@@ -117,6 +117,7 @@ import type {
   StyleFingerprintResponse,
   ValidationIssue,
   ValidationReport,
+  WorkbookFileContent,
   WorkbookScope,
   WorkbookRegion,
   WorkbookId,
@@ -1660,7 +1661,18 @@ export class RuntimeService {
       backupRequest.ranges = input.ranges;
     }
     const backup = await this.createWorkbookBackup(backupRequest);
-    if ("backup" in backup && this.fileBridge.getStatus().available) {
+    if (!("backup" in backup)) {
+      return {
+        ok: false,
+        workbookId: input.workbookId,
+        targetPath: input.targetPath,
+        backup,
+        error: runtimeError("BACKUP_UNAVAILABLE", "Workbook export requires a persistent safety backup before writing a file copy.", { retryable: true })
+      };
+    }
+    const bridgeStatus = this.fileBridge.getStatus();
+    let bridge: Awaited<ReturnType<NativeFileBridge["request"]>> | undefined;
+    if (bridgeStatus.available) {
       const bridgeRequest: Parameters<NativeFileBridge["request"]>[0] = {
         operation: "workbook.export_copy",
         workbookId: input.workbookId,
@@ -1675,7 +1687,7 @@ export class RuntimeService {
       if (input.reason !== undefined) {
         bridgeRequest.reason = input.reason;
       }
-      const bridge = await this.fileBridge.request(bridgeRequest);
+      bridge = await this.fileBridge.request(bridgeRequest);
       if (bridge.ok) {
         return {
           ok: true,
@@ -1685,29 +1697,74 @@ export class RuntimeService {
           bridge
         };
       }
-      return {
-        ok: false,
-        workbookId: input.workbookId,
-        targetPath: input.targetPath,
-        backup,
-        bridge,
-        error: runtimeError(
-          "OPERATION_FAILED",
-          `Native file bridge failed to export workbook copy${input.targetPath ? ` ${input.targetPath}` : ""}: ${bridge.error ?? "unknown error"}`,
-          { retryable: true, details: { bridgeStatus: this.fileBridge.getStatus() } }
-        )
-      };
     }
-    const bridgeStatus = this.fileBridge.getStatus();
+
+    const client = this.getActiveAddinClient();
+    if (client) {
+      try {
+        const exported = await client.request<WorkbookFileContent | { ok: false; error?: ReturnType<typeof runtimeError> }>("workbook.get_file", {
+          workbookId: input.workbookId
+        });
+        if (exported.ok) {
+          const targetPath = input.targetPath ?? this.defaultWorkbookExportPath(input.workbookId);
+          const writtenPath = await this.writeWorkbookFileContent(targetPath, exported);
+          return {
+            ok: true,
+            workbookId: input.workbookId,
+            targetPath: writtenPath,
+            backup,
+            bridgeStatus,
+            ...(bridge !== undefined ? { bridge } : {}),
+            file: {
+              path: writtenPath,
+              size: exported.size,
+              sliceCount: exported.sliceCount,
+              capturedAt: exported.capturedAt,
+              method: "office-js-compressed-file"
+            }
+          };
+        }
+        return {
+          ok: false,
+          workbookId: input.workbookId,
+          targetPath: input.targetPath,
+          backup,
+          bridgeStatus,
+          ...(bridge !== undefined ? { bridge } : {}),
+          error:
+            exported.error ??
+            runtimeError("CAPABILITY_UNAVAILABLE", "The connected Excel add-in could not export a compressed workbook file.", {
+              retryable: false,
+              details: { bridgeStatus }
+            })
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          workbookId: input.workbookId,
+          targetPath: input.targetPath,
+          backup,
+          bridgeStatus,
+          ...(bridge !== undefined ? { bridge } : {}),
+          error: runtimeError(
+            bridge !== undefined ? "OPERATION_FAILED" : "CAPABILITY_UNAVAILABLE",
+            `Workbook export copy failed: ${error instanceof Error ? error.message : String(error)}`,
+            { retryable: true, details: { bridgeStatus } }
+          )
+        };
+      }
+    }
+
     return {
       ok: false,
       workbookId: input.workbookId,
       targetPath: input.targetPath,
       backup,
       bridgeStatus,
+      ...(bridge !== undefined ? { bridge } : {}),
       error: runtimeError(
         "CAPABILITY_UNAVAILABLE",
-        "Office.js cannot export a local .xlsx copy from the add-in. A persistent snapshot backup was created instead. Configure OPEN_WORKBOOK_FILE_BRIDGE_URL for true .xlsx export.",
+        "No native file bridge or Excel add-in file export path is available. A persistent snapshot backup was created instead.",
         { retryable: false, details: { bridgeStatus } }
       )
     };
@@ -1927,9 +1984,10 @@ export class RuntimeService {
       workbookId: request.workbookId,
       pivotTableName: request.templatePivotTableName
     });
-    const targetSheetName = (targetInfo as { info?: { sheetName?: string } }).info?.sheetName;
+    const targetPivotInfo = (targetInfo as { info?: { sheetName?: string; range?: { address: string } } }).info;
+    const targetSheetName = targetPivotInfo?.sheetName;
     const sourceSheetName = (sourceInfo as { info?: { sheetName?: string } }).info?.sheetName;
-    const ranges = await this.getPivotTemplateCopyRanges(request.workbookId, targetSheetName, sourceSheetName);
+    const ranges = await this.getPivotTemplateCopyRanges(request.workbookId, targetSheetName, targetPivotInfo?.range?.address);
     const permissionWarnings = this.validateDirectMutation(request.workbookId, ranges, "format");
     if (permissionWarnings.length > 0) {
       return permissionDenied("PivotTable template copy is blocked by the current Open Workbook permission policy.", permissionWarnings);
@@ -4446,10 +4504,17 @@ export class RuntimeService {
     ];
   }
 
-  private async getPivotTemplateCopyRanges(workbookId: WorkbookId, targetSheetName: string | undefined, sourceSheetName: string | undefined): Promise<A1Range[]> {
-    const sheetNames = Array.from(new Set([sourceSheetName, targetSheetName].filter((sheetName): sheetName is string => sheetName !== undefined)));
-    const ranges = (await Promise.all(sheetNames.map((sheetName) => this.getSheetUsedRange(workbookId, sheetName)))).flat();
-    return ranges.length > 0 ? ranges : this.getUsedRangesForSnapshot(workbookId);
+  private async getPivotTemplateCopyRanges(workbookId: WorkbookId, targetSheetName: string | undefined, targetAddress: string | undefined): Promise<A1Range[]> {
+    if (targetSheetName !== undefined && targetAddress !== undefined) {
+      return [{ workbookId, sheetName: targetSheetName, address: stripSheetName(targetAddress) }];
+    }
+    if (targetSheetName !== undefined) {
+      const ranges = await this.getSheetUsedRange(workbookId, targetSheetName);
+      if (ranges.length > 0) {
+        return ranges;
+      }
+    }
+    return this.getUsedRangesForSnapshot(workbookId);
   }
 
   private async getFormulaMutationRanges(request: FormulaCopyPatternsRequest | FormulaFillRequest | FormulaPatternRequest): Promise<A1Range[]> {
@@ -4526,6 +4591,26 @@ export class RuntimeService {
   private getBackupDirectory(): string {
     return process.env.OPEN_WORKBOOK_BACKUP_DIR ?? path.join(process.cwd(), ".open-workbook", "backups");
   }
+
+  private getExportDirectory(): string {
+    return process.env.OPEN_WORKBOOK_EXPORT_DIR ?? path.join(process.cwd(), ".open-workbook", "exports");
+  }
+
+  private defaultWorkbookExportPath(workbookId: WorkbookId): string {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    return path.join(this.getExportDirectory(), `${sanitizeFileName(workbookId)}-${timestamp}.xlsx`);
+  }
+
+  private async writeWorkbookFileContent(targetPath: string, content: WorkbookFileContent): Promise<string> {
+    const resolved = path.resolve(targetPath);
+    await mkdir(path.dirname(resolved), { recursive: true });
+    await writeFile(resolved, Buffer.from(content.base64, "base64"));
+    return resolved;
+  }
+}
+
+function sanitizeFileName(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "workbook";
 }
 
 function compareTemplatePayload(

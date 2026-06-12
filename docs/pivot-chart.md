@@ -18,9 +18,9 @@ Capability-status tools:
 
 - `excel.pivot.update_source`: Office.js does not expose a safe in-place source reassignment path in this runtime. Create a new PivotTable from the desired source.
 
-`excel.pivot.get_info` returns source metadata, layout settings, row/column/filter/data hierarchy summaries, field settings, and source hierarchy names where Office.js exposes them.
+`excel.pivot.get_info` returns source metadata, the PivotTable output range, layout settings, row/column/filter/data hierarchy summaries, field settings, and source hierarchy names where Office.js exposes them.
 
-`excel.pivot.copy_from_template` requires `templatePivotTableName`. It creates a backup and transaction record, then replays settable PivotTable options, layout flags, axis membership/order, data hierarchy aggregation and number formats, and basic field settings when the target pivot exposes matching source field names. It intentionally does not claim source reassignment or PivotChart-specific styling.
+`excel.pivot.copy_from_template` requires `templatePivotTableName`. It creates a backup and transaction record, then replays settable PivotTable options, layout flags, axis membership/order, data hierarchy aggregation and number formats, and basic field settings when the target pivot exposes matching source field names. When Office.js reports the target PivotTable range, the backup is scoped to that range instead of the whole sheet. It intentionally does not claim source reassignment or PivotChart-specific styling.
 
 ## Charts
 

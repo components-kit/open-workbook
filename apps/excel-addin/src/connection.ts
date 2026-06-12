@@ -26,6 +26,7 @@ import {
   executeBatch,
   getActiveWorkbookContext,
   embedWorkbookLocalConfig,
+  exportWorkbookFile,
   getChartInfo,
   getName,
   getPivotTableInfo,
@@ -153,6 +154,11 @@ export class AddinConnection {
         case "workbook.save":
           this.sendSuccess(request.id, await saveWorkbook());
           break;
+        case "workbook.get_file": {
+          const params = request.params as { workbookId: string; sliceSize?: number };
+          this.sendSuccess(request.id, await exportWorkbookFile(params.workbookId, params.sliceSize));
+          break;
+        }
         case "workbook.close": {
           const params = request.params as { closeBehavior?: "Save" | "SkipSave" };
           this.sendSuccess(request.id, await closeWorkbook(params.closeBehavior));

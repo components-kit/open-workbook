@@ -229,6 +229,7 @@ program
           addinServer: resolveAsset("addinServer"),
           manifest: resolveAsset("manifest"),
           stateDir: defaultStateDir(),
+          exportDir: defaultExportDir(),
           mode: existsSync(sourcePaths.mcpServer) ? "source" : "bundled"
         },
         null,
@@ -413,6 +414,10 @@ function defaultServiceCommand(): string {
 
 function defaultStateDir(): string {
   return process.env.OPEN_WORKBOOK_STATE_DIR ?? resolve(process.cwd(), ".open-workbook/state");
+}
+
+function defaultExportDir(): string {
+  return process.env.OPEN_WORKBOOK_EXPORT_DIR ?? resolve(process.cwd(), ".open-workbook/exports");
 }
 
 function trimTrailingSlash(value: string): string {

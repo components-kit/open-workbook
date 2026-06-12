@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -598,6 +598,60 @@ describe("RuntimeService native file bridge", () => {
       workbookId,
       targetPath: "/tmp/report.xlsx"
     });
+  });
+
+  it("writes workbook export copies from add-in compressed file payloads", async () => {
+    const workbookId = "workbook_file_export" as WorkbookId;
+    const stateDir = mkdtempSync(path.join(tmpdir(), "open-workbook-file-export-"));
+    const targetPath = path.join(stateDir, "exports", "report.xlsx");
+    const runtime = new RuntimeService({ stateDir, persistState: false });
+    const session = runtime.sessions.createSession();
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string, params: any) => {
+        if (method === "workbook.snapshot_ranges") {
+          return {
+            workbookFingerprint: {
+              workbookId,
+              workbookHash: "file_export_workbook",
+              structureHash: "structure",
+              capturedAt: new Date().toISOString()
+            },
+            rangeSnapshots: params.ranges.map((range: any) => ({
+              range,
+              values: [["snapshot"]],
+              fingerprint: {
+                range,
+                hash: "file_export_range",
+                cellCount: 1,
+                capturedAt: new Date().toISOString()
+              }
+            }))
+          };
+        }
+        if (method === "workbook.get_file") {
+          return {
+            ok: true,
+            workbookId,
+            fileType: "compressed",
+            size: 8,
+            sliceCount: 1,
+            base64: Buffer.from("xlsxdata").toString("base64"),
+            capturedAt: new Date().toISOString()
+          };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const result = await runtime.exportWorkbookCopy({
+      workbookId,
+      targetPath,
+      ranges: [{ workbookId, sheetName: "Report", address: "A1:B2" }]
+    });
+
+    expect((result as { ok?: boolean }).ok).toBe(true);
+    expect(readFileSync(targetPath, "utf8")).toBe("xlsxdata");
+    expect((result as { file?: { method?: string } }).file?.method).toBe("office-js-compressed-file");
   });
 });
 

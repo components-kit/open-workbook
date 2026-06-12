@@ -53,6 +53,7 @@ import type {
   TableUpdateRowsRequest,
   TemplateExecutionSource,
   RuntimeCapabilities,
+  WorkbookFileContent,
   WorkbookRef,
   WorkbookLocalConfig,
   WorkbookSnapshotResponse
@@ -86,11 +87,13 @@ export function getRuntimeCapabilities(): RuntimeCapabilities {
   }));
   const supports = (version: (typeof EXCEL_API_VERSIONS)[number]) => apiSets.some((apiSet) => apiSet.version === version && apiSet.supported);
   const officeVersion = typeof Office.context.diagnostics?.version === "string" ? Office.context.diagnostics.version : undefined;
+  const platform = detectPlatform();
+  const supportsCompressedFileExport = typeof Office.context.document?.getFileAsync === "function" && platform !== "web";
   return {
     engine: {
       name: ENGINE_NAME,
       version: ENGINE_VERSION,
-      platform: detectPlatform(),
+      platform,
       host: String(Office.context.host ?? "Excel"),
       ...(officeVersion !== undefined ? { officeVersion } : {})
     },
@@ -138,6 +141,14 @@ export function getRuntimeCapabilities(): RuntimeCapabilities {
       hostCapability("tables-filters-sorts", supports("1.9"), "ExcelApi", "1.9"),
       hostCapability("pivots", supports("1.8"), "ExcelApi", "1.8"),
       hostCapability("charts", supports("1.9"), "ExcelApi", "1.9"),
+      {
+        name: "workbook-compressed-file-export",
+        supported: supportsCompressedFileExport,
+        status: supportsCompressedFileExport ? "supported" : "unsupported",
+        reason: supportsCompressedFileExport
+          ? "Office Document.getFileAsync supports compressed workbook slices on this host."
+          : "Compressed workbook file export is supported by Excel desktop hosts, not Excel on the web."
+      },
       {
         name: "workbook-save-as-local-path",
         supported: false,
@@ -320,6 +331,42 @@ export async function saveWorkbook(): Promise<{ ok: boolean }> {
     await context.sync();
     return { ok: true };
   });
+}
+
+export async function exportWorkbookFile(workbookId: string, sliceSize = 4 * 1024 * 1024): Promise<WorkbookFileContent | { ok: false; error: ReturnType<typeof runtimeError> }> {
+  const document = Office.context.document;
+  if (!document || typeof document.getFileAsync !== "function") {
+    return {
+      ok: false,
+      error: runtimeError("CAPABILITY_UNAVAILABLE", "This Excel host does not expose Office Document.getFileAsync.", { retryable: false })
+    };
+  }
+  if (detectPlatform() === "web") {
+    return {
+      ok: false,
+      error: runtimeError("CAPABILITY_UNAVAILABLE", "Excel on the web does not expose compressed workbook export through Office.js.", { retryable: false })
+    };
+  }
+
+  const file = await getDocumentFile(sliceSize);
+  try {
+    const chunks: string[] = [];
+    for (let index = 0; index < file.sliceCount; index += 1) {
+      const slice = await getDocumentFileSlice(file, index);
+      chunks.push(sliceDataToBase64(slice.data));
+    }
+    return {
+      ok: true,
+      workbookId: workbookId as WorkbookFileContent["workbookId"],
+      fileType: "compressed",
+      size: file.size,
+      sliceCount: file.sliceCount,
+      base64: chunks.join(""),
+      capturedAt: new Date().toISOString()
+    };
+  } finally {
+    await closeDocumentFile(file);
+  }
 }
 
 export async function closeWorkbook(closeBehavior: "Save" | "SkipSave" = "Save"): Promise<{ ok: boolean; closeBehavior: string }> {
@@ -2020,6 +2067,8 @@ function materializeNameInfo(workbookId: string, item: Excel.NamedItem, fallback
 async function readPivotTableInfo(context: Excel.RequestContext, workbookId: string, pivot: Excel.PivotTable): Promise<PivotTableInfo> {
   pivot.load("name,id,refreshOnOpen,useCustomSortLists,enableDataValueEditing,allowMultipleFiltersPerField");
   pivot.worksheet.load("name");
+  const pivotRange = pivot.layout.getRange();
+  pivotRange.load("address,rowCount,columnCount");
   pivot.layout.load("altTextDescription,altTextTitle,autoFormat,emptyCellText,enableFieldList,fillEmptyCells,layoutType,preserveFormatting,showColumnGrandTotals,showFieldHeaders,showRowGrandTotals,subtotalLocation");
   pivot.hierarchies.load("items/name,items/id");
   pivot.rowHierarchies.load("items/name,items/id,items/position");
@@ -2049,6 +2098,11 @@ async function readPivotTableInfo(context: Excel.RequestContext, workbookId: str
   };
   assignIfDefined(info, "id", optionalValue(pivot.id));
   assignIfDefined(info, "sheetName", optionalValue(pivot.worksheet.name));
+  assignIfDefined(info, "range", {
+    address: pivotRange.address,
+    rowCount: pivotRange.rowCount,
+    columnCount: pivotRange.columnCount
+  });
   assignIfDefined(info, "source", optionalValue(source.value));
   assignIfDefined(info, "sourceType", optionalValue(String(sourceType.value)));
   assignIfDefined(info, "refreshOnOpen", optionalValue(pivot.refreshOnOpen));
@@ -2586,6 +2640,62 @@ function writeMatrixInChunks(
 
 function optionalValue<T>(value: T | null | undefined): T | undefined {
   return value === null || value === undefined ? undefined : value;
+}
+
+function getDocumentFile(sliceSize: number): Promise<Office.File> {
+  return new Promise((resolve, reject) => {
+    Office.context.document.getFileAsync(Office.FileType.Compressed, { sliceSize }, (result) => {
+      if (result.status === Office.AsyncResultStatus.Succeeded) {
+        resolve(result.value);
+        return;
+      }
+      reject(new Error(result.error?.message ?? "Office Document.getFileAsync failed."));
+    });
+  });
+}
+
+function getDocumentFileSlice(file: Office.File, index: number): Promise<Office.Slice> {
+  return new Promise((resolve, reject) => {
+    file.getSliceAsync(index, (result) => {
+      if (result.status === Office.AsyncResultStatus.Succeeded) {
+        resolve(result.value);
+        return;
+      }
+      reject(new Error(result.error?.message ?? `Office File.getSliceAsync failed for slice ${index}.`));
+    });
+  });
+}
+
+function closeDocumentFile(file: Office.File): Promise<void> {
+  return new Promise((resolve) => {
+    file.closeAsync(() => resolve());
+  });
+}
+
+function sliceDataToBase64(data: unknown): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (data instanceof Uint8Array) {
+    return uint8ArrayToBase64(data);
+  }
+  if (Array.isArray(data)) {
+    return uint8ArrayToBase64(Uint8Array.from(data as number[]));
+  }
+  if (data instanceof ArrayBuffer) {
+    return uint8ArrayToBase64(new Uint8Array(data));
+  }
+  throw new Error("Unsupported Office file slice data format.");
+}
+
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const chunk = bytes.subarray(offset, offset + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
 }
 
 function getCustomXmlParts(context: Excel.RequestContext): any | undefined {

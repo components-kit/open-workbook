@@ -42,7 +42,7 @@ Region snapshots are retained for the active session by default. Workbook-copy b
 
 Workbook-copy backups are persisted as JSON snapshot payloads under `OPEN_WORKBOOK_BACKUP_DIR` when set, otherwise `.open-workbook/backups` under the MCP process working directory.
 
-These backups are restorable through `excel.workbook.restore_backup` because they contain captured range values, formulas, number formats, display text, and basic styles. They are not full `.xlsx` file copies. True file-copy backup/export uses the native file bridge when `OPEN_WORKBOOK_FILE_BRIDGE_URL` is configured because Office.js does not expose local file-system save-as/export APIs.
+These backups are restorable through `excel.workbook.restore_backup` because they contain captured range values, formulas, number formats, display text, and basic styles. They are not full `.xlsx` file copies. True workbook export uses the native file bridge when configured or the Excel desktop compressed-file export path; `save_as` still requires the native bridge because Office.js does not expose a local save-as path API.
 
 ## Implemented Rollback
 

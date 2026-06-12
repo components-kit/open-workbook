@@ -790,11 +790,18 @@ export interface PivotLayoutInfo {
   subtotalLocation?: string;
 }
 
+export interface PivotRangeInfo {
+  address: string;
+  rowCount: number;
+  columnCount: number;
+}
+
 export interface PivotTableInfo {
   workbookId: WorkbookId;
   pivotTableName: string;
   id?: string;
   sheetName?: string;
+  range?: PivotRangeInfo;
   source?: string;
   sourceType?: string;
   refreshOnOpen?: boolean;
@@ -841,6 +848,16 @@ export interface WorkbookFileBridgeResponse {
   filePath?: string;
   metadata?: Record<string, unknown>;
   error?: string;
+}
+
+export interface WorkbookFileContent {
+  ok: true;
+  workbookId: WorkbookId;
+  fileType: "compressed";
+  size: number;
+  sliceCount: number;
+  base64: string;
+  capturedAt: string;
 }
 
 export interface ChartSelector {
