@@ -92,6 +92,7 @@ For an installed package, the same commands become:
 ```bash
 owb doctor
 owb daemon start
+owb file-bridge start
 owb mcp
 owb addin serve
 owb opencode config --id open-workbook --agent-name finance-agent
@@ -121,6 +122,7 @@ Defaults:
 
 - Add-in taskpane: `http://127.0.0.1:37846/taskpane.html`
 - Add-in backend: `ws://127.0.0.1:37845/addin`
+- Native file bridge: `http://127.0.0.1:37847`
 
 Environment overrides:
 
@@ -131,7 +133,10 @@ Environment overrides:
 - `OPEN_WORKBOOK_PORT`
 - `OPEN_WORKBOOK_ADDIN_PATH`
 - `OPEN_WORKBOOK_BACKUP_DIR`
+- `OPEN_WORKBOOK_EXPORT_DIR`
 - `OPEN_WORKBOOK_STATE_DIR`
+- `OPEN_WORKBOOK_FILE_BRIDGE_URL`
+- `OPEN_WORKBOOK_FILE_BRIDGE_PORT`
 - `OPEN_WORKBOOK_PREVIEW_TOOLS=1`
 
 ## Common Commands
@@ -144,6 +149,7 @@ corepack pnpm verify
 corepack pnpm pack:dry-run
 node packages/cli/dist/index.js paths
 node packages/cli/dist/index.js daemon status
+node packages/cli/dist/index.js file-bridge status
 node packages/cli/dist/index.js sideload manifest --out open-workbook.xml
 ```
 

@@ -833,6 +833,15 @@ export interface PivotCopyFromTemplateRequest extends PivotSelector {
 
 export type WorkbookFileBridgeOperation = "workbook.save_as" | "workbook.export_copy" | "workbook.restore_file_backup";
 
+export interface WorkbookFileBridgeRequest {
+  operation: WorkbookFileBridgeOperation;
+  workbookId: WorkbookId;
+  targetPath?: string;
+  sourceBackupId?: BackupId;
+  ranges?: A1Range[];
+  reason?: string;
+}
+
 export interface WorkbookFileBridgeStatus {
   available: boolean;
   url?: string;

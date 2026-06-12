@@ -1,25 +1,13 @@
 import type {
-  A1Range,
-  BackupId,
-  WorkbookFileBridgeOperation,
+  WorkbookFileBridgeRequest,
   WorkbookFileBridgeResponse,
-  WorkbookFileBridgeStatus,
-  WorkbookId
+  WorkbookFileBridgeStatus
 } from "@open-workbook/protocol";
 
 export interface NativeFileBridgeOptions {
   url?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
-}
-
-export interface NativeFileBridgeRequest {
-  operation: WorkbookFileBridgeOperation;
-  workbookId: WorkbookId;
-  targetPath?: string;
-  sourceBackupId?: BackupId;
-  ranges?: A1Range[];
-  reason?: string;
 }
 
 export class NativeFileBridge {
@@ -47,7 +35,7 @@ export class NativeFileBridge {
     };
   }
 
-  async request(input: NativeFileBridgeRequest): Promise<WorkbookFileBridgeResponse> {
+  async request(input: WorkbookFileBridgeRequest): Promise<WorkbookFileBridgeResponse> {
     if (!this.url || !this.fetchImpl) {
       return {
         ok: false,

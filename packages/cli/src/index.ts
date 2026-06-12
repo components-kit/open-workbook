@@ -12,18 +12,21 @@ const packageRoot = resolve(__dirname, "..");
 const sourcePaths = {
   mcpServer: resolve(repoRoot, "apps/mcp-server/dist/index.js"),
   backend: resolve(repoRoot, "apps/backend/dist/index.js"),
+  fileBridge: resolve(repoRoot, "apps/backend/dist/file-bridge.js"),
   addinServer: resolve(repoRoot, "apps/excel-addin/scripts/dev-server.mjs"),
   manifest: resolve(repoRoot, "apps/excel-addin/manifest.xml")
 };
 const bundledPaths = {
   mcpServer: resolve(packageRoot, "assets/mcp-server/dist/index.js"),
   backend: resolve(packageRoot, "assets/backend/dist/index.js"),
+  fileBridge: resolve(packageRoot, "assets/backend/dist/file-bridge.js"),
   addinServer: resolve(packageRoot, "assets/excel-addin/scripts/dev-server.mjs"),
   manifest: resolve(packageRoot, "assets/excel-addin/manifest.xml")
 };
 const dependencyPaths = {
   mcpServer: resolve(packageRoot, "node_modules/@open-workbook/mcp-server/dist/index.js"),
   backend: resolve(packageRoot, "node_modules/@open-workbook/backend/dist/index.js"),
+  fileBridge: resolve(packageRoot, "node_modules/@open-workbook/backend/dist/file-bridge.js"),
   addinServer: bundledPaths.addinServer,
   manifest: bundledPaths.manifest
 };
@@ -66,7 +69,7 @@ daemon
   .description("Print daemon status from the local health endpoint")
   .option("--daemon-url <url>", "Daemon base URL", defaultDaemonUrl())
   .action(async (options: { daemonUrl: string }) => {
-    const response = await fetchDaemon(`${trimTrailingSlash(options.daemonUrl)}/status`, "Daemon status");
+    const response = await fetchLocal(`${trimTrailingSlash(options.daemonUrl)}/status`, "Daemon status", "owb daemon start");
     if (!response.ok) {
       fail(`Daemon status failed: ${response.status} ${response.statusText}`);
     }
@@ -78,11 +81,44 @@ daemon
   .description("Stop the shared local Open Workbook daemon")
   .option("--daemon-url <url>", "Daemon base URL", defaultDaemonUrl())
   .action(async (options: { daemonUrl: string }) => {
-    const response = await fetchDaemon(`${trimTrailingSlash(options.daemonUrl)}/shutdown`, "Daemon stop", { method: "POST" });
+    const response = await fetchLocal(`${trimTrailingSlash(options.daemonUrl)}/shutdown`, "Daemon stop", "owb daemon start", { method: "POST" });
     if (!response.ok) {
       fail(`Daemon stop failed: ${response.status} ${response.statusText}`);
     }
     console.log("Stopped Open Workbook daemon.");
+  });
+
+const fileBridge = program.command("file-bridge").description("Manage the native workbook file bridge");
+
+fileBridge
+  .command("start")
+  .description("Start the local native file bridge for Save As and host file operations")
+  .action(() => {
+    runNode(resolveAsset("fileBridge"));
+  });
+
+fileBridge
+  .command("status")
+  .description("Print native file bridge status")
+  .option("--bridge-url <url>", "File bridge base URL", defaultFileBridgeUrl())
+  .action(async (options: { bridgeUrl: string }) => {
+    const response = await fetchLocal(`${trimTrailingSlash(options.bridgeUrl)}/status`, "File bridge status", "owb file-bridge start");
+    if (!response.ok) {
+      fail(`File bridge status failed: ${response.status} ${response.statusText}`);
+    }
+    console.log(JSON.stringify(await response.json(), null, 2));
+  });
+
+fileBridge
+  .command("stop")
+  .description("Stop the local native file bridge")
+  .option("--bridge-url <url>", "File bridge base URL", defaultFileBridgeUrl())
+  .action(async (options: { bridgeUrl: string }) => {
+    const response = await fetchLocal(`${trimTrailingSlash(options.bridgeUrl)}/shutdown`, "File bridge stop", "owb file-bridge start", { method: "POST" });
+    if (!response.ok) {
+      fail(`File bridge stop failed: ${response.status} ${response.statusText}`);
+    }
+    console.log("Stopped Open Workbook file bridge.");
   });
 
 const service = program.command("service").description("Generate local auto-start service wrappers");
@@ -91,7 +127,7 @@ service
   .command("manifest")
   .description("Print or write a launchd, systemd user, or Windows scheduled-task wrapper")
   .option("--target <target>", "Target wrapper: macos, systemd, windows", defaultServiceTarget())
-  .option("--service <service>", "Service to run: addin or daemon", "addin")
+  .option("--service <service>", "Service to run: addin, daemon, or file-bridge", "addin")
   .option("--out <path>", "Write wrapper to a file instead of stdout")
   .option("--command <command>", "Base CLI command to run", defaultServiceCommand())
   .action((options: { target: string; service: string; out?: string; command: string }) => {
@@ -226,10 +262,12 @@ program
         {
           mcpServer: resolveAsset("mcpServer"),
           backend: resolveAsset("backend"),
+          fileBridge: resolveAsset("fileBridge"),
           addinServer: resolveAsset("addinServer"),
           manifest: resolveAsset("manifest"),
           stateDir: defaultStateDir(),
           exportDir: defaultExportDir(),
+          fileBridgeUrl: defaultFileBridgeUrl(),
           mode: existsSync(sourcePaths.mcpServer) ? "source" : "bundled"
         },
         null,
@@ -245,6 +283,7 @@ program
     const checks = [
       checkPath("MCP server", resolveAsset("mcpServer")),
       checkPath("Backend daemon", resolveAsset("backend")),
+      checkPath("File bridge", resolveAsset("fileBridge")),
       checkPath("Add-in server", resolveAsset("addinServer")),
       checkPath("Manifest", resolveAsset("manifest"))
     ];
@@ -257,6 +296,7 @@ program
     }
     console.log(`Taskpane URL: ${defaultAddinUrl()}`);
     console.log(`Backend URL: ${defaultBackendUrl()}`);
+    console.log(`File bridge URL: ${defaultFileBridgeUrl()}`);
   });
 
 program.parse();
@@ -307,12 +347,17 @@ function generateManifest(options: { addinUrl: string; backendUrl: string }): st
 }
 
 type ServiceTarget = "macos" | "systemd" | "windows";
-type ServiceName = "addin" | "daemon";
+type ServiceName = "addin" | "daemon" | "file-bridge";
 
 function generateServiceManifest(options: { target: ServiceTarget; serviceName: ServiceName; command: string }): string {
-  const args = options.serviceName === "addin" ? ["addin", "serve"] : ["daemon", "start"];
+  const args = options.serviceName === "addin" ? ["addin", "serve"] : options.serviceName === "daemon" ? ["daemon", "start"] : ["file-bridge", "start"];
   const label = `com.open-workbook.${options.serviceName}`;
-  const description = options.serviceName === "addin" ? "Open Workbook Excel add-in asset server" : "Open Workbook shared daemon";
+  const description =
+    options.serviceName === "addin"
+      ? "Open Workbook Excel add-in asset server"
+      : options.serviceName === "daemon"
+        ? "Open Workbook shared daemon"
+        : "Open Workbook native file bridge";
   const commandParts = [options.command, ...args];
   switch (options.target) {
     case "macos":
@@ -398,6 +443,15 @@ function defaultDaemonUrl(): string {
   return `http://${host}:${port}`;
 }
 
+function defaultFileBridgeUrl(): string {
+  if (process.env.OPEN_WORKBOOK_FILE_BRIDGE_URL !== undefined) {
+    return process.env.OPEN_WORKBOOK_FILE_BRIDGE_URL;
+  }
+  const host = process.env.OPEN_WORKBOOK_FILE_BRIDGE_HOST ?? "127.0.0.1";
+  const port = process.env.OPEN_WORKBOOK_FILE_BRIDGE_PORT ?? "37847";
+  return `http://${host}:${port}`;
+}
+
 function defaultServiceTarget(): ServiceTarget {
   if (process.platform === "darwin") {
     return "macos";
@@ -438,7 +492,7 @@ function normalizeServiceTarget(value: string): ServiceTarget {
 }
 
 function normalizeServiceName(value: string): ServiceName {
-  if (value === "addin" || value === "daemon") {
+  if (value === "addin" || value === "daemon" || value === "file-bridge") {
     return value;
   }
   fail(`Unknown service name: ${value}`);
@@ -465,12 +519,12 @@ function checkPath(label: string, path: string): { label: string; path: string; 
   return { label, path, ok: existsSync(path) };
 }
 
-async function fetchDaemon(url: string, label: string, init?: RequestInit): Promise<Response> {
+async function fetchLocal(url: string, label: string, startCommand: string, init?: RequestInit): Promise<Response> {
   try {
     return await fetch(url, init);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    fail(`${label} failed: could not connect to ${url}. Start the daemon with \`owb daemon start\` or check OPEN_WORKBOOK_PORT. ${detail}`);
+    fail(`${label} failed: could not connect to ${url}. Start it with \`${startCommand}\` or check the configured port. ${detail}`);
   }
 }
 

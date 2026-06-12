@@ -51,12 +51,13 @@ After package installation, use `owb` directly:
 ```bash
 owb doctor
 owb daemon start
+owb file-bridge start
 owb mcp
 owb addin serve
 owb opencode config --id open-workbook
 ```
 
-The daemon starts the local backend WebSocket and owns shared workbook coordination. `owb mcp` attaches to that daemon when it is running. The add-in asset server is a separate process because Excel loads the taskpane HTML from it.
+The daemon starts the local backend WebSocket and owns shared workbook coordination. `owb file-bridge start` starts the optional native Save As bridge. `owb mcp` attaches to the daemon when it is running. The add-in asset server is a separate process because Excel loads the taskpane HTML from it.
 
 ## Sideload On macOS
 
@@ -130,6 +131,7 @@ Use these together during local testing:
 
 ```bash
 owb daemon start
+owb file-bridge start
 owb mcp
 owb addin serve
 ```
@@ -140,6 +142,7 @@ To generate an optional auto-start wrapper for the add-in asset server:
 owb service manifest --target macos --service addin --out com.open-workbook.addin.plist
 owb service manifest --target systemd --service addin --out com.open-workbook.addin.service
 owb service manifest --target windows --service addin --out open-workbook-addin-task.ps1
+owb service manifest --target macos --service file-bridge --out com.open-workbook.file-bridge.plist
 ```
 
 See [Service Wrapper](service-wrapper.md) for install examples.

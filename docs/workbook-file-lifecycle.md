@@ -26,7 +26,15 @@ The MCP tools return explicit `CAPABILITY_UNAVAILABLE` errors instead of silentl
 
 ## Native File Bridge Contract
 
-Set `OPEN_WORKBOOK_FILE_BRIDGE_URL` to a local helper base URL. The backend sends `POST /v1/workbook-file` with JSON:
+Run `owb file-bridge start` to start Open Workbook's built-in native bridge. It listens on `http://127.0.0.1:37847` by default. Set `OPEN_WORKBOOK_FILE_BRIDGE_URL=http://127.0.0.1:37847` for the backend daemon so `excel.workbook.save_as` can use it.
+
+The bridge exposes:
+
+- `GET /status`
+- `POST /shutdown`
+- `POST /v1/workbook-file`
+
+The backend sends `POST /v1/workbook-file` with JSON:
 
 ```json
 {
@@ -50,7 +58,9 @@ The helper should return:
 }
 ```
 
-Set `OPEN_WORKBOOK_FILE_BRIDGE_TIMEOUT_MS` to override the default 30000 ms bridge timeout. Set `OPEN_WORKBOOK_EXPORT_DIR` to control the default output directory for add-in compressed-file exports.
+The built-in bridge uses AppleScript on macOS and PowerShell COM automation on Windows for `workbook.save_as`. It matches `workbookId` against the open Excel workbook name or full path. Linux returns an explicit unsupported result.
+
+Set `OPEN_WORKBOOK_FILE_BRIDGE_TIMEOUT_MS` to override the default 30000 ms backend-to-bridge timeout. Set `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` to a path-delimited allowlist of output directories for native Save As. Set `OPEN_WORKBOOK_EXPORT_DIR` to control the default output directory for add-in compressed-file exports.
 
 `excel.runtime.get_status` and `excel.runtime.get_capabilities` include `fileBridge` status so agents can check whether native Save As is configured before requesting it.
 

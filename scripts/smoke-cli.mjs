@@ -22,7 +22,7 @@ const checks = [
         return false;
       }
       const parsed = JSON.parse(result.stdout);
-      return Boolean(parsed.mcpServer) && Boolean(parsed.backend) && Boolean(parsed.addinServer) && Boolean(parsed.manifest);
+      return Boolean(parsed.mcpServer) && Boolean(parsed.backend) && Boolean(parsed.fileBridge) && Boolean(parsed.addinServer) && Boolean(parsed.manifest) && Boolean(parsed.fileBridgeUrl);
     }
   },
   {
@@ -53,12 +53,25 @@ const checks = [
     assert: (result) => result.status === 0 && result.stdout.includes("ExecStart='owb' 'daemon' 'start'")
   },
   {
+    name: "service manifest file bridge",
+    args: ["service", "manifest", "--target", "systemd", "--service", "file-bridge", "--command", "owb"],
+    assert: (result) => result.status === 0 && result.stdout.includes("ExecStart='owb' 'file-bridge' 'start'")
+  },
+  {
     name: "disconnected daemon status",
     args: ["daemon", "status", "--daemon-url", "http://127.0.0.1:37999"],
     assert: (result) =>
       result.status === 1 &&
       result.stderr.includes("Daemon status failed: could not connect to http://127.0.0.1:37999/status") &&
       result.stderr.includes("owb daemon start")
+  },
+  {
+    name: "disconnected file bridge status",
+    args: ["file-bridge", "status", "--bridge-url", "http://127.0.0.1:37998"],
+    assert: (result) =>
+      result.status === 1 &&
+      result.stderr.includes("File bridge status failed: could not connect to http://127.0.0.1:37998/status") &&
+      result.stderr.includes("owb file-bridge start")
   }
 ];
 
