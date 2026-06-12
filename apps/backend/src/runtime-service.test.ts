@@ -610,6 +610,65 @@ describe("RuntimeService PivotTable template copy", () => {
     expect((result as { transactionId?: string }).transactionId).toBeDefined();
     expect(runtime.transactions.list(workbookId).some((transaction) => transaction.status === "applied" && transaction.backups.length === 1)).toBe(true);
   });
+
+  it("blocks PivotTable template copy when target source fields are incompatible", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_pivot_copy_incompatible" as WorkbookId;
+    const session = runtime.sessions.createSession();
+    const calls: string[] = [];
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string, params: any) => {
+        calls.push(method);
+        if (method === "pivot.get_info") {
+          if (params.pivotTableName === "TemplatePivot") {
+            return {
+              ok: true,
+              info: {
+                workbookId,
+                pivotTableName: "TemplatePivot",
+                sheetName: "Template",
+                source: "TemplateTransactions",
+                sourceType: "Table",
+                hierarchies: [{ name: "Region" }, { name: "Amount" }],
+                rowHierarchies: [{ name: "Region" }],
+                columnHierarchies: [],
+                filterHierarchies: [],
+                dataHierarchies: [{ name: "Sum of Amount", field: { name: "Amount" } }]
+              }
+            };
+          }
+          return {
+            ok: true,
+            info: {
+              workbookId,
+              pivotTableName: "ReportPivot",
+              sheetName: "Report",
+              source: "ReportTransactions",
+              sourceType: "Table",
+              hierarchies: [{ name: "Region" }],
+              rowHierarchies: [],
+              columnHierarchies: [],
+              filterHierarchies: [],
+              dataHierarchies: []
+            }
+          };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const result = await runtime.copyPivotFromTemplate({
+      workbookId,
+      pivotTableName: "ReportPivot",
+      templatePivotTableName: "TemplatePivot"
+    });
+
+    expect((result as { ok?: boolean }).ok).toBe(false);
+    expect((result as { error?: { code?: string } }).error?.code).toBe("TEMPLATE_MISMATCH");
+    expect((result as { issues?: Array<{ code: string; details?: Record<string, unknown> }> }).issues?.some((issue) => issue.code === "PIVOT_TEMPLATE_SOURCE_FIELD_MISSING" && issue.details?.field === "Amount")).toBe(true);
+    expect(calls).toEqual(["pivot.get_info", "pivot.get_info"]);
+    expect(runtime.transactions.list(workbookId)).toHaveLength(0);
+  });
 });
 
 describe("RuntimeService PivotTable validation", () => {

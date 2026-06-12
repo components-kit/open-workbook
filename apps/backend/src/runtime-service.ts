@@ -68,6 +68,7 @@ import type {
   PivotCopyFromTemplateRequest,
   PivotCreateRequest,
   PivotSelector,
+  PivotTableInfo,
   PivotValidateSourceRequest,
   PlanCreateRequest,
   PlanId,
@@ -1995,9 +1996,37 @@ export class RuntimeService {
       workbookId: request.workbookId,
       pivotTableName: request.templatePivotTableName
     });
-    const targetPivotInfo = (targetInfo as { info?: { sheetName?: string; range?: { address: string } } }).info;
+    const targetPivotInfo = (targetInfo as { ok?: boolean; info?: PivotTableInfo }).info;
+    const sourcePivotInfo = (sourceInfo as { ok?: boolean; info?: PivotTableInfo }).info;
+    if (!(targetInfo as { ok?: boolean }).ok || !targetPivotInfo) {
+      return {
+        ok: false,
+        target: targetInfo,
+        error: runtimeError("NOT_FOUND", `Target PivotTable not found or unavailable: ${request.pivotTableName}`, { retryable: false })
+      };
+    }
+    if (!(sourceInfo as { ok?: boolean }).ok || !sourcePivotInfo) {
+      return {
+        ok: false,
+        source: sourceInfo,
+        error: runtimeError("NOT_FOUND", `Template PivotTable not found or unavailable: ${request.templatePivotTableName}`, { retryable: false })
+      };
+    }
+    const compatibilityIssues = validatePivotTemplateCompatibility(sourcePivotInfo, targetPivotInfo);
+    if (compatibilityIssues.some((issue) => issue.severity === "error")) {
+      return {
+        ok: false,
+        source: sourceInfo,
+        target: targetInfo,
+        issues: compatibilityIssues,
+        error: runtimeError("TEMPLATE_MISMATCH", "PivotTable template copy is blocked because the target pivot source is missing fields required by the template.", {
+          retryable: false,
+          details: { issues: compatibilityIssues }
+        })
+      };
+    }
     const targetSheetName = targetPivotInfo?.sheetName;
-    const sourceSheetName = (sourceInfo as { info?: { sheetName?: string } }).info?.sheetName;
+    const sourceSheetName = sourcePivotInfo?.sheetName;
     const ranges = await this.getPivotTemplateCopyRanges(request.workbookId, targetSheetName, targetPivotInfo?.range?.address);
     const permissionWarnings = this.validateDirectMutation(request.workbookId, ranges, "format");
     if (permissionWarnings.length > 0) {
@@ -5167,6 +5196,38 @@ function pivotDeleteScopes(request: PivotSelector, sheetName: string | undefined
       sheetName,
       pivotName: request.pivotTableName
     }
+  ]);
+}
+
+function validatePivotTemplateCompatibility(source: PivotTableInfo, target: PivotTableInfo): ValidationIssue[] {
+  const requiredFields = pivotTemplateRequiredSourceFields(source);
+  const targetSourceFields = uniqueDefined((target.hierarchies ?? []).map((hierarchy) => hierarchy.name));
+  if (requiredFields.length === 0 || targetSourceFields.length === 0) {
+    return [];
+  }
+  return requiredFields
+    .filter((field) => !targetSourceFields.includes(field))
+    .map((field) => ({
+      code: "PIVOT_TEMPLATE_SOURCE_FIELD_MISSING",
+      severity: "error",
+      category: "template",
+      message: `Target PivotTable source is missing template field: ${field}`,
+      details: {
+        field,
+        templatePivotTableName: source.pivotTableName,
+        targetPivotTableName: target.pivotTableName,
+        requiredFields,
+        targetSourceFields
+      }
+    }));
+}
+
+function pivotTemplateRequiredSourceFields(info: PivotTableInfo): string[] {
+  return uniqueDefined([
+    ...(info.rowHierarchies ?? []).map((hierarchy) => hierarchy.name),
+    ...(info.columnHierarchies ?? []).map((hierarchy) => hierarchy.name),
+    ...(info.filterHierarchies ?? []).map((hierarchy) => hierarchy.name),
+    ...(info.dataHierarchies ?? []).map((hierarchy) => hierarchy.field?.name ?? hierarchy.name)
   ]);
 }
 
