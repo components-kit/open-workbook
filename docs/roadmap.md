@@ -11,6 +11,14 @@ Open Workbook is ready for local source installs, packaged CLI testing, MCP inte
 - Excel Office.js add-in runtime.
 - CLI for running MCP, serving the add-in, generating manifests, sideloading, diagnostics, and OpenCode config.
 - Backup, snapshot, plan, permission, template, diff, and rollback primitives.
+- Runtime capability reporting by connected Office host, platform, Office version, and supported `ExcelApi` versions.
+- HTTPS add-in asset serving with user-provided local certificate and manifest URL generation.
+- Large matrix write chunking for values, formulas, and number formats, with chunk telemetry.
+- Persistent local state for templates, regions, permissions, plans, and backup indexes.
+- Workbook local config export/import for portable templates, regions, and permission metadata.
+- Workbook custom XML embedding/import for portable templates, regions, and permission metadata when the connected Excel host exposes the Office.js API.
+- Service wrapper manifest generation for add-in and daemon auto-start on macOS, Linux systemd user services, and Windows Task Scheduler.
+- Deterministic chart template metadata replay for chart type, style, title, and geometry.
 
 ## Implemented Excel Surfaces
 
@@ -27,13 +35,8 @@ Open Workbook is ready for local source installs, packaged CLI testing, MCP inte
 ## Hardening Before Broader Production
 
 - Real Excel E2E matrix on macOS and Windows.
-- Runtime capability checks by Office API set and platform.
-- HTTPS/dev-certificate option for add-in serving.
-- Larger workbook performance profiling and true large-range chunk execution.
-- Persistent local stores for templates, regions, permissions, plans, and backup indexes.
-- Native installer or service wrapper for auto-starting the add-in asset server.
-- Deeper chart and PivotTable template copying where Office.js exposes deterministic APIs.
-- Workbook custom XML or local config integration for portable template/region metadata.
+- Larger workbook performance profiling and SLO calibration from real workbook traces.
+- Deeper PivotTable field-layout/template copying where Office.js exposes deterministic APIs.
 
 ## Explicit Non-Goals For Now
 

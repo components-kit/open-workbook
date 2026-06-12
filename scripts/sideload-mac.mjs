@@ -31,7 +31,8 @@ function generateManifest() {
 function defaultAddinUrl() {
   const host = process.env.OPEN_WORKBOOK_ADDIN_HOST ?? "127.0.0.1";
   const port = process.env.OPEN_WORKBOOK_ADDIN_PORT ?? "37846";
-  return `http://${host}:${port}`;
+  const protocol = process.env.OPEN_WORKBOOK_ADDIN_HTTPS === "1" || process.env.OPEN_WORKBOOK_ADDIN_PROTOCOL === "https" ? "https" : "http";
+  return `${protocol}://${host}:${port}`;
 }
 
 function defaultBackendUrl() {

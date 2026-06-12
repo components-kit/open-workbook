@@ -1,4 +1,4 @@
-import { createRangeFingerprint, createWorkbookFingerprint, hashStable } from "@open-workbook/excel-core";
+import { chunkMatrixRows, createRangeFingerprint, createWorkbookFingerprint, hashStable, parseA1Address } from "@open-workbook/excel-core";
 import type {
   AddinExecuteBatchRequest,
   AddinTemplateRepairRequest,
@@ -51,7 +51,9 @@ import type {
   TableSortRequest,
   TableUpdateRowsRequest,
   TemplateExecutionSource,
+  RuntimeCapabilities,
   WorkbookRef,
+  WorkbookLocalConfig,
   WorkbookSnapshotResponse
 } from "@open-workbook/protocol";
 import { runtimeError } from "@open-workbook/protocol";
@@ -72,6 +74,90 @@ interface ExecutionCounters {
 const ENGINE_NAME = "office-js-addin";
 const ENGINE_VERSION = "0.1.0";
 const CHUNK_CELL_LIMIT = 50_000;
+const OPEN_WORKBOOK_CUSTOM_XML_NAMESPACE = "https://open-workbook.dev/schema/local-config/1";
+const EXCEL_API_VERSIONS = ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17"] as const;
+
+export function getRuntimeCapabilities(): RuntimeCapabilities {
+  const apiSets = EXCEL_API_VERSIONS.map((version) => ({
+    set: "ExcelApi",
+    version,
+    supported: isOfficeApiSetSupported("ExcelApi", version)
+  }));
+  const supports = (version: (typeof EXCEL_API_VERSIONS)[number]) => apiSets.some((apiSet) => apiSet.version === version && apiSet.supported);
+  const officeVersion = typeof Office.context.diagnostics?.version === "string" ? Office.context.diagnostics.version : undefined;
+  return {
+    engine: {
+      name: ENGINE_NAME,
+      version: ENGINE_VERSION,
+      platform: detectPlatform(),
+      host: String(Office.context.host ?? "Excel"),
+      ...(officeVersion !== undefined ? { officeVersion } : {})
+    },
+    apiSets,
+    capabilities: [
+      {
+        name: "workbook.context",
+        supported: supports("1.1"),
+        platforms: ["mac", "windows", "web"],
+        requires: [{ set: "ExcelApi", version: "1.1" }]
+      },
+      {
+        name: "range.batch.read_write",
+        supported: supports("1.9"),
+        platforms: ["mac", "windows", "web"],
+        requires: [{ set: "ExcelApi", version: "1.9" }]
+      },
+      {
+        name: "table.native",
+        supported: supports("1.9"),
+        platforms: ["mac", "windows", "web"],
+        requires: [{ set: "ExcelApi", version: "1.9" }]
+      },
+      {
+        name: "pivot.native",
+        supported: supports("1.8"),
+        platforms: ["mac", "windows", "web"],
+        requires: [{ set: "ExcelApi", version: "1.8" }]
+      },
+      {
+        name: "chart.native",
+        supported: supports("1.9"),
+        platforms: ["mac", "windows", "web"],
+        requires: [{ set: "ExcelApi", version: "1.9" }]
+      },
+      {
+        name: "range.metadata.advanced",
+        supported: supports("1.9"),
+        platforms: ["mac", "windows", "web"],
+        requires: [{ set: "ExcelApi", version: "1.9" }]
+      }
+    ],
+    hostCapabilities: [
+      hostCapability("range-values-formulas-styles", supports("1.9"), "ExcelApi", "1.9"),
+      hostCapability("tables-filters-sorts", supports("1.9"), "ExcelApi", "1.9"),
+      hostCapability("pivots", supports("1.8"), "ExcelApi", "1.8"),
+      hostCapability("charts", supports("1.9"), "ExcelApi", "1.9"),
+      {
+        name: "workbook-save-as-local-path",
+        supported: false,
+        status: "unsupported",
+        reason: "Office.js does not expose a deterministic local Save As path API."
+      },
+      {
+        name: "theme-freeze-print-layout-replay",
+        supported: false,
+        status: "limited",
+        reason: "Current implementation reports layout capability status instead of replaying these dimensions."
+      },
+      {
+        name: "comments-notes-address-mapping",
+        supported: false,
+        status: "limited",
+        reason: "Office.js comment and legacy-note collections need deterministic address mapping before agent writes are enabled."
+      }
+    ]
+  };
+}
 
 export async function getActiveWorkbookContext(): Promise<WorkbookRef | undefined> {
   return Excel.run(async (context) => {
@@ -326,6 +412,86 @@ export async function deleteName(request: NameSelector): Promise<{ ok: boolean; 
   });
 }
 
+export async function embedWorkbookLocalConfig(request: {
+  workbookId: string;
+  config: WorkbookLocalConfig;
+}): Promise<{ ok: boolean; embedded: boolean; partCount: number; namespaceUri: string; error?: unknown }> {
+  return Excel.run(async (context) => {
+    const customXmlParts = getCustomXmlParts(context);
+    if (!customXmlParts) {
+      return {
+        ok: false,
+        embedded: false,
+        partCount: 0,
+        namespaceUri: OPEN_WORKBOOK_CUSTOM_XML_NAMESPACE,
+        error: runtimeError("CAPABILITY_UNAVAILABLE", "This Excel host does not expose workbook custom XML parts to Office.js.", { retryable: false })
+      };
+    }
+    const existing = customXmlParts.getByNamespace(OPEN_WORKBOOK_CUSTOM_XML_NAMESPACE);
+    existing.load("items/id");
+    await context.sync();
+    for (const part of existing.items ?? []) {
+      part.delete();
+    }
+    await context.sync();
+    customXmlParts.add(workbookLocalConfigXml(request.config));
+    await context.sync();
+    return {
+      ok: true,
+      embedded: true,
+      partCount: 1,
+      namespaceUri: OPEN_WORKBOOK_CUSTOM_XML_NAMESPACE
+    };
+  });
+}
+
+export async function readWorkbookEmbeddedLocalConfig(workbookId: string): Promise<{
+  ok: boolean;
+  workbookId: string;
+  embedded: boolean;
+  partCount: number;
+  config?: WorkbookLocalConfig;
+  namespaceUri: string;
+  error?: unknown;
+}> {
+  return Excel.run(async (context) => {
+    const customXmlParts = getCustomXmlParts(context);
+    if (!customXmlParts) {
+      return {
+        ok: false,
+        workbookId,
+        embedded: false,
+        partCount: 0,
+        namespaceUri: OPEN_WORKBOOK_CUSTOM_XML_NAMESPACE,
+        error: runtimeError("CAPABILITY_UNAVAILABLE", "This Excel host does not expose workbook custom XML parts to Office.js.", { retryable: false })
+      };
+    }
+    const parts = customXmlParts.getByNamespace(OPEN_WORKBOOK_CUSTOM_XML_NAMESPACE);
+    parts.load("items/id");
+    await context.sync();
+    if (!parts.items || parts.items.length === 0) {
+      return {
+        ok: true,
+        workbookId,
+        embedded: false,
+        partCount: 0,
+        namespaceUri: OPEN_WORKBOOK_CUSTOM_XML_NAMESPACE
+      };
+    }
+    const xmlResult = parts.items[0]!.getXml();
+    await context.sync();
+    const config = parseWorkbookLocalConfigXml(xmlResult.value);
+    return {
+      ok: true,
+      workbookId,
+      embedded: true,
+      partCount: parts.items.length,
+      config,
+      namespaceUri: OPEN_WORKBOOK_CUSTOM_XML_NAMESPACE
+    };
+  });
+}
+
 export async function listPivotTables(workbookId: string): Promise<{ ok: boolean; pivotTables: PivotTableInfo[] }> {
   return Excel.run(async (context) => {
     const pivots = context.workbook.pivotTables;
@@ -469,6 +635,54 @@ export async function updateChartDataSource(request: ChartUpdateDataSourceReques
     chart.setData(worksheet.getRange(stripSheetName(request.sourceAddress)), request.seriesBy);
     await context.sync();
     return { ok: true, info: materializeChartInfo(loaded) };
+  });
+}
+
+export async function copyChartFromTemplate(request: ChartSelector & { templateSheetName: string; templateChartName: string }): Promise<{
+  ok: boolean;
+  copied: string[];
+  source?: ChartInfo;
+  target?: ChartInfo;
+}> {
+  return Excel.run(async (context) => {
+    const sourceChart = context.workbook.worksheets.getItem(request.templateSheetName).charts.getItemOrNullObject(request.templateChartName);
+    const targetChart = context.workbook.worksheets.getItem(request.sheetName).charts.getItemOrNullObject(request.chartName);
+    sourceChart.load("name,id,chartType,top,left,width,height,style,plotBy,isNullObject");
+    sourceChart.title.load("text");
+    targetChart.load("name,id,chartType,top,left,width,height,style,plotBy,isNullObject");
+    targetChart.title.load("text");
+    await context.sync();
+    if (sourceChart.isNullObject || targetChart.isNullObject) {
+      return { ok: false, copied: [] };
+    }
+
+    const copied: string[] = [];
+    targetChart.chartType = sourceChart.chartType;
+    copied.push("chartType");
+    if (sourceChart.style !== undefined) {
+      targetChart.style = sourceChart.style;
+      copied.push("style");
+    }
+    if (sourceChart.title.text !== undefined) {
+      targetChart.title.text = sourceChart.title.text;
+      copied.push("title");
+    }
+    targetChart.top = sourceChart.top;
+    targetChart.left = sourceChart.left;
+    targetChart.width = sourceChart.width;
+    targetChart.height = sourceChart.height;
+    copied.push("position");
+
+    targetChart.load("name,id,chartType,top,left,width,height,style,plotBy");
+    targetChart.title.load("text");
+    await context.sync();
+
+    return {
+      ok: true,
+      copied,
+      source: materializeChartInfo({ workbookId: request.workbookId, sheetName: request.templateSheetName, chart: sourceChart }),
+      target: materializeChartInfo({ workbookId: request.workbookId, sheetName: request.sheetName, chart: targetChart })
+    };
   });
 }
 
@@ -775,7 +989,7 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
     cellsRead: 0,
     cellsWritten: 0,
     rangeCount: payload.compiled.targetFingerprints.length,
-    chunkCount: Math.max(1, Math.ceil(payload.compiled.estimatedCellsTouched / CHUNK_CELL_LIMIT))
+    chunkCount: 0
   };
   const warnings: OperationWarning[] = [];
 
@@ -817,20 +1031,20 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
           }
           case "range.write_values": {
             assertMatrixShape(operation.target, operation.values);
-            getRange(context, operation.target).values = operation.values;
+            counters.chunkCount += writeMatrixInChunks(context, operation.target, operation.values, "values");
             counters.cellsWritten += matrixCellCount(operation.values);
             break;
           }
           case "range.write_formulas": {
             assertMatrixShape(operation.target, operation.formulas);
-            getRange(context, operation.target).formulas = operation.formulas;
+            counters.chunkCount += writeMatrixInChunks(context, operation.target, operation.formulas, "formulas");
             counters.cellsWritten += matrixCellCount(operation.formulas);
             formulasChanged += matrixCellCount(operation.formulas);
             break;
           }
           case "range.write_number_formats": {
             assertMatrixShape(operation.target, operation.numberFormat);
-            getRange(context, operation.target).numberFormat = operation.numberFormat;
+            counters.chunkCount += writeMatrixInChunks(context, operation.target, operation.numberFormat, "numberFormat");
             counters.cellsWritten += matrixCellCount(operation.numberFormat);
             break;
           }
@@ -1796,6 +2010,7 @@ function loadChartInfoObjects(workbookId: string, sheetName: string, chart: Exce
   chart: Excel.Chart;
 } {
   chart.load("name,id,chartType,top,left,width,height,style,plotBy");
+  chart.title.load("text");
   return { workbookId, sheetName, chart };
 }
 
@@ -1813,6 +2028,7 @@ function materializeChartInfo(loaded: ReturnType<typeof loadChartInfoObjects>): 
   assignIfDefined(info, "height", optionalValue(loaded.chart.height));
   assignIfDefined(info, "style", optionalValue(loaded.chart.style));
   assignIfDefined(info, "plotBy", optionalValue(String(loaded.chart.plotBy)));
+  assignIfDefined(info, "title", optionalValue(loaded.chart.title.text));
   return info;
 }
 
@@ -2132,14 +2348,72 @@ function assertMatrixShape(target: A1Range, matrix: unknown[][]): void {
   if (matrix.length === 0 || matrix.some((row) => row.length !== matrix[0]!.length)) {
     throw new Error(`Invalid matrix shape for ${target.sheetName}!${target.address}`);
   }
+  const parsed = parseA1Address(stripSheetName(target.address));
+  if (parsed.endRow - parsed.startRow + 1 !== matrix.length || parsed.endColumn - parsed.startColumn + 1 !== matrix[0]!.length) {
+    throw new Error(`Matrix dimensions do not match ${target.sheetName}!${target.address}`);
+  }
 }
 
 function matrixCellCount(matrix: unknown[][]): number {
   return matrix.reduce((count, row) => count + row.length, 0);
 }
 
+function writeMatrixInChunks(
+  context: Excel.RequestContext,
+  target: A1Range,
+  matrix: unknown[][],
+  property: "values" | "formulas" | "numberFormat"
+): number {
+  const parsed = parseA1Address(stripSheetName(target.address));
+  const columnCount = matrix[0]?.length ?? 0;
+  const worksheet = context.workbook.worksheets.getItem(target.sheetName);
+  let chunkCount = 0;
+  for (const chunk of chunkMatrixRows(matrix, CHUNK_CELL_LIMIT)) {
+    const range = worksheet.getRangeByIndexes(parsed.startRow - 1 + chunk.rowOffset, parsed.startColumn - 1, chunk.rows.length, columnCount);
+    (range as unknown as Record<typeof property, unknown[][]>)[property] = chunk.rows;
+    chunkCount += 1;
+  }
+  return chunkCount;
+}
+
 function optionalValue<T>(value: T | null | undefined): T | undefined {
   return value === null || value === undefined ? undefined : value;
+}
+
+function getCustomXmlParts(context: Excel.RequestContext): any | undefined {
+  const workbook = context.workbook as unknown as { customXmlParts?: any };
+  return workbook.customXmlParts;
+}
+
+function workbookLocalConfigXml(config: WorkbookLocalConfig): string {
+  const json = JSON.stringify(config);
+  return [
+    `<owb:localConfig xmlns:owb="${OPEN_WORKBOOK_CUSTOM_XML_NAMESPACE}" version="1" workbookId="${escapeXmlAttribute(config.workbookId)}">`,
+    `<owb:json>${cdata(json)}</owb:json>`,
+    "</owb:localConfig>"
+  ].join("");
+}
+
+function parseWorkbookLocalConfigXml(xml: string): WorkbookLocalConfig {
+  const cdataMatch = xml.match(/<owb:json>\s*<!\[CDATA\[([\s\S]*)\]\]>\s*<\/owb:json>/);
+  const textMatch = xml.match(/<owb:json>([\s\S]*?)<\/owb:json>/);
+  const rawJson = cdataMatch?.[1] ?? (textMatch?.[1] ? unescapeXmlText(textMatch[1]) : undefined);
+  if (!rawJson) {
+    throw new Error("Open Workbook custom XML part does not contain local config JSON.");
+  }
+  return JSON.parse(rawJson) as WorkbookLocalConfig;
+}
+
+function cdata(value: string): string {
+  return `<![CDATA[${value.replaceAll("]]>", "]]]]><![CDATA[>")}]]>`;
+}
+
+function escapeXmlAttribute(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("\"", "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function unescapeXmlText(value: string): string {
+  return value.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&quot;", "\"").replaceAll("&apos;", "'").replaceAll("&amp;", "&");
 }
 
 function assignIfDefined<T extends object, K extends keyof T>(target: T, key: K, value: T[K] | undefined): void {
@@ -2169,7 +2443,7 @@ function createTelemetry(started: number, counters: ExecutionCounters, warnings:
     cellsRead: counters.cellsRead,
     cellsWritten: counters.cellsWritten,
     rangeCount: counters.rangeCount,
-    chunkCount: counters.chunkCount,
+    chunkCount: Math.max(1, counters.chunkCount),
     engineName: ENGINE_NAME,
     engineVersion: ENGINE_VERSION,
     warningCount: warnings.length
@@ -2187,4 +2461,22 @@ function detectPlatform(): WorkbookRef["platform"] {
     return "web";
   }
   return "unknown";
+}
+
+function isOfficeApiSetSupported(set: string, version: string): boolean {
+  try {
+    return Office.context.requirements.isSetSupported(set, version);
+  } catch {
+    return false;
+  }
+}
+
+function hostCapability(name: string, supported: boolean, set: string, version: string): NonNullable<RuntimeCapabilities["hostCapabilities"]>[number] {
+  return {
+    name,
+    supported,
+    status: supported ? "supported" : "unsupported",
+    ...(supported ? {} : { reason: `${set} ${version} is not supported by this Excel host.` }),
+    requires: [{ set, version }]
+  };
 }

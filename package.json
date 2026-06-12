@@ -26,9 +26,12 @@
     "node": ">=20.11"
   },
   "scripts": {
-    "build": "tsc -b --pretty false && node scripts/package-cli-assets.mjs && node scripts/chmod-bins.mjs",
+    "build": "node scripts/clean-dist.mjs && tsc -b --pretty false && node scripts/package-cli-assets.mjs && node scripts/chmod-bins.mjs",
     "check": "tsc -b --pretty false",
     "test": "corepack pnpm -r test",
+    "benchmark:synthetic": "corepack pnpm build && node scripts/benchmark-synthetic.mjs",
+    "pack:dry-run": "node scripts/package-dry-run.mjs",
+    "verify": "corepack pnpm build && corepack pnpm test && node scripts/benchmark-synthetic.mjs",
     "dev:backend": "corepack pnpm --filter @open-workbook/backend dev",
     "dev:mcp": "corepack pnpm --filter @open-workbook/mcp-server dev",
     "dev:addin": "corepack pnpm --filter @open-workbook/excel-addin dev",

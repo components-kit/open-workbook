@@ -70,7 +70,18 @@ Custom local ports can be passed to every manifest-producing command:
 owb sideload manifest --addin-url http://127.0.0.1:37846 --backend-url ws://127.0.0.1:37845/addin
 ```
 
-For local desktop sideloading, the default URLs use loopback HTTP and WebSocket endpoints. HTTPS is still recommended for broader deployment, Office on the web, external services, and any future production installer.
+For local desktop sideloading, the default URLs use loopback HTTP and WebSocket endpoints. HTTPS serving is available when you provide a trusted local certificate:
+
+```bash
+owb addin serve --https \
+  --tls-cert ./certs/open-workbook.local.pem \
+  --tls-key ./certs/open-workbook.local-key.pem
+
+OPEN_WORKBOOK_ADDIN_HTTPS=1 \
+owb sideload manifest --out open-workbook.xml
+```
+
+The CLI does not install or trust certificates automatically. Use a local tool such as `mkcert` or your organization's certificate process, then pass the certificate paths to the add-in server.
 
 ## User Install Shape
 
@@ -81,4 +92,4 @@ For non-store open-source distribution, the expected install flow is:
 3. Sideload the manifest once.
 4. Open Excel; the add-in connects to the MCP-started backend.
 
-Later releases can package these steps into a native installer, but Excel still requires user or admin trust approval for the add-in manifest.
+`owb service manifest` can generate launchd, systemd user, or Windows scheduled-task wrappers for auto-starting the add-in asset server. Excel still requires user or admin trust approval for the add-in manifest.

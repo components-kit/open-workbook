@@ -1,4 +1,4 @@
-import type { BackupId, OperationId, PlanId, SnapshotId, TemplateId, WorkbookId } from "./ids.js";
+import type { AgentId, BackupId, OperationId, PlanId, SnapshotId, TaskId, TemplateId, TransactionId, WorkbookId } from "./ids.js";
 import type { A1Range, CellMatrix, RangeFingerprint, WorkbookFingerprint } from "./workbook.js";
 import type { ExcelRuntimeError } from "./errors.js";
 
@@ -292,9 +292,14 @@ export interface BatchRequest {
   workbookId: WorkbookId;
   operations: ExcelOperation[];
   mode: "validate" | "dry_run" | "apply";
+  planId?: PlanId | undefined;
   confirmationToken?: string;
   expectedTargetFingerprints?: RangeFingerprint[];
   baseSnapshotId?: SnapshotId;
+  agentId?: AgentId | undefined;
+  agentName?: string | undefined;
+  taskId?: TaskId | undefined;
+  role?: string | undefined;
 }
 
 export interface CompiledBatch {
@@ -311,6 +316,10 @@ export interface PlanCreateRequest {
   goal: string;
   operations: ExcelOperation[];
   baseSnapshotId?: SnapshotId;
+  agentId?: AgentId | undefined;
+  agentName?: string | undefined;
+  taskId?: TaskId | undefined;
+  role?: string | undefined;
 }
 
 export interface PlanPreview {
@@ -321,6 +330,15 @@ export interface PlanPreview {
   beforeWorkbookFingerprint: WorkbookFingerprint;
   targetFingerprints: RangeFingerprint[];
   diffSummary: DiffSummary;
+  warnings: OperationWarning[];
+}
+
+export interface PlanRefreshResult {
+  ok: boolean;
+  planId: PlanId;
+  refreshed: boolean;
+  preview?: PlanPreview | undefined;
+  conflicts: OperationWarning[];
   warnings: OperationWarning[];
 }
 
@@ -337,8 +355,11 @@ export interface DiffSummary {
 
 export interface OperationResult {
   ok: boolean;
-  operationId?: OperationId;
-  planId?: PlanId;
+  operationId?: OperationId | undefined;
+  planId?: PlanId | undefined;
+  transactionId?: TransactionId | undefined;
+  taskId?: TaskId | undefined;
+  agentId?: AgentId | undefined;
   diffSummary?: DiffSummary;
   data?: unknown;
   rollbackAvailable: boolean;
@@ -439,6 +460,12 @@ export interface FormulaPatternCell {
   patternHash: string;
 }
 
+export interface FormulaSpillRange {
+  sheetName?: string | undefined;
+  anchorAddress: string;
+  spillAddress: string;
+}
+
 export interface FormulaPatternResponse {
   workbookId: WorkbookId;
   sheetName: string;
@@ -457,6 +484,48 @@ export interface FormulaPatternResponse {
     cells: Array<{ rowIndex: number; columnIndex: number }>;
   }>;
   cells: FormulaPatternCell[];
+  spillRanges?: FormulaSpillRange[] | undefined;
+  warnings: OperationWarning[];
+}
+
+export interface FormulaDependencyNode {
+  id: string;
+  workbookId: WorkbookId;
+  kind: "range" | "table" | "external";
+  sheetName?: string | undefined;
+  address?: string | undefined;
+  tableName?: string | undefined;
+  structuredReference?: string | undefined;
+  externalWorkbook?: string | undefined;
+  externalReference?: string | undefined;
+  formula?: string | undefined;
+}
+
+export interface FormulaDependencyEdge {
+  from: FormulaDependencyNode;
+  to: FormulaDependencyNode;
+  kind: "precedent";
+  confidence: "parsed" | "inferred";
+}
+
+export interface FormulaDependencyGraph {
+  workbookId: WorkbookId;
+  sheetName: string;
+  address: string;
+  capturedAt: string;
+  nodes: FormulaDependencyNode[];
+  edges: FormulaDependencyEdge[];
+  warnings: OperationWarning[];
+}
+
+export interface FormulaTraceResponse {
+  ok: boolean;
+  workbookId: WorkbookId;
+  sheetName: string;
+  address: string;
+  direction: "precedents" | "dependents";
+  nodes: FormulaDependencyNode[];
+  edges: FormulaDependencyEdge[];
   warnings: OperationWarning[];
 }
 
@@ -867,6 +936,50 @@ export interface PermissionState {
   requireConfirmationFor: DestructiveLevel[];
   scope: PermissionScope;
   lockedRegions: LockedRegion[];
+}
+
+export interface WorkbookLocalConfig {
+  version: 1;
+  workbookId: WorkbookId;
+  exportedAt: string;
+  source: "open-workbook-local-config";
+  templates: Array<Record<string, unknown>>;
+  regions: WorkbookRegion[];
+  permissions?: PermissionState;
+}
+
+export interface WorkbookLocalConfigImportRequest {
+  workbookId: WorkbookId;
+  config: WorkbookLocalConfig;
+  includeTemplates?: boolean;
+  includeRegions?: boolean;
+  includePermissions?: boolean;
+  overwrite?: boolean;
+}
+
+export interface WorkbookLocalConfigImportResponse {
+  ok: boolean;
+  workbookId: WorkbookId;
+  imported: {
+    templates: number;
+    regions: number;
+    permissions: boolean;
+  };
+  skipped: {
+    templates: number;
+    regions: number;
+  };
+  error?: ExcelRuntimeError;
+}
+
+export interface WorkbookEmbeddedLocalConfigResponse {
+  ok: boolean;
+  workbookId: WorkbookId;
+  embedded: boolean;
+  config?: WorkbookLocalConfig;
+  partCount?: number;
+  warnings?: OperationWarning[];
+  error?: ExcelRuntimeError;
 }
 
 export interface CleaningReport {

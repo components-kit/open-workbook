@@ -6,6 +6,10 @@ export type TemplateId = string & { readonly __brand: "TemplateId" };
 export type PlanId = string & { readonly __brand: "PlanId" };
 export type OperationId = string & { readonly __brand: "OperationId" };
 export type ConnectionId = string & { readonly __brand: "ConnectionId" };
+export type AgentId = string & { readonly __brand: "AgentId" };
+export type TaskId = string & { readonly __brand: "TaskId" };
+export type LockId = string & { readonly __brand: "LockId" };
+export type TransactionId = string & { readonly __brand: "TransactionId" };
 
 export function makeId<T extends string>(prefix: string): T {
   const random =

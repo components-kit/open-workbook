@@ -24,7 +24,7 @@ The default `open-workbook-mcp` process starts both stdio MCP and the local add-
 
 Office.js is the primary engine for macOS and Windows desktop Excel. Other engines may be added behind the same compiled operation interface when Office.js cannot support a feature.
 
-Engine adapters must report capabilities. Tools should fail honestly or degrade explicitly when a capability is unavailable.
+Engine adapters must report capabilities. The Office.js add-in reports host platform, Office version when available, supported `ExcelApi` versions, and derived feature statuses during its WebSocket hello. Tools should fail honestly or degrade explicitly when a capability is unavailable.
 
 ## Catalog Policy
 

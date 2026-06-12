@@ -13,6 +13,15 @@ Workbook templates win over local templates with the same ID unless the caller e
 
 The runtime stores both hashes and the captured fingerprint payload. Hashes are used for fast comparisons; payloads are retained so validation and repair can explain which component differs.
 
+Template metadata can be moved between environments with workbook local config:
+
+- `excel.workbook.export_local_config` exports registered templates, regions, and optional permission metadata as versioned JSON.
+- `excel.workbook.import_local_config` imports the JSON into another local daemon registry, either merging or overwriting matching ids.
+- `excel.workbook.embed_local_config` writes that JSON into the workbook's custom XML part when the connected Excel host supports the Office.js custom XML API.
+- `excel.workbook.import_embedded_local_config` reads embedded workbook metadata and imports it into the local daemon registry.
+
+Local config does not modify workbook cells or save the `.xlsx`; it only moves Open Workbook's registry layer. Embedded local config modifies workbook metadata, not cells, and is guarded by workbook-level permissions and the transaction queue.
+
 ## Template Fingerprint
 
 A template captures:

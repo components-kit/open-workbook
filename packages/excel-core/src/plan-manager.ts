@@ -1,5 +1,6 @@
 import {
   type BackupId,
+  type AgentId,
   type BatchRequest,
   type ExcelOperation,
   type OperationResult,
@@ -7,6 +8,7 @@ import {
   type PlanId,
   type PlanPreview,
   type SnapshotId,
+  type TaskId,
   type WorkbookId,
   makeId,
   runtimeError
@@ -20,6 +22,10 @@ export interface PlanRecord {
   workbookId: WorkbookId;
   goal: string;
   operations: ExcelOperation[];
+  agentId?: AgentId | undefined;
+  agentName?: string | undefined;
+  taskId?: TaskId | undefined;
+  role?: string | undefined;
   status: "draft" | "previewed" | "applying" | "applied" | "rolled_back" | "failed" | "cancelled";
   baseSnapshotId: SnapshotId;
   preview?: PlanPreview;
@@ -48,6 +54,18 @@ export class PlanManager {
       createdAt: now,
       updatedAt: now
     };
+    if (request.agentId !== undefined) {
+      plan.agentId = request.agentId;
+    }
+    if (request.agentName !== undefined) {
+      plan.agentName = request.agentName;
+    }
+    if (request.taskId !== undefined) {
+      plan.taskId = request.taskId;
+    }
+    if (request.role !== undefined) {
+      plan.role = request.role;
+    }
     this.plans.set(planId, plan);
     return plan;
   }
@@ -126,13 +144,26 @@ export class PlanManager {
         retryable: true
       });
     }
-    const request = {
+    const request: BatchRequest = {
       workbookId: plan.workbookId,
       operations: plan.operations,
       mode: "apply" as const,
+      planId,
       baseSnapshotId: plan.baseSnapshotId,
       expectedTargetFingerprints: plan.preview.targetFingerprints
     };
+    if (plan.agentId !== undefined) {
+      request.agentId = plan.agentId;
+    }
+    if (plan.agentName !== undefined) {
+      request.agentName = plan.agentName;
+    }
+    if (plan.taskId !== undefined) {
+      request.taskId = plan.taskId;
+    }
+    if (plan.role !== undefined) {
+      request.role = plan.role;
+    }
     return confirmationToken === undefined ? request : { ...request, confirmationToken };
   }
 
@@ -161,6 +192,17 @@ export class PlanManager {
     return [...this.plans.values()]
       .filter((plan) => plan.workbookId === workbookId)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  load(records: PlanRecord[]): void {
+    this.plans.clear();
+    for (const record of records) {
+      this.plans.set(record.planId, { ...record });
+    }
+  }
+
+  dump(): PlanRecord[] {
+    return [...this.plans.values()].map((plan) => ({ ...plan }));
   }
 
   requireBackups(planId: PlanId): BackupId[] {

@@ -32,6 +32,8 @@ Supported tools:
 
 Region mutations compile to normal `range.*` batch operations, so they use the same backup, telemetry, and rollback path as direct range writes.
 
+Region metadata can be exported with `excel.workbook.export_local_config` and imported with `excel.workbook.import_local_config`. This is useful for open-source templates because the repo can carry JSON metadata for semantic regions while the workbook file stays unchanged. When the connected Excel host exposes Office.js custom XML APIs, `excel.workbook.embed_local_config` can also store the same region metadata inside the workbook file.
+
 ## Current Limits
 
-The region registry is runtime-local for now. Persisting regions to workbook custom XML or local project storage should be a future milestone before relying on regions across MCP restarts.
+The region registry is persisted in the daemon state file under `.open-workbook/state` by default, or under `OPEN_WORKBOOK_STATE_DIR` when configured. Local config export/import makes that registry portable outside the daemon state. Embedded local config makes it portable with the workbook file on Excel hosts that support custom XML parts.

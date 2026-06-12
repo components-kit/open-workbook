@@ -11,6 +11,7 @@ import {
   clearTableSort,
   closeWorkbook,
   convertFormulasToValues,
+  copyChartFromTemplate,
   copyFormulaPatterns,
   copyStyleDimensions,
   copyTableStructure,
@@ -23,9 +24,11 @@ import {
   deletePivotTable,
   executeBatch,
   getActiveWorkbookContext,
+  embedWorkbookLocalConfig,
   getChartInfo,
   getName,
   getPivotTableInfo,
+  getRuntimeCapabilities,
   getSelection,
   getTableInfo,
   getWorkbookInfo,
@@ -45,6 +48,7 @@ import {
   readRangeMergedCells,
   readRangeNotes,
   readFormulaPatterns,
+  readWorkbookEmbeddedLocalConfig,
   resizeTable,
   saveWorkbook,
   setActiveSheet,
@@ -79,6 +83,7 @@ export class AddinConnection {
       this.sendNotification("addin.hello", {
         host: "excel",
         runtime: "office-js",
+        capabilities: getRuntimeCapabilities(),
         connectedAt: new Date().toISOString()
       });
       this.startHeartbeat();
@@ -157,6 +162,12 @@ export class AddinConnection {
           this.sendSuccess(request.id, await snapshotRanges(params.workbookId, params.ranges));
           break;
         }
+        case "workbook.embed_local_config":
+          this.sendSuccess(request.id, await embedWorkbookLocalConfig(request.params as Parameters<typeof embedWorkbookLocalConfig>[0]));
+          break;
+        case "workbook.read_embedded_local_config":
+          this.sendSuccess(request.id, await readWorkbookEmbeddedLocalConfig((request.params as { workbookId: string }).workbookId));
+          break;
         case "names.list":
           this.sendSuccess(request.id, await listNames((request.params as { workbookId: string }).workbookId));
           break;
@@ -201,6 +212,9 @@ export class AddinConnection {
           break;
         case "chart.update_data_source":
           this.sendSuccess(request.id, await updateChartDataSource(request.params as Parameters<typeof updateChartDataSource>[0]));
+          break;
+        case "chart.copy_from_template":
+          this.sendSuccess(request.id, await copyChartFromTemplate(request.params as Parameters<typeof copyChartFromTemplate>[0]));
           break;
         case "chart.refresh":
           this.sendSuccess(request.id, await refreshChart(request.params as Parameters<typeof refreshChart>[0]));

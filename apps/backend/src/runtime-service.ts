@@ -1,11 +1,32 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { BackupManager, BatchCompiler, DefaultPermissionPolicy, hashStable, parseA1Address, PlanManager, SnapshotManager, TemplateRegistry } from "@open-workbook/excel-core";
+import {
+  BackupManager,
+  BatchCompiler,
+  DefaultPermissionPolicy,
+  buildFormulaDependencyGraph,
+  attachConflictGuidance,
+  extractFormulaReferences,
+  hashStable,
+  LockManager,
+  parseA1Address,
+  PlanManager,
+  SnapshotManager,
+  TaskRegistry,
+  TemplateRegistry,
+  TransactionManager,
+  traceDependents,
+  tracePrecedents
+} from "@open-workbook/excel-core";
+import { makeRollbackConflict } from "@open-workbook/excel-core";
 import type { BackupRecord, PermissionPolicy } from "@open-workbook/excel-core";
+import type { TemplateRecord } from "@open-workbook/excel-core";
 import type {
   AddinTemplateRepairRequest,
   AddinExecuteBatchRequest,
   A1Range,
+  AgentId,
+  AgentRecord,
   BackupId,
   BatchRequest,
   CellMatrix,
@@ -14,10 +35,24 @@ import type {
   ChartSelector,
   ChartUpdateDataSourceRequest,
   CleaningReport,
+  CollaborationEvent,
+  ConflictRecord,
+  ConflictTelemetryRecord,
+  ConflictTelemetrySummary,
   ConnectionId,
+  DestructiveLevel,
   ExcelOperation,
   FormulaCompareResponse,
+  FormulaDependencyGraph,
+  FormulaTraceResponse,
   FormulaCopyPatternsRequest,
+  ConflictGuidanceResponse,
+  LockAcquireResponse,
+  LockId,
+  LockLeasePolicy,
+  LockMode,
+  LockRenewResponse,
+  LockReleaseResponse,
   FormulaFillRequest,
   FormulaMutationResponse,
   FormulaPatternRequest,
@@ -34,6 +69,7 @@ import type {
   PivotSelector,
   PlanCreateRequest,
   PlanId,
+  PlanRefreshResult,
   RangeFingerprint,
   RangeMetadataResponse,
   RangeAreasSummary,
@@ -43,7 +79,12 @@ import type {
   RepairReport,
   RegionRegisterRequest,
   RegionSelector,
+  RuntimeCapabilities,
   SnapshotId,
+  TaskId,
+  TaskBlocker,
+  TaskScheduleResponse,
+  TaskRecord,
   TableAppendRowsRequest,
   TableApplyFiltersRequest,
   TableCopyStructureRequest,
@@ -59,6 +100,11 @@ import type {
   TemplateExecutionSource,
   TemplateCaptureRequest,
   TemplateCaptureResponse,
+  TransactionId,
+  TransactionRecord,
+  TransactionRollbackPreview,
+  TransactionRollbackConflict,
+  TransactionRollbackChainPreview,
   SheetTemplateFingerprintResponse,
   TemplateValidationIssue,
   TemplateValidationResponse,
@@ -70,14 +116,25 @@ import type {
   StyleFingerprintResponse,
   ValidationIssue,
   ValidationReport,
+  WorkbookScope,
   WorkbookRegion,
   WorkbookId,
+  WorkbookEmbeddedLocalConfigResponse,
+  WorkbookLocalConfig,
+  WorkbookLocalConfigImportRequest,
+  WorkbookLocalConfigImportResponse,
   WorkbookRef,
   WorkbookSnapshotResponse
 } from "@open-workbook/protocol";
 import { getToolCatalogSummary, PromptCatalog, ResourceCatalog, makeId, runtimeError } from "@open-workbook/protocol";
 import { SessionRegistry } from "./session-registry.js";
 import type { AddinRpcClient } from "./addin-rpc-client.js";
+import { RuntimeStateStore } from "./state-store.js";
+
+export interface RuntimeServiceOptions {
+  stateDir?: string;
+  persistState?: boolean;
+}
 
 export class RuntimeService {
   readonly sessions = new SessionRegistry();
@@ -86,8 +143,19 @@ export class RuntimeService {
   readonly templates = new TemplateRegistry();
   readonly compiler = new BatchCompiler();
   readonly plans = new PlanManager(this.compiler, this.backups);
+  readonly tasks = new TaskRegistry();
+  readonly locks = new LockManager();
+  readonly transactions = new TransactionManager();
   private readonly addinClients = new Map<ConnectionId, AddinRpcClient>();
   private readonly regions = new Map<string, WorkbookRegion>();
+  private readonly agents = new Map<AgentId, AgentRecord>();
+  private readonly collabEvents: CollaborationEvent[] = [];
+  private readonly conflicts: ConflictRecord[] = [];
+  private readonly conflictTelemetry: ConflictTelemetryRecord[] = [];
+  private transactionQueue: Promise<void> = Promise.resolve();
+  private readonly defaultAgentId: AgentId = "agent_daemon" as AgentId;
+  private readonly stateStore: RuntimeStateStore | undefined;
+  private lockLeasePolicy: LockLeasePolicy = defaultLockLeasePolicy();
   private permissionState: PermissionState = {
     ...DefaultPermissionPolicy,
     requireConfirmationFor: [],
@@ -104,6 +172,870 @@ export class RuntimeService {
   }> = [];
   private eventSubscriptionEnabled = true;
   private eventDebounceMs = 250;
+
+  constructor(options: RuntimeServiceOptions = {}) {
+    this.stateStore = options.persistState === false ? undefined : new RuntimeStateStore(options.stateDir);
+    this.restoreState();
+    this.recoverRuntimeState();
+    this.registerAgent({
+      agentId: this.defaultAgentId,
+      agentName: process.env.OPEN_WORKBOOK_AGENT_NAME ?? "local-agent",
+      clientType: "daemon",
+      pid: process.pid
+    });
+  }
+
+  registerAgent(input: { agentId?: AgentId | undefined; agentName?: string | undefined; clientType?: AgentRecord["clientType"] | undefined; pid?: number | undefined } = {}) {
+    const now = new Date().toISOString();
+    const agentId = input.agentId ?? makeId<AgentId>("agent");
+    const existing = this.agents.get(agentId);
+    const agent: AgentRecord = existing
+      ? {
+          ...existing,
+          agentName: input.agentName ?? existing.agentName,
+          clientType: input.clientType ?? existing.clientType,
+          pid: input.pid ?? existing.pid,
+          status: "active",
+          lastSeenAt: now
+        }
+      : {
+          agentId,
+          agentName: input.agentName,
+          clientType: input.clientType ?? "mcp",
+          pid: input.pid,
+          status: "active",
+          connectedAt: now,
+          lastSeenAt: now
+        };
+    this.agents.set(agentId, agent);
+    this.recordCollabEvent({
+      type: existing ? "agent.heartbeat" : "agent.registered",
+      agentId,
+      message: existing ? `Agent ${agent.agentName ?? agentId} heartbeat.` : `Agent ${agent.agentName ?? agentId} registered.`
+    });
+    return { ok: true, agent };
+  }
+
+  createTask(input: {
+    workbookId: WorkbookId;
+    goal: string;
+    role?: string | undefined;
+    priority?: TaskRecord["priority"] | undefined;
+    assignedAgentId?: AgentId | undefined;
+    allowedScopes?: WorkbookScope[] | undefined;
+    dependencies?: TaskId[] | undefined;
+  }) {
+    const task = this.tasks.create(input);
+    this.recordCollabEvent({
+      type: "task.created",
+      workbookId: input.workbookId,
+      agentId: task.assignedAgentId,
+      taskId: task.taskId,
+      message: `Task created: ${task.goal}`
+    });
+    return { ok: true, task };
+  }
+
+  claimTask(taskId: TaskId, agentId: AgentId) {
+    const task = this.tasks.claim(taskId, agentId);
+    this.recordCollabEvent({
+      type: "task.updated",
+      workbookId: task.workbookId,
+      agentId,
+      taskId,
+      message: `Task claimed: ${task.goal}`
+    });
+    return { ok: true, task };
+  }
+
+  updateTask(
+    taskId: TaskId,
+    patch: Partial<
+      Pick<
+        TaskRecord,
+        "goal" | "role" | "priority" | "status" | "progress" | "currentStep" | "blockers" | "assignedAgentId" | "allowedScopes" | "dependencies" | "errorMessage"
+      >
+    >
+  ) {
+    const task = this.tasks.update(taskId, patch);
+    this.recordCollabEvent({
+      type: patch.status === "completed" ? "task.completed" : patch.status === "failed" ? "task.failed" : "task.updated",
+      workbookId: task.workbookId,
+      agentId: task.assignedAgentId,
+      taskId,
+      message: `Task ${task.status}: ${task.goal}`
+    });
+    return { ok: true, task };
+  }
+
+  setTaskProgress(taskId: TaskId, progress: number, currentStep?: string | undefined) {
+    const task = this.tasks.setProgress(taskId, progress, currentStep);
+    this.recordCollabEvent({
+      type: "task.updated",
+      workbookId: task.workbookId,
+      agentId: task.assignedAgentId,
+      taskId,
+      message: `Task progress ${task.progress}%: ${task.goal}`,
+      details: { progress: task.progress, currentStep: task.currentStep }
+    });
+    return { ok: true, task };
+  }
+
+  addTaskBlocker(taskId: TaskId, input: Pick<TaskBlocker, "message" | "severity"> & { scope?: WorkbookScope | undefined }) {
+    const task = this.tasks.addBlocker(taskId, input);
+    const blocker = task.blockers.at(-1);
+    this.recordCollabEvent({
+      type: "task.updated",
+      workbookId: task.workbookId,
+      agentId: task.assignedAgentId,
+      taskId,
+      message: `${input.severity === "blocked" ? "Task blocked" : "Task note added"}: ${task.goal}`,
+      details: { blocker }
+    });
+    return { ok: true, task, blocker };
+  }
+
+  resolveTaskBlocker(taskId: TaskId, blockerId: string) {
+    const task = this.tasks.resolveBlocker(taskId, blockerId);
+    this.recordCollabEvent({
+      type: "task.updated",
+      workbookId: task.workbookId,
+      agentId: task.assignedAgentId,
+      taskId,
+      message: `Task blocker resolved: ${task.goal}`,
+      details: { blockerId }
+    });
+    return { ok: true, task };
+  }
+
+  evaluateTaskSchedule(input: { workbookId?: WorkbookId | undefined; apply?: boolean | undefined; lockMode?: LockMode | undefined } = {}): TaskScheduleResponse {
+    const tasks = this.tasks.list(input.workbookId);
+    const decisions = tasks.map((task) => {
+      const activeBlockers = task.blockers.filter((blocker) => blocker.status === "open" && blocker.severity === "blocked");
+      const waitingForTaskIds = task.dependencies.filter((dependencyId) => this.tasks.get(dependencyId)?.status !== "completed");
+      const lockConflicts =
+        task.allowedScopes.length > 0
+          ? this.locks.findConflicts(task.workbookId, task.allowedScopes, input.lockMode ?? "write_values")
+          : [];
+      const done = task.status === "completed" || task.status === "failed" || task.status === "cancelled";
+      const state: "ready" | "waiting_dependencies" | "waiting_locks" | "blocked" | "done" = done
+        ? "done"
+        : activeBlockers.length > 0
+          ? "blocked"
+          : waitingForTaskIds.length > 0
+            ? "waiting_dependencies"
+            : lockConflicts.length > 0
+              ? "waiting_locks"
+              : "ready";
+      return {
+        taskId: task.taskId,
+        workbookId: task.workbookId,
+        ready: state === "ready",
+        state,
+        waitingForTaskIds,
+        lockConflicts,
+        blockers: activeBlockers,
+        nextRetryAt: nextRetryAt(lockConflicts),
+        suggestedAction: taskScheduleAction(task.status, state),
+        message: taskScheduleMessage(task.goal, state, waitingForTaskIds.length, lockConflicts.length, activeBlockers.length)
+      };
+    });
+
+    const updatedTasks: TaskRecord[] = [];
+    if (input.apply) {
+      for (const decision of decisions) {
+        const task = this.tasks.get(decision.taskId);
+        if (!task || decision.state === "done") {
+          continue;
+        }
+        if (decision.ready && task.status === "blocked") {
+          updatedTasks.push(this.tasks.update(task.taskId, {
+            status: task.assignedAgentId ? "claimed" : "open",
+            currentStep: "Ready to resume"
+          }));
+          continue;
+        }
+        if (!decision.ready && task.status !== "blocked") {
+          updatedTasks.push(this.tasks.update(task.taskId, {
+            status: "blocked",
+            currentStep: decision.message
+          }));
+        }
+      }
+      if (updatedTasks.length > 0) {
+        this.recordCollabEvent({
+          type: "task.updated",
+          workbookId: input.workbookId,
+          message: `Task schedule evaluated; ${updatedTasks.length} task(s) updated.`,
+          details: { decisions }
+        });
+      } else {
+        this.persistState();
+      }
+    }
+
+    return {
+      ok: true,
+      workbookId: input.workbookId,
+      applied: Boolean(input.apply),
+      decisions,
+      updatedTasks
+    };
+  }
+
+  resumeReadyTasks(workbookId?: WorkbookId | undefined): TaskScheduleResponse {
+    return this.evaluateTaskSchedule({ workbookId, apply: true });
+  }
+
+  getTask(taskId: TaskId) {
+    const task = this.tasks.get(taskId);
+    return task ? { ok: true, task } : { ok: false, error: runtimeError("NOT_FOUND", `Task not found: ${taskId}`, { retryable: false }) };
+  }
+
+  listTasks(workbookId?: WorkbookId) {
+    return { ok: true, tasks: this.tasks.list(workbookId) };
+  }
+
+  getCollaborationStatus(workbookId?: WorkbookId) {
+    return {
+      ok: true,
+      agents: this.listAgents().agents,
+      tasks: this.tasks.list(workbookId),
+      locks: this.locks.list(workbookId),
+      transactions: this.transactions.list(workbookId),
+      conflicts: this.conflicts.filter((conflict) => workbookId === undefined || conflict.workbookId === workbookId).slice(-50).reverse().map(attachConflictGuidance),
+      events: this.collabEvents.filter((event) => workbookId === undefined || event.workbookId === workbookId).slice(-50).reverse()
+    };
+  }
+
+  listAgents() {
+    return { ok: true, agents: [...this.agents.values()].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt)) };
+  }
+
+  listLocks(workbookId?: WorkbookId) {
+    return { ok: true, locks: this.locks.list(workbookId) };
+  }
+
+  getLockPolicy() {
+    return { ok: true, policy: this.lockLeasePolicy };
+  }
+
+  setLockPolicy(update: Partial<LockLeasePolicy>) {
+    this.lockLeasePolicy = normalizeLockLeasePolicy({ ...this.lockLeasePolicy, ...update });
+    this.recordCollabEvent({
+      type: "lock.policy_updated",
+      message: "Lock lease policy updated.",
+      details: { policy: this.lockLeasePolicy }
+    });
+    return { ok: true, policy: this.lockLeasePolicy };
+  }
+
+  acquireLocks(input: {
+    workbookId: WorkbookId;
+    scopes: WorkbookScope[];
+    mode: LockMode;
+    reason: string;
+    ownerAgentId?: AgentId | undefined;
+    taskId?: TaskId | undefined;
+    ttlMs?: number | undefined;
+  }): LockAcquireResponse {
+    if (!this.lockLeasePolicy.allowManualLocks) {
+      return {
+        ok: false,
+        locks: [],
+        conflicts: [
+          {
+            conflictId: makeId<string>("conflict"),
+            code: "MANUAL_LOCKS_DISABLED",
+            message: "Manual lock acquisition is disabled by runtime lock policy.",
+            workbookId: input.workbookId,
+            scopes: input.scopes,
+            retryable: false,
+            suggestedAction: "manual_review",
+            createdAt: new Date().toISOString()
+          }
+        ],
+        policy: this.lockLeasePolicy
+      };
+    }
+    const lockResult = this.locks.acquire({
+      workbookId: input.workbookId,
+      ownerAgentId: input.ownerAgentId,
+      taskId: input.taskId,
+      scopes: input.scopes,
+      mode: input.mode,
+      ttlMs: lockTtl(input.ttlMs ?? this.lockLeasePolicy.defaultTtlMs, this.lockLeasePolicy),
+      reason: input.reason
+    });
+    if (!lockResult.ok) {
+      this.conflicts.push(...lockResult.conflicts);
+      for (const conflict of lockResult.conflicts) {
+        this.recordConflictTelemetry(conflict);
+        this.recordCollabEvent({
+          type: "conflict.detected",
+          workbookId: input.workbookId,
+          agentId: input.ownerAgentId,
+          taskId: input.taskId,
+          message: conflict.message,
+          details: { conflict }
+        });
+      }
+      return { ok: false, locks: [], conflicts: lockResult.conflicts, policy: this.lockLeasePolicy };
+    }
+    for (const lock of lockResult.locks) {
+      this.recordCollabEvent({
+        type: "lock.acquired",
+        workbookId: input.workbookId,
+        agentId: input.ownerAgentId,
+        taskId: input.taskId,
+        lockId: lock.lockId,
+        message: `Lock acquired: ${input.reason}`,
+        details: { lock }
+      });
+    }
+    return { ok: true, locks: lockResult.locks, conflicts: [], policy: this.lockLeasePolicy };
+  }
+
+  renewLocks(lockIds: LockId[], ttlMs?: number | undefined): LockRenewResponse {
+    const result = this.locks.renewWithMissing(lockIds, lockTtl(ttlMs ?? this.lockLeasePolicy.defaultTtlMs, this.lockLeasePolicy));
+    for (const lock of result.renewed) {
+      this.recordCollabEvent({
+        type: "lock.acquired",
+        workbookId: lock.workbookId,
+        agentId: lock.ownerAgentId,
+        taskId: lock.taskId,
+        lockId: lock.lockId,
+        message: `Lock renewed: ${lock.reason}`,
+        details: { lock }
+      });
+    }
+    if (result.renewed.length === 0) {
+      this.persistState();
+    }
+    return { ok: result.missingLockIds.length === 0, renewed: result.renewed, missingLockIds: result.missingLockIds, policy: this.lockLeasePolicy };
+  }
+
+  releaseLocks(lockIds: LockId[]): LockReleaseResponse {
+    const result = this.locks.releaseWithMissing(lockIds);
+    this.markConflictTelemetryClearedByLock(result.released.map((lock) => lock.lockId));
+    for (const lock of result.released) {
+      this.recordCollabEvent({
+        type: "lock.released",
+        workbookId: lock.workbookId,
+        agentId: lock.ownerAgentId,
+        taskId: lock.taskId,
+        lockId: lock.lockId,
+        message: `Lock released: ${lock.reason}`,
+        details: { lock }
+      });
+    }
+    if (result.released.length === 0) {
+      this.persistState();
+    }
+    return { ok: result.missingLockIds.length === 0, released: result.released, missingLockIds: result.missingLockIds };
+  }
+
+  listTransactions(workbookId?: WorkbookId) {
+    return { ok: true, transactions: this.transactions.list(workbookId) };
+  }
+
+  getTransaction(transactionId: TransactionId) {
+    const transaction = this.transactions.get(transactionId);
+    return transaction
+      ? { ok: true, transaction }
+      : { ok: false, error: runtimeError("NOT_FOUND", `Transaction not found: ${transactionId}`, { retryable: false }) };
+  }
+
+  previewTransactionRollback(transactionId: TransactionId): TransactionRollbackPreview {
+    const transaction = this.transactions.get(transactionId);
+    if (!transaction) {
+      return {
+        ok: false,
+        transactionId,
+        rollbackAvailable: false,
+        scopes: [],
+        laterTransactions: [],
+        conflicts: [
+          {
+            code: "ROLLBACK_UNAVAILABLE",
+            message: `Transaction not found: ${transactionId}`,
+            transactionId,
+            scopes: [],
+            suggestedAction: "manual_review"
+          }
+        ],
+        warnings: []
+      };
+    }
+
+    const laterTransactions = this.transactions.getLaterApplied(transaction);
+    const conflicts: TransactionRollbackConflict[] = [];
+    for (const later of laterTransactions) {
+      for (const scope of transaction.scopes) {
+        for (const laterScope of later.scopes) {
+          const conflict = makeRollbackConflict({
+            transactionId,
+            conflictingTransactionId: later.transactionId,
+            left: scope,
+            right: laterScope
+          });
+          if (conflict) {
+            conflicts.push(conflict);
+          }
+        }
+      }
+    }
+
+    if (transaction.status !== "applied" && transaction.status !== "rolled_back") {
+      conflicts.push({
+        code: "ROLLBACK_UNAVAILABLE",
+        message: `Only applied transactions can be rolled back. Current status is ${transaction.status}.`,
+        transactionId,
+        scopes: transaction.scopes,
+        suggestedAction: "manual_review"
+      });
+    }
+
+    if (transaction.status === "rolled_back") {
+      conflicts.push({
+        code: "ROLLBACK_UNAVAILABLE",
+        message: "Transaction has already been rolled back.",
+        transactionId,
+        scopes: transaction.scopes,
+        suggestedAction: "manual_review"
+      });
+    }
+
+    if (!transaction.planId) {
+      conflicts.push({
+        code: "ROLLBACK_UNAVAILABLE",
+        message: "Transaction has no plan rollback metadata. Use backup repair or workbook restore instead.",
+        transactionId,
+        scopes: transaction.scopes,
+        suggestedAction: "repair_from_backup"
+      });
+    }
+
+    const preview: TransactionRollbackPreview = {
+      ok: conflicts.length === 0,
+      transactionId,
+      workbookId: transaction.workbookId,
+      planId: transaction.planId,
+      taskId: transaction.taskId,
+      rollbackAvailable: conflicts.length === 0 && transaction.planId !== undefined,
+      rollbackMethod: transaction.planId !== undefined ? "plan" : undefined,
+      scopes: transaction.scopes,
+      laterTransactions,
+      conflicts,
+      warnings: transaction.warnings
+    };
+    this.recordCollabEvent({
+      type: "transaction.rollback_previewed",
+      workbookId: transaction.workbookId,
+      agentId: transaction.agentId,
+      taskId: transaction.taskId,
+      transactionId,
+      message: preview.ok ? `Rollback preview ready for ${transactionId}.` : `Rollback blocked for ${transactionId}.`,
+      details: { preview }
+    });
+    return preview;
+  }
+
+  async rollbackTransaction(transactionId: TransactionId, confirmationToken?: string): Promise<OperationResult> {
+    const preview = this.previewTransactionRollback(transactionId);
+    const transaction = this.transactions.get(transactionId);
+    if (!preview.ok || !transaction?.planId) {
+      return {
+        ok: false,
+        transactionId,
+        planId: transaction?.planId,
+        taskId: transaction?.taskId,
+        agentId: transaction?.agentId,
+        rollbackAvailable: false,
+        backups: [],
+        warnings: preview.conflicts.map((conflict) => ({
+          code: conflict.code,
+          message: conflict.message,
+          details: { conflict }
+        })),
+        telemetry: { warningCount: preview.conflicts.length },
+        error: runtimeError("BACKUP_UNAVAILABLE", "Transaction rollback is blocked. Review rollback preview conflicts.", {
+          retryable: false,
+          details: { preview }
+        })
+      };
+    }
+
+    const result = await this.rollbackPlan(transaction.planId, confirmationToken);
+    if (result.ok) {
+      this.transactions.markRolledBack(transactionId);
+      this.recordCollabEvent({
+        type: "transaction.rolled_back",
+        workbookId: transaction.workbookId,
+        agentId: transaction.agentId,
+        taskId: transaction.taskId,
+        transactionId,
+        message: `Transaction rolled back: ${transaction.goal}`
+      });
+      this.persistState();
+    }
+    return {
+      ...result,
+      transactionId,
+      taskId: transaction.taskId,
+      agentId: transaction.agentId
+    };
+  }
+
+  previewTransactionRollbackChain(transactionId: TransactionId): TransactionRollbackChainPreview {
+    const transaction = this.transactions.get(transactionId);
+    if (!transaction) {
+      return {
+        ok: false,
+        rootTransactionId: transactionId,
+        rollbackAvailable: false,
+        rollbackOrder: [],
+        affectedTransactions: [],
+        conflicts: [
+          {
+            code: "ROLLBACK_UNAVAILABLE",
+            message: `Transaction not found: ${transactionId}`,
+            transactionId,
+            scopes: [],
+            suggestedAction: "manual_review"
+          }
+        ],
+        warnings: [],
+        requiresConfirmation: false
+      };
+    }
+
+    const affected = this.collectRollbackChain(transaction);
+    const rollbackOrder = [...affected].reverse();
+    const conflicts: TransactionRollbackConflict[] = [];
+    for (const affectedTransaction of affected) {
+      if (affectedTransaction.status !== "applied") {
+        conflicts.push({
+          code: "ROLLBACK_UNAVAILABLE",
+          message: `Only applied transactions can be included in a rollback chain. ${affectedTransaction.transactionId} is ${affectedTransaction.status}.`,
+          transactionId: affectedTransaction.transactionId,
+          scopes: affectedTransaction.scopes,
+          suggestedAction: "manual_review"
+        });
+      }
+      if (!affectedTransaction.planId) {
+        conflicts.push({
+          code: "ROLLBACK_UNAVAILABLE",
+          message: `Transaction ${affectedTransaction.transactionId} has no plan rollback metadata.`,
+          transactionId: affectedTransaction.transactionId,
+          scopes: affectedTransaction.scopes,
+          suggestedAction: "repair_from_backup"
+        });
+      }
+    }
+
+    const warnings: OperationWarning[] =
+      affected.length > 1
+        ? [
+            {
+              code: "ROLLBACK_CHAIN_REQUIRED",
+              message: `Rollback requires ${affected.length} related transactions to be rolled back newest-first.`,
+              details: { transactionIds: rollbackOrder.map((candidate) => candidate.transactionId) }
+            }
+          ]
+        : [];
+    const confirmationToken = affected.length > 1 ? this.rollbackChainConfirmationToken(transactionId, rollbackOrder) : undefined;
+    const preview: TransactionRollbackChainPreview = {
+      ok: conflicts.length === 0,
+      rootTransactionId: transactionId,
+      workbookId: transaction.workbookId,
+      rollbackAvailable: conflicts.length === 0,
+      rollbackOrder,
+      affectedTransactions: affected,
+      conflicts,
+      warnings,
+      requiresConfirmation: affected.length > 1
+    };
+    if (confirmationToken !== undefined) {
+      preview.confirmationToken = confirmationToken;
+    }
+    this.recordCollabEvent({
+      type: "transaction.rollback_previewed",
+      workbookId: transaction.workbookId,
+      agentId: transaction.agentId,
+      taskId: transaction.taskId,
+      transactionId,
+      message: preview.ok ? `Rollback chain preview ready for ${transactionId}.` : `Rollback chain blocked for ${transactionId}.`,
+      details: { preview }
+    });
+    return preview;
+  }
+
+  async rollbackTransactionChain(transactionId: TransactionId, confirmationToken?: string): Promise<OperationResult> {
+    const preview = this.previewTransactionRollbackChain(transactionId);
+    if (!preview.ok) {
+      return {
+        ok: false,
+        transactionId,
+        rollbackAvailable: false,
+        backups: [],
+        warnings: preview.conflicts.map((conflict) => ({
+          code: conflict.code,
+          message: conflict.message,
+          details: { conflict }
+        })),
+        telemetry: { warningCount: preview.conflicts.length },
+        error: runtimeError("BACKUP_UNAVAILABLE", "Transaction rollback chain is blocked. Review rollback preview conflicts.", {
+          retryable: false,
+          details: { preview }
+        })
+      };
+    }
+    if (preview.requiresConfirmation && confirmationToken !== preview.confirmationToken) {
+      return {
+        ok: false,
+        transactionId,
+        rollbackAvailable: true,
+        backups: [],
+        warnings: [
+          {
+            code: "CONFIRMATION_REQUIRED",
+            message: "Rollback chain requires the exact confirmation token from preview.",
+            details: { confirmationToken: preview.confirmationToken }
+          }
+        ],
+        telemetry: { warningCount: 1 },
+        error: runtimeError("CONFIRMATION_REQUIRED", "Rollback chain requires explicit confirmation.", {
+          retryable: true,
+          details: { preview }
+        })
+      };
+    }
+
+    const results: OperationResult[] = [];
+    for (const transaction of preview.rollbackOrder) {
+      const result = await this.rollbackTransaction(transaction.transactionId, confirmationToken);
+      results.push(result);
+      if (!result.ok) {
+        return {
+          ...result,
+          transactionId,
+          warnings: [
+            ...result.warnings,
+            {
+              code: "ROLLBACK_CHAIN_PARTIAL",
+              message: `Rollback chain stopped at ${transaction.transactionId}.`,
+              details: { results }
+            }
+          ]
+        };
+      }
+    }
+    return {
+      ok: true,
+      transactionId,
+      rollbackAvailable: false,
+      backups: results.flatMap((result) => result.backups),
+      warnings: preview.warnings,
+      telemetry: {
+        warningCount: preview.warnings.length,
+        chunkCount: results.length
+      },
+      data: {
+        rollbackChain: preview.rollbackOrder.map((transaction) => transaction.transactionId),
+        results
+      }
+    };
+  }
+
+  private collectRollbackChain(root: TransactionRecord): TransactionRecord[] {
+    const affected: TransactionRecord[] = [root];
+    const laterTransactions = this.transactions.getLaterApplied(root);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const later of laterTransactions) {
+        if (affected.some((candidate) => candidate.transactionId === later.transactionId)) {
+          continue;
+        }
+        const conflictsAffected = affected.some((candidate) =>
+          candidate.scopes.some((scope) =>
+            later.scopes.some((laterScope) =>
+              makeRollbackConflict({
+                transactionId: candidate.transactionId,
+                conflictingTransactionId: later.transactionId,
+                left: scope,
+                right: laterScope
+              })
+            )
+          )
+        );
+        if (conflictsAffected) {
+          affected.push(later);
+          changed = true;
+        }
+      }
+    }
+    return affected;
+  }
+
+  private rollbackChainConfirmationToken(rootTransactionId: TransactionId, rollbackOrder: TransactionRecord[]): string {
+    const chainHash = hashStable(rollbackOrder.map((transaction) => transaction.transactionId));
+    return `rollback-chain:${rootTransactionId}:${chainHash}`;
+  }
+
+  listConflicts(workbookId?: WorkbookId) {
+    return {
+      ok: true,
+      conflicts: this.conflicts.filter((conflict) => workbookId === undefined || conflict.workbookId === workbookId).slice(-100).reverse().map(attachConflictGuidance)
+    };
+  }
+
+  getConflictGuidance(workbookId?: WorkbookId): ConflictGuidanceResponse {
+    const conflicts = this.conflicts.filter((conflict) => workbookId === undefined || conflict.workbookId === workbookId).slice(-100).reverse();
+    return {
+      ok: true,
+      workbookId,
+      guidance: conflicts.map((conflict) => attachConflictGuidance(conflict).guidance).filter((guidance): guidance is NonNullable<ConflictRecord["guidance"]> => guidance !== undefined)
+    };
+  }
+
+  explainConflict(conflict: ConflictRecord) {
+    return {
+      ok: true,
+      conflict: attachConflictGuidance(conflict),
+      guidance: attachConflictGuidance(conflict).guidance
+    };
+  }
+
+  getConflictTelemetry(workbookId?: WorkbookId, windowSize = 250): ConflictTelemetrySummary {
+    const recent = this.conflictTelemetry
+      .filter((record) => workbookId === undefined || record.workbookId === workbookId)
+      .slice(-Math.max(1, Math.min(1_000, Math.round(windowSize))));
+    return {
+      ok: true,
+      workbookId,
+      windowSize: recent.length,
+      totalCount: recent.length,
+      openCount: recent.filter((record) => record.status === "open").length,
+      clearedCount: recent.filter((record) => record.status === "cleared").length,
+      byCode: telemetryBuckets(recent, (record) => [record.code]),
+      byPrimaryAction: telemetryBuckets(recent, (record) => [record.primaryAction]),
+      hotScopes: telemetryBuckets(recent, (record) => record.scopeKeys),
+      hotTasks: telemetryBuckets(recent, (record) => record.taskId ? [record.taskId] : []),
+      hotAgents: telemetryBuckets(recent, (record) => record.ownerAgentId ? [record.ownerAgentId] : []),
+      recent: [...recent].reverse()
+    };
+  }
+
+  clearConflictTelemetry(workbookId?: WorkbookId) {
+    const before = this.conflictTelemetry.length;
+    if (workbookId === undefined) {
+      this.conflictTelemetry.splice(0, this.conflictTelemetry.length);
+    } else {
+      for (let index = this.conflictTelemetry.length - 1; index >= 0; index -= 1) {
+        if (this.conflictTelemetry[index]?.workbookId === workbookId) {
+          this.conflictTelemetry.splice(index, 1);
+        }
+      }
+    }
+    const cleared = before - this.conflictTelemetry.length;
+    this.persistState();
+    return { ok: true, workbookId, cleared };
+  }
+
+  private restoreState(): void {
+    const snapshot = this.stateStore?.load();
+    if (!snapshot) {
+      return;
+    }
+    this.agents.clear();
+    for (const agent of snapshot.agents) {
+      this.agents.set(agent.agentId, { ...agent });
+    }
+    this.tasks.load(snapshot.tasks);
+    this.locks.load(snapshot.locks);
+    if (snapshot.lockLeasePolicy !== undefined) {
+      this.lockLeasePolicy = normalizeLockLeasePolicy(snapshot.lockLeasePolicy);
+    }
+    this.transactions.load(snapshot.transactions);
+    this.conflicts.splice(0, this.conflicts.length, ...snapshot.conflicts.slice(-250));
+    this.conflictTelemetry.splice(0, this.conflictTelemetry.length, ...(snapshot.conflictTelemetry ?? []).slice(-1_000));
+    this.collabEvents.splice(0, this.collabEvents.length, ...snapshot.collaborationEvents.slice(-1_000));
+    this.templates.load(snapshot.templates ?? []);
+    this.regions.clear();
+    for (const region of snapshot.regions ?? []) {
+      this.regions.set(regionKey(region.workbookId, region.name), { ...region });
+    }
+    if (snapshot.permissions !== undefined) {
+      this.permissionState = mergePermissionState(this.permissionState, snapshot.permissions);
+    }
+    this.plans.load(snapshot.plans ?? []);
+    this.backups.load(snapshot.backups ?? []);
+  }
+
+  private recoverRuntimeState(): void {
+    const now = new Date().toISOString();
+    let recovered = false;
+    for (const agent of this.agents.values()) {
+      if (agent.status === "active" || agent.status === "idle") {
+        agent.status = "disconnected";
+        agent.lastSeenAt = now;
+        recovered = true;
+      }
+    }
+    const expiredLocks = this.locks.expireActive("Daemon restarted before the lock was released.");
+    if (expiredLocks.length > 0) {
+      recovered = true;
+    }
+    const interruptedTransactions = this.transactions.markInterrupted();
+    if (interruptedTransactions.length > 0) {
+      recovered = true;
+      for (const transaction of interruptedTransactions) {
+        if (transaction.taskId !== undefined) {
+          const task = this.tasks.get(transaction.taskId);
+          if (task && (task.status === "queued" || task.status === "applying")) {
+            this.tasks.update(transaction.taskId, {
+              status: "failed",
+              errorMessage: "Daemon restarted before the task transaction finished."
+            });
+          }
+        }
+      }
+    }
+    if (recovered) {
+      this.recordCollabEvent({
+        type: "transaction.failed",
+        message: "Recovered daemon state after restart.",
+        details: {
+          expiredLocks: expiredLocks.length,
+          interruptedTransactions: interruptedTransactions.length
+        }
+      });
+      return;
+    }
+    this.persistState();
+  }
+
+  private persistState(): void {
+    this.stateStore?.save({
+      version: 1,
+      savedAt: new Date().toISOString(),
+      agents: [...this.agents.values()],
+      tasks: this.tasks.dump(),
+      locks: this.locks.dump(),
+      lockLeasePolicy: this.lockLeasePolicy,
+      transactions: this.transactions.dump(),
+      conflicts: this.conflicts.slice(-250),
+      conflictTelemetry: this.conflictTelemetry.slice(-1_000),
+      collaborationEvents: this.collabEvents.slice(-1_000),
+      templates: this.templates.dump(),
+      regions: [...this.regions.values()].map((region) => ({ ...region })),
+      permissions: this.permissionState,
+      plans: this.plans.dump(),
+      backups: this.backups.dump()
+    });
+  }
 
   attachAddinClient(connectionId: ConnectionId, client: AddinRpcClient): void {
     this.addinClients.set(connectionId, client);
@@ -129,6 +1061,71 @@ export class RuntimeService {
     }
   }
 
+  private recordCollabEvent(input: Omit<CollaborationEvent, "eventId" | "createdAt">): void {
+    const event: CollaborationEvent = {
+      ...input,
+      eventId: makeId<string>("collab_event"),
+      createdAt: new Date().toISOString()
+    };
+    this.collabEvents.push(event);
+    if (this.collabEvents.length > 1_000) {
+      this.collabEvents.splice(0, this.collabEvents.length - 1_000);
+    }
+    this.persistState();
+  }
+
+  private recordConflictTelemetry(conflict: ConflictRecord): void {
+    const guided = attachConflictGuidance(conflict);
+    const telemetry: ConflictTelemetryRecord = {
+      telemetryId: makeId<string>("conflict_telemetry"),
+      conflictId: conflict.conflictId,
+      code: conflict.code,
+      workbookId: conflict.workbookId,
+      scopes: conflict.scopes,
+      scopeKeys: conflict.scopes.map(scopeTelemetryKey),
+      primaryAction: guided.guidance?.primaryAction ?? conflict.suggestedAction,
+      retryable: conflict.retryable,
+      status: "open",
+      createdAt: conflict.createdAt
+    };
+    if (conflict.ownerAgentId !== undefined) {
+      telemetry.ownerAgentId = conflict.ownerAgentId;
+    }
+    if (conflict.taskId !== undefined) {
+      telemetry.taskId = conflict.taskId;
+    }
+    if (conflict.transactionId !== undefined) {
+      telemetry.transactionId = conflict.transactionId;
+    }
+    if (conflict.lockId !== undefined) {
+      telemetry.lockId = conflict.lockId;
+    }
+    this.conflictTelemetry.push(telemetry);
+    if (this.conflictTelemetry.length > 1_000) {
+      this.conflictTelemetry.splice(0, this.conflictTelemetry.length - 1_000);
+    }
+  }
+
+  private markConflictTelemetryClearedByLock(lockIds: LockId[]): void {
+    if (lockIds.length === 0) {
+      return;
+    }
+    const lockIdSet = new Set(lockIds);
+    const clearedAt = new Date().toISOString();
+    let changed = false;
+    for (const record of this.conflictTelemetry) {
+      if (record.status === "open" && record.lockId !== undefined && lockIdSet.has(record.lockId)) {
+        record.status = "cleared";
+        record.clearedAt = clearedAt;
+        record.clearReason = "lock_released";
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.persistState();
+    }
+  }
+
   getStatus() {
     const activeSession = this.sessions.getActive();
     return {
@@ -141,8 +1138,20 @@ export class RuntimeService {
 
   getCapabilities(options: { includePreview?: boolean } = {}) {
     const catalogOptions = options.includePreview === undefined ? {} : { includePreview: options.includePreview };
+    const sessions = this.sessions.list();
+    const activeSession = this.sessions.getActive();
     return {
       runtime: this.getStatus(),
+      activeHostCapabilities: activeSession?.capabilities ?? disconnectedRuntimeCapabilities(),
+      connectedHostCapabilities: sessions
+        .filter((session) => session.capabilities !== undefined)
+        .map((session) => ({
+          connectionId: session.connectionId,
+          connectedAt: session.connectedAt,
+          lastSeenAt: session.lastSeenAt,
+          activeWorkbook: session.activeWorkbook,
+          capabilities: session.capabilities
+        })),
       catalog: getToolCatalogSummary(catalogOptions),
       resources: ResourceCatalog,
       prompts: PromptCatalog
@@ -184,6 +1193,7 @@ export class RuntimeService {
 
   setPermissions(update: Partial<PermissionState>) {
     this.permissionState = mergePermissionState(this.permissionState, update);
+    this.persistState();
     return this.getPermissions();
   }
 
@@ -192,6 +1202,7 @@ export class RuntimeService {
       ...this.permissionState,
       requireConfirmationFor: [...new Set(levels)]
     };
+    this.persistState();
     return this.getPermissions();
   }
 
@@ -200,6 +1211,7 @@ export class RuntimeService {
       ...this.permissionState,
       scope: { ...scope }
     };
+    this.persistState();
     return this.getPermissions();
   }
 
@@ -208,6 +1220,7 @@ export class RuntimeService {
       ...this.permissionState,
       allowDestructiveActions: allow
     };
+    this.persistState();
     return this.getPermissions();
   }
 
@@ -216,6 +1229,7 @@ export class RuntimeService {
       ...this.permissionState,
       allowMacroExecution: allow
     };
+    this.persistState();
     return this.getPermissions();
   }
 
@@ -246,6 +1260,7 @@ export class RuntimeService {
       ...this.permissionState,
       lockedRegions: [...existing, ...locked]
     };
+    this.persistState();
     return this.getPermissions();
   }
 
@@ -259,6 +1274,7 @@ export class RuntimeService {
         return input.regionNames !== undefined && !input.regionNames.includes(region.regionName);
       })
     };
+    this.persistState();
     return this.getPermissions();
   }
 
@@ -298,13 +1314,26 @@ export class RuntimeService {
   }
 
   createPlan(request: PlanCreateRequest) {
-    return this.plans.createPlan(request);
+    const agentId = request.agentId ?? this.defaultAgentId;
+    this.registerAgent({ agentId, agentName: request.agentName, clientType: "mcp" });
+    const plan = this.plans.createPlan({ ...request, agentId });
+    if (request.taskId !== undefined) {
+      this.tasks.attachPlan(request.taskId, plan.planId);
+      this.updateTask(request.taskId, { status: "planning" });
+    }
+    this.persistState();
+    return plan;
+  }
+
+  compileBatch(request: BatchRequest) {
+    return this.compiler.compile(request);
   }
 
   async previewPlan(planId: PlanId) {
     const preview = this.plans.previewPlan(planId);
     const client = this.getActiveAddinClient();
     if (!client || preview.diffSummary.changedRanges.length === 0) {
+      this.persistState();
       return preview;
     }
 
@@ -313,10 +1342,100 @@ export class RuntimeService {
       ranges: preview.diffSummary.changedRanges
     });
 
-    return this.plans.replacePreviewFingerprints(planId, {
+    const refreshed = this.plans.replacePreviewFingerprints(planId, {
       beforeWorkbookFingerprint: snapshot.workbookFingerprint,
       targetFingerprints: snapshot.rangeSnapshots.map((rangeSnapshot) => rangeSnapshot.fingerprint)
     });
+    this.persistState();
+    return refreshed;
+  }
+
+  async refreshPlanPreview(planId: PlanId): Promise<PlanRefreshResult> {
+    const plan = this.plans.getPlan(planId);
+    if (!plan) {
+      return {
+        ok: false,
+        planId,
+        refreshed: false,
+        conflicts: [{ code: "PLAN_NOT_FOUND", message: `Plan not found: ${planId}` }],
+        warnings: []
+      };
+    }
+    const existingPreview = plan.preview ?? await this.previewPlan(planId);
+    const client = this.getActiveAddinClient();
+    if (!client) {
+      return {
+        ok: false,
+        planId,
+        refreshed: false,
+        preview: existingPreview,
+        conflicts: [{ code: "ADDIN_DISCONNECTED", message: "No Excel add-in session is connected." }],
+        warnings: []
+      };
+    }
+    if (existingPreview.targetFingerprints.length === 0) {
+      return { ok: true, planId, refreshed: false, preview: existingPreview, conflicts: [], warnings: [] };
+    }
+
+    const snapshot = await client.request<WorkbookSnapshotResponse>("workbook.snapshot_ranges", {
+      workbookId: existingPreview.workbookId,
+      ranges: existingPreview.targetFingerprints.map((fingerprint) => fingerprint.range)
+    });
+    const currentFingerprints = snapshot.rangeSnapshots.map((rangeSnapshot) => rangeSnapshot.fingerprint);
+    const conflicts = detectFingerprintConflicts(existingPreview.targetFingerprints, currentFingerprints);
+    if (conflicts.length > 0) {
+      return {
+        ok: false,
+        planId,
+        refreshed: false,
+        preview: existingPreview,
+        conflicts,
+        warnings: [
+          {
+            code: "PLAN_REBASE_BLOCKED",
+            message: "Plan target ranges changed after preview. Refresh/rebase is blocked to avoid overwriting newer work."
+          }
+        ]
+      };
+    }
+
+    const refreshed = this.plans.replacePreviewFingerprints(planId, {
+      beforeWorkbookFingerprint: snapshot.workbookFingerprint,
+      targetFingerprints: currentFingerprints
+    });
+    this.recordCollabEvent({
+      type: "task.updated",
+      workbookId: plan.workbookId,
+      agentId: plan.agentId,
+      taskId: plan.taskId,
+      message: `Plan preview refreshed: ${plan.goal}`,
+      details: { planId }
+    });
+    return { ok: true, planId, refreshed: true, preview: refreshed, conflicts: [], warnings: [] };
+  }
+
+  async rebasePlan(planId: PlanId): Promise<PlanRefreshResult> {
+    return this.refreshPlanPreview(planId);
+  }
+
+  getPlanDiffResource(workbookId: WorkbookId, planId: PlanId) {
+    const plan = this.plans.getPlan(planId);
+    if (!plan || plan.workbookId !== workbookId) {
+      return {
+        ok: false,
+        workbookId,
+        planId,
+        error: runtimeError("NOT_FOUND", `Plan not found: ${planId}`, { retryable: false })
+      };
+    }
+    return {
+      ok: true,
+      workbookId,
+      planId,
+      diffSummary: plan.preview?.diffSummary,
+      preview: plan.preview,
+      plan
+    };
   }
 
   async getActiveContext() {
@@ -575,13 +1694,23 @@ export class RuntimeService {
         error: runtimeError("ADDIN_DISCONNECTED", "No Excel add-in session is connected.", { retryable: true })
       };
     }
-    const backup = request.reference && request.sheetName ? await this.createWorkbookBackup({
-      workbookId: request.workbookId,
-      reason: `Before creating named range ${request.name}`,
-      ranges: [{ workbookId: request.workbookId, sheetName: request.sheetName, address: request.reference }]
-    }) : undefined;
-    const result = await client.request("names.create", request);
-    return backup ? { ok: true, backup, result } : result;
+    return this.applyDirectTransaction(
+      {
+        workbookId: request.workbookId,
+        goal: `Before creating named range ${request.name}`,
+        scopes: nameMutationScopes(request),
+        destructiveLevel: "structure"
+      },
+      async () => {
+        const backup = request.reference && request.sheetName ? await this.createWorkbookBackup({
+          workbookId: request.workbookId,
+          reason: `Before creating named range ${request.name}`,
+          ranges: [{ workbookId: request.workbookId, sheetName: request.sheetName, address: request.reference }]
+        }) : undefined;
+        const result = await client.request("names.create", request);
+        return backup ? { ok: true, backup, result } : { ok: true, result };
+      }
+    );
   }
 
   async updateName(request: NameUpdateRequest) {
@@ -592,13 +1721,23 @@ export class RuntimeService {
         error: runtimeError("ADDIN_DISCONNECTED", "No Excel add-in session is connected.", { retryable: true })
       };
     }
-    const backup = request.reference && request.sheetName ? await this.createWorkbookBackup({
-      workbookId: request.workbookId,
-      reason: `Before updating named range ${request.name}`,
-      ranges: [{ workbookId: request.workbookId, sheetName: request.sheetName, address: request.reference }]
-    }) : undefined;
-    const result = await client.request("names.update", request);
-    return backup ? { ok: true, backup, result } : result;
+    return this.applyDirectTransaction(
+      {
+        workbookId: request.workbookId,
+        goal: `Before updating named range ${request.name}`,
+        scopes: nameMutationScopes(request),
+        destructiveLevel: "structure"
+      },
+      async () => {
+        const backup = request.reference && request.sheetName ? await this.createWorkbookBackup({
+          workbookId: request.workbookId,
+          reason: `Before updating named range ${request.name}`,
+          ranges: [{ workbookId: request.workbookId, sheetName: request.sheetName, address: request.reference }]
+        }) : undefined;
+        const result = await client.request("names.update", request);
+        return backup ? { ok: true, backup, result } : { ok: true, result };
+      }
+    );
   }
 
   async deleteName(request: NameSelector) {
@@ -609,7 +1748,18 @@ export class RuntimeService {
         error: runtimeError("ADDIN_DISCONNECTED", "No Excel add-in session is connected.", { retryable: true })
       };
     }
-    return client.request("names.delete", request);
+    return this.applyDirectTransaction(
+      {
+        workbookId: request.workbookId,
+        goal: `Before deleting named range ${request.name}`,
+        scopes: nameMutationScopes(request),
+        destructiveLevel: "structure"
+      },
+      async () => {
+        const result = await client.request("names.delete", request);
+        return { ok: true, result };
+      }
+    );
   }
 
   async listPivotTables(workbookId: WorkbookId) {
@@ -644,13 +1794,23 @@ export class RuntimeService {
     if (permissionWarnings.length > 0) {
       return permissionDenied("PivotTable creation is blocked by the current Open Workbook permission policy.", permissionWarnings);
     }
-    const backup = await this.createWorkbookBackup({
-      workbookId: request.workbookId,
-      reason: `Before creating PivotTable ${request.pivotTableName}`,
-      ranges
-    });
-    const result = await client.request("pivot.create", request);
-    return { ok: true, backup, result };
+    return this.applyDirectTransaction(
+      {
+        workbookId: request.workbookId,
+        goal: `Before creating PivotTable ${request.pivotTableName}`,
+        scopes: pivotMutationScopes(request, ranges),
+        destructiveLevel: "structure"
+      },
+      async () => {
+        const backup = await this.createWorkbookBackup({
+          workbookId: request.workbookId,
+          reason: `Before creating PivotTable ${request.pivotTableName}`,
+          ranges
+        });
+        const result = await client.request("pivot.create", request);
+        return { ok: true, backup, result };
+      }
+    );
   }
 
   async refreshPivotTable(request: PivotSelector) {
@@ -725,13 +1885,23 @@ export class RuntimeService {
     if (permissionWarnings.length > 0) {
       return permissionDenied("Chart creation is blocked by the current Open Workbook permission policy.", permissionWarnings);
     }
-    const backup = await this.createWorkbookBackup({
-      workbookId: request.workbookId,
-      reason: `Before creating chart ${request.chartName ?? request.chartType}`,
-      ranges
-    });
-    const result = await client.request("chart.create", request);
-    return { ok: true, backup, result };
+    return this.applyDirectTransaction(
+      {
+        workbookId: request.workbookId,
+        goal: `Before creating chart ${request.chartName ?? request.chartType}`,
+        scopes: chartMutationScopes(request, ranges),
+        destructiveLevel: "structure"
+      },
+      async () => {
+        const backup = await this.createWorkbookBackup({
+          workbookId: request.workbookId,
+          reason: `Before creating chart ${request.chartName ?? request.chartType}`,
+          ranges
+        });
+        const result = await client.request("chart.create", request);
+        return { ok: true, backup, result };
+      }
+    );
   }
 
   async updateChartDataSource(request: ChartUpdateDataSourceRequest) {
@@ -744,28 +1914,56 @@ export class RuntimeService {
     if (permissionWarnings.length > 0) {
       return permissionDenied("Chart data-source update is blocked by the current Open Workbook permission policy.", permissionWarnings);
     }
-    const backup = await this.createWorkbookBackup({
-      workbookId: request.workbookId,
-      reason: `Before updating chart ${request.chartName} data source`,
-      ranges
-    });
-    const result = await client.request("chart.update_data_source", request);
-    return { ok: true, backup, result };
+    return this.applyDirectTransaction(
+      {
+        workbookId: request.workbookId,
+        goal: `Before updating chart ${request.chartName} data source`,
+        scopes: chartMutationScopes(request, ranges),
+        destructiveLevel: "structure"
+      },
+      async () => {
+        const backup = await this.createWorkbookBackup({
+          workbookId: request.workbookId,
+          reason: `Before updating chart ${request.chartName} data source`,
+          ranges
+        });
+        const result = await client.request("chart.update_data_source", request);
+        return { ok: true, backup, result };
+      }
+    );
   }
 
   async copyChartFromTemplate(request: ChartSelector & { templateChartName: string; templateSheetName: string }) {
-    const source = await this.getChartInfo({
-      workbookId: request.workbookId,
-      sheetName: request.templateSheetName,
-      chartName: request.templateChartName
-    });
-    const target = await this.getChartInfo(request);
-    return {
-      ok: Boolean((source as { ok?: boolean }).ok && (target as { ok?: boolean }).ok),
-      source,
-      target,
-      note: "Chart template copy currently reports source/target metadata. Style replay will be added after chart style fingerprints are captured."
-    };
+    const client = this.getActiveAddinClient();
+    if (!client) {
+      return disconnectedError();
+    }
+    const permissionWarnings = this.validateDirectMutation(request.workbookId, [], "structure");
+    if (permissionWarnings.length > 0) {
+      return permissionDenied("Chart template copy is blocked by the current Open Workbook permission policy.", permissionWarnings);
+    }
+    return this.applyDirectTransaction(
+      {
+        workbookId: request.workbookId,
+        goal: `Before copying chart template ${request.templateChartName} to ${request.chartName}`,
+        scopes: dedupeScopes([
+          { type: "chart", workbookId: request.workbookId, sheetName: request.templateSheetName, chartName: request.templateChartName },
+          { type: "chart", workbookId: request.workbookId, sheetName: request.sheetName, chartName: request.chartName }
+        ]),
+        destructiveLevel: "structure"
+      },
+      async () => {
+        const backupResult = await this.createWorkbookBackup({
+          workbookId: request.workbookId,
+          reason: `Before copying chart template ${request.templateChartName} to ${request.chartName}`
+        });
+        if (!("backup" in backupResult)) {
+          return backupResult;
+        }
+        const result = await client.request("chart.copy_from_template", request);
+        return { ok: true, backup: backupResult.backup, result };
+      }
+    );
   }
 
   async refreshChart(request: ChartSelector) {
@@ -873,6 +2071,7 @@ export class RuntimeService {
       region.namedItem = namedItem;
     }
     this.regions.set(regionKey(request.workbookId, request.name), region);
+    this.persistState();
     return { ok: true, region };
   }
 
@@ -1572,6 +2771,7 @@ export class RuntimeService {
     });
     backup.payload = snapshotResult.snapshot.payload;
     backup.payloadRef = await this.persistBackupPayload(backup.backupId, snapshotResult.snapshot.payload);
+    this.persistState();
     return { ok: true, backup };
   }
 
@@ -1631,13 +2831,23 @@ export class RuntimeService {
       };
     }
 
-    const backup = await this.createWorkbookBackup({
-      workbookId: request.workbookId,
-      reason,
-      ranges
-    });
-    const result = await client.request(method, request);
-    return { ok: true, backup, result };
+    return this.applyDirectTransaction(
+      {
+        workbookId: request.workbookId,
+        goal: reason,
+        scopes: tableMutationScopes(request, ranges),
+        destructiveLevel: method.includes("resize") || method.includes("copy_structure") ? "structure" : "values"
+      },
+      async () => {
+        const backup = await this.createWorkbookBackup({
+          workbookId: request.workbookId,
+          reason,
+          ranges
+        });
+        const result = await client.request(method, request);
+        return { ok: true, backup, result };
+      }
+    );
   }
 
   private async mutateFormulas(
@@ -1666,14 +2876,24 @@ export class RuntimeService {
       };
     }
 
-    const backup = await this.createWorkbookBackup({
-      workbookId: request.workbookId,
-      reason,
-      ranges
-    });
-    const result = await client.request<FormulaMutationResponse>(method, request);
-    const validation = validate ? await validate() : undefined;
-    return { ok: result.ok, backup, result, validation };
+    return this.applyDirectTransaction(
+      {
+        workbookId: request.workbookId,
+        goal: reason,
+        scopes: formulaMutationScopes(request, ranges),
+        destructiveLevel: "values"
+      },
+      async () => {
+        const backup = await this.createWorkbookBackup({
+          workbookId: request.workbookId,
+          reason,
+          ranges
+        });
+        const result = await client.request<FormulaMutationResponse>(method, request);
+        const validation = validate ? await validate() : undefined;
+        return { ok: result.ok, backup, result, validation };
+      }
+    );
   }
 
   private async getTableBackupRanges(request: TableSelector): Promise<A1Range[]> {
@@ -1734,11 +2954,13 @@ export class RuntimeService {
       dataRegions: captured.dataRegions,
       fingerprintPayload: captured.fingerprintPayload
     };
-    return this.templates.register(
+    const template = this.templates.register(
       request.scope === "workbook"
         ? { ...input, workbookId: request.workbookId }
         : input
     );
+    this.persistState();
+    return template;
   }
 
   listTemplates(workbookId?: WorkbookId) {
@@ -1757,7 +2979,216 @@ export class RuntimeService {
   }
 
   unregisterTemplate(templateId: TemplateId) {
-    return { ok: this.templates.unregister(templateId) };
+    const ok = this.templates.unregister(templateId);
+    this.persistState();
+    return { ok };
+  }
+
+  exportWorkbookLocalConfig(workbookId: WorkbookId, options: { includePermissions?: boolean } = {}) {
+    const regions = [...this.regions.values()]
+      .filter((region) => region.workbookId === workbookId)
+      .map((region) => ({ ...region }));
+    const templates = this.templates
+      .dump()
+      .filter((template) => template.scope === "local" || template.workbookId === workbookId)
+      .map((template) => ({ ...template }));
+    const config: WorkbookLocalConfig = {
+      version: 1,
+      workbookId,
+      exportedAt: new Date().toISOString(),
+      source: "open-workbook-local-config",
+      templates: templates as unknown as Array<Record<string, unknown>>,
+      regions
+    };
+    if (options.includePermissions ?? true) {
+      config.permissions = clonePermissionStateForWorkbook(this.permissionState, workbookId);
+    }
+    return {
+      ok: true,
+      workbookId,
+      config,
+      counts: {
+        templates: templates.length,
+        regions: regions.length,
+        permissions: config.permissions !== undefined
+      }
+    };
+  }
+
+  importWorkbookLocalConfig(request: WorkbookLocalConfigImportRequest): WorkbookLocalConfigImportResponse {
+    const includeTemplates = request.includeTemplates ?? true;
+    const includeRegions = request.includeRegions ?? true;
+    const includePermissions = request.includePermissions ?? true;
+    const overwrite = request.overwrite ?? false;
+    if (request.config.version !== 1 || request.config.source !== "open-workbook-local-config") {
+      return {
+        ok: false,
+        workbookId: request.workbookId,
+        imported: { templates: 0, regions: 0, permissions: false },
+        skipped: { templates: 0, regions: 0 },
+        error: runtimeError("INVALID_ARGUMENT", "Unsupported workbook local config format.", { retryable: false })
+      };
+    }
+    if (request.config.workbookId !== request.workbookId) {
+      return {
+        ok: false,
+        workbookId: request.workbookId,
+        imported: { templates: 0, regions: 0, permissions: false },
+        skipped: { templates: 0, regions: 0 },
+        error: runtimeError("INVALID_ARGUMENT", "Config workbookId does not match the import target.", {
+          retryable: false,
+          details: { configWorkbookId: request.config.workbookId }
+        })
+      };
+    }
+
+    let importedTemplates = 0;
+    let skippedTemplates = 0;
+    if (includeTemplates) {
+      const existingTemplates = this.templates.dump();
+      const byId = new Map(existingTemplates.map((template) => [template.templateId, template]));
+      for (const rawTemplate of request.config.templates) {
+        const template = normalizeImportedTemplate(rawTemplate, request.workbookId);
+        if (!template) {
+          skippedTemplates += 1;
+          continue;
+        }
+        if (!overwrite && byId.has(template.templateId)) {
+          skippedTemplates += 1;
+          continue;
+        }
+        byId.set(template.templateId, template);
+        importedTemplates += 1;
+      }
+      this.templates.load([...byId.values()]);
+    }
+
+    let importedRegions = 0;
+    let skippedRegions = 0;
+    if (includeRegions) {
+      for (const rawRegion of request.config.regions) {
+        const region = normalizeImportedRegion(rawRegion, request.workbookId);
+        if (!region) {
+          skippedRegions += 1;
+          continue;
+        }
+        const key = regionKey(region.workbookId, region.name);
+        if (!overwrite && this.regions.has(key)) {
+          skippedRegions += 1;
+          continue;
+        }
+        this.regions.set(key, region);
+        importedRegions += 1;
+      }
+    }
+
+    let importedPermissions = false;
+    if (includePermissions && request.config.permissions !== undefined) {
+      this.permissionState = mergePermissionState(
+        this.permissionState,
+        clonePermissionStateForWorkbook(request.config.permissions, request.workbookId)
+      );
+      importedPermissions = true;
+    }
+
+    this.persistState();
+    return {
+      ok: true,
+      workbookId: request.workbookId,
+      imported: {
+        templates: importedTemplates,
+        regions: importedRegions,
+        permissions: importedPermissions
+      },
+      skipped: {
+        templates: skippedTemplates,
+        regions: skippedRegions
+      }
+    };
+  }
+
+  async embedWorkbookLocalConfig(workbookId: WorkbookId, options: { includePermissions?: boolean } = {}) {
+    const client = this.getActiveAddinClient();
+    if (!client) {
+      return disconnectedError();
+    }
+    const permissionWarnings = this.validateDirectMutation(workbookId, [], "workbook");
+    if (permissionWarnings.length > 0) {
+      return permissionDenied("Embedding workbook local config is blocked by the current Open Workbook permission policy.", permissionWarnings);
+    }
+    const exported = this.exportWorkbookLocalConfig(workbookId, options);
+    return this.applyDirectTransaction(
+      {
+        workbookId,
+        goal: "Embed Open Workbook local config into workbook custom XML",
+        scopes: [{ type: "workbook", workbookId }],
+        destructiveLevel: "workbook"
+      },
+      async () => {
+        const result = await client.request<WorkbookEmbeddedLocalConfigResponse>("workbook.embed_local_config", {
+          workbookId,
+          config: exported.config
+        });
+        return {
+          ...result,
+          config: exported.config
+        };
+      }
+    );
+  }
+
+  async readWorkbookEmbeddedLocalConfig(workbookId: WorkbookId): Promise<WorkbookEmbeddedLocalConfigResponse> {
+    const client = this.getActiveAddinClient();
+    if (!client) {
+      return disconnectedError() as WorkbookEmbeddedLocalConfigResponse;
+    }
+    const result = await client.request<WorkbookEmbeddedLocalConfigResponse>("workbook.read_embedded_local_config", { workbookId });
+    if (result.ok && result.config !== undefined && result.config.workbookId !== workbookId) {
+      const mismatch: WorkbookEmbeddedLocalConfigResponse = {
+        ok: false,
+        workbookId,
+        embedded: true,
+        error: runtimeError("INVALID_ARGUMENT", "Embedded Open Workbook config belongs to a different workbook id.", {
+          retryable: false,
+          details: { embeddedWorkbookId: result.config.workbookId }
+        })
+      };
+      if (result.partCount !== undefined) {
+        mismatch.partCount = result.partCount;
+      }
+      return mismatch;
+    }
+    return result;
+  }
+
+  async importWorkbookEmbeddedLocalConfig(input: {
+    workbookId: WorkbookId;
+    includeTemplates?: boolean;
+    includeRegions?: boolean;
+    includePermissions?: boolean;
+    overwrite?: boolean;
+  }): Promise<WorkbookLocalConfigImportResponse | WorkbookEmbeddedLocalConfigResponse> {
+    const embedded = await this.readWorkbookEmbeddedLocalConfig(input.workbookId);
+    if (!embedded.ok || embedded.config === undefined) {
+      return embedded;
+    }
+    const request: WorkbookLocalConfigImportRequest = {
+      workbookId: input.workbookId,
+      config: embedded.config
+    };
+    if (input.includeTemplates !== undefined) {
+      request.includeTemplates = input.includeTemplates;
+    }
+    if (input.includeRegions !== undefined) {
+      request.includeRegions = input.includeRegions;
+    }
+    if (input.includePermissions !== undefined) {
+      request.includePermissions = input.includePermissions;
+    }
+    if (input.overwrite !== undefined) {
+      request.overwrite = input.overwrite;
+    }
+    return this.importWorkbookLocalConfig(request);
   }
 
   async detectTemplates(workbookId: WorkbookId) {
@@ -1981,6 +3412,66 @@ export class RuntimeService {
     };
   }
 
+  async getFormulaDependencyGraph(input: FormulaPatternRequest): Promise<{ ok: true; graph: FormulaDependencyGraph } | { ok: false; error: ReturnType<typeof runtimeError> }> {
+    const patterns = await this.readFormulaPatterns(input);
+    if (!patterns.ok) {
+      return patterns;
+    }
+    const tables = await this.getFormulaGraphTables(input.workbookId);
+    return {
+      ok: true,
+      graph: buildFormulaDependencyGraph(patterns.patterns, { tables })
+    };
+  }
+
+  async traceFormulaPrecedents(input: FormulaPatternRequest): Promise<FormulaTraceResponse | { ok: false; error: ReturnType<typeof runtimeError> }> {
+    const graphResult = await this.getFormulaDependencyGraph(input);
+    if (!graphResult.ok) {
+      return graphResult;
+    }
+    const traced = tracePrecedents(graphResult.graph, input.sheetName, input.address ?? graphResult.graph.address);
+    return {
+      ok: true,
+      workbookId: input.workbookId,
+      sheetName: input.sheetName,
+      address: input.address ?? graphResult.graph.address,
+      direction: "precedents",
+      nodes: traced.nodes,
+      edges: traced.edges,
+      warnings: graphResult.graph.warnings
+    };
+  }
+
+  async traceFormulaDependents(input: FormulaPatternRequest): Promise<FormulaTraceResponse | { ok: false; error: ReturnType<typeof runtimeError> }> {
+    const graphResult = await this.getFormulaDependencyGraph({
+      workbookId: input.workbookId,
+      sheetName: input.sheetName
+    });
+    if (!graphResult.ok) {
+      return graphResult;
+    }
+    const traced = traceDependents(graphResult.graph, input.sheetName, input.address ?? graphResult.graph.address);
+    return {
+      ok: true,
+      workbookId: input.workbookId,
+      sheetName: input.sheetName,
+      address: input.address ?? graphResult.graph.address,
+      direction: "dependents",
+      nodes: traced.nodes,
+      edges: traced.edges,
+      warnings: graphResult.graph.warnings
+    };
+  }
+
+  private async getFormulaGraphTables(workbookId: WorkbookId): Promise<TableInfo[]> {
+    const listed = await this.listTables(workbookId);
+    const tables = (listed as { ok?: boolean; tables?: TableInfo[] }).tables;
+    if (!Array.isArray(tables)) {
+      return [];
+    }
+    return tables.filter((table) => table.workbookId === workbookId);
+  }
+
   async compareFormulaPatterns(input: {
     workbookId: WorkbookId;
     sourceSheetName: string;
@@ -2118,9 +3609,22 @@ export class RuntimeService {
 
     const request: BatchRequest = {
       workbookId: plan.workbookId,
+      planId,
       mode: "apply",
       operations
     };
+    if (plan.agentId !== undefined) {
+      request.agentId = plan.agentId;
+    }
+    if (plan.agentName !== undefined) {
+      request.agentName = plan.agentName;
+    }
+    if (plan.taskId !== undefined) {
+      request.taskId = plan.taskId;
+    }
+    if (plan.role !== undefined) {
+      request.role = plan.role;
+    }
     if (confirmationToken !== undefined) {
       request.confirmationToken = confirmationToken;
     }
@@ -2142,6 +3646,344 @@ export class RuntimeService {
   }
 
   async applyBatch(request: BatchRequest): Promise<OperationResult> {
+    if (request.mode !== "apply") {
+      return this.applyBatchDirect(request);
+    }
+    const compiled = this.compiler.compile(request);
+    const agentId = request.agentId ?? this.defaultAgentId;
+    const scopes = scopesFromBatch(request.workbookId, request.operations);
+    const transaction = this.transactions.create({
+      workbookId: request.workbookId,
+      agentId,
+      taskId: request.taskId,
+      planId: request.planId,
+      goal: request.operations.map((operation) => operation.reason || operation.kind).join("; ") || "Apply Excel batch",
+      scopes,
+      baseFingerprints: request.expectedTargetFingerprints ?? [],
+      destructiveLevel: compiled.destructiveLevel
+    });
+    if (request.taskId !== undefined) {
+      this.tasks.attachTransaction(request.taskId, transaction.transactionId);
+      this.updateTask(request.taskId, { status: "queued" });
+    }
+    this.recordCollabEvent({
+      type: "transaction.queued",
+      workbookId: request.workbookId,
+      agentId,
+      taskId: request.taskId,
+      transactionId: transaction.transactionId,
+      message: `Transaction queued: ${transaction.goal}`
+    });
+
+    return this.enqueueTransaction(async () => {
+      const lockResult = this.locks.acquire({
+        workbookId: request.workbookId,
+        ownerAgentId: agentId,
+        taskId: request.taskId,
+        transactionId: transaction.transactionId,
+        scopes,
+        mode: lockModeForDestructiveLevel(compiled.destructiveLevel),
+        ttlMs: lockTtl(this.lockLeasePolicy.transactionTtlMs, this.lockLeasePolicy),
+        reason: transaction.goal
+      });
+      if (!lockResult.ok) {
+        this.conflicts.push(...lockResult.conflicts);
+        for (const conflict of lockResult.conflicts) {
+          this.recordConflictTelemetry(conflict);
+          this.recordCollabEvent({
+            type: "conflict.detected",
+            workbookId: request.workbookId,
+            agentId,
+            taskId: request.taskId,
+            transactionId: transaction.transactionId,
+            message: conflict.message,
+            details: { conflict }
+          });
+        }
+        this.transactions.markBlocked(transaction.transactionId, "LOCK_CONFLICT", "Transaction conflicts with an active lock.");
+        this.persistState();
+        return {
+          ok: false,
+          transactionId: transaction.transactionId,
+          taskId: request.taskId,
+          agentId,
+          rollbackAvailable: compiled.requiredBackups.length > 0,
+          backups: [],
+          warnings: lockResult.conflicts.map((conflict) => ({
+            code: conflict.code,
+            message: conflict.message,
+            details: { conflict }
+          })),
+          telemetry: { warningCount: lockResult.conflicts.length },
+          error: runtimeError("LOCK_CONFLICT", "Transaction conflicts with active workbook work. Wait for the lock or refresh the plan.", {
+            retryable: true
+          })
+        };
+      }
+
+      this.transactions.markApplying(transaction.transactionId, lockResult.locks.map((lock) => lock.lockId));
+      for (const lock of lockResult.locks) {
+        this.recordCollabEvent({
+          type: "lock.acquired",
+          workbookId: request.workbookId,
+          agentId,
+          taskId: request.taskId,
+          transactionId: transaction.transactionId,
+          lockId: lock.lockId,
+          message: `Lock acquired for transaction ${transaction.transactionId}.`,
+          details: { lock }
+        });
+      }
+      if (request.taskId !== undefined) {
+        this.updateTask(request.taskId, { status: "applying" });
+      }
+      this.recordCollabEvent({
+        type: "transaction.applying",
+        workbookId: request.workbookId,
+        agentId,
+        taskId: request.taskId,
+        transactionId: transaction.transactionId,
+        message: `Transaction applying: ${transaction.goal}`
+      });
+
+      try {
+        const result = await this.applyBatchDirect({ ...request, agentId });
+        const enriched: OperationResult = {
+          ...result,
+          transactionId: transaction.transactionId,
+          agentId
+        };
+        if (request.taskId !== undefined) {
+          enriched.taskId = request.taskId;
+        }
+        if (result.ok) {
+          this.transactions.markApplied(transaction.transactionId, {
+            backups: enriched.backups,
+            warnings: enriched.warnings,
+            diffSummary: enriched.diffSummary,
+            telemetry: enriched.telemetry
+          });
+          if (request.taskId !== undefined) {
+            this.tasks.attachBackups(request.taskId, enriched.backups);
+            this.updateTask(request.taskId, { status: "completed" });
+          }
+          this.recordCollabEvent({
+            type: "transaction.applied",
+            workbookId: request.workbookId,
+            agentId,
+            taskId: request.taskId,
+            transactionId: transaction.transactionId,
+            message: `Transaction applied: ${transaction.goal}`
+          });
+        } else {
+          this.transactions.markFailed(
+            transaction.transactionId,
+            result.error?.code ?? "TRANSACTION_FAILED",
+            result.error?.message ?? "Transaction failed.",
+            result.warnings
+          );
+          if (request.taskId !== undefined) {
+            this.updateTask(request.taskId, { status: "failed", errorMessage: result.error?.message ?? "Transaction failed." });
+          }
+          this.recordCollabEvent({
+            type: "transaction.failed",
+            workbookId: request.workbookId,
+            agentId,
+            taskId: request.taskId,
+            transactionId: transaction.transactionId,
+            message: result.error?.message ?? `Transaction failed: ${transaction.goal}`
+          });
+        }
+        return enriched;
+      } finally {
+        const releasedLocks = this.locks.release(lockResult.locks.map((lock) => lock.lockId));
+        this.markConflictTelemetryClearedByLock(releasedLocks.map((lock) => lock.lockId));
+        for (const lock of releasedLocks) {
+          this.recordCollabEvent({
+            type: "lock.released",
+            workbookId: request.workbookId,
+            agentId,
+            taskId: request.taskId,
+            transactionId: transaction.transactionId,
+            lockId: lock.lockId,
+            message: `Lock released for transaction ${transaction.transactionId}.`,
+            details: { lock }
+          });
+        }
+        if (releasedLocks.length === 0) {
+          this.persistState();
+        }
+      }
+    });
+  }
+
+  private enqueueTransaction(work: () => Promise<OperationResult>): Promise<OperationResult> {
+    return this.enqueueRuntimeMutation(work);
+  }
+
+  private enqueueRuntimeMutation<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.transactionQueue.then(work, work);
+    this.transactionQueue = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
+  private async applyDirectTransaction<T>(
+    input: {
+      workbookId: WorkbookId;
+      goal: string;
+      scopes: WorkbookScope[];
+      destructiveLevel: DestructiveLevel;
+      taskId?: TaskId | undefined;
+      agentId?: AgentId | undefined;
+    },
+    work: () => Promise<T>
+  ): Promise<T | { ok: false; transactionId: TransactionId; rollbackAvailable: false; backups: []; warnings: OperationWarning[]; telemetry: { warningCount: number }; error: ReturnType<typeof runtimeError> }> {
+    const agentId = input.agentId ?? this.defaultAgentId;
+    const transaction = this.transactions.create({
+      workbookId: input.workbookId,
+      agentId,
+      taskId: input.taskId,
+      goal: input.goal,
+      scopes: input.scopes,
+      destructiveLevel: input.destructiveLevel
+    });
+    this.recordCollabEvent({
+      type: "transaction.queued",
+      workbookId: input.workbookId,
+      agentId,
+      taskId: input.taskId,
+      transactionId: transaction.transactionId,
+      message: `Transaction queued: ${transaction.goal}`
+    });
+    if (input.taskId !== undefined) {
+      this.tasks.attachTransaction(input.taskId, transaction.transactionId);
+      this.updateTask(input.taskId, { status: "queued" });
+    }
+
+    return this.enqueueRuntimeMutation(async () => {
+      const lockResult = this.locks.acquire({
+        workbookId: input.workbookId,
+        ownerAgentId: agentId,
+        taskId: input.taskId,
+        transactionId: transaction.transactionId,
+        scopes: input.scopes,
+        mode: lockModeForDestructiveLevel(input.destructiveLevel),
+        ttlMs: lockTtl(this.lockLeasePolicy.transactionTtlMs, this.lockLeasePolicy),
+        reason: input.goal
+      });
+      if (!lockResult.ok) {
+        this.conflicts.push(...lockResult.conflicts);
+        for (const conflict of lockResult.conflicts) {
+          this.recordConflictTelemetry(conflict);
+          this.recordCollabEvent({
+            type: "conflict.detected",
+            workbookId: input.workbookId,
+            agentId,
+            taskId: input.taskId,
+            transactionId: transaction.transactionId,
+            message: conflict.message,
+            details: { conflict }
+          });
+        }
+        this.transactions.markBlocked(transaction.transactionId, "LOCK_CONFLICT", "Direct transaction conflicts with an active lock.", lockResult.conflicts.map((conflict) => ({
+          code: conflict.code,
+          message: conflict.message,
+          details: { conflict }
+        })));
+        if (input.taskId !== undefined) {
+          this.updateTask(input.taskId, { status: "blocked", currentStep: "Waiting for conflicting workbook lock" });
+        } else {
+          this.persistState();
+        }
+        return {
+          ok: false,
+          transactionId: transaction.transactionId,
+          rollbackAvailable: false,
+          backups: [],
+          warnings: lockResult.conflicts.map((conflict) => ({
+            code: conflict.code,
+            message: conflict.message,
+            details: { conflict }
+          })),
+          telemetry: { warningCount: lockResult.conflicts.length },
+          error: runtimeError("LOCK_CONFLICT", "Direct transaction conflicts with active workbook work. Wait for the lock or split the task scope.", {
+            retryable: true
+          })
+        };
+      }
+
+      this.transactions.markApplying(transaction.transactionId, lockResult.locks.map((lock) => lock.lockId));
+      this.recordCollabEvent({
+        type: "transaction.applying",
+        workbookId: input.workbookId,
+        agentId,
+        taskId: input.taskId,
+        transactionId: transaction.transactionId,
+        message: `Transaction applying: ${transaction.goal}`
+      });
+      if (input.taskId !== undefined) {
+        this.updateTask(input.taskId, { status: "applying" });
+      }
+      try {
+        const result = await work();
+        const resultRecord = result as { ok?: boolean; backup?: { backupId?: BackupId }; warnings?: OperationWarning[]; error?: { code?: string; message?: string } };
+        const backups = resultRecord.backup?.backupId ? [resultRecord.backup.backupId] : [];
+        const warnings = resultRecord.warnings ?? [];
+        if (resultRecord.ok === false) {
+          this.transactions.markFailed(transaction.transactionId, resultRecord.error?.code ?? "TRANSACTION_FAILED", resultRecord.error?.message ?? "Direct transaction failed.", warnings);
+          if (input.taskId !== undefined) {
+            this.updateTask(input.taskId, { status: "failed", errorMessage: resultRecord.error?.message ?? "Direct transaction failed." });
+          }
+          this.recordCollabEvent({
+            type: "transaction.failed",
+            workbookId: input.workbookId,
+            agentId,
+            taskId: input.taskId,
+            transactionId: transaction.transactionId,
+            message: resultRecord.error?.message ?? `Transaction failed: ${transaction.goal}`
+          });
+        } else {
+          this.transactions.markApplied(transaction.transactionId, { backups, warnings });
+          if (input.taskId !== undefined) {
+            this.tasks.attachBackups(input.taskId, backups);
+            this.updateTask(input.taskId, { status: "completed" });
+          }
+          this.recordCollabEvent({
+            type: "transaction.applied",
+            workbookId: input.workbookId,
+            agentId,
+            taskId: input.taskId,
+            transactionId: transaction.transactionId,
+            message: `Transaction applied: ${transaction.goal}`
+          });
+        }
+        if (typeof result === "object" && result !== null && !Array.isArray(result)) {
+          return { ...result, transactionId: transaction.transactionId } as T;
+        }
+        return result;
+      } finally {
+        const releasedLocks = this.locks.release(lockResult.locks.map((lock) => lock.lockId));
+        this.markConflictTelemetryClearedByLock(releasedLocks.map((lock) => lock.lockId));
+        for (const lock of releasedLocks) {
+          this.recordCollabEvent({
+            type: "lock.released",
+            workbookId: input.workbookId,
+            agentId,
+            taskId: input.taskId,
+            transactionId: transaction.transactionId,
+            lockId: lock.lockId,
+            message: `Lock released for transaction ${transaction.transactionId}.`,
+            details: { lock }
+          });
+        }
+      }
+    });
+  }
+
+  private async applyBatchDirect(request: BatchRequest): Promise<OperationResult> {
     const activeSession = this.sessions.getActive();
     const client = this.getActiveAddinClient();
     if (!activeSession || !client) {
@@ -2872,6 +4714,187 @@ function permissionDenied(message: string, permissionWarnings: OperationWarning[
   };
 }
 
+function scopesFromBatch(workbookId: WorkbookId, operations: ExcelOperation[]): WorkbookScope[] {
+  const scopes: WorkbookScope[] = [];
+  for (const operation of operations) {
+    scopes.push(...scopesFromOperation(workbookId, operation));
+  }
+  return dedupeScopes(scopes.length > 0 ? scopes : [{ type: "workbook", workbookId }]);
+}
+
+function tableMutationScopes(request: { workbookId: WorkbookId; tableName?: string; sheetName?: string; address?: string }, ranges: A1Range[]): WorkbookScope[] {
+  const scopes: WorkbookScope[] = ranges.map(rangeScope);
+  if (request.tableName !== undefined) {
+    scopes.push({ type: "table", workbookId: request.workbookId, sheetName: request.sheetName, tableName: request.tableName });
+  } else if (request.sheetName !== undefined && request.address !== undefined) {
+    scopes.push({ type: "table", workbookId: request.workbookId, sheetName: request.sheetName, tableName: `${request.sheetName}!${request.address}` });
+  }
+  return dedupeScopes(scopes);
+}
+
+function formulaMutationScopes(
+  request: FormulaCopyPatternsRequest | FormulaFillRequest | FormulaPatternRequest,
+  ranges: A1Range[]
+): WorkbookScope[] {
+  const scopes: WorkbookScope[] = ranges.flatMap((range) => [
+    rangeScope(range),
+    { type: "formula" as const, workbookId: range.workbookId, sheetName: range.sheetName, address: range.address }
+  ]);
+  if ("sourceSheetName" in request) {
+    scopes.push({
+      type: "formula",
+      workbookId: request.workbookId,
+      sheetName: request.sourceSheetName,
+      address: request.sourceAddress
+    });
+  }
+  return dedupeScopes(scopes);
+}
+
+function chartMutationScopes(request: { workbookId: WorkbookId; sheetName: string; sourceAddress: string; chartName?: string; chartType?: string }, ranges: A1Range[]): WorkbookScope[] {
+  return dedupeScopes([
+    ...ranges.map(rangeScope),
+    {
+      type: "chart",
+      workbookId: request.workbookId,
+      sheetName: request.sheetName,
+      chartName: request.chartName ?? request.chartType ?? `${request.sheetName}!${request.sourceAddress}`
+    }
+  ]);
+}
+
+function pivotMutationScopes(request: PivotCreateRequest, ranges: A1Range[]): WorkbookScope[] {
+  const scopes: WorkbookScope[] = [
+    ...ranges.map(rangeScope),
+    {
+      type: "pivot",
+      workbookId: request.workbookId,
+      sheetName: request.destinationSheetName,
+      pivotName: request.pivotTableName
+    }
+  ];
+  if (request.sourceTableName !== undefined) {
+    scopes.push({ type: "table", workbookId: request.workbookId, tableName: request.sourceTableName });
+  }
+  return dedupeScopes(scopes);
+}
+
+function nameMutationScopes(request: { workbookId: WorkbookId; name: string; sheetName?: string; reference?: string }): WorkbookScope[] {
+  const scopes: WorkbookScope[] = [
+    { type: "named_range", workbookId: request.workbookId, name: request.name, sheetName: request.sheetName }
+  ];
+  if (request.sheetName !== undefined && request.reference !== undefined) {
+    scopes.push({ type: "range", workbookId: request.workbookId, sheetName: request.sheetName, address: request.reference });
+  }
+  return dedupeScopes(scopes);
+}
+
+function scopesFromOperation(workbookId: WorkbookId, operation: ExcelOperation): WorkbookScope[] {
+  switch (operation.kind) {
+    case "range.read_full":
+    case "range.write_values":
+    case "range.write_number_formats":
+    case "range.write_styles":
+    case "range.write_hyperlinks":
+    case "range.write_comments":
+    case "range.clear":
+    case "range.clear_values":
+    case "range.clear_formats":
+    case "range.clear_values_keep_format":
+    case "range.insert_rows":
+    case "range.delete_rows":
+    case "range.insert_columns":
+    case "range.delete_columns":
+    case "range.autofit_columns":
+    case "range.autofit_rows":
+    case "range.merge":
+    case "range.unmerge":
+    case "range.restore_snapshot":
+      return [rangeScope(operation.target)];
+    case "range.write_formulas":
+      return [
+        rangeScope(operation.target),
+        { type: "formula", workbookId: operation.target.workbookId, sheetName: operation.target.sheetName, address: operation.target.address },
+        ...formulaDependencyScopes(operation.target.workbookId, operation.target.sheetName, operation.formulas)
+      ];
+    case "range.copy":
+    case "range.move":
+      return [rangeScope(operation.source), rangeScope(operation.target)];
+    case "sheet.create":
+    case "template.create_sheet_from_template":
+    case "workbook.calculate":
+    case "workbook.save":
+      return [{ type: "workbook", workbookId }];
+    case "sheet.copy":
+      return [
+        { type: "sheet", workbookId, sheetName: operation.sourceSheetName },
+        { type: "workbook", workbookId }
+      ];
+    case "sheet.rename":
+    case "sheet.delete":
+    case "sheet.move":
+    case "sheet.hide":
+    case "sheet.unhide":
+    case "sheet.protect":
+    case "sheet.unprotect":
+    case "sheet.clear":
+    case "sheet.set_tab_color":
+      return [{ type: "sheet", workbookId, sheetName: operation.sheetName }];
+  }
+}
+
+function rangeScope(range: A1Range): WorkbookScope {
+  return { type: "range", workbookId: range.workbookId, sheetName: range.sheetName, address: range.address };
+}
+
+function formulaDependencyScopes(workbookId: WorkbookId, sheetName: string, formulas: CellMatrix<string | null>): WorkbookScope[] {
+  const scopes: WorkbookScope[] = [];
+  for (const row of formulas) {
+    for (const formula of row) {
+      if (!formula) {
+        continue;
+      }
+      for (const reference of extractFormulaReferences(workbookId, sheetName, formula)) {
+        if (reference.kind === "range" && reference.sheetName !== undefined && reference.address !== undefined) {
+          scopes.push({ type: "range", workbookId, sheetName: reference.sheetName, address: reference.address });
+        }
+        if (reference.kind === "table" && reference.tableName !== undefined) {
+          scopes.push({ type: "table", workbookId, tableName: reference.tableName });
+        }
+      }
+    }
+  }
+  return dedupeScopes(scopes);
+}
+
+function dedupeScopes(scopes: WorkbookScope[]): WorkbookScope[] {
+  const seen = new Set<string>();
+  const deduped: WorkbookScope[] = [];
+  for (const scope of scopes) {
+    const key = JSON.stringify(scope);
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(scope);
+    }
+  }
+  return deduped;
+}
+
+function lockModeForDestructiveLevel(level: DestructiveLevel): LockMode {
+  switch (level) {
+    case "workbook":
+      return "workbook";
+    case "structure":
+      return "structure";
+    case "format":
+      return "format_layout";
+    case "values":
+      return "write_values";
+    case "none":
+      return "read";
+  }
+}
+
 function pivotCreateRanges(request: PivotCreateRequest): A1Range[] {
   const ranges: A1Range[] = [
     {
@@ -3157,4 +5180,257 @@ function mergePermissionState(current: PermissionState, update: Partial<Permissi
     scope: update.scope ? { ...update.scope } : current.scope,
     lockedRegions: update.lockedRegions ? [...update.lockedRegions] : current.lockedRegions
   };
+}
+
+function clonePermissionStateForWorkbook(state: PermissionState, workbookId: WorkbookId): PermissionState {
+  return {
+    ...state,
+    requireConfirmationFor: [...state.requireConfirmationFor],
+    scope: { ...state.scope, workbookId },
+    lockedRegions: state.lockedRegions.filter((region) => region.workbookId === workbookId).map((region) => ({ ...region }))
+  };
+}
+
+function normalizeImportedTemplate(raw: Record<string, unknown>, workbookId: WorkbookId): TemplateRecord | undefined {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+  const templateId = raw.templateId;
+  const name = raw.name;
+  const scope = raw.scope;
+  const sourceSheetName = raw.sourceSheetName;
+  const fingerprint = raw.fingerprint;
+  const fingerprintPayload = raw.fingerprintPayload;
+  if (
+    typeof templateId !== "string" ||
+    typeof name !== "string" ||
+    (scope !== "workbook" && scope !== "local") ||
+    typeof sourceSheetName !== "string" ||
+    !isRecord(fingerprint) ||
+    !isRecord(fingerprintPayload)
+  ) {
+    return undefined;
+  }
+  const record: TemplateRecord = {
+    templateId: templateId as TemplateId,
+    name,
+    scope,
+    version: typeof raw.version === "number" ? raw.version : 1,
+    sourceSheetName,
+    fingerprint: fingerprint as unknown as TemplateRecord["fingerprint"],
+    fingerprintPayload: fingerprintPayload as unknown as TemplateRecord["fingerprintPayload"],
+    dataRegions: Array.isArray(raw.dataRegions) ? raw.dataRegions.filter((item): item is string => typeof item === "string") : [],
+    createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date().toISOString(),
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date().toISOString()
+  };
+  if (scope === "workbook") {
+    record.workbookId = workbookId;
+  } else if (typeof raw.workbookId === "string") {
+    record.workbookId = raw.workbookId as WorkbookId;
+  }
+  return record;
+}
+
+function normalizeImportedRegion(region: WorkbookRegion, workbookId: WorkbookId): WorkbookRegion | undefined {
+  if (!isRecord(region) || region.workbookId !== workbookId) {
+    return undefined;
+  }
+  if (
+    typeof region.regionId !== "string" ||
+    typeof region.name !== "string" ||
+    typeof region.sheetName !== "string" ||
+    typeof region.address !== "string" ||
+    typeof region.kind !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    ...region,
+    workbookId,
+    createdAt: typeof region.createdAt === "string" ? region.createdAt : new Date().toISOString(),
+    updatedAt: typeof region.updatedAt === "string" ? region.updatedAt : new Date().toISOString()
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function taskScheduleAction(
+  taskStatus: TaskRecord["status"],
+  state: "ready" | "waiting_dependencies" | "waiting_locks" | "blocked" | "done"
+): "start" | "resume" | "wait" | "resolve_blockers" | "none" {
+  if (state === "done") {
+    return "none";
+  }
+  if (state === "waiting_dependencies" || state === "waiting_locks") {
+    return "wait";
+  }
+  if (state === "blocked") {
+    return "resolve_blockers";
+  }
+  return taskStatus === "blocked" ? "resume" : "start";
+}
+
+function taskScheduleMessage(goal: string, state: string, dependencyCount: number, lockConflictCount: number, blockerCount: number): string {
+  switch (state) {
+    case "ready":
+      return `Ready: ${goal}`;
+    case "waiting_dependencies":
+      return `Waiting for ${dependencyCount} task dependenc${dependencyCount === 1 ? "y" : "ies"}: ${goal}`;
+    case "waiting_locks":
+      return `Waiting for ${lockConflictCount} lock conflict${lockConflictCount === 1 ? "" : "s"}: ${goal}`;
+    case "blocked":
+      return `Blocked by ${blockerCount} open blocker${blockerCount === 1 ? "" : "s"}: ${goal}`;
+    case "done":
+      return `Done: ${goal}`;
+    default:
+      return goal;
+  }
+}
+
+function defaultLockLeasePolicy(): LockLeasePolicy {
+  return normalizeLockLeasePolicy({
+    defaultTtlMs: Number(process.env.OPEN_WORKBOOK_LOCK_DEFAULT_TTL_MS ?? 120_000),
+    transactionTtlMs: Number(process.env.OPEN_WORKBOOK_LOCK_TRANSACTION_TTL_MS ?? 120_000),
+    maxTtlMs: Number(process.env.OPEN_WORKBOOK_LOCK_MAX_TTL_MS ?? 600_000),
+    allowManualLocks: process.env.OPEN_WORKBOOK_ALLOW_MANUAL_LOCKS !== "0"
+  });
+}
+
+function normalizeLockLeasePolicy(input: Partial<LockLeasePolicy>): LockLeasePolicy {
+  const maxTtlMs = positiveInteger(input.maxTtlMs, 600_000);
+  return {
+    maxTtlMs,
+    defaultTtlMs: Math.min(positiveInteger(input.defaultTtlMs, 120_000), maxTtlMs),
+    transactionTtlMs: Math.min(positiveInteger(input.transactionTtlMs, 120_000), maxTtlMs),
+    allowManualLocks: input.allowManualLocks ?? true
+  };
+}
+
+function lockTtl(ttlMs: number, policy: LockLeasePolicy): number {
+  return Math.min(positiveInteger(ttlMs, policy.defaultTtlMs), policy.maxTtlMs);
+}
+
+function disconnectedRuntimeCapabilities(): RuntimeCapabilities {
+  return {
+    engine: {
+      name: "open-workbook-daemon",
+      version: "0.1.0",
+      platform: "unknown"
+    },
+    apiSets: [],
+    capabilities: [
+      {
+        name: "mcp.catalog",
+        supported: true,
+        platforms: ["mac", "windows", "web"],
+        notes: "Tool, resource, and prompt catalogs are available without a connected Excel host."
+      },
+      {
+        name: "collaboration.runtime",
+        supported: true,
+        platforms: ["mac", "windows", "web"],
+        notes: "Tasks, locks, transactions, conflict telemetry, and local state are daemon-side capabilities."
+      },
+      {
+        name: "excel.office-js",
+        supported: false,
+        platforms: ["mac", "windows", "web"],
+        notes: "Connect the Excel add-in to report real Office API set support."
+      }
+    ],
+    hostCapabilities: [
+      {
+        name: "range-values-formulas-styles",
+        supported: false,
+        status: "unknown",
+        reason: "No Excel add-in session is connected."
+      },
+      {
+        name: "tables-filters-sorts",
+        supported: false,
+        status: "unknown",
+        reason: "No Excel add-in session is connected."
+      },
+      {
+        name: "pivots",
+        supported: false,
+        status: "unknown",
+        reason: "No Excel add-in session is connected."
+      },
+      {
+        name: "charts",
+        supported: false,
+        status: "unknown",
+        reason: "No Excel add-in session is connected."
+      }
+    ]
+  };
+}
+
+function positiveInteger(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : fallback;
+}
+
+function nextRetryAt(conflicts: ConflictRecord[]): string | undefined {
+  const timestamps = conflicts
+    .map((conflict) => conflict.lockExpiresAt)
+    .filter((expiresAt): expiresAt is string => expiresAt !== undefined)
+    .map((expiresAt) => Date.parse(expiresAt))
+    .filter((timestamp) => Number.isFinite(timestamp));
+  if (timestamps.length === 0) {
+    return undefined;
+  }
+  return new Date(Math.min(...timestamps)).toISOString();
+}
+
+function telemetryBuckets(records: ConflictTelemetryRecord[], keySelector: (record: ConflictTelemetryRecord) => string[]): ConflictTelemetrySummary["byCode"] {
+  const buckets = new Map<string, { count: number; openCount: number; lastSeenAt: string; codes: Set<string> }>();
+  for (const record of records) {
+    for (const key of keySelector(record)) {
+      const bucket = buckets.get(key) ?? { count: 0, openCount: 0, lastSeenAt: record.createdAt, codes: new Set<string>() };
+      bucket.count += 1;
+      if (record.status === "open") {
+        bucket.openCount += 1;
+      }
+      if (record.createdAt > bucket.lastSeenAt) {
+        bucket.lastSeenAt = record.createdAt;
+      }
+      bucket.codes.add(record.code);
+      buckets.set(key, bucket);
+    }
+  }
+  return [...buckets.entries()]
+    .map(([key, bucket]) => ({
+      key,
+      count: bucket.count,
+      openCount: bucket.openCount,
+      lastSeenAt: bucket.lastSeenAt,
+      codes: [...bucket.codes].sort()
+    }))
+    .sort((a, b) => b.count - a.count || b.lastSeenAt.localeCompare(a.lastSeenAt));
+}
+
+function scopeTelemetryKey(scope: WorkbookScope): string {
+  switch (scope.type) {
+    case "workbook":
+      return `${scope.workbookId}:workbook`;
+    case "sheet":
+      return `${scope.workbookId}:${scope.sheetName}`;
+    case "range":
+      return `${scope.workbookId}:${scope.sheetName}!${scope.address}`;
+    case "formula":
+      return `${scope.workbookId}:formula:${scope.sheetName}${scope.address ? `!${scope.address}` : ""}`;
+    case "table":
+      return `${scope.workbookId}:table:${scope.tableName}`;
+    case "named_range":
+      return `${scope.workbookId}:name:${scope.name}`;
+    case "chart":
+      return `${scope.workbookId}:chart:${scope.chartName}`;
+    case "pivot":
+      return `${scope.workbookId}:pivot:${scope.pivotName}`;
+    case "template":
+      return `${scope.workbookId}:template:${scope.templateId}`;
+  }
 }

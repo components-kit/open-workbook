@@ -16,7 +16,9 @@ Daily spreadsheet work usually does not need the largest model available, but it
 
 The project is publishable for local development, MCP integration, and sideloaded desktop Excel testing on macOS and Windows. It is not a Microsoft AppSource add-in and does not attempt to install itself into Excel without user or admin trust approval.
 
-Stable areas include runtime connection, workbook/sheet/range operations, reversible batches, snapshots, rollback, templates, style fidelity, formula patterns, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, permissions, packaging, and OpenCode config generation. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
+Stable areas include runtime connection, workbook/sheet/range operations, reversible batches, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, and OpenCode config generation. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
+
+The multi-agent foundation is implemented through a shared `owb daemon`: tasks, agent records, task progress and blockers, scoped locks with lease policy, serialized transactions, collaboration events, transaction audit records, conservative rollback previews, confirmed rollback chains, and safe plan refresh/rebase checks are available to multiple MCP adapters at once.
 
 ## Architecture
 
@@ -61,7 +63,13 @@ corepack pnpm build
 node packages/cli/dist/index.js doctor
 ```
 
-Run the MCP server:
+Run the shared daemon:
+
+```bash
+node packages/cli/dist/index.js daemon start
+```
+
+Run the MCP adapter in another terminal:
 
 ```bash
 node packages/cli/dist/index.js mcp
@@ -83,9 +91,10 @@ For an installed package, the same commands become:
 
 ```bash
 owb doctor
+owb daemon start
 owb mcp
 owb addin serve
-owb opencode config --id open-workbook
+owb opencode config --id open-workbook --agent-name finance-agent
 ```
 
 ## Sideload Excel Add-in
@@ -122,6 +131,7 @@ Environment overrides:
 - `OPEN_WORKBOOK_PORT`
 - `OPEN_WORKBOOK_ADDIN_PATH`
 - `OPEN_WORKBOOK_BACKUP_DIR`
+- `OPEN_WORKBOOK_STATE_DIR`
 - `OPEN_WORKBOOK_PREVIEW_TOOLS=1`
 
 ## Common Commands
@@ -130,7 +140,10 @@ Environment overrides:
 corepack pnpm check
 corepack pnpm test
 corepack pnpm build
+corepack pnpm verify
+corepack pnpm pack:dry-run
 node packages/cli/dist/index.js paths
+node packages/cli/dist/index.js daemon status
 node packages/cli/dist/index.js sideload manifest --out open-workbook.xml
 ```
 
@@ -166,6 +179,9 @@ Mutating operations should follow the same lifecycle:
 - [Permissions and Cleaning](docs/permissions-cleaning.md)
 - [Workbook File Lifecycle](docs/workbook-file-lifecycle.md)
 - [Performance Contract](docs/performance.md)
+- [Multi-Agent Runtime](docs/multi-agent-runtime.md)
+- [Production Readiness](docs/production-readiness.md)
+- [Service Wrapper](docs/service-wrapper.md)
 - [OpenCode Configuration](docs/opencode.md)
 - [Packaging and Publishing](docs/packaging.md)
 - [Sideloading](docs/sideloading.md)

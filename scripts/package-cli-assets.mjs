@@ -6,6 +6,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(root, "packages/cli/assets");
 
 const copies = [
+  ["apps/backend/dist", "backend/dist"],
   ["apps/mcp-server/dist", "mcp-server/dist"],
   ["apps/excel-addin/dist", "excel-addin/dist"],
   ["apps/excel-addin/public", "excel-addin/public"],

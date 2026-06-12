@@ -1,20 +1,24 @@
 #!/usr/bin/env node
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import * as z from "zod/v4";
 import { RuntimeService } from "@open-workbook/backend/runtime";
 import { startBackendServer } from "@open-workbook/backend/server";
 import type {
   A1Range,
+  AgentId,
   BackupId,
   BatchRequest,
   ChartCreateRequest,
   ChartSelector,
   ChartUpdateDataSourceRequest,
+  ConflictRecord,
   ExcelOperation,
   FormulaCopyPatternsRequest,
   FormulaFillRequest,
   FormulaPatternRequest,
+  LockId,
+  LockMode,
   NameCreateRequest,
   NameSelector,
   NameUpdateRequest,
@@ -26,6 +30,7 @@ import type {
   RegionRegisterRequest,
   RegionSelector,
   SnapshotId,
+  TaskId,
   StyleDimension,
   TableAppendRowsRequest,
   TableApplyFiltersRequest,
@@ -38,15 +43,23 @@ import type {
   TableSortRequest,
   TableUpdateRowsRequest,
   TemplateId,
-  WorkbookId
+  TransactionId,
+  WorkbookScope,
+  WorkbookId,
+  WorkbookLocalConfig
 } from "@open-workbook/protocol";
 import { isToolExposed, makeId } from "@open-workbook/protocol";
 
-const runtime = new RuntimeService();
+type RuntimeFacade = RuntimeService & {
+  compileBatch(request: BatchRequest): unknown;
+};
 
 const host = process.env.OPEN_WORKBOOK_HOST ?? "127.0.0.1";
 const port = Number(process.env.OPEN_WORKBOOK_PORT ?? 37845);
 const addinPath = process.env.OPEN_WORKBOOK_ADDIN_PATH ?? "/addin";
+const daemonUrl = trimTrailingSlash(readArg("--daemon-url") ?? process.env.OPEN_WORKBOOK_DAEMON_URL ?? `http://${host}:${port}`);
+const agentName = readArg("--agent-name") ?? process.env.OPEN_WORKBOOK_AGENT_NAME;
+const standalone = hasArg("--standalone") || process.env.OPEN_WORKBOOK_MCP_STANDALONE === "1";
 const catalogOptions = {
   includePreview: process.env.OPEN_WORKBOOK_PREVIEW_TOOLS === "1"
 };
@@ -83,8 +96,7 @@ const STYLE_COPY_TOOL_DIMENSIONS: Record<string, StyleDimension> = {
   "excel.style.copy_hidden_rows_columns": "hiddenRowsColumns"
 };
 
-await startBackendServer(runtime, { host, port, addinPath });
-console.error(`open-workbook add-in backend listening on ws://${host}:${port}${addinPath}`);
+const runtime = await createRuntimeFacade();
 
 const server = new McpServer({
   name: "open-workbook",
@@ -107,6 +119,11 @@ registerPivotTools(server);
 registerChartTools(server);
 registerNamesTools(server);
 registerRegionTools(server);
+registerTaskTools(server);
+registerCollaborationTools(server);
+registerLockTools(server);
+registerConflictTools(server);
+registerTransactionTools(server);
 registerPermissionsTools(server);
 registerCleanTools(server);
 registerValidateTools(server);
@@ -114,8 +131,446 @@ registerRepairTools(server);
 registerSnapshotTools(server);
 registerDiffTools(server);
 registerEventTools(server);
+registerResources(server);
+registerPrompts(server);
 
 await server.connect(new StdioServerTransport());
+
+async function createRuntimeFacade(): Promise<RuntimeFacade> {
+  if (!standalone && await daemonAvailable(daemonUrl)) {
+    const proxy = createDaemonRuntimeProxy(daemonUrl) as RuntimeFacade;
+    const registration = await proxy.registerAgent({ agentName, clientType: "mcp", pid: process.pid });
+    const registeredAgent = (registration as { agent?: { agentId?: string } }).agent;
+    console.error(`open-workbook MCP adapter connected to ${daemonUrl}${registeredAgent?.agentId ? ` as ${registeredAgent.agentId}` : ""}`);
+    return proxy;
+  }
+
+  const localRuntime = new RuntimeService() as RuntimeFacade;
+  if (agentName !== undefined) {
+    localRuntime.registerAgent({ agentName, clientType: "mcp", pid: process.pid });
+  }
+  await startBackendServer(localRuntime, { host, port, addinPath });
+  console.error(`open-workbook MCP standalone backend listening on ws://${host}:${port}${addinPath}`);
+  return localRuntime;
+}
+
+async function daemonAvailable(baseUrl: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${baseUrl}/status`);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function createDaemonRuntimeProxy(baseUrl: string): unknown {
+  const call = async (method: string, args: unknown[]) => {
+    const response = await fetch(`${baseUrl}/rpc`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ method, args })
+    });
+    const payload = await response.json() as { ok: boolean; result?: unknown; error?: unknown };
+    if (!response.ok || !payload.ok) {
+      throw new Error(JSON.stringify(payload.error ?? { code: "OPERATION_FAILED", message: `Daemon RPC failed: ${method}` }));
+    }
+    return payload.result;
+  };
+  return new Proxy(
+    {},
+    {
+      get(_target, property) {
+        if (typeof property !== "string") {
+          return undefined;
+        }
+        return (...args: unknown[]) => call(property, args);
+      }
+    }
+  );
+}
+
+function registerResources(mcp: McpServer): void {
+  registerJsonResource(mcp, "runtime status", "excel://runtime/status", "Runtime connection, collaboration, and capability status.", async (uri) => ({
+    status: runtime.getStatus(),
+    capabilities: runtime.getCapabilities(),
+    collaboration: runtime.getCollaborationStatus()
+  }));
+
+  registerJsonResource(mcp, "workbooks", "excel://workbooks", "Open workbook references visible to connected add-ins.", async () => {
+    const sessions = runtime.getStatus().sessions;
+    return {
+      workbooks: sessions.flatMap((session) => (session.activeWorkbook ? [session.activeWorkbook] : [])),
+      sessions
+    };
+  });
+
+  registerJsonTemplateResource(
+    mcp,
+    "workbook map",
+    "excel://workbooks/{workbook_id}/map",
+    "Workbook map with sheets, used ranges, and table names.",
+    async (_uri, variables) => runtime.getWorkbookMap()
+  );
+
+  registerJsonTemplateResource(
+    mcp,
+    "workbook sheets",
+    "excel://workbooks/{workbook_id}/sheets",
+    "Worksheet list from the workbook map.",
+    async (_uri, variables) => {
+      const workbookId = resourceVariable(variables, "workbook_id") as WorkbookId;
+      const map = await runtime.getWorkbookMap();
+      return {
+        ok: (map as { ok?: boolean }).ok,
+        workbookId,
+        sheets: (map as { map?: { sheets?: unknown[] } }).map?.sheets ?? [],
+        source: map
+      };
+    }
+  );
+
+  registerJsonTemplateResource(
+    mcp,
+    "sheet used range",
+    "excel://workbooks/{workbook_id}/sheets/{sheet_name}/used-range",
+    "Used range metadata for one worksheet.",
+    async (_uri, variables) => {
+      const workbookId = resourceVariable(variables, "workbook_id") as WorkbookId;
+      const sheetName = resourceVariable(variables, "sheet_name");
+      const map = await runtime.getWorkbookMap();
+      const sheet = (map as { map?: { sheets?: Array<{ name: string; usedRange?: unknown }> } }).map?.sheets?.find((item) => item.name === sheetName);
+      return {
+        ok: Boolean(sheet),
+        workbookId,
+        sheetName,
+        usedRange: sheet?.usedRange,
+        source: map
+      };
+    }
+  );
+
+  registerJsonTemplateResource(
+    mcp,
+    "sheet style fingerprint",
+    "excel://workbooks/{workbook_id}/sheets/{sheet_name}/style-fingerprint",
+    "Style fingerprint for one worksheet used range.",
+    async (_uri, variables) => {
+      const workbookId = resourceVariable(variables, "workbook_id") as WorkbookId;
+      const sheetName = resourceVariable(variables, "sheet_name");
+      return runtime.getStyleFingerprint({ workbookId, sheetName });
+    }
+  );
+
+  registerJsonTemplateResource(
+    mcp,
+    "sheet formula patterns",
+    "excel://workbooks/{workbook_id}/sheets/{sheet_name}/formula-patterns",
+    "Formula pattern summary for one worksheet used range.",
+    async (_uri, variables) => {
+      const workbookId = resourceVariable(variables, "workbook_id") as WorkbookId;
+      const sheetName = resourceVariable(variables, "sheet_name");
+      const map = await runtime.getWorkbookMap();
+      const sheet = (map as { map?: { sheets?: Array<{ name: string; usedRange?: { address?: string } }> } }).map?.sheets?.find((item) => item.name === sheetName);
+      const address = sheet?.usedRange?.address;
+      if (!address) {
+        return {
+          ok: false,
+          workbookId,
+          sheetName,
+          error: { code: "RANGE_INVALID", message: "Sheet used range is unavailable." },
+          source: map
+        };
+      }
+      return runtime.readFormulaPatterns({ workbookId, sheetName, address: stripResourceSheetName(address) });
+    }
+  );
+
+  registerJsonTemplateResource(
+    mcp,
+    "workbook tables",
+    "excel://workbooks/{workbook_id}/tables",
+    "Structured table list for a workbook.",
+    async (_uri, variables) => runtime.listTables(resourceVariable(variables, "workbook_id") as WorkbookId)
+  );
+
+  registerJsonTemplateResource(
+    mcp,
+    "workbook templates",
+    "excel://workbooks/{workbook_id}/templates",
+    "Registered Open Workbook templates for a workbook.",
+    async (_uri, variables) => ({
+      ok: true,
+      workbookId: resourceVariable(variables, "workbook_id"),
+      templates: runtime.listTemplates(resourceVariable(variables, "workbook_id") as WorkbookId)
+    })
+  );
+
+  registerJsonTemplateResource(
+    mcp,
+    "workbook snapshot",
+    "excel://workbooks/{workbook_id}/snapshots/{snapshot_id}",
+    "Stored snapshot metadata and payload reference.",
+    async (_uri, variables) => {
+      const snapshot = runtime.getSnapshot(resourceVariable(variables, "snapshot_id") as SnapshotId);
+      return {
+        workbookId: resourceVariable(variables, "workbook_id"),
+        ...snapshot
+      };
+    }
+  );
+
+  registerJsonTemplateResource(
+    mcp,
+    "plan diff",
+    "excel://workbooks/{workbook_id}/plans/{plan_id}/diff",
+    "Stored plan preview diff summary.",
+    async (_uri, variables) => {
+      const workbookId = resourceVariable(variables, "workbook_id") as WorkbookId;
+      const planId = resourceVariable(variables, "plan_id") as PlanId;
+      return runtime.getPlanDiffResource(workbookId, planId);
+    }
+  );
+}
+
+function registerJsonResource(
+  mcp: McpServer,
+  name: string,
+  uri: string,
+  description: string,
+  read: (uri: URL) => unknown | Promise<unknown>
+): void {
+  mcp.registerResource(
+    name,
+    uri,
+    {
+      title: name,
+      description,
+      mimeType: "application/json"
+    },
+    async (resourceUri) => jsonResource(resourceUri.toString(), await read(resourceUri))
+  );
+}
+
+function registerJsonTemplateResource(
+  mcp: McpServer,
+  name: string,
+  uriTemplate: string,
+  description: string,
+  read: (uri: URL, variables: Record<string, string | string[]>) => unknown | Promise<unknown>
+): void {
+  mcp.registerResource(
+    name,
+    new ResourceTemplate(uriTemplate, { list: undefined }),
+    {
+      title: name,
+      description,
+      mimeType: "application/json"
+    },
+    async (resourceUri, variables) => jsonResource(resourceUri.toString(), await read(resourceUri, variables as Record<string, string | string[]>))
+  );
+}
+
+function registerPrompts(mcp: McpServer): void {
+  const promptArgs = {
+    workbookId: z.string().optional(),
+    sheetName: z.string().optional(),
+    templateId: z.string().optional(),
+    targetSheetName: z.string().optional(),
+    goal: z.string().optional()
+  };
+
+  registerWorkflowPrompt(
+    mcp,
+    "excel.prompts.create_next_month_sheet",
+    "Create next month sheet",
+    "Plan and safely create a next-period worksheet from an existing template or previous-period sheet.",
+    promptArgs,
+    (args) => [
+      "Create a next-period worksheet without damaging formulas, formatting, filters, tables, print layout, or named regions.",
+      promptContext(args),
+      "Workflow:",
+      "1. Read `excel.runtime.get_active_context`, then inspect `excel.workbook.get_workbook_map` and `excel.template.list`.",
+      "2. Prefer a registered template. If no template is registered, call `excel.template.detect_templates` and ask the user to confirm the source sheet.",
+      "3. Use `excel.plan.create` and `excel.plan.preview` before mutation.",
+      "4. Use `excel.template.create_sheet_from_template` or `excel.template.create_sheet_from_previous_period`.",
+      "5. Clear only declared data regions with `excel.template.clear_data_regions` or `excel.range.clear_values_keep_format`.",
+      "6. Validate with `excel.template.validate_sheet_against_template`, `excel.formula.validate_against_template`, `excel.style.validate_consistency`, and `excel.validate.no_formula_errors`.",
+      "7. Commit only after validation is clean or after discussing warnings with the user."
+    ]
+  );
+
+  registerWorkflowPrompt(
+    mcp,
+    "excel.prompts.clean_current_sheet",
+    "Clean current sheet",
+    "Clean worksheet data while preserving workbook structure, styling, formulas, filters, and templates.",
+    promptArgs,
+    (args) => [
+      "Clean the current worksheet conservatively. Do not overwrite formulas, templates, filters, styling, or hidden layout areas.",
+      promptContext(args),
+      "Workflow:",
+      "1. Read active context, selection, used range, tables, filters, formulas, and style fingerprint.",
+      "2. Identify data-entry regions using registered regions, table data bodies, or template data regions.",
+      "3. Preview transformations with read-only tools first: header detection, trim/normalize, parse dates/numbers, duplicate/outlier checks.",
+      "4. Create a plan and preview it. Apply only scoped range/table operations.",
+      "5. Prefer `excel.table.update_rows`, `excel.region.write_values`, or `excel.range.write_values` with format preservation.",
+      "6. Re-run table/filter/style/formula validation and summarize exactly what changed."
+    ]
+  );
+
+  registerWorkflowPrompt(
+    mcp,
+    "excel.prompts.fix_formula_errors",
+    "Fix formula errors",
+    "Diagnose formula errors, compare against template patterns, and repair only after preview and validation.",
+    promptArgs,
+    (args) => [
+      "Fix formula errors without converting formulas to values unless the user explicitly asks.",
+      promptContext(args),
+      "Workflow:",
+      "1. Locate errors with `excel.formula.find_errors` and `excel.validate.no_formula_errors`.",
+      "2. Read formula patterns and dependency graph with `excel.formula.read_patterns`, `excel.formula.get_dependency_graph`, `trace_precedents`, and `trace_dependents`.",
+      "3. If a template exists, compare with `excel.formula.validate_against_template`.",
+      "4. Create a repair plan using `excel.formula.repair_patterns`, `fill_down`, `fill_right`, or explicit `range.write_formulas`.",
+      "5. Preview, apply, recalculate, and re-run formula validation before reporting success."
+    ]
+  );
+
+  registerWorkflowPrompt(
+    mcp,
+    "excel.prompts.format_like_template",
+    "Format like template",
+    "Repair styling and layout consistency using registered template fingerprints.",
+    promptArgs,
+    (args) => [
+      "Make the target sheet look like the template while preserving current data values.",
+      promptContext(args),
+      "Workflow:",
+      "1. Read template registry and current style fingerprints.",
+      "2. Compare with `excel.style.compare_fingerprint` and `excel.style.validate_consistency`.",
+      "3. Ask before changing structure-level layout such as hidden rows/columns, freeze panes, print settings, or page layout.",
+      "4. Use granular style copy tools or `excel.style.repair_consistency` for confirmed dimensions.",
+      "5. Validate styles, formulas, tables, filters, and print layout after applying."
+    ]
+  );
+
+  registerWorkflowPrompt(
+    mcp,
+    "excel.prompts.validate_report_before_saving",
+    "Validate report before saving",
+    "Run workbook/report validation before saving or handing a file back to the user.",
+    promptArgs,
+    (args) => [
+      "Validate the report before saving. Do not save if validation finds material formula, reference, template, or unintended-change issues.",
+      promptContext(args),
+      "Workflow:",
+      "1. Create or refresh a snapshot if one is available for unintended-change checks.",
+      "2. Run workbook, sheet, template, formula, style, table, filter, print-layout, broken-reference, formula-error, and unintended-change validators.",
+      "3. Summarize issues by severity and affected range/table/sheet.",
+      "4. Repair only with explicit scoped tools and backups.",
+      "5. Save with `excel.workbook.save` only when errors are clean or the user confirms known warnings."
+    ]
+  );
+
+  registerWorkflowPrompt(
+    mcp,
+    "excel.prompts.create_summary_report",
+    "Create summary report",
+    "Create a summary/report sheet from existing workbook data with safe planning and validation.",
+    promptArgs,
+    (args) => [
+      "Create a summary report from existing workbook data without disturbing source sheets.",
+      promptContext(args),
+      "Workflow:",
+      "1. Map workbook sheets, tables, names, regions, filters, PivotTables, and charts.",
+      "2. Ask the user which metrics/groupings/date ranges matter if not obvious.",
+      "3. Prefer creating a new sheet from a template or copying a previous report sheet.",
+      "4. Use table reads, formulas, PivotTables, and charts through planned operations.",
+      "5. Preview and apply via plan/batch; never write directly outside the target report regions.",
+      "6. Validate formulas, style consistency, tables, charts, and no unintended source changes."
+    ]
+  );
+
+  for (const name of [
+    "excel.prompts.import_receipts_to_table",
+    "excel.prompts.import_invoices_to_table",
+    "excel.prompts.reconcile_statement",
+    "excel.prompts.create_driver_payroll",
+    "excel.prompts.import_fuel_slips",
+    "excel.prompts.calculate_fuel_consumption",
+    "excel.prompts.create_customer_transport_report",
+    "excel.prompts.reconcile_job_payments"
+  ]) {
+    registerUnsupportedPrompt(mcp, name);
+  }
+}
+
+function registerWorkflowPrompt(
+  mcp: McpServer,
+  name: string,
+  title: string,
+  description: string,
+  argsSchema: Record<string, z.ZodTypeAny>,
+  body: (args: Record<string, unknown>) => string[]
+): void {
+  mcp.registerPrompt(
+    name,
+    {
+      title,
+      description,
+      argsSchema
+    },
+    (args) => ({
+      description,
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: body(args as Record<string, unknown>).filter(Boolean).join("\n")
+          }
+        }
+      ]
+    })
+  );
+}
+
+function registerUnsupportedPrompt(mcp: McpServer, name: string): void {
+  mcp.registerPrompt(
+    name,
+    {
+      title: name.replace(/^excel\.prompts\./, "").replace(/_/g, " "),
+      description: "This vertical workflow is intentionally unsupported in the current Open Workbook runtime.",
+      argsSchema: {
+        goal: z.string().optional()
+      }
+    },
+    () => ({
+      description: "Unsupported vertical workflow.",
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: [
+              "This prompt is intentionally unsupported in the current Open Workbook runtime.",
+              "OCR and vertical reconciliation workflows are out of scope for now.",
+              "Use generic table, range, template, validation, and cleaning tools with explicit user-provided data instead."
+            ].join("\n")
+          }
+        }
+      ]
+    })
+  );
+}
+
+function promptContext(args: Record<string, unknown>): string {
+  const entries = Object.entries(args).filter(([, value]) => value !== undefined && value !== "");
+  if (entries.length === 0) {
+    return "";
+  }
+  return `Context: ${entries.map(([key, value]) => `${key}=${String(value)}`).join(", ")}`;
+}
 
 function registerRuntimeTools(mcp: McpServer): void {
   registerMcpTool(
@@ -358,15 +813,15 @@ function registerWorkbookTools(mcp: McpServer): void {
       }
     },
     async ({ snapshotId, reason }: { snapshotId: string; reason?: string }) => {
-      const existing = runtime.snapshots.getSnapshot(snapshotId as SnapshotId);
-      if (!existing) {
-        return jsonResult(runtime.getSnapshot(snapshotId as SnapshotId));
+      const existing = await runtime.getSnapshot(snapshotId as SnapshotId);
+      if (!existing.ok || !("snapshot" in existing)) {
+        return jsonResult(existing);
       }
       return jsonResult(
         await runtime.createWorkbookSnapshot({
-          workbookId: existing.workbookId,
+          workbookId: existing.snapshot.workbookId,
           reason: reason ?? `Refresh snapshot ${snapshotId}`,
-          ranges: existing.affectedRanges
+          ranges: existing.snapshot.affectedRanges
         })
       );
     }
@@ -550,6 +1005,199 @@ function registerWorkbookTools(mcp: McpServer): void {
 
   registerMcpTool(
     mcp,
+    "excel.workbook.export_local_config",
+    {
+      title: "Export workbook local config",
+      description: "Export Open Workbook templates, registered regions, and workbook permission metadata as portable JSON.",
+      inputSchema: {
+        workbookId: z.string(),
+        includePermissions: z.boolean().optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ workbookId, includePermissions }: { workbookId: string; includePermissions?: boolean }) => {
+      const options: { includePermissions?: boolean } = {};
+      if (includePermissions !== undefined) {
+        options.includePermissions = includePermissions;
+      }
+      return jsonResult(await runtime.exportWorkbookLocalConfig(workbookId as WorkbookId, options));
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.workbook.import_local_config",
+    {
+      title: "Import workbook local config",
+      description: "Import portable Open Workbook templates, registered regions, and workbook permission metadata into the local daemon registry.",
+      inputSchema: {
+        workbookId: z.string(),
+        config: z.object({
+          version: z.literal(1),
+          workbookId: z.string(),
+          exportedAt: z.string(),
+          source: z.literal("open-workbook-local-config"),
+          templates: z.array(z.record(z.string(), z.unknown())),
+          regions: z.array(z.any()),
+          permissions: z.any().optional()
+        }),
+        includeTemplates: z.boolean().optional(),
+        includeRegions: z.boolean().optional(),
+        includePermissions: z.boolean().optional(),
+        overwrite: z.boolean().optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({
+      workbookId,
+      config,
+      includeTemplates,
+      includeRegions,
+      includePermissions,
+      overwrite
+    }: {
+      workbookId: string;
+      config: WorkbookLocalConfig;
+      includeTemplates?: boolean;
+      includeRegions?: boolean;
+      includePermissions?: boolean;
+      overwrite?: boolean;
+    }) => {
+      const request = {
+        workbookId: workbookId as WorkbookId,
+        config
+      } as {
+        workbookId: WorkbookId;
+        config: WorkbookLocalConfig;
+        includeTemplates?: boolean;
+        includeRegions?: boolean;
+        includePermissions?: boolean;
+        overwrite?: boolean;
+      };
+      if (includeTemplates !== undefined) {
+        request.includeTemplates = includeTemplates;
+      }
+      if (includeRegions !== undefined) {
+        request.includeRegions = includeRegions;
+      }
+      if (includePermissions !== undefined) {
+        request.includePermissions = includePermissions;
+      }
+      if (overwrite !== undefined) {
+        request.overwrite = overwrite;
+      }
+      return jsonResult(await runtime.importWorkbookLocalConfig(request));
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.workbook.embed_local_config",
+    {
+      title: "Embed workbook local config",
+      description: "Write Open Workbook template, region, and permission metadata into the workbook custom XML part when the Excel host supports it.",
+      inputSchema: {
+        workbookId: z.string(),
+        includePermissions: z.boolean().optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ workbookId, includePermissions }: { workbookId: string; includePermissions?: boolean }) => {
+      const options: { includePermissions?: boolean } = {};
+      if (includePermissions !== undefined) {
+        options.includePermissions = includePermissions;
+      }
+      return jsonResult(await runtime.embedWorkbookLocalConfig(workbookId as WorkbookId, options));
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.workbook.read_embedded_local_config",
+    {
+      title: "Read embedded workbook local config",
+      description: "Read Open Workbook local config metadata from the workbook custom XML part when present.",
+      inputSchema: {
+        workbookId: z.string()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ workbookId }: { workbookId: string }) => jsonResult(await runtime.readWorkbookEmbeddedLocalConfig(workbookId as WorkbookId))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.workbook.import_embedded_local_config",
+    {
+      title: "Import embedded workbook local config",
+      description: "Read workbook custom XML metadata and import it into the local daemon registry.",
+      inputSchema: {
+        workbookId: z.string(),
+        includeTemplates: z.boolean().optional(),
+        includeRegions: z.boolean().optional(),
+        includePermissions: z.boolean().optional(),
+        overwrite: z.boolean().optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({
+      workbookId,
+      includeTemplates,
+      includeRegions,
+      includePermissions,
+      overwrite
+    }: {
+      workbookId: string;
+      includeTemplates?: boolean;
+      includeRegions?: boolean;
+      includePermissions?: boolean;
+      overwrite?: boolean;
+    }) => {
+      const request: {
+        workbookId: WorkbookId;
+        includeTemplates?: boolean;
+        includeRegions?: boolean;
+        includePermissions?: boolean;
+        overwrite?: boolean;
+      } = { workbookId: workbookId as WorkbookId };
+      if (includeTemplates !== undefined) {
+        request.includeTemplates = includeTemplates;
+      }
+      if (includeRegions !== undefined) {
+        request.includeRegions = includeRegions;
+      }
+      if (includePermissions !== undefined) {
+        request.includePermissions = includePermissions;
+      }
+      if (overwrite !== undefined) {
+        request.overwrite = overwrite;
+      }
+      return jsonResult(await runtime.importWorkbookEmbeddedLocalConfig(request));
+    }
+  );
+
+  registerMcpTool(
+    mcp,
     "excel.workbook.close",
     {
       title: "Close workbook",
@@ -577,7 +1225,7 @@ function registerSheetTools(mcp: McpServer): void {
       title: "List worksheets",
       description: "List worksheets in the active workbook.",
       inputSchema: {},
-      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
     },
     async () => {
       const result = await runtime.getWorkbookMap();
@@ -985,7 +1633,7 @@ function registerBatchTools(mcp: McpServer): void {
         mode: "validate",
         operations: operations as ExcelOperation[]
       };
-      return jsonResult(runtime.compiler.compile(request));
+      return jsonResult(await runtime.compileBatch(request));
     }
   );
 
@@ -1011,7 +1659,7 @@ function registerBatchTools(mcp: McpServer): void {
         mode: "dry_run",
         operations: operations as ExcelOperation[]
       };
-      return jsonResult(runtime.compiler.compile(request));
+      return jsonResult(await runtime.compileBatch(request));
     }
   );
 
@@ -1025,7 +1673,11 @@ function registerBatchTools(mcp: McpServer): void {
         workbookId: z.string(),
         operations: z.array(z.any()),
         confirmationToken: z.string().optional(),
-        expectedTargetFingerprints: z.array(z.any()).optional()
+        expectedTargetFingerprints: z.array(z.any()).optional(),
+        agentId: z.string().optional(),
+        agentName: z.string().optional(),
+        taskId: z.string().optional(),
+        role: z.string().optional()
       },
       annotations: {
         readOnlyHint: false,
@@ -1037,12 +1689,20 @@ function registerBatchTools(mcp: McpServer): void {
       workbookId,
       operations,
       confirmationToken,
-      expectedTargetFingerprints
+      expectedTargetFingerprints,
+      agentId,
+      agentName,
+      taskId,
+      role
     }: {
       workbookId: string;
       operations: unknown[];
       confirmationToken?: string;
       expectedTargetFingerprints?: unknown[];
+      agentId?: string;
+      agentName?: string;
+      taskId?: string;
+      role?: string;
     }) => {
       const request: BatchRequest = {
         workbookId: workbookId as WorkbookId,
@@ -1056,6 +1716,18 @@ function registerBatchTools(mcp: McpServer): void {
         request.expectedTargetFingerprints = expectedTargetFingerprints as NonNullable<
           BatchRequest["expectedTargetFingerprints"]
         >;
+      }
+      if (agentId !== undefined) {
+        request.agentId = agentId as AgentId;
+      }
+      if (agentName !== undefined) {
+        request.agentName = agentName;
+      }
+      if (taskId !== undefined) {
+        request.taskId = taskId as TaskId;
+      }
+      if (role !== undefined) {
+        request.role = role;
       }
       return jsonResult(await runtime.applyBatch(request));
     }
@@ -1072,7 +1744,11 @@ function registerPlanTools(mcp: McpServer): void {
       inputSchema: {
         workbookId: z.string(),
         goal: z.string(),
-        operations: z.array(z.any())
+        operations: z.array(z.any()),
+        agentId: z.string().optional(),
+        agentName: z.string().optional(),
+        taskId: z.string().optional(),
+        role: z.string().optional()
       },
       annotations: {
         readOnlyHint: true,
@@ -1080,12 +1756,32 @@ function registerPlanTools(mcp: McpServer): void {
         openWorldHint: false
       }
     },
-    async ({ workbookId, goal, operations }: { workbookId: string; goal: string; operations: unknown[] }) =>
+    async ({
+      workbookId,
+      goal,
+      operations,
+      agentId,
+      agentName,
+      taskId,
+      role
+    }: {
+      workbookId: string;
+      goal: string;
+      operations: unknown[];
+      agentId?: string;
+      agentName?: string;
+      taskId?: string;
+      role?: string;
+    }) =>
       jsonResult(
         runtime.createPlan({
           workbookId: workbookId as WorkbookId,
           goal,
-          operations: operations as ExcelOperation[]
+          operations: operations as ExcelOperation[],
+          agentId: agentId as AgentId | undefined,
+          agentName,
+          taskId: taskId as TaskId | undefined,
+          role
         })
       )
   );
@@ -1106,6 +1802,42 @@ function registerPlanTools(mcp: McpServer): void {
       }
     },
     async ({ planId }: { planId: string }) => jsonResult(await runtime.previewPlan(planId as PlanId))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.plan.refresh_preview",
+    {
+      title: "Refresh Excel plan preview",
+      description: "Refresh plan target fingerprints only when target ranges have not changed since preview.",
+      inputSchema: {
+        planId: z.string()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ planId }: { planId: string }) => jsonResult(await runtime.refreshPlanPreview(planId as PlanId))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.plan.rebase",
+    {
+      title: "Rebase Excel plan",
+      description: "Safely rebase a plan by refreshing fingerprints when target ranges are unchanged.",
+      inputSchema: {
+        planId: z.string()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ planId }: { planId: string }) => jsonResult(await runtime.rebasePlan(planId as PlanId))
   );
 
   registerMcpTool(
@@ -1799,30 +2531,49 @@ function registerFormulaTools(mcp: McpServer): void {
     async (args: any) => jsonResult(capabilityUnavailable(args.workbookId, "FORMULA_CIRCULAR_REFERENCES_UNAVAILABLE", "Office.js does not expose deterministic circular-reference enumeration in this runtime yet."))
   );
 
-  for (const name of ["excel.formula.trace_precedents", "excel.formula.trace_dependents"] as const) {
-    registerMcpTool(
-      mcp,
-      name,
-      {
-        title: name.replace(/^excel\.formula\./, "").replace(/_/g, " "),
-        description: "Report formula graph tracing capability status.",
-        inputSchema: {
-          workbookId: z.string(),
-          sheetName: z.string(),
-          address: z.string()
-        },
-        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+  registerMcpTool(
+    mcp,
+    "excel.formula.get_dependency_graph",
+    {
+      title: "Get formula dependency graph",
+      description: "Parse formulas in a sheet or range and return precedent dependency edges.",
+      inputSchema: formulaPatternSchema(),
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async (args: any) => jsonResult(await runtime.getFormulaDependencyGraph(formulaPatternRequest(args)))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.formula.trace_precedents",
+    {
+      title: "Trace formula precedents",
+      description: "Parse a formula cell and return referenced precedent ranges.",
+      inputSchema: {
+        workbookId: z.string(),
+        sheetName: z.string(),
+        address: z.string()
       },
-      async (args: any) =>
-        jsonResult(
-          capabilityUnavailable(
-            args.workbookId,
-            name.endsWith("trace_precedents") ? "FORMULA_PRECEDENTS_UNAVAILABLE" : "FORMULA_DEPENDENTS_UNAVAILABLE",
-            "Formula dependency graph tracing is not enabled until we can normalize Office.js range-area results across Excel hosts."
-          )
-        )
-    );
-  }
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async (args: any) => jsonResult(await runtime.traceFormulaPrecedents(formulaPatternRequest(args)))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.formula.trace_dependents",
+    {
+      title: "Trace formula dependents",
+      description: "Parse formulas on a sheet and return formula cells that depend on the target range.",
+      inputSchema: {
+        workbookId: z.string(),
+        sheetName: z.string(),
+        address: z.string()
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async (args: any) => jsonResult(await runtime.traceFormulaDependents(formulaPatternRequest(args)))
+  );
 
   registerMcpTool(
     mcp,
@@ -2510,7 +3261,7 @@ function registerChartTools(mcp: McpServer): void {
     "excel.chart.copy_from_template",
     {
       title: "Copy chart from template",
-      description: "Compare template and target chart metadata for future chart style copy.",
+      description: "Copy deterministic chart metadata from a template chart to a target chart.",
       inputSchema: { ...chartSelectorSchema(), templateSheetName: z.string(), templateChartName: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
     },
@@ -2721,6 +3472,486 @@ function registerRegionTools(mcp: McpServer): void {
       }
       return jsonResult(await runtime.fillRegion(request));
     }
+  );
+}
+
+function registerTaskTools(mcp: McpServer): void {
+  registerMcpTool(
+    mcp,
+    "excel.task.create",
+    {
+      title: "Create Excel task",
+      description: "Create a multi-agent workbook task with optional scope and assigned agent.",
+      inputSchema: {
+        workbookId: z.string(),
+        goal: z.string(),
+        role: z.string().optional(),
+        priority: z.enum(["low", "normal", "high"]).optional(),
+        assignedAgentId: z.string().optional(),
+        allowedScopes: z.array(z.any()).optional(),
+        dependencies: z.array(z.string()).optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async (args: any) =>
+      jsonResult(
+        runtime.createTask({
+          workbookId: args.workbookId as WorkbookId,
+          goal: args.goal,
+          role: args.role,
+          priority: args.priority,
+          assignedAgentId: args.assignedAgentId as AgentId | undefined,
+          allowedScopes: args.allowedScopes,
+          dependencies: args.dependencies as TaskId[] | undefined
+        })
+      )
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.task.claim",
+    {
+      title: "Claim Excel task",
+      description: "Assign a task to an agent.",
+      inputSchema: { taskId: z.string(), agentId: z.string() },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ taskId, agentId }: { taskId: string; agentId: string }) => jsonResult(runtime.claimTask(taskId as TaskId, agentId as AgentId))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.task.update",
+    {
+      title: "Update Excel task",
+      description: "Update task metadata, status, scope, or assignment.",
+      inputSchema: {
+        taskId: z.string(),
+        goal: z.string().optional(),
+        role: z.string().optional(),
+        priority: z.enum(["low", "normal", "high"]).optional(),
+        status: z.enum(["open", "claimed", "planning", "queued", "applying", "blocked", "completed", "failed", "cancelled"]).optional(),
+        progress: z.number().min(0).max(100).optional(),
+        currentStep: z.string().optional(),
+        blockers: z.array(z.any()).optional(),
+        assignedAgentId: z.string().optional(),
+        allowedScopes: z.array(z.any()).optional(),
+        dependencies: z.array(z.string()).optional(),
+        errorMessage: z.string().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async (args: any) => {
+      const { taskId, ...patch } = args;
+      return jsonResult(runtime.updateTask(taskId as TaskId, patch));
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.task.set_progress",
+    {
+      title: "Set Excel task progress",
+      description: "Update task progress and the current step shown in collaboration status.",
+      inputSchema: {
+        taskId: z.string(),
+        progress: z.number().min(0).max(100),
+        currentStep: z.string().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ taskId, progress, currentStep }: { taskId: string; progress: number; currentStep?: string }) =>
+      jsonResult(runtime.setTaskProgress(taskId as TaskId, progress, currentStep))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.task.add_blocker",
+    {
+      title: "Add Excel task blocker",
+      description: "Add an open blocker, warning, or informational note to a task.",
+      inputSchema: {
+        taskId: z.string(),
+        severity: z.enum(["info", "warning", "blocked"]),
+        message: z.string(),
+        scope: z.any().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async (args: any) =>
+      jsonResult(
+        runtime.addTaskBlocker(args.taskId as TaskId, {
+          severity: args.severity,
+          message: args.message,
+          scope: args.scope
+        })
+      )
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.task.resolve_blocker",
+    {
+      title: "Resolve Excel task blocker",
+      description: "Mark a task blocker as resolved.",
+      inputSchema: {
+        taskId: z.string(),
+        blockerId: z.string()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ taskId, blockerId }: { taskId: string; blockerId: string }) => jsonResult(runtime.resolveTaskBlocker(taskId as TaskId, blockerId))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.task.evaluate_schedule",
+    {
+      title: "Evaluate Excel task schedule",
+      description: "Evaluate task readiness against dependencies, blockers, and active locks.",
+      inputSchema: {
+        workbookId: z.string().optional(),
+        apply: z.boolean().optional(),
+        lockMode: z.enum(["read", "write_values", "write_formulas", "write_styles", "format_layout", "table", "chart", "pivot", "structure", "workbook"]).optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async (args: any) =>
+      jsonResult(
+        runtime.evaluateTaskSchedule({
+          workbookId: args.workbookId as WorkbookId | undefined,
+          apply: args.apply,
+          lockMode: args.lockMode
+        })
+      )
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.task.resume_ready",
+    {
+      title: "Resume ready Excel tasks",
+      description: "Apply scheduler decisions so blocked tasks with cleared dependencies can resume.",
+      inputSchema: {
+        workbookId: z.string().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ workbookId }: { workbookId?: string }) => jsonResult(runtime.resumeReadyTasks(workbookId as WorkbookId | undefined))
+  );
+
+  for (const [name, status] of [
+    ["excel.task.complete", "completed"],
+    ["excel.task.fail", "failed"],
+    ["excel.task.cancel", "cancelled"]
+  ] as const) {
+    registerMcpTool(
+      mcp,
+      name,
+      {
+        title: name.replace(/^excel\./, ""),
+        description: `Mark a task as ${status}.`,
+        inputSchema: { taskId: z.string(), errorMessage: z.string().optional() },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+      },
+      async ({ taskId, errorMessage }: { taskId: string; errorMessage?: string }) =>
+        jsonResult(runtime.updateTask(taskId as TaskId, status === "failed" ? { status, errorMessage } : { status }))
+    );
+  }
+
+  registerMcpTool(
+    mcp,
+    "excel.task.list",
+    {
+      title: "List Excel tasks",
+      description: "List multi-agent workbook tasks.",
+      inputSchema: { workbookId: z.string().optional() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ workbookId }: { workbookId?: string }) => jsonResult(runtime.listTasks(workbookId as WorkbookId | undefined))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.task.get",
+    {
+      title: "Get Excel task",
+      description: "Return a task by ID.",
+      inputSchema: { taskId: z.string() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ taskId }: { taskId: string }) => jsonResult(runtime.getTask(taskId as TaskId))
+  );
+}
+
+function registerCollaborationTools(mcp: McpServer): void {
+  registerMcpTool(
+    mcp,
+    "excel.collab.get_status",
+    {
+      title: "Get collaboration status",
+      description: "Return agents, tasks, locks, transactions, conflicts, and recent collaboration events.",
+      inputSchema: { workbookId: z.string().optional() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ workbookId }: { workbookId?: string }) => jsonResult(runtime.getCollaborationStatus(workbookId as WorkbookId | undefined))
+  );
+
+  for (const [name, method] of [
+    ["excel.collab.list_agents", "listAgents"],
+    ["excel.collab.list_tasks", "listTasks"],
+    ["excel.collab.list_locks", "listLocks"],
+    ["excel.collab.list_transactions", "listTransactions"],
+    ["excel.collab.get_conflicts", "listConflicts"]
+  ] as const) {
+    registerMcpTool(
+      mcp,
+      name,
+      {
+        title: name.replace(/^excel\./, ""),
+        description: "Return collaboration runtime state.",
+        inputSchema: { workbookId: z.string().optional() },
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+      },
+      async ({ workbookId }: { workbookId?: string }) => jsonResult(runtime[method](workbookId as WorkbookId | undefined))
+    );
+  }
+
+  registerMcpTool(
+    mcp,
+    "excel.collab.get_recent_events",
+    {
+      title: "Get recent collaboration events",
+      description: "Return recent collaboration events from the shared runtime.",
+      inputSchema: { workbookId: z.string().optional() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ workbookId }: { workbookId?: string }) => jsonResult(runtime.getCollaborationStatus(workbookId as WorkbookId | undefined).events)
+  );
+}
+
+function registerLockTools(mcp: McpServer): void {
+  registerMcpTool(
+    mcp,
+    "excel.lock.get_policy",
+    {
+      title: "Get lock lease policy",
+      description: "Return runtime lock TTL and manual-lock policy.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async () => jsonResult(runtime.getLockPolicy())
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.lock.set_policy",
+    {
+      title: "Set lock lease policy",
+      description: "Update runtime lock TTL and manual-lock policy.",
+      inputSchema: {
+        defaultTtlMs: z.number().int().positive().optional(),
+        transactionTtlMs: z.number().int().positive().optional(),
+        maxTtlMs: z.number().int().positive().optional(),
+        allowManualLocks: z.boolean().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async (args: any) => jsonResult(runtime.setLockPolicy(args))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.lock.acquire",
+    {
+      title: "Acquire Excel lock",
+      description: "Acquire explicit workbook/sheet/range/object locks for multi-agent planning or guarded work.",
+      inputSchema: {
+        workbookId: z.string(),
+        scopes: z.array(z.any()),
+        mode: z.enum(["read", "write_values", "write_formulas", "write_styles", "format_layout", "table", "chart", "pivot", "structure", "workbook"]),
+        reason: z.string(),
+        ownerAgentId: z.string().optional(),
+        taskId: z.string().optional(),
+        ttlMs: z.number().int().positive().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async (args: any) =>
+      jsonResult(
+        runtime.acquireLocks({
+          workbookId: args.workbookId as WorkbookId,
+          scopes: args.scopes as WorkbookScope[],
+          mode: args.mode as LockMode,
+          reason: args.reason,
+          ownerAgentId: args.ownerAgentId as AgentId | undefined,
+          taskId: args.taskId as TaskId | undefined,
+          ttlMs: args.ttlMs
+        })
+      )
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.lock.renew",
+    {
+      title: "Renew Excel locks",
+      description: "Extend active lock leases up to the runtime max TTL.",
+      inputSchema: {
+        lockIds: z.array(z.string()),
+        ttlMs: z.number().int().positive().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ lockIds, ttlMs }: { lockIds: string[]; ttlMs?: number }) => jsonResult(runtime.renewLocks(lockIds as LockId[], ttlMs))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.lock.release",
+    {
+      title: "Release Excel locks",
+      description: "Release active lock leases.",
+      inputSchema: {
+        lockIds: z.array(z.string())
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ lockIds }: { lockIds: string[] }) => jsonResult(runtime.releaseLocks(lockIds as LockId[]))
+  );
+}
+
+function registerConflictTools(mcp: McpServer): void {
+  registerMcpTool(
+    mcp,
+    "excel.conflict.get_guidance",
+    {
+      title: "Get conflict guidance",
+      description: "Return actionable conflict-resolution guidance for recent runtime conflicts.",
+      inputSchema: { workbookId: z.string().optional() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ workbookId }: { workbookId?: string }) => jsonResult(runtime.getConflictGuidance(workbookId as WorkbookId | undefined))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.conflict.explain",
+    {
+      title: "Explain conflict",
+      description: "Return actionable resolution guidance for a supplied conflict record.",
+      inputSchema: {
+        conflict: z.any()
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ conflict }: { conflict: ConflictRecord }) => jsonResult(runtime.explainConflict(conflict))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.conflict.get_telemetry",
+    {
+      title: "Get conflict telemetry",
+      description: "Summarize repeated contention, hot scopes, tasks, agents, and wait outcomes.",
+      inputSchema: {
+        workbookId: z.string().optional(),
+        windowSize: z.number().int().positive().optional()
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ workbookId, windowSize }: { workbookId?: string; windowSize?: number }) =>
+      jsonResult(runtime.getConflictTelemetry(workbookId as WorkbookId | undefined, windowSize))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.conflict.clear_telemetry",
+    {
+      title: "Clear conflict telemetry",
+      description: "Clear conflict telemetry for one workbook or the whole runtime.",
+      inputSchema: {
+        workbookId: z.string().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ workbookId }: { workbookId?: string }) => jsonResult(runtime.clearConflictTelemetry(workbookId as WorkbookId | undefined))
+  );
+}
+
+function registerTransactionTools(mcp: McpServer): void {
+  registerMcpTool(
+    mcp,
+    "excel.transaction.list",
+    {
+      title: "List Excel transactions",
+      description: "List serialized workbook transactions.",
+      inputSchema: { workbookId: z.string().optional() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ workbookId }: { workbookId?: string }) => jsonResult(runtime.listTransactions(workbookId as WorkbookId | undefined))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.transaction.get",
+    {
+      title: "Get Excel transaction",
+      description: "Return one serialized workbook transaction.",
+      inputSchema: { transactionId: z.string() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ transactionId }: { transactionId: string }) => jsonResult(runtime.getTransaction(transactionId as TransactionId))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.transaction.preview_rollback",
+    {
+      title: "Preview transaction rollback",
+      description: "Check whether a transaction can be rolled back without overwriting later work.",
+      inputSchema: { transactionId: z.string() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ transactionId }: { transactionId: string }) => jsonResult(runtime.previewTransactionRollback(transactionId as TransactionId))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.transaction.rollback",
+    {
+      title: "Rollback transaction",
+      description: "Rollback a transaction only when rollback preview has no later-overlap conflicts.",
+      inputSchema: { transactionId: z.string(), confirmationToken: z.string().optional() },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    async ({ transactionId, confirmationToken }: { transactionId: string; confirmationToken?: string }) =>
+      jsonResult(await runtime.rollbackTransaction(transactionId as TransactionId, confirmationToken))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.transaction.preview_rollback_chain",
+    {
+      title: "Preview transaction rollback chain",
+      description: "Find later dependent transactions that must be rolled back newest-first with the target transaction.",
+      inputSchema: { transactionId: z.string() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ transactionId }: { transactionId: string }) => jsonResult(runtime.previewTransactionRollbackChain(transactionId as TransactionId))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.transaction.rollback_chain",
+    {
+      title: "Rollback transaction chain",
+      description: "Rollback a confirmed related transaction chain newest-first.",
+      inputSchema: { transactionId: z.string(), confirmationToken: z.string().optional() },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    async ({ transactionId, confirmationToken }: { transactionId: string; confirmationToken?: string }) =>
+      jsonResult(await runtime.rollbackTransactionChain(transactionId as TransactionId, confirmationToken))
   );
 }
 
@@ -3309,15 +4540,15 @@ function registerSnapshotTools(mcp: McpServer): void {
       },
       async (args: any) => {
         if (name.endsWith(".refresh")) {
-          const existing = runtime.snapshots.getSnapshot(args.snapshotId as SnapshotId);
-          if (!existing) {
-            return jsonResult(runtime.getSnapshot(args.snapshotId as SnapshotId));
+          const existing = await runtime.getSnapshot(args.snapshotId as SnapshotId);
+          if (!existing.ok || !("snapshot" in existing)) {
+            return jsonResult(existing);
           }
           return jsonResult(
             await runtime.createWorkbookSnapshot({
-              workbookId: existing.workbookId,
+              workbookId: existing.snapshot.workbookId,
               reason: args.reason ?? `Refresh snapshot ${args.snapshotId}`,
-              ranges: existing.affectedRanges
+              ranges: existing.snapshot.affectedRanges
             })
           );
         }
@@ -4091,4 +5322,50 @@ function jsonResult(value: unknown) {
       }
     ]
   };
+}
+
+function jsonResource(uri: string, value: unknown) {
+  return {
+    contents: [
+      {
+        uri,
+        mimeType: "application/json",
+        text: JSON.stringify(value, null, 2)
+      }
+    ]
+  };
+}
+
+function resourceVariable(variables: Record<string, string | string[]>, name: string): string {
+  const value = variables[name];
+  if (Array.isArray(value)) {
+    return value.join("/");
+  }
+  return value ?? "";
+}
+
+function stripResourceSheetName(address: string): string {
+  const bangIndex = address.lastIndexOf("!");
+  return bangIndex >= 0 ? address.slice(bangIndex + 1) : address;
+}
+
+function hasArg(name: string): boolean {
+  return process.argv.includes(name);
+}
+
+function readArg(name: string): string | undefined {
+  const prefix = `${name}=`;
+  const inline = process.argv.find((arg) => arg.startsWith(prefix));
+  if (inline) {
+    return inline.slice(prefix.length);
+  }
+  const index = process.argv.indexOf(name);
+  if (index >= 0) {
+    return process.argv[index + 1];
+  }
+  return undefined;
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.endsWith("/") ? value.slice(0, -1) : value;
 }

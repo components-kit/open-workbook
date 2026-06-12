@@ -13,6 +13,9 @@ export const ExcelErrorCode = {
   FormulaValidationFailed: "FORMULA_VALIDATION_FAILED",
   StyleValidationFailed: "STYLE_VALIDATION_FAILED",
   BackupUnavailable: "BACKUP_UNAVAILABLE",
+  LockConflict: "LOCK_CONFLICT",
+  NotFound: "NOT_FOUND",
+  InvalidArgument: "INVALID_ARGUMENT",
   PayloadTooLarge: "PAYLOAD_TOO_LARGE",
   OperationFailed: "OPERATION_FAILED"
 } as const;

@@ -82,13 +82,12 @@ The tarball should include:
 Before publishing:
 
 1. Confirm package versions are aligned.
-2. Run `corepack pnpm build`.
-3. Run `corepack pnpm test`.
-4. Run `node packages/cli/dist/index.js doctor`.
-5. Run `npm pack --dry-run ./packages/cli`.
-6. Confirm generated manifests include the expected taskpane URL and `backendUrl`.
-7. Confirm `@open-workbook/excel-addin` remains private.
-8. Confirm npm publish access is public for publishable scoped packages.
+2. Run `corepack pnpm verify`.
+3. Run `node packages/cli/dist/index.js doctor`.
+4. Run `corepack pnpm pack:dry-run`.
+5. Confirm generated manifests include the expected taskpane URL and `backendUrl`.
+6. Confirm `@open-workbook/excel-addin` remains private.
+7. Confirm npm publish access is public for publishable scoped packages.
 
 ## End-User Install Shape
 
@@ -110,13 +109,13 @@ owb sideload windows --out open-workbook.xml
 
 and copy the generated manifest into a trusted shared-folder add-in catalog.
 
-## Native Installer Future
+## Native Installer Shape
 
-A future native installer can wrap the same commands:
+Native installers or administrator scripts can wrap the same commands:
 
 - install Node/runtime assets or embed a Node runtime
 - place `owb` on `PATH`
-- register an optional auto-start process for `owb addin serve`
+- register an optional auto-start process from `owb service manifest`
 - guide or automate the Excel manifest trust step where the platform allows it
 
 Excel still requires user or admin trust approval for the add-in manifest outside AppSource.

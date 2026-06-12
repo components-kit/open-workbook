@@ -29,8 +29,18 @@ All formula mutations validate permissions and create backups before Excel recei
 - `excel.formula.validate_against_template` compares the target sheet against a registered template fingerprint.
 - Formula pattern comparisons report missing formulas, unexpected formulas, shape mismatches, and pattern mismatches.
 
+## Dependency Graph
+
+- `excel.formula.get_dependency_graph` parses formulas in a sheet or range and returns precedent edges.
+- `excel.formula.trace_precedents` returns parsed precedent ranges for a formula cell.
+- `excel.formula.trace_dependents` scans formulas on the sheet and returns formula cells that reference the target range.
+
+The parser handles normal A1 references, quoted sheet names, absolute references, rectangular ranges, whole-column references, dynamic array spill anchors, structured table references, and external workbook references. Structured references are represented as table dependency nodes and are also resolved to precise local ranges when table metadata is available, including data body, headers, totals, `#All`, and bounded column spans. Dynamic array spill references expand to the spill range when spill metadata is available and fall back to the anchor cell with a warning when it is not. External workbook references are represented as external dependency nodes and are not resolved to local workbook ranges.
+
+Formula writes use parsed local dependencies during pre-commit lock checks. If an agent writes `=SUM(A1:A10)` while another agent has a write lock on `A1:A10`, the formula write is blocked before Excel receives the mutation.
+
 ## Current Limits
 
-`excel.formula.find_circular_references`, `excel.formula.trace_precedents`, and `excel.formula.trace_dependents` are exposed as deterministic capability-status tools until dependency graph results can be normalized safely across Excel hosts.
+`excel.formula.find_circular_references` is exposed as a deterministic capability-status tool until circular-reference enumeration can be normalized safely across Excel hosts.
 
 `excel.formula.explain` is intentionally lightweight. It summarizes functions, references, structured references, external references, and volatile functions; it is not a full Excel formula parser.

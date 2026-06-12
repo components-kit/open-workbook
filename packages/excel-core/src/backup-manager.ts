@@ -59,6 +59,17 @@ export class BackupManager {
     return this.backups.get(backupId);
   }
 
+  load(records: BackupRecord[]): void {
+    this.backups.clear();
+    for (const record of records) {
+      this.backups.set(record.backupId, { ...record });
+    }
+  }
+
+  dump(): BackupRecord[] {
+    return [...this.backups.values()].map((backup) => ({ ...backup }));
+  }
+
   assertRollbackAvailable(backupIds: BackupId[]): void {
     const missing = backupIds.filter((backupId) => !this.backups.has(backupId));
     if (missing.length > 0) {

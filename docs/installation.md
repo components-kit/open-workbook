@@ -20,7 +20,13 @@ corepack pnpm build
 node packages/cli/dist/index.js doctor
 ```
 
-Run the MCP server:
+Run the shared daemon:
+
+```bash
+node packages/cli/dist/index.js daemon start
+```
+
+Run the MCP adapter in another terminal:
 
 ```bash
 node packages/cli/dist/index.js mcp
@@ -44,12 +50,13 @@ After package installation, use `owb` directly:
 
 ```bash
 owb doctor
+owb daemon start
 owb mcp
 owb addin serve
 owb opencode config --id open-workbook
 ```
 
-The MCP server starts the local backend WebSocket automatically. The add-in asset server is a separate process because Excel loads the taskpane HTML from it.
+The daemon starts the local backend WebSocket and owns shared workbook coordination. `owb mcp` attaches to that daemon when it is running. The add-in asset server is a separate process because Excel loads the taskpane HTML from it.
 
 ## Sideload On macOS
 
@@ -89,6 +96,25 @@ OPEN_WORKBOOK_ADDIN_PORT=37856 \
 owb sideload manifest --out open-workbook.xml
 ```
 
+## HTTPS Add-in Serving
+
+Loopback HTTP is the default for desktop sideload development. To serve the taskpane over HTTPS, provide a trusted local certificate and key:
+
+```bash
+owb addin serve --https \
+  --tls-cert ./certs/open-workbook.local.pem \
+  --tls-key ./certs/open-workbook.local-key.pem
+```
+
+Then generate a matching manifest:
+
+```bash
+OPEN_WORKBOOK_ADDIN_HTTPS=1 \
+owb sideload manifest --out open-workbook.xml
+```
+
+The CLI also honors `OPEN_WORKBOOK_ADDIN_PROTOCOL=https`, `OPEN_WORKBOOK_ADDIN_TLS_CERT`, and `OPEN_WORKBOOK_ADDIN_TLS_KEY`. Certificate trust is intentionally left to the user or organization.
+
 You can also pass URLs explicitly:
 
 ```bash
@@ -103,15 +129,27 @@ owb sideload manifest \
 Use these together during local testing:
 
 ```bash
+owb daemon start
 owb mcp
 owb addin serve
 ```
+
+To generate an optional auto-start wrapper for the add-in asset server:
+
+```bash
+owb service manifest --target macos --service addin --out com.open-workbook.addin.plist
+owb service manifest --target systemd --service addin --out com.open-workbook.addin.service
+owb service manifest --target windows --service addin --out open-workbook-addin-task.ps1
+```
+
+See [Service Wrapper](service-wrapper.md) for install examples.
 
 Then open Excel, load the sideloaded add-in, and call:
 
 ```text
 excel.runtime.get_status
 excel.runtime.get_active_context
+excel.collab.get_status
 ```
 
 from your MCP client.
@@ -119,8 +157,10 @@ from your MCP client.
 ## Troubleshooting
 
 - Run `owb doctor` to confirm packaged assets are available.
+- Run `owb paths` to see the daemon state directory and packaged entrypoints.
 - Confirm the add-in server prints a manifest URL.
-- Confirm the MCP process prints the backend WebSocket URL.
+- Confirm `owb daemon status` returns JSON.
+- Confirm the MCP process says it connected to the daemon, or use `owb mcp --standalone` for a single-process test.
 - If Excel cannot load the add-in, regenerate the manifest and repeat sideloading.
 - If Windows Excel does not show the add-in, confirm the trusted catalog is a shared-folder UNC path and `Show in Menu` is enabled.
 - If the add-in loads but does not connect, confirm the `backendUrl` query string in the generated manifest points at the running MCP backend.

@@ -91,4 +91,15 @@ export class TemplateRegistry {
       return !options.workbookId || record.workbookId === options.workbookId;
     });
   }
+
+  load(records: TemplateRecord[]): void {
+    this.records.clear();
+    for (const record of records) {
+      this.records.set(record.templateId, { ...record });
+    }
+  }
+
+  dump(): TemplateRecord[] {
+    return [...this.records.values()].map((record) => ({ ...record }));
+  }
 }

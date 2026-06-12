@@ -11,16 +11,19 @@ const repoRoot = resolve(__dirname, "../../..");
 const packageRoot = resolve(__dirname, "..");
 const sourcePaths = {
   mcpServer: resolve(repoRoot, "apps/mcp-server/dist/index.js"),
+  backend: resolve(repoRoot, "apps/backend/dist/index.js"),
   addinServer: resolve(repoRoot, "apps/excel-addin/scripts/dev-server.mjs"),
   manifest: resolve(repoRoot, "apps/excel-addin/manifest.xml")
 };
 const bundledPaths = {
   mcpServer: resolve(packageRoot, "assets/mcp-server/dist/index.js"),
+  backend: resolve(packageRoot, "assets/backend/dist/index.js"),
   addinServer: resolve(packageRoot, "assets/excel-addin/scripts/dev-server.mjs"),
   manifest: resolve(packageRoot, "assets/excel-addin/manifest.xml")
 };
 const dependencyPaths = {
   mcpServer: resolve(packageRoot, "node_modules/@open-workbook/mcp-server/dist/index.js"),
+  backend: resolve(packageRoot, "node_modules/@open-workbook/backend/dist/index.js"),
   addinServer: bundledPaths.addinServer,
   manifest: bundledPaths.manifest
 };
@@ -31,18 +34,102 @@ program.name("owb").description("Open Workbook local CLI").version("0.1.0");
 
 program
   .command("mcp")
-  .description("Start the Open Workbook MCP server and embedded add-in backend")
+  .description("Start the Open Workbook MCP adapter; attaches to daemon when available")
+  .option("--agent-name <name>", "Agent name shown in collaboration status")
+  .option("--daemon-url <url>", "Daemon base URL", defaultDaemonUrl())
+  .option("--standalone", "Start a single-process MCP server with embedded backend")
+  .action((options: { agentName?: string; daemonUrl: string; standalone?: boolean }) => {
+    const args: string[] = [];
+    if (options.agentName !== undefined) {
+      args.push("--agent-name", options.agentName);
+    }
+    if (options.daemonUrl !== undefined) {
+      args.push("--daemon-url", options.daemonUrl);
+    }
+    if (options.standalone) {
+      args.push("--standalone");
+    }
+    runNode(resolveAsset("mcpServer"), args);
+  });
+
+const daemon = program.command("daemon").description("Manage the shared Open Workbook daemon");
+
+daemon
+  .command("start")
+  .description("Start the shared local Open Workbook daemon")
   .action(() => {
-    runNode(resolveAsset("mcpServer"));
+    runNode(resolveAsset("backend"));
+  });
+
+daemon
+  .command("status")
+  .description("Print daemon status from the local health endpoint")
+  .option("--daemon-url <url>", "Daemon base URL", defaultDaemonUrl())
+  .action(async (options: { daemonUrl: string }) => {
+    const response = await fetchDaemon(`${trimTrailingSlash(options.daemonUrl)}/status`, "Daemon status");
+    if (!response.ok) {
+      fail(`Daemon status failed: ${response.status} ${response.statusText}`);
+    }
+    console.log(JSON.stringify(await response.json(), null, 2));
+  });
+
+daemon
+  .command("stop")
+  .description("Stop the shared local Open Workbook daemon")
+  .option("--daemon-url <url>", "Daemon base URL", defaultDaemonUrl())
+  .action(async (options: { daemonUrl: string }) => {
+    const response = await fetchDaemon(`${trimTrailingSlash(options.daemonUrl)}/shutdown`, "Daemon stop", { method: "POST" });
+    if (!response.ok) {
+      fail(`Daemon stop failed: ${response.status} ${response.statusText}`);
+    }
+    console.log("Stopped Open Workbook daemon.");
+  });
+
+const service = program.command("service").description("Generate local auto-start service wrappers");
+
+service
+  .command("manifest")
+  .description("Print or write a launchd, systemd user, or Windows scheduled-task wrapper")
+  .option("--target <target>", "Target wrapper: macos, systemd, windows", defaultServiceTarget())
+  .option("--service <service>", "Service to run: addin or daemon", "addin")
+  .option("--out <path>", "Write wrapper to a file instead of stdout")
+  .option("--command <command>", "Base CLI command to run", defaultServiceCommand())
+  .action((options: { target: string; service: string; out?: string; command: string }) => {
+    const target = normalizeServiceTarget(options.target);
+    const serviceName = normalizeServiceName(options.service);
+    const manifest = generateServiceManifest({
+      target,
+      serviceName,
+      command: options.command
+    });
+    if (options.out) {
+      writeFileSync(resolve(options.out), manifest, "utf8");
+      console.log(`Wrote ${target} ${serviceName} service wrapper to ${resolve(options.out)}`);
+      return;
+    }
+    console.log(manifest);
   });
 
 program
   .command("addin")
   .description("Manage the local Excel add-in")
   .argument("<command>", "Command: serve")
-  .action((command: string) => {
+  .option("--https", "Serve the add-in over HTTPS with a local certificate")
+  .option("--tls-cert <path>", "TLS certificate PEM path for HTTPS add-in serving")
+  .option("--tls-key <path>", "TLS private key PEM path for HTTPS add-in serving")
+  .action((command: string, options: { https?: boolean; tlsCert?: string; tlsKey?: string }) => {
     if (command !== "serve") {
       fail(`Unknown addin command: ${command}`);
+    }
+    if (options.https) {
+      process.env.OPEN_WORKBOOK_ADDIN_HTTPS = "1";
+      process.env.OPEN_WORKBOOK_ADDIN_PROTOCOL = "https";
+    }
+    if (options.tlsCert !== undefined) {
+      process.env.OPEN_WORKBOOK_ADDIN_TLS_CERT = resolve(options.tlsCert);
+    }
+    if (options.tlsKey !== undefined) {
+      process.env.OPEN_WORKBOOK_ADDIN_TLS_KEY = resolve(options.tlsKey);
     }
     runNode(resolveAsset("addinServer"));
   });
@@ -112,12 +199,17 @@ opencode
   .description("Print an OpenCode MCP server config snippet")
   .option("--id <id>", "MCP server id in OpenCode config", "open-workbook")
   .option("--command <command>", "Command to run Open Workbook MCP", "owb")
-  .action((options: { id: string; command: string }) => {
+  .option("--agent-name <name>", "Agent name passed to the MCP adapter")
+  .action((options: { id: string; command: string; agentName?: string }) => {
+    const command = [options.command, "mcp"];
+    if (options.agentName !== undefined) {
+      command.push("--agent-name", options.agentName);
+    }
     const config = {
       mcp: {
         [options.id]: {
           type: "local",
-          command: [options.command, "mcp"],
+          command,
           enabled: true
         }
       }
@@ -133,8 +225,10 @@ program
       JSON.stringify(
         {
           mcpServer: resolveAsset("mcpServer"),
+          backend: resolveAsset("backend"),
           addinServer: resolveAsset("addinServer"),
           manifest: resolveAsset("manifest"),
+          stateDir: defaultStateDir(),
           mode: existsSync(sourcePaths.mcpServer) ? "source" : "bundled"
         },
         null,
@@ -149,6 +243,7 @@ program
   .action(() => {
     const checks = [
       checkPath("MCP server", resolveAsset("mcpServer")),
+      checkPath("Backend daemon", resolveAsset("backend")),
       checkPath("Add-in server", resolveAsset("addinServer")),
       checkPath("Manifest", resolveAsset("manifest"))
     ];
@@ -180,12 +275,12 @@ function resolveAsset(name: AssetName): string {
   return sourcePaths[name];
 }
 
-function runNode(entrypoint: string): void {
+function runNode(entrypoint: string, args: string[] = []): void {
   if (!existsSync(entrypoint)) {
     fail(`Missing built entrypoint: ${entrypoint}\nRun: corepack pnpm build`);
   }
 
-  const child = spawn(process.execPath, [entrypoint], {
+  const child = spawn(process.execPath, [entrypoint, ...args], {
     stdio: "inherit",
     env: process.env
   });
@@ -210,10 +305,83 @@ function generateManifest(options: { addinUrl: string; backendUrl: string }): st
     .replaceAll("http://localhost:37846", addinUrl);
 }
 
+type ServiceTarget = "macos" | "systemd" | "windows";
+type ServiceName = "addin" | "daemon";
+
+function generateServiceManifest(options: { target: ServiceTarget; serviceName: ServiceName; command: string }): string {
+  const args = options.serviceName === "addin" ? ["addin", "serve"] : ["daemon", "start"];
+  const label = `com.open-workbook.${options.serviceName}`;
+  const description = options.serviceName === "addin" ? "Open Workbook Excel add-in asset server" : "Open Workbook shared daemon";
+  const commandParts = [options.command, ...args];
+  switch (options.target) {
+    case "macos":
+      return generateLaunchdPlist(label, commandParts);
+    case "systemd":
+      return generateSystemdUnit(label, description, commandParts);
+    case "windows":
+      return generateWindowsScheduledTask(label, description, commandParts);
+  }
+}
+
+function generateLaunchdPlist(label: string, commandParts: string[]): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${escapeXml(label)}</string>
+  <key>ProgramArguments</key>
+  <array>
+${commandParts.map((part) => `    <string>${escapeXml(part)}</string>`).join("\n")}
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${escapeXml(join(homedir(), "Library/Logs", `${label}.out.log`))}</string>
+  <key>StandardErrorPath</key>
+  <string>${escapeXml(join(homedir(), "Library/Logs", `${label}.err.log`))}</string>
+</dict>
+</plist>
+`;
+}
+
+function generateSystemdUnit(label: string, description: string, commandParts: string[]): string {
+  return `[Unit]
+Description=${description}
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${commandParts.map(shellQuote).join(" ")}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+
+# Save as ~/.config/systemd/user/${label}.service
+# Enable with: systemctl --user enable --now ${label}.service
+`;
+}
+
+function generateWindowsScheduledTask(label: string, description: string, commandParts: string[]): string {
+  const executable = commandParts[0]!;
+  const argumentsText = commandParts.slice(1).join(" ");
+  return `$Action = New-ScheduledTaskAction -Execute ${powerShellQuote(executable)} -Argument ${powerShellQuote(argumentsText)}
+$Trigger = New-ScheduledTaskTrigger -AtLogOn
+$Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel LeastPrivilege
+$Settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+Register-ScheduledTask -TaskName ${powerShellQuote(label)} -Description ${powerShellQuote(description)} -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force
+`;
+}
+
 function defaultAddinUrl(): string {
   const host = process.env.OPEN_WORKBOOK_ADDIN_HOST ?? "127.0.0.1";
   const port = process.env.OPEN_WORKBOOK_ADDIN_PORT ?? "37846";
-  return `http://${host}:${port}`;
+  const protocol = process.env.OPEN_WORKBOOK_ADDIN_HTTPS === "1" || process.env.OPEN_WORKBOOK_ADDIN_PROTOCOL === "https" ? "https" : "http";
+  return `${protocol}://${host}:${port}`;
 }
 
 function defaultBackendUrl(): string {
@@ -223,12 +391,82 @@ function defaultBackendUrl(): string {
   return `ws://${host}:${port}${path}`;
 }
 
+function defaultDaemonUrl(): string {
+  const host = process.env.OPEN_WORKBOOK_HOST ?? "127.0.0.1";
+  const port = process.env.OPEN_WORKBOOK_PORT ?? "37845";
+  return `http://${host}:${port}`;
+}
+
+function defaultServiceTarget(): ServiceTarget {
+  if (process.platform === "darwin") {
+    return "macos";
+  }
+  if (process.platform === "win32") {
+    return "windows";
+  }
+  return "systemd";
+}
+
+function defaultServiceCommand(): string {
+  return process.env.OPEN_WORKBOOK_SERVICE_COMMAND ?? "owb";
+}
+
+function defaultStateDir(): string {
+  return process.env.OPEN_WORKBOOK_STATE_DIR ?? resolve(process.cwd(), ".open-workbook/state");
+}
+
 function trimTrailingSlash(value: string): string {
   return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 
+function normalizeServiceTarget(value: string): ServiceTarget {
+  if (value === "mac" || value === "macos" || value === "launchd") {
+    return "macos";
+  }
+  if (value === "win" || value === "windows" || value === "task-scheduler") {
+    return "windows";
+  }
+  if (value === "linux" || value === "systemd") {
+    return "systemd";
+  }
+  fail(`Unknown service target: ${value}`);
+}
+
+function normalizeServiceName(value: string): ServiceName {
+  if (value === "addin" || value === "daemon") {
+    return value;
+  }
+  fail(`Unknown service name: ${value}`);
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function powerShellQuote(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
 function checkPath(label: string, path: string): { label: string; path: string; ok: boolean } {
   return { label, path, ok: existsSync(path) };
+}
+
+async function fetchDaemon(url: string, label: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    fail(`${label} failed: could not connect to ${url}. Start the daemon with \`owb daemon start\` or check OPEN_WORKBOOK_PORT. ${detail}`);
+  }
 }
 
 function fail(message: string): never {

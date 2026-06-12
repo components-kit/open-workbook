@@ -9,6 +9,8 @@ export interface BackendServerOptions {
   host: string;
   port: number;
   addinPath: string;
+  rpcPath?: string;
+  shutdownPath?: string;
 }
 
 export interface BackendServerHandle {
@@ -16,10 +18,25 @@ export interface BackendServerHandle {
 }
 
 export function startBackendServer(runtime: RuntimeService, options: BackendServerOptions): Promise<BackendServerHandle> {
+  const rpcPath = options.rpcPath ?? "/rpc";
+  const shutdownPath = options.shutdownPath ?? "/shutdown";
+  let handle: BackendServerHandle | undefined;
   const httpServer = createServer((request, response) => {
     if (request.url === "/status") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify(runtime.getStatus()));
+      return;
+    }
+    if (request.url === rpcPath && request.method === "POST") {
+      handleRuntimeRpc(runtime, request, response);
+      return;
+    }
+    if (request.url === shutdownPath && request.method === "POST") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true }));
+      setTimeout(() => {
+        void handle?.close();
+      }, 25);
       return;
     }
 
@@ -75,15 +92,63 @@ export function startBackendServer(runtime: RuntimeService, options: BackendServ
     });
   });
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    httpServer.once("error", reject);
     httpServer.listen(options.port, options.host, () => {
-      resolve({
+      httpServer.off("error", reject);
+      handle = {
         close: async () => {
           await new Promise<void>((closeResolve) => websocketServer.close(() => closeResolve()));
           await new Promise<void>((closeResolve) => httpServer.close(() => closeResolve()));
         }
-      });
+      };
+      resolve(handle);
     });
+  });
+}
+
+function handleRuntimeRpc(runtime: RuntimeService, request: IncomingMessage, response: import("node:http").ServerResponse): void {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  request.on("data", (chunk: Buffer) => {
+    bytes += chunk.length;
+    if (bytes > 10 * 1024 * 1024) {
+      response.writeHead(413, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: false, error: { code: "PAYLOAD_TOO_LARGE", message: "RPC payload is too large." } }));
+      request.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+  request.on("end", async () => {
+    try {
+      const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { method?: string; args?: unknown[] };
+      if (!payload.method || !Array.isArray(payload.args)) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: false, error: { code: "RANGE_INVALID", message: "RPC payload must include method and args array." } }));
+        return;
+      }
+      const target = (runtime as unknown as Record<string, unknown>)[payload.method];
+      if (typeof target !== "function") {
+        response.writeHead(404, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: false, error: { code: "NOT_FOUND", message: `Runtime method not found: ${payload.method}` } }));
+        return;
+      }
+      const result = await target.apply(runtime, payload.args);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, result }));
+    } catch (error) {
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          ok: false,
+          error: {
+            code: "OPERATION_FAILED",
+            message: error instanceof Error ? error.message : String(error)
+          }
+        })
+      );
+    }
   });
 }
 

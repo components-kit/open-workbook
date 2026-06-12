@@ -3,6 +3,27 @@ export interface EngineCapability {
   supported: boolean;
   platforms: Array<"mac" | "windows" | "web">;
   notes?: string;
+  requires?: Array<{
+    set: string;
+    version: string;
+  }>;
+}
+
+export interface OfficeApiSetSupport {
+  set: "ExcelApi" | "ExcelApiOnline" | string;
+  version: string;
+  supported: boolean;
+}
+
+export interface HostCapabilityStatus {
+  name: string;
+  supported: boolean;
+  status: "supported" | "limited" | "unsupported" | "unknown";
+  reason?: string;
+  requires?: Array<{
+    set: string;
+    version: string;
+  }>;
 }
 
 export interface RuntimeCapabilities {
@@ -10,8 +31,12 @@ export interface RuntimeCapabilities {
     name: string;
     version: string;
     platform: "mac" | "windows" | "web" | "unknown";
+    host?: string;
+    officeVersion?: string;
   };
+  apiSets?: OfficeApiSetSupport[];
   capabilities: EngineCapability[];
+  hostCapabilities?: HostCapabilityStatus[];
 }
 
 export const RequiredV1Capabilities = [

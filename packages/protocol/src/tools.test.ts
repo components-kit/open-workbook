@@ -60,6 +60,8 @@ describe("tool catalog", () => {
 
   it("tracks resources and prompts as catalog entries", () => {
     expect(ResourceCatalog.some((resource) => resource.uriTemplate === "excel://runtime/status")).toBe(true);
-    expect(PromptCatalog.some((prompt) => prompt.name === "excel.prompts.create_next_month_sheet")).toBe(true);
+    expect(ResourceCatalog.every((resource) => resource.status === "stable")).toBe(true);
+    expect(PromptCatalog.some((prompt) => prompt.name === "excel.prompts.create_next_month_sheet" && prompt.status === "stable")).toBe(true);
+    expect(PromptCatalog.some((prompt) => prompt.name === "excel.prompts.reconcile_statement" && prompt.status === "unsupported")).toBe(true);
   });
 });

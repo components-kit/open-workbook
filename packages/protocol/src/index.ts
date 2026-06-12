@@ -1,4 +1,5 @@
 export * from "./capabilities.js";
+export * from "./collaboration.js";
 export * from "./errors.js";
 export * from "./ids.js";
 export * from "./json-rpc.js";

@@ -45,6 +45,6 @@ Because writes use `range.write_values`, cleaning preserves formatting and parti
 
 ## Current Limits
 
-The permission state is runtime-local. A future persistence milestone should store policies and region locks in a local config file or workbook custom XML.
+The permission state and locked region list are persisted in the daemon state file under `.open-workbook/state` by default, or under `OPEN_WORKBOOK_STATE_DIR` when configured.
 
 Cleaning tools currently operate on values only. Formula-preserving table cleanup should use table-specific tools or template repair paths.
