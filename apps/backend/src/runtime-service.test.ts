@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentId, ExcelOperation, OperationId, PlanId, RuntimeCapabilities, TransactionRecord, WorkbookId, WorkbookScope } from "@open-workbook/protocol";
+import { NativeFileBridge } from "./native-file-bridge.js";
 import { RuntimeService } from "./runtime-service.js";
 
 describe("RuntimeService persistence", () => {
@@ -496,6 +497,107 @@ describe("RuntimeService chart template copy", () => {
     expect((result as { ok?: boolean }).ok).toBe(true);
     expect((result as { transactionId?: string }).transactionId).toBeDefined();
     expect(runtime.transactions.list(workbookId).some((transaction) => transaction.status === "applied" && transaction.backups.length === 1)).toBe(true);
+  });
+});
+
+describe("RuntimeService PivotTable template copy", () => {
+  it("records a backup and transaction for deterministic PivotTable copy", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_pivot_copy" as WorkbookId;
+    const session = runtime.sessions.createSession();
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string, params: any) => {
+        if (method === "pivot.get_info") {
+          return {
+            ok: true,
+            info: {
+              workbookId,
+              pivotTableName: params.pivotTableName,
+              sheetName: params.pivotTableName === "TemplatePivot" ? "Template" : "Report",
+              source: "Transactions",
+              sourceType: "Table"
+            }
+          };
+        }
+        if (method === "workbook.get_map") {
+          return {
+            sheets: [
+              { name: "Template", usedRange: { address: "A1:H20" } },
+              { name: "Report", usedRange: { address: "A1:H20" } }
+            ]
+          };
+        }
+        if (method === "workbook.snapshot_ranges") {
+          return {
+            workbookFingerprint: {
+              workbookId,
+              workbookHash: "pivot_copy_workbook",
+              structureHash: "structure",
+              capturedAt: new Date().toISOString()
+            },
+            rangeSnapshots: params.ranges.map((range: any) => ({
+              range,
+              values: [["snapshot"]],
+              fingerprint: {
+                range,
+                hash: "pivot_copy_range",
+                cellCount: 1,
+                capturedAt: new Date().toISOString()
+              }
+            }))
+          };
+        }
+        if (method === "pivot.copy_from_template") {
+          return {
+            ok: true,
+            copied: ["layout", "rowHierarchyPositions", "dataHierarchySettings"],
+            source: { workbookId, pivotTableName: params.templatePivotTableName },
+            target: { workbookId, pivotTableName: params.pivotTableName }
+          };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const result = await runtime.copyPivotFromTemplate({
+      workbookId,
+      pivotTableName: "ReportPivot",
+      templatePivotTableName: "TemplatePivot"
+    });
+
+    expect((result as { ok?: boolean }).ok).toBe(true);
+    expect((result as { transactionId?: string }).transactionId).toBeDefined();
+    expect(runtime.transactions.list(workbookId).some((transaction) => transaction.status === "applied" && transaction.backups.length === 1)).toBe(true);
+  });
+});
+
+describe("RuntimeService native file bridge", () => {
+  it("uses the configured bridge for workbook save_as", async () => {
+    const workbookId = "workbook_file_bridge" as WorkbookId;
+    let requestBody: any;
+    const bridge = new NativeFileBridge({
+      url: "http://127.0.0.1:37999",
+      fetchImpl: (async (_url: string | URL | Request, init?: RequestInit) => {
+        requestBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({
+          ok: true,
+          operation: "workbook.save_as",
+          workbookId,
+          targetPath: "/tmp/report.xlsx",
+          filePath: "/tmp/report.xlsx"
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof fetch
+    });
+    const runtime = new RuntimeService({ persistState: false, fileBridge: bridge });
+
+    const result = await runtime.saveWorkbookAs(workbookId, "/tmp/report.xlsx");
+
+    expect(result.ok).toBe(true);
+    expect(requestBody).toMatchObject({
+      operation: "workbook.save_as",
+      workbookId,
+      targetPath: "/tmp/report.xlsx"
+    });
   });
 });
 

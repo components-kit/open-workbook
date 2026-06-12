@@ -24,6 +24,7 @@ import type {
   NameUpdateRequest,
   OperationId,
   PermissionState,
+  PivotCopyFromTemplateRequest,
   PivotCreateRequest,
   PivotSelector,
   PlanId,
@@ -908,7 +909,7 @@ function registerWorkbookTools(mcp: McpServer): void {
     "excel.workbook.save_as",
     {
       title: "Save workbook as",
-      description: "Report Save As capability status. True local Save As requires a future native host bridge.",
+      description: "Save the workbook through the native file bridge when configured, otherwise report Save As capability status.",
       inputSchema: {
         workbookId: z.string(),
         targetPath: z.string().optional()
@@ -920,7 +921,7 @@ function registerWorkbookTools(mcp: McpServer): void {
       }
     },
     async ({ workbookId, targetPath }: { workbookId: string; targetPath?: string }) =>
-      jsonResult(runtime.saveWorkbookAs(workbookId as WorkbookId, targetPath))
+      jsonResult(await runtime.saveWorkbookAs(workbookId as WorkbookId, targetPath))
   );
 
   registerMcpTool(
@@ -3181,16 +3182,19 @@ function registerPivotTools(mcp: McpServer): void {
     "excel.pivot.copy_from_template",
     {
       title: "Copy PivotTable from template",
-      description: "Return current PivotTable template-copy support status.",
-      inputSchema: { ...pivotSelectorSchema(), templateId: z.string().optional() },
+      description: "Replay deterministic PivotTable metadata and layout from a template PivotTable through the transaction-backed add-in path.",
+      inputSchema: { ...pivotSelectorSchema(), templatePivotTableName: z.string(), templateId: z.string().optional() },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
     },
     async (args: any) => {
-      const request: PivotSelector & { templateId?: TemplateId } = pivotSelector(args);
+      const request: PivotCopyFromTemplateRequest = {
+        ...pivotSelector(args),
+        templatePivotTableName: args.templatePivotTableName
+      };
       if (args.templateId !== undefined) {
         request.templateId = args.templateId as TemplateId;
       }
-      return jsonResult(runtime.copyPivotFromTemplate(request));
+      return jsonResult(await runtime.copyPivotFromTemplate(request));
     }
   );
 

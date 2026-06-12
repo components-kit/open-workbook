@@ -21,6 +21,7 @@ import type {
   OperationResult,
   OperationTelemetry,
   OperationWarning,
+  PivotCopyFromTemplateRequest,
   PivotCreateRequest,
   PivotSelector,
   PivotTableInfo,
@@ -495,26 +496,26 @@ export async function readWorkbookEmbeddedLocalConfig(workbookId: string): Promi
 export async function listPivotTables(workbookId: string): Promise<{ ok: boolean; pivotTables: PivotTableInfo[] }> {
   return Excel.run(async (context) => {
     const pivots = context.workbook.pivotTables;
-    pivots.load("items/name,items/id,items/refreshOnOpen,items/useCustomSortLists,items/enableDataValueEditing,items/allowMultipleFiltersPerField");
+    pivots.load("items/name");
     await context.sync();
 
-    const loaded = pivots.items.map((pivot) => loadPivotInfoObjects(pivot));
-    await context.sync();
-
-    return { ok: true, pivotTables: loaded.map((pivot) => materializePivotInfo(workbookId, pivot)) };
+    const pivotTables: PivotTableInfo[] = [];
+    for (const pivot of pivots.items) {
+      pivotTables.push(await readPivotTableInfo(context, workbookId, pivot));
+    }
+    return { ok: true, pivotTables };
   });
 }
 
 export async function getPivotTableInfo(request: PivotSelector): Promise<{ ok: boolean; info?: PivotTableInfo }> {
   return Excel.run(async (context) => {
     const pivot = context.workbook.pivotTables.getItemOrNullObject(request.pivotTableName);
-    pivot.load("name,id,refreshOnOpen,useCustomSortLists,enableDataValueEditing,allowMultipleFiltersPerField,isNullObject");
-    const loaded = loadPivotInfoObjects(pivot);
+    pivot.load("isNullObject");
     await context.sync();
     if (pivot.isNullObject) {
       return { ok: false };
     }
-    return { ok: true, info: materializePivotInfo(request.workbookId, loaded) };
+    return { ok: true, info: await readPivotTableInfo(context, request.workbookId, pivot) };
   });
 }
 
@@ -525,25 +526,22 @@ export async function createPivotTable(request: PivotCreateRequest): Promise<{ o
       : context.workbook.worksheets.getItem(request.sourceSheetName ?? request.destinationSheetName).getRange(stripSheetName(request.sourceAddress ?? ""));
     const destination = context.workbook.worksheets.getItem(request.destinationSheetName).getRange(stripSheetName(request.destinationAddress));
     const pivot = context.workbook.pivotTables.add(request.pivotTableName, source, destination);
-    pivot.load("name,id,refreshOnOpen,useCustomSortLists,enableDataValueEditing,allowMultipleFiltersPerField");
-    const loaded = loadPivotInfoObjects(pivot);
     await context.sync();
-    return { ok: true, info: materializePivotInfo(request.workbookId, loaded) };
+    return { ok: true, info: await readPivotTableInfo(context, request.workbookId, pivot) };
   });
 }
 
 export async function refreshPivotTable(request: PivotSelector): Promise<{ ok: boolean; info?: PivotTableInfo }> {
   return Excel.run(async (context) => {
     const pivot = context.workbook.pivotTables.getItemOrNullObject(request.pivotTableName);
-    pivot.load("name,id,refreshOnOpen,useCustomSortLists,enableDataValueEditing,allowMultipleFiltersPerField,isNullObject");
-    const loaded = loadPivotInfoObjects(pivot);
+    pivot.load("isNullObject");
     await context.sync();
     if (pivot.isNullObject) {
       return { ok: false };
     }
     pivot.refresh();
     await context.sync();
-    return { ok: true, info: materializePivotInfo(request.workbookId, loaded) };
+    return { ok: true, info: await readPivotTableInfo(context, request.workbookId, pivot) };
   });
 }
 
@@ -552,6 +550,50 @@ export async function refreshAllPivotTables(workbookId: string): Promise<{ ok: b
     context.workbook.pivotTables.refreshAll();
     await context.sync();
     return { ok: true };
+  });
+}
+
+export async function copyPivotTableFromTemplate(request: PivotCopyFromTemplateRequest): Promise<{
+  ok: boolean;
+  copied?: string[];
+  source?: PivotTableInfo;
+  target?: PivotTableInfo;
+}> {
+  return Excel.run(async (context) => {
+    const sourcePivot = context.workbook.pivotTables.getItemOrNullObject(request.templatePivotTableName);
+    const targetPivot = context.workbook.pivotTables.getItemOrNullObject(request.pivotTableName);
+    sourcePivot.load("isNullObject");
+    targetPivot.load("isNullObject");
+    await context.sync();
+    if (sourcePivot.isNullObject || targetPivot.isNullObject) {
+      return { ok: false, copied: [] };
+    }
+
+    const source = await readPivotTableInfo(context, request.workbookId, sourcePivot);
+    loadPivotTemplateReplayObjects(targetPivot);
+    await context.sync();
+    applyPivotTemplateMetadata(source, targetPivot);
+    await context.sync();
+    targetPivot.refresh();
+    await context.sync();
+    const target = await readPivotTableInfo(context, request.workbookId, targetPivot);
+    return {
+      ok: true,
+      copied: [
+        "refreshOnOpen",
+        "useCustomSortLists",
+        "enableDataValueEditing",
+        "allowMultipleFiltersPerField",
+        "layout",
+        "rowHierarchyPositions",
+        "columnHierarchyPositions",
+        "filterHierarchyPositions",
+        "dataHierarchySettings",
+        "fieldSettings"
+      ],
+      source,
+      target
+    };
   });
 }
 
@@ -1975,33 +2017,199 @@ function materializeNameInfo(workbookId: string, item: Excel.NamedItem, fallback
   return info;
 }
 
-function loadPivotInfoObjects(pivot: Excel.PivotTable): {
-  pivot: Excel.PivotTable;
-  worksheet: Excel.Worksheet;
-  source: OfficeExtension.ClientResult<string>;
-  sourceType: OfficeExtension.ClientResult<Excel.DataSourceType>;
-} {
+async function readPivotTableInfo(context: Excel.RequestContext, workbookId: string, pivot: Excel.PivotTable): Promise<PivotTableInfo> {
   pivot.load("name,id,refreshOnOpen,useCustomSortLists,enableDataValueEditing,allowMultipleFiltersPerField");
   pivot.worksheet.load("name");
+  pivot.layout.load("altTextDescription,altTextTitle,autoFormat,emptyCellText,enableFieldList,fillEmptyCells,layoutType,preserveFormatting,showColumnGrandTotals,showFieldHeaders,showRowGrandTotals,subtotalLocation");
+  pivot.hierarchies.load("items/name,items/id");
+  pivot.rowHierarchies.load("items/name,items/id,items/position");
+  pivot.columnHierarchies.load("items/name,items/id,items/position");
+  pivot.filterHierarchies.load("items/name,items/id,items/position,items/enableMultipleFilterItems");
+  pivot.dataHierarchies.load("items/name,items/id,items/position,items/numberFormat,items/summarizeBy");
   const source = pivot.getDataSourceString();
   const sourceType = pivot.getDataSourceType();
-  return { pivot, worksheet: pivot.worksheet, source, sourceType };
-}
+  await context.sync();
 
-function materializePivotInfo(workbookId: string, loaded: ReturnType<typeof loadPivotInfoObjects>): PivotTableInfo {
+  const axisHierarchies = [
+    ...pivot.rowHierarchies.items,
+    ...pivot.columnHierarchies.items,
+    ...pivot.filterHierarchies.items
+  ];
+  for (const hierarchy of axisHierarchies) {
+    hierarchy.fields.load("items/name,items/id,items/showAllItems,items/subtotals");
+  }
+  for (const hierarchy of pivot.dataHierarchies.items) {
+    hierarchy.field.load("name,id,showAllItems,subtotals");
+  }
+  await context.sync();
+
   const info: PivotTableInfo = {
     workbookId: workbookId as PivotTableInfo["workbookId"],
-    pivotTableName: loaded.pivot.name
+    pivotTableName: pivot.name
   };
-  assignIfDefined(info, "id", optionalValue(loaded.pivot.id));
-  assignIfDefined(info, "sheetName", optionalValue(loaded.worksheet.name));
-  assignIfDefined(info, "source", optionalValue(loaded.source.value));
-  assignIfDefined(info, "sourceType", optionalValue(String(loaded.sourceType.value)));
-  assignIfDefined(info, "refreshOnOpen", optionalValue(loaded.pivot.refreshOnOpen));
-  assignIfDefined(info, "useCustomSortLists", optionalValue(loaded.pivot.useCustomSortLists));
-  assignIfDefined(info, "enableDataValueEditing", optionalValue(loaded.pivot.enableDataValueEditing));
-  assignIfDefined(info, "allowMultipleFiltersPerField", optionalValue(loaded.pivot.allowMultipleFiltersPerField));
+  assignIfDefined(info, "id", optionalValue(pivot.id));
+  assignIfDefined(info, "sheetName", optionalValue(pivot.worksheet.name));
+  assignIfDefined(info, "source", optionalValue(source.value));
+  assignIfDefined(info, "sourceType", optionalValue(String(sourceType.value)));
+  assignIfDefined(info, "refreshOnOpen", optionalValue(pivot.refreshOnOpen));
+  assignIfDefined(info, "useCustomSortLists", optionalValue(pivot.useCustomSortLists));
+  assignIfDefined(info, "enableDataValueEditing", optionalValue(pivot.enableDataValueEditing));
+  assignIfDefined(info, "allowMultipleFiltersPerField", optionalValue(pivot.allowMultipleFiltersPerField));
+  const layout: NonNullable<PivotTableInfo["layout"]> = {};
+  assignIfDefined(layout, "altTextDescription", optionalValue(pivot.layout.altTextDescription));
+  assignIfDefined(layout, "altTextTitle", optionalValue(pivot.layout.altTextTitle));
+  assignIfDefined(layout, "autoFormat", optionalValue(pivot.layout.autoFormat));
+  assignIfDefined(layout, "emptyCellText", optionalValue(pivot.layout.emptyCellText));
+  assignIfDefined(layout, "enableFieldList", optionalValue(pivot.layout.enableFieldList));
+  assignIfDefined(layout, "fillEmptyCells", optionalValue(pivot.layout.fillEmptyCells));
+  assignIfDefined(layout, "layoutType", optionalString(pivot.layout.layoutType));
+  assignIfDefined(layout, "preserveFormatting", optionalValue(pivot.layout.preserveFormatting));
+  assignIfDefined(layout, "showColumnGrandTotals", optionalValue(pivot.layout.showColumnGrandTotals));
+  assignIfDefined(layout, "showFieldHeaders", optionalValue(pivot.layout.showFieldHeaders));
+  assignIfDefined(layout, "showRowGrandTotals", optionalValue(pivot.layout.showRowGrandTotals));
+  assignIfDefined(layout, "subtotalLocation", optionalString(pivot.layout.subtotalLocation));
+  assignIfDefined(info, "layout", layout);
+  assignIfDefined(info, "hierarchies", pivot.hierarchies.items.map((hierarchy) => ({
+    ...(hierarchy.id !== undefined ? { id: hierarchy.id } : {}),
+    name: hierarchy.name
+  })));
+  assignIfDefined(info, "rowHierarchies", pivot.rowHierarchies.items.map(materializeAxisHierarchyInfo));
+  assignIfDefined(info, "columnHierarchies", pivot.columnHierarchies.items.map(materializeAxisHierarchyInfo));
+  assignIfDefined(info, "filterHierarchies", pivot.filterHierarchies.items.map(materializeAxisHierarchyInfo));
+  assignIfDefined(info, "dataHierarchies", pivot.dataHierarchies.items.map(materializeDataHierarchyInfo));
   return info;
+}
+
+function materializeAxisHierarchyInfo(hierarchy: Excel.RowColumnPivotHierarchy | Excel.FilterPivotHierarchy): NonNullable<PivotTableInfo["rowHierarchies"]>[number] {
+  const info: NonNullable<PivotTableInfo["rowHierarchies"]>[number] = {
+    name: hierarchy.name
+  };
+  assignIfDefined(info, "id", optionalValue(hierarchy.id));
+  assignIfDefined(info, "position", optionalValue(hierarchy.position));
+  if ("enableMultipleFilterItems" in hierarchy) {
+    assignIfDefined(info, "enableMultipleFilterItems", optionalValue(hierarchy.enableMultipleFilterItems));
+  }
+  assignIfDefined(info, "fields", hierarchy.fields.items.map(materializePivotFieldInfo));
+  return info;
+}
+
+function materializeDataHierarchyInfo(hierarchy: Excel.DataPivotHierarchy): NonNullable<PivotTableInfo["dataHierarchies"]>[number] {
+  const info: NonNullable<PivotTableInfo["dataHierarchies"]>[number] = {
+    name: hierarchy.name
+  };
+  assignIfDefined(info, "id", optionalValue(hierarchy.id));
+  assignIfDefined(info, "position", optionalValue(hierarchy.position));
+  assignIfDefined(info, "numberFormat", optionalValue(hierarchy.numberFormat));
+  assignIfDefined(info, "summarizeBy", optionalString(hierarchy.summarizeBy));
+  assignIfDefined(info, "field", materializePivotFieldInfo(hierarchy.field));
+  return info;
+}
+
+function materializePivotFieldInfo(field: Excel.PivotField): NonNullable<NonNullable<PivotTableInfo["rowHierarchies"]>[number]["fields"]>[number] {
+  const info: NonNullable<NonNullable<PivotTableInfo["rowHierarchies"]>[number]["fields"]>[number] = {
+    name: field.name
+  };
+  assignIfDefined(info, "id", optionalValue(field.id));
+  assignIfDefined(info, "showAllItems", optionalValue(field.showAllItems));
+  assignIfDefined(info, "subtotals", optionalValue(field.subtotals as Record<string, unknown>));
+  return info;
+}
+
+function loadPivotTemplateReplayObjects(pivot: Excel.PivotTable): void {
+  pivot.layout.load("altTextDescription,altTextTitle,autoFormat,emptyCellText,enableFieldList,fillEmptyCells,layoutType,preserveFormatting,showColumnGrandTotals,showFieldHeaders,showRowGrandTotals,subtotalLocation");
+  pivot.hierarchies.load("items/name,items/id");
+  pivot.rowHierarchies.load("items/name,items/id,items/position");
+  pivot.columnHierarchies.load("items/name,items/id,items/position");
+  pivot.filterHierarchies.load("items/name,items/id,items/position,items/enableMultipleFilterItems");
+  pivot.dataHierarchies.load("items/name,items/id,items/position");
+}
+
+function applyPivotTemplateMetadata(source: PivotTableInfo, targetPivot: Excel.PivotTable): void {
+  targetPivot.refreshOnOpen = source.refreshOnOpen ?? targetPivot.refreshOnOpen;
+  targetPivot.useCustomSortLists = source.useCustomSortLists ?? targetPivot.useCustomSortLists;
+  targetPivot.enableDataValueEditing = source.enableDataValueEditing ?? targetPivot.enableDataValueEditing;
+  targetPivot.allowMultipleFiltersPerField = source.allowMultipleFiltersPerField ?? targetPivot.allowMultipleFiltersPerField;
+  if (source.layout !== undefined) {
+    targetPivot.layout.set(source.layout as Excel.Interfaces.PivotLayoutUpdateData);
+  }
+  replayPivotAxis(targetPivot, "row", source.rowHierarchies ?? []);
+  replayPivotAxis(targetPivot, "column", source.columnHierarchies ?? []);
+  replayPivotAxis(targetPivot, "filter", source.filterHierarchies ?? []);
+  replayPivotDataHierarchies(targetPivot, source.dataHierarchies ?? []);
+}
+
+function replayPivotAxis(
+  targetPivot: Excel.PivotTable,
+  axis: "row" | "column" | "filter",
+  hierarchies: NonNullable<PivotTableInfo["rowHierarchies"]>
+): void {
+  if (axis === "filter") {
+    replayFilterPivotAxis(targetPivot, hierarchies);
+    return;
+  }
+  const collection = axis === "row" ? targetPivot.rowHierarchies : targetPivot.columnHierarchies;
+  for (const existing of collection.items) {
+    collection.remove(existing);
+  }
+  for (const [index, hierarchyInfo] of hierarchies.entries()) {
+    const hierarchy = targetPivot.hierarchies.getItem(hierarchyInfo.name);
+    const added = collection.add(hierarchy);
+    added.position = hierarchyInfo.position ?? index;
+    for (const fieldInfo of hierarchyInfo.fields ?? []) {
+      const field = added.fields.getItem(fieldInfo.name);
+      applyPivotFieldMetadata(field, fieldInfo);
+    }
+  }
+}
+
+function replayFilterPivotAxis(targetPivot: Excel.PivotTable, hierarchies: NonNullable<PivotTableInfo["filterHierarchies"]>): void {
+  for (const existing of targetPivot.filterHierarchies.items) {
+    targetPivot.filterHierarchies.remove(existing);
+  }
+  for (const [index, hierarchyInfo] of hierarchies.entries()) {
+    const hierarchy = targetPivot.hierarchies.getItem(hierarchyInfo.name);
+    const added = targetPivot.filterHierarchies.add(hierarchy);
+    added.position = hierarchyInfo.position ?? index;
+    if (hierarchyInfo.enableMultipleFilterItems !== undefined) {
+      added.enableMultipleFilterItems = hierarchyInfo.enableMultipleFilterItems;
+    }
+    for (const fieldInfo of hierarchyInfo.fields ?? []) {
+      const field = added.fields.getItem(fieldInfo.name);
+      applyPivotFieldMetadata(field, fieldInfo);
+    }
+  }
+}
+
+function replayPivotDataHierarchies(targetPivot: Excel.PivotTable, hierarchies: NonNullable<PivotTableInfo["dataHierarchies"]>): void {
+  for (const existing of targetPivot.dataHierarchies.items) {
+    targetPivot.dataHierarchies.remove(existing);
+  }
+  for (const [index, hierarchyInfo] of hierarchies.entries()) {
+    const sourceFieldName = hierarchyInfo.field?.name ?? hierarchyInfo.name;
+    const added = targetPivot.dataHierarchies.add(targetPivot.hierarchies.getItem(sourceFieldName));
+    added.position = hierarchyInfo.position ?? index;
+    if (hierarchyInfo.name !== undefined) {
+      added.name = hierarchyInfo.name;
+    }
+    if (hierarchyInfo.numberFormat !== undefined) {
+      added.numberFormat = hierarchyInfo.numberFormat;
+    }
+    if (hierarchyInfo.summarizeBy !== undefined) {
+      added.summarizeBy = hierarchyInfo.summarizeBy as Excel.AggregationFunction;
+    }
+    if (hierarchyInfo.field !== undefined) {
+      applyPivotFieldMetadata(added.field, hierarchyInfo.field);
+    }
+  }
+}
+
+function applyPivotFieldMetadata(field: Excel.PivotField, fieldInfo: NonNullable<NonNullable<PivotTableInfo["rowHierarchies"]>[number]["fields"]>[number]): void {
+  if (fieldInfo.showAllItems !== undefined) {
+    field.showAllItems = fieldInfo.showAllItems;
+  }
+  if (fieldInfo.subtotals !== undefined) {
+    field.subtotals = fieldInfo.subtotals as Excel.Subtotals;
+  }
 }
 
 function loadChartInfoObjects(workbookId: string, sheetName: string, chart: Excel.Chart): {

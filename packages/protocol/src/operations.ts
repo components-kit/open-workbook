@@ -751,6 +751,45 @@ export interface PivotSelector {
   pivotTableName: string;
 }
 
+export interface PivotFieldInfo {
+  id?: string;
+  name: string;
+  showAllItems?: boolean;
+  subtotals?: Record<string, unknown>;
+}
+
+export interface PivotAxisHierarchyInfo {
+  id?: string;
+  name: string;
+  position?: number;
+  enableMultipleFilterItems?: boolean;
+  fields?: PivotFieldInfo[];
+}
+
+export interface PivotDataHierarchyInfo {
+  id?: string;
+  name: string;
+  position?: number;
+  numberFormat?: string;
+  summarizeBy?: string;
+  field?: PivotFieldInfo;
+}
+
+export interface PivotLayoutInfo {
+  altTextDescription?: string;
+  altTextTitle?: string;
+  autoFormat?: boolean;
+  emptyCellText?: string;
+  enableFieldList?: boolean;
+  fillEmptyCells?: boolean;
+  layoutType?: string;
+  preserveFormatting?: boolean;
+  showColumnGrandTotals?: boolean;
+  showFieldHeaders?: boolean;
+  showRowGrandTotals?: boolean;
+  subtotalLocation?: string;
+}
+
 export interface PivotTableInfo {
   workbookId: WorkbookId;
   pivotTableName: string;
@@ -762,6 +801,12 @@ export interface PivotTableInfo {
   useCustomSortLists?: boolean;
   enableDataValueEditing?: boolean;
   allowMultipleFiltersPerField?: boolean;
+  layout?: PivotLayoutInfo;
+  rowHierarchies?: PivotAxisHierarchyInfo[];
+  columnHierarchies?: PivotAxisHierarchyInfo[];
+  filterHierarchies?: PivotAxisHierarchyInfo[];
+  dataHierarchies?: PivotDataHierarchyInfo[];
+  hierarchies?: Array<{ id?: string; name: string }>;
 }
 
 export interface PivotCreateRequest {
@@ -772,6 +817,30 @@ export interface PivotCreateRequest {
   sourceTableName?: string;
   destinationSheetName: string;
   destinationAddress: string;
+}
+
+export interface PivotCopyFromTemplateRequest extends PivotSelector {
+  templatePivotTableName: string;
+  templateId?: TemplateId;
+}
+
+export type WorkbookFileBridgeOperation = "workbook.save_as" | "workbook.export_copy" | "workbook.restore_file_backup";
+
+export interface WorkbookFileBridgeStatus {
+  available: boolean;
+  url?: string;
+  reason?: "not_configured" | "configured";
+}
+
+export interface WorkbookFileBridgeResponse {
+  ok: boolean;
+  operation: WorkbookFileBridgeOperation;
+  workbookId: WorkbookId;
+  targetPath?: string;
+  sourceBackupId?: BackupId;
+  filePath?: string;
+  metadata?: Record<string, unknown>;
+  error?: string;
 }
 
 export interface ChartSelector {

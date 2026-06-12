@@ -13,6 +13,7 @@ import {
   convertFormulasToValues,
   copyChartFromTemplate,
   copyFormulaPatterns,
+  copyPivotTableFromTemplate,
   copyStyleDimensions,
   copyTableStructure,
   createChart,
@@ -197,6 +198,9 @@ export class AddinConnection {
           break;
         case "pivot.refresh_all":
           this.sendSuccess(request.id, await refreshAllPivotTables((request.params as { workbookId: string }).workbookId));
+          break;
+        case "pivot.copy_from_template":
+          this.sendSuccess(request.id, await copyPivotTableFromTemplate(request.params as Parameters<typeof copyPivotTableFromTemplate>[0]));
           break;
         case "pivot.delete":
           this.sendSuccess(request.id, await deletePivotTable(request.params as Parameters<typeof deletePivotTable>[0]));

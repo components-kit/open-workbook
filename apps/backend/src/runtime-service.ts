@@ -65,6 +65,7 @@ import type {
   OperationId,
   OperationWarning,
   PermissionState,
+  PivotCopyFromTemplateRequest,
   PivotCreateRequest,
   PivotSelector,
   PlanCreateRequest,
@@ -129,11 +130,13 @@ import type {
 import { getToolCatalogSummary, PromptCatalog, ResourceCatalog, makeId, runtimeError } from "@open-workbook/protocol";
 import { SessionRegistry } from "./session-registry.js";
 import type { AddinRpcClient } from "./addin-rpc-client.js";
+import { NativeFileBridge } from "./native-file-bridge.js";
 import { RuntimeStateStore } from "./state-store.js";
 
 export interface RuntimeServiceOptions {
   stateDir?: string;
   persistState?: boolean;
+  fileBridge?: NativeFileBridge;
 }
 
 export class RuntimeService {
@@ -155,6 +158,7 @@ export class RuntimeService {
   private transactionQueue: Promise<void> = Promise.resolve();
   private readonly defaultAgentId: AgentId = "agent_daemon" as AgentId;
   private readonly stateStore: RuntimeStateStore | undefined;
+  private readonly fileBridge: NativeFileBridge;
   private lockLeasePolicy: LockLeasePolicy = defaultLockLeasePolicy();
   private permissionState: PermissionState = {
     ...DefaultPermissionPolicy,
@@ -175,6 +179,7 @@ export class RuntimeService {
 
   constructor(options: RuntimeServiceOptions = {}) {
     this.stateStore = options.persistState === false ? undefined : new RuntimeStateStore(options.stateDir);
+    this.fileBridge = options.fileBridge ?? new NativeFileBridge();
     this.restoreState();
     this.recoverRuntimeState();
     this.registerAgent({
@@ -1607,15 +1612,41 @@ export class RuntimeService {
     return client.request("workbook.save", { workbookId });
   }
 
-  saveWorkbookAs(workbookId: WorkbookId, targetPath?: string) {
+  async saveWorkbookAs(workbookId: WorkbookId, targetPath?: string) {
+    const bridgeStatus = this.fileBridge.getStatus();
+    if (bridgeStatus.available) {
+      const bridgeRequest: Parameters<NativeFileBridge["request"]>[0] = {
+        operation: "workbook.save_as",
+        workbookId
+      };
+      if (targetPath !== undefined) {
+        bridgeRequest.targetPath = targetPath;
+      }
+      const bridge = await this.fileBridge.request(bridgeRequest);
+      if (bridge.ok) {
+        return { ok: true, workbookId, targetPath, bridge };
+      }
+      return {
+        ok: false,
+        workbookId,
+        targetPath,
+        bridge,
+        error: runtimeError(
+          "OPERATION_FAILED",
+          `Native file bridge failed to save workbook as${targetPath ? ` ${targetPath}` : ""}: ${bridge.error ?? "unknown error"}`,
+          { retryable: true, details: { bridgeStatus } }
+        )
+      };
+    }
     return {
       ok: false,
       workbookId,
       targetPath,
+      bridgeStatus,
       error: runtimeError(
         "CAPABILITY_UNAVAILABLE",
-        "Office.js does not expose a local Save As file path API. Use Excel UI or a future native host bridge for true save_as.",
-        { retryable: false }
+        "Office.js does not expose a local Save As file path API. Configure OPEN_WORKBOOK_FILE_BRIDGE_URL for true save_as.",
+        { retryable: false, details: { bridgeStatus } }
       )
     };
   }
@@ -1629,15 +1660,55 @@ export class RuntimeService {
       backupRequest.ranges = input.ranges;
     }
     const backup = await this.createWorkbookBackup(backupRequest);
+    if ("backup" in backup && this.fileBridge.getStatus().available) {
+      const bridgeRequest: Parameters<NativeFileBridge["request"]>[0] = {
+        operation: "workbook.export_copy",
+        workbookId: input.workbookId,
+        sourceBackupId: backup.backup.backupId
+      };
+      if (input.targetPath !== undefined) {
+        bridgeRequest.targetPath = input.targetPath;
+      }
+      if (input.ranges !== undefined) {
+        bridgeRequest.ranges = input.ranges;
+      }
+      if (input.reason !== undefined) {
+        bridgeRequest.reason = input.reason;
+      }
+      const bridge = await this.fileBridge.request(bridgeRequest);
+      if (bridge.ok) {
+        return {
+          ok: true,
+          workbookId: input.workbookId,
+          targetPath: input.targetPath,
+          backup,
+          bridge
+        };
+      }
+      return {
+        ok: false,
+        workbookId: input.workbookId,
+        targetPath: input.targetPath,
+        backup,
+        bridge,
+        error: runtimeError(
+          "OPERATION_FAILED",
+          `Native file bridge failed to export workbook copy${input.targetPath ? ` ${input.targetPath}` : ""}: ${bridge.error ?? "unknown error"}`,
+          { retryable: true, details: { bridgeStatus: this.fileBridge.getStatus() } }
+        )
+      };
+    }
+    const bridgeStatus = this.fileBridge.getStatus();
     return {
       ok: false,
       workbookId: input.workbookId,
       targetPath: input.targetPath,
       backup,
+      bridgeStatus,
       error: runtimeError(
         "CAPABILITY_UNAVAILABLE",
-        "Office.js cannot export a local .xlsx copy from the add-in. A persistent snapshot backup was created instead.",
-        { retryable: false }
+        "Office.js cannot export a local .xlsx copy from the add-in. A persistent snapshot backup was created instead. Configure OPEN_WORKBOOK_FILE_BRIDGE_URL for true .xlsx export.",
+        { retryable: false, details: { bridgeStatus } }
       )
     };
   }
@@ -1839,14 +1910,50 @@ export class RuntimeService {
     };
   }
 
-  copyPivotFromTemplate(request: PivotSelector & { templateId?: TemplateId }) {
-    return {
-      ok: false,
-      request,
-      error: runtimeError("CAPABILITY_UNAVAILABLE", "PivotTable template copy is not implemented yet. Use create plus template/style validation once field layout copy is added.", {
-        retryable: false
-      })
-    };
+  async copyPivotFromTemplate(request: PivotCopyFromTemplateRequest) {
+    const client = this.getActiveAddinClient();
+    if (!client) {
+      return disconnectedError();
+    }
+    if (!request.templatePivotTableName) {
+      return {
+        ok: false,
+        request,
+        error: runtimeError("INVALID_ARGUMENT", "PivotTable template copy requires templatePivotTableName.", { retryable: false })
+      };
+    }
+    const targetInfo = await this.getPivotTableInfo(request);
+    const sourceInfo = await this.getPivotTableInfo({
+      workbookId: request.workbookId,
+      pivotTableName: request.templatePivotTableName
+    });
+    const targetSheetName = (targetInfo as { info?: { sheetName?: string } }).info?.sheetName;
+    const sourceSheetName = (sourceInfo as { info?: { sheetName?: string } }).info?.sheetName;
+    const ranges = await this.getPivotTemplateCopyRanges(request.workbookId, targetSheetName, sourceSheetName);
+    const permissionWarnings = this.validateDirectMutation(request.workbookId, ranges, "format");
+    if (permissionWarnings.length > 0) {
+      return permissionDenied("PivotTable template copy is blocked by the current Open Workbook permission policy.", permissionWarnings);
+    }
+    return this.applyDirectTransaction(
+      {
+        workbookId: request.workbookId,
+        goal: `Before copying PivotTable template ${request.templatePivotTableName} to ${request.pivotTableName}`,
+        scopes: pivotTemplateCopyScopes(request, targetSheetName, sourceSheetName, ranges),
+        destructiveLevel: "format"
+      },
+      async () => {
+        const backupResult = await this.createWorkbookBackup({
+          workbookId: request.workbookId,
+          reason: `Before copying PivotTable template ${request.templatePivotTableName} to ${request.pivotTableName}`,
+          ranges
+        });
+        if (!("backup" in backupResult)) {
+          return backupResult;
+        }
+        const result = await client.request("pivot.copy_from_template", request);
+        return { ok: true, backup: backupResult.backup, result };
+      }
+    );
   }
 
   async validatePivotSource(request: PivotSelector) {
@@ -4339,6 +4446,12 @@ export class RuntimeService {
     ];
   }
 
+  private async getPivotTemplateCopyRanges(workbookId: WorkbookId, targetSheetName: string | undefined, sourceSheetName: string | undefined): Promise<A1Range[]> {
+    const sheetNames = Array.from(new Set([sourceSheetName, targetSheetName].filter((sheetName): sheetName is string => sheetName !== undefined)));
+    const ranges = (await Promise.all(sheetNames.map((sheetName) => this.getSheetUsedRange(workbookId, sheetName)))).flat();
+    return ranges.length > 0 ? ranges : this.getUsedRangesForSnapshot(workbookId);
+  }
+
   private async getFormulaMutationRanges(request: FormulaCopyPatternsRequest | FormulaFillRequest | FormulaPatternRequest): Promise<A1Range[]> {
     if ("targetSheetName" in request) {
       if (request.targetAddress !== undefined) {
@@ -4780,6 +4893,29 @@ function pivotMutationScopes(request: PivotCreateRequest, ranges: A1Range[]): Wo
     scopes.push({ type: "table", workbookId: request.workbookId, tableName: request.sourceTableName });
   }
   return dedupeScopes(scopes);
+}
+
+function pivotTemplateCopyScopes(
+  request: PivotCopyFromTemplateRequest,
+  targetSheetName: string | undefined,
+  sourceSheetName: string | undefined,
+  ranges: A1Range[]
+): WorkbookScope[] {
+  return dedupeScopes([
+    ...ranges.map(rangeScope),
+    {
+      type: "pivot",
+      workbookId: request.workbookId,
+      sheetName: targetSheetName,
+      pivotName: request.pivotTableName
+    },
+    {
+      type: "pivot",
+      workbookId: request.workbookId,
+      sheetName: sourceSheetName,
+      pivotName: request.templatePivotTableName
+    }
+  ]);
 }
 
 function nameMutationScopes(request: { workbookId: WorkbookId; name: string; sheetName?: string; reference?: string }): WorkbookScope[] {

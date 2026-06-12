@@ -11,12 +11,16 @@ Supported tools:
 - `excel.pivot.create`: create a PivotTable from a source range or structured table at a destination cell.
 - `excel.pivot.refresh`: refresh one PivotTable.
 - `excel.pivot.refresh_all`: refresh all PivotTables in the workbook.
+- `excel.pivot.copy_from_template`: replay deterministic PivotTable settings from a template PivotTable to a target PivotTable.
 - `excel.pivot.validate_source`: check whether source metadata is available.
 
 Capability-status tools:
 
 - `excel.pivot.update_source`: Office.js does not expose a safe in-place source reassignment path in this runtime. Create a new PivotTable from the desired source.
-- `excel.pivot.copy_from_template`: deep field-layout and style replay is not implemented yet.
+
+`excel.pivot.get_info` returns source metadata, layout settings, row/column/filter/data hierarchy summaries, field settings, and source hierarchy names where Office.js exposes them.
+
+`excel.pivot.copy_from_template` requires `templatePivotTableName`. It creates a backup and transaction record, then replays settable PivotTable options, layout flags, axis membership/order, data hierarchy aggregation and number formats, and basic field settings when the target pivot exposes matching source field names. It intentionally does not claim source reassignment or PivotChart-specific styling.
 
 ## Charts
 
@@ -37,8 +41,8 @@ Supported tools:
 
 ## Safety
 
-Pivot/chart creation and source changes are structure-level operations. They respect permission policy, sheet/region scope, and locked-region checks before calling Excel. The backend creates a range snapshot backup for known source and destination ranges before mutating where a range target is available.
+Pivot/chart creation and source changes are structure-level operations. Pivot/chart template copy is a format/layout operation. These tools respect permission policy, sheet/region scope, and locked-region checks before calling Excel. The backend creates a range snapshot backup for known source and destination or used ranges before mutating where a range target is available.
 
 ## Current Limits
 
-Pivot field layout authoring, PivotTable source reassignment, PivotChart-specific controls, and deep series-level chart fingerprints are future milestones.
+Direct PivotTable source reassignment, PivotChart-specific controls, unsupported host-specific PivotTable settings, and deep series-level chart fingerprints are future milestones.
