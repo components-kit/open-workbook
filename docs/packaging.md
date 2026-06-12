@@ -89,6 +89,8 @@ Before publishing:
 6. Confirm `@open-workbook/excel-addin` remains private.
 7. Confirm npm publish access is public for publishable scoped packages.
 
+`corepack pnpm verify` runs `scripts/validate-package-metadata.mjs`, which enforces the package version, repository, public/private publish intent, `dist` entrypoints, README presence, and publish access rules above.
+
 ## End-User Install Shape
 
 The intended user flow after package publishing:

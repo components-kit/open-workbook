@@ -20,6 +20,8 @@
     "spreadsheet",
     "automation"
   ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
     "open-workbook-mcp": "dist/index.js"
   },
