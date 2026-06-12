@@ -1,7 +1,25 @@
 {
   "name": "@open-workbook/excel-core",
   "version": "0.1.0",
+  "description": "Core planning, backup, snapshot, template, permission, and range utilities for Open Workbook.",
+  "license": "MIT",
   "type": "module",
+  "homepage": "https://github.com/open-workbook/open-workbook#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-workbook/open-workbook.git",
+    "directory": "packages/excel-core"
+  },
+  "bugs": {
+    "url": "https://github.com/open-workbook/open-workbook/issues"
+  },
+  "keywords": [
+    "excel",
+    "spreadsheet",
+    "planning",
+    "backup",
+    "template"
+  ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -9,6 +27,14 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

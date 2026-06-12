@@ -91,6 +91,7 @@ function handleAddinMessage(runtime: RuntimeService, connectionId: ConnectionId,
   if (!("method" in message)) {
     return;
   }
+  runtime.recordAddinEvent(connectionId, message.method, message.params);
 
   switch (message.method) {
     case "addin.hello":

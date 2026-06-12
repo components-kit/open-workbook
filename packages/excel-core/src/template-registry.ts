@@ -11,10 +11,20 @@ export interface TemplateFingerprint {
   printLayoutHash: string;
 }
 
+export interface TemplateFingerprintPayload {
+  structure: unknown;
+  formulas: unknown;
+  styles: unknown;
+  filters: unknown;
+  tables: unknown;
+  printLayout: unknown;
+}
+
 export interface TemplateRecord extends TemplateRef {
   workbookId?: WorkbookId;
   sourceSheetName: string;
   fingerprint: TemplateFingerprint;
+  fingerprintPayload: TemplateFingerprintPayload;
   dataRegions: string[];
   createdAt: string;
   updatedAt: string;
@@ -26,14 +36,7 @@ export interface RegisterTemplateInput {
   sourceSheetName: string;
   workbookId?: WorkbookId;
   dataRegions?: string[];
-  fingerprintPayload: {
-    structure: unknown;
-    formulas: unknown;
-    styles: unknown;
-    filters: unknown;
-    tables: unknown;
-    printLayout: unknown;
-  };
+  fingerprintPayload: TemplateFingerprintPayload;
 }
 
 export class TemplateRegistry {
@@ -61,6 +64,7 @@ export class TemplateRegistry {
         tableHash: hashStable(input.fingerprintPayload.tables),
         printLayoutHash: hashStable(input.fingerprintPayload.printLayout)
       },
+      fingerprintPayload: input.fingerprintPayload,
       createdAt: now,
       updatedAt: now
     };
@@ -73,6 +77,10 @@ export class TemplateRegistry {
 
   get(templateId: TemplateId): TemplateRecord | undefined {
     return this.records.get(templateId);
+  }
+
+  unregister(templateId: TemplateId): boolean {
+    return this.records.delete(templateId);
   }
 
   list(options: { workbookId?: WorkbookId } = {}): TemplateRecord[] {

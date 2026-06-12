@@ -35,6 +35,12 @@ export class BatchCompiler {
       if (operation.kind.startsWith("range.")) {
         requiredBackups.add("region");
       }
+      if (operation.kind === "sheet.delete") {
+        requiredBackups.add("workbook-copy");
+      }
+      if (operation.kind === "sheet.clear") {
+        requiredBackups.add("sheet");
+      }
       if (operation.kind === "template.create_sheet_from_template") {
         requiredBackups.add("sheet");
         requiredBackups.add("workbook-copy");
@@ -74,9 +80,41 @@ function getOperationTarget(operation: ExcelOperation) {
     case "range.read_full":
     case "range.write_values":
     case "range.write_formulas":
+    case "range.write_number_formats":
+    case "range.write_styles":
+    case "range.write_hyperlinks":
+    case "range.write_comments":
+    case "range.clear":
+    case "range.clear_values":
+    case "range.clear_formats":
     case "range.clear_values_keep_format":
+    case "range.insert_rows":
+    case "range.delete_rows":
+    case "range.insert_columns":
+    case "range.delete_columns":
+    case "range.autofit_columns":
+    case "range.autofit_rows":
+    case "range.merge":
+    case "range.unmerge":
+    case "range.restore_snapshot":
       return operation.target;
+    case "range.copy":
+    case "range.move":
+      return operation.source;
     case "template.create_sheet_from_template":
+    case "workbook.calculate":
+    case "workbook.save":
+    case "sheet.create":
+    case "sheet.copy":
+    case "sheet.rename":
+    case "sheet.delete":
+    case "sheet.move":
+    case "sheet.hide":
+    case "sheet.unhide":
+    case "sheet.protect":
+    case "sheet.unprotect":
+    case "sheet.clear":
+    case "sheet.set_tab_color":
       return undefined;
   }
 }

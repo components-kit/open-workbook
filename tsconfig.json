@@ -4,6 +4,7 @@
     { "path": "packages/protocol" },
     { "path": "packages/excel-core" },
     { "path": "packages/office-js-engine" },
+    { "path": "packages/cli" },
     { "path": "apps/backend" },
     { "path": "apps/mcp-server" },
     { "path": "apps/excel-addin" }

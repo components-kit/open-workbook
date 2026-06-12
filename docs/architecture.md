@@ -25,3 +25,13 @@ The default `open-workbook-mcp` process starts both stdio MCP and the local add-
 Office.js is the primary engine for macOS and Windows desktop Excel. Other engines may be added behind the same compiled operation interface when Office.js cannot support a feature.
 
 Engine adapters must report capabilities. Tools should fail honestly or degrade explicitly when a capability is unavailable.
+
+## Catalog Policy
+
+The protocol package owns the full tool, resource, and prompt catalog. MCP registration is capability-gated:
+
+- stable tools are registered by default
+- preview tools require `OPEN_WORKBOOK_PREVIEW_TOOLS=1`
+- planned and unsupported tools are reported through capabilities but are not callable
+
+This keeps agents from calling incomplete tools while still making the roadmap discoverable.

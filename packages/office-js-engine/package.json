@@ -1,7 +1,24 @@
 {
   "name": "@open-workbook/office-js-engine",
   "version": "0.1.0",
+  "description": "Office.js engine interfaces and defaults for Open Workbook Excel execution.",
+  "license": "MIT",
   "type": "module",
+  "homepage": "https://github.com/open-workbook/open-workbook#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-workbook/open-workbook.git",
+    "directory": "packages/office-js-engine"
+  },
+  "bugs": {
+    "url": "https://github.com/open-workbook/open-workbook/issues"
+  },
+  "keywords": [
+    "excel",
+    "office-js",
+    "spreadsheet",
+    "engine"
+  ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -9,6 +26,12 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

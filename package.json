@@ -5,12 +5,28 @@
   "description": "Local-first MCP runtime for fast, reversible, template-aware Excel automation.",
   "license": "MIT",
   "type": "module",
+  "homepage": "https://github.com/open-workbook/open-workbook#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-workbook/open-workbook.git"
+  },
+  "bugs": {
+    "url": "https://github.com/open-workbook/open-workbook/issues"
+  },
+  "keywords": [
+    "excel",
+    "office-js",
+    "mcp",
+    "openrouter",
+    "spreadsheet",
+    "automation"
+  ],
   "packageManager": "pnpm@9.15.4",
   "engines": {
     "node": ">=20.11"
   },
   "scripts": {
-    "build": "tsc -b --pretty false",
+    "build": "tsc -b --pretty false && node scripts/package-cli-assets.mjs && node scripts/chmod-bins.mjs",
     "check": "tsc -b --pretty false",
     "test": "corepack pnpm -r test",
     "dev:backend": "corepack pnpm --filter @open-workbook/backend dev",

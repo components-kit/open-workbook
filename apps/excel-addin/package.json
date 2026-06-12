@@ -1,8 +1,25 @@
 {
   "name": "@open-workbook/excel-addin",
   "version": "0.1.0",
+  "description": "Office.js Excel add-in runtime for Open Workbook local automation.",
+  "license": "MIT",
   "private": true,
   "type": "module",
+  "homepage": "https://github.com/open-workbook/open-workbook#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-workbook/open-workbook.git",
+    "directory": "apps/excel-addin"
+  },
+  "bugs": {
+    "url": "https://github.com/open-workbook/open-workbook/issues"
+  },
+  "keywords": [
+    "excel",
+    "office-js",
+    "addin",
+    "mcp"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",

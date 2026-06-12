@@ -1,5 +1,6 @@
 node_modules/
 dist/
+packages/cli/assets/
 coverage/
 .turbo/
 .DS_Store

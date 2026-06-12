@@ -1,8 +1,25 @@
 {
   "name": "@open-workbook/backend",
   "version": "0.1.0",
-  "private": true,
+  "description": "Local backend broker for Open Workbook add-in sessions, backups, snapshots, plans, and permissions.",
+  "license": "MIT",
   "type": "module",
+  "homepage": "https://github.com/open-workbook/open-workbook#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-workbook/open-workbook.git",
+    "directory": "apps/backend"
+  },
+  "bugs": {
+    "url": "https://github.com/open-workbook/open-workbook/issues"
+  },
+  "keywords": [
+    "excel",
+    "mcp",
+    "office-js",
+    "websocket",
+    "spreadsheet"
+  ],
   "exports": {
     "./runtime": {
       "types": "./dist/runtime-service.d.ts",
@@ -12,6 +29,12 @@
       "types": "./dist/addin-websocket-server.d.ts",
       "default": "./dist/addin-websocket-server.js"
     }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

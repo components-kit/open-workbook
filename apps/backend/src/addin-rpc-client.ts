@@ -77,6 +77,11 @@ export class AddinRpcClient {
       this.pending.delete(id);
     }
   }
+
+  close(): void {
+    this.rejectAll("Excel add-in connection closed by backend");
+    this.websocket.close();
+  }
 }
 
 function isFailure(message: JsonRpcMessage): message is JsonRpcFailure {

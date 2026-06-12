@@ -1,7 +1,25 @@
 {
   "name": "@open-workbook/protocol",
   "version": "0.1.0",
+  "description": "Shared Open Workbook protocol types, tool catalog, resources, prompts, and JSON-RPC contracts.",
+  "license": "MIT",
   "type": "module",
+  "homepage": "https://github.com/open-workbook/open-workbook#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-workbook/open-workbook.git",
+    "directory": "packages/protocol"
+  },
+  "bugs": {
+    "url": "https://github.com/open-workbook/open-workbook/issues"
+  },
+  "keywords": [
+    "mcp",
+    "excel",
+    "protocol",
+    "json-rpc",
+    "spreadsheet"
+  ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -9,6 +27,14 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

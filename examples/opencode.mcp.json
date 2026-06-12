@@ -1,0 +1,9 @@
+{
+  "mcp": {
+    "open-workbook": {
+      "type": "local",
+      "command": ["owb", "mcp"],
+      "enabled": true
+    }
+  }
+}

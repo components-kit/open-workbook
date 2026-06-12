@@ -11,6 +11,8 @@ Templates live in two places:
 
 Workbook templates win over local templates with the same ID unless the caller explicitly selects a local template version.
 
+The runtime stores both hashes and the captured fingerprint payload. Hashes are used for fast comparisons; payloads are retained so validation and repair can explain which component differs.
+
 ## Template Fingerprint
 
 A template captures:
@@ -34,3 +36,17 @@ Creating a new accounting or reporting sheet must:
 5. Validate against the template before returning success.
 
 If no registered template exists, the runtime may infer candidates but mutating template workflows must warn and require confirmation.
+
+## Implemented Flow
+
+Current stable MCP support covers:
+
+- detecting candidate template sheets
+- registering, listing, getting, and unregistering templates
+- creating a sheet from a registered template
+- clearing declared data regions while preserving formats
+- filling target regions while preserving existing formats
+- validating a target sheet against template structure, formulas, styles, filters, tables, and print-layout fingerprints
+- repairing target sheet styles, formulas, declared data regions, or full layout from the source template sheet
+
+Repair creates a backup before it mutates a target sheet. Validation ignores the sheet name when comparing structure, so a new period sheet can be named differently from the template without failing solely on identity.

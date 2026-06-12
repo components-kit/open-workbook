@@ -87,6 +87,43 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.21)
 
+  packages/cli:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.7.0
+        version: 1.29.0(zod@3.25.76)
+      '@open-workbook/backend':
+        specifier: workspace:*
+        version: link:../../apps/backend
+      '@open-workbook/excel-core':
+        specifier: workspace:*
+        version: link:../excel-core
+      '@open-workbook/mcp-server':
+        specifier: workspace:*
+        version: link:../../apps/mcp-server
+      '@open-workbook/office-js-engine':
+        specifier: workspace:*
+        version: link:../office-js-engine
+      '@open-workbook/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      commander:
+        specifier: ^13.1.0
+        version: 13.1.0
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.7
+        version: 22.19.21
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.21)
+
   packages/excel-core:
     dependencies:
       '@open-workbook/protocol':
@@ -537,6 +574,10 @@ packages:
 
   color-name@1.1.3:
     resolution: {integrity: sha512-72fSenhMw2HZMTVHeCA9KCmpEIbzWiQsjN+BHcBbS9vr1mtt+vJjPdksIBNUmKAW8TFUDPJK5SUU3QhE9NEXDw==}
+
+  commander@13.1.0:
+    resolution: {integrity: sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw==}
+    engines: {node: '>=18'}
 
   concat-map@0.0.1:
     resolution: {integrity: sha512-/Srv4dswyQNBfohGpz9o6Yb3Gz3SrUDqBH5rTuhGR7ahtlbYKnVxw2bCFMRljaA7EXHaXZ8wsHdodFvbkhKmqg==}
@@ -1769,6 +1810,8 @@ snapshots:
       color-name: 1.1.3
 
   color-name@1.1.3: {}
+
+  commander@13.1.0: {}
 
   concat-map@0.0.1: {}
 

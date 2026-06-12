@@ -10,17 +10,22 @@
   <DefaultLocale>en-US</DefaultLocale>
   <DisplayName DefaultValue="Open Workbook" />
   <Description DefaultValue="Local-first MCP bridge for safe, fast Excel automation." />
-  <IconUrl DefaultValue="http://127.0.0.1:37846/assets/icon-32.png" />
-  <HighResolutionIconUrl DefaultValue="http://127.0.0.1:37846/assets/icon-64.png" />
+  <IconUrl DefaultValue="http://localhost:37846/assets/icon-32.png" />
+  <HighResolutionIconUrl DefaultValue="http://localhost:37846/assets/icon-64.png" />
   <SupportUrl DefaultValue="https://github.com/open-workbook/open-workbook" />
   <AppDomains>
-    <AppDomain>http://127.0.0.1:37846</AppDomain>
+    <AppDomain>http://localhost:37846</AppDomain>
   </AppDomains>
+  <Requirements>
+    <Sets DefaultMinVersion="1.9">
+      <Set Name="ExcelApi" MinVersion="1.9" />
+    </Sets>
+  </Requirements>
   <Hosts>
     <Host Name="Workbook" />
   </Hosts>
   <DefaultSettings>
-    <SourceLocation DefaultValue="http://127.0.0.1:37846/taskpane.html" />
+    <SourceLocation DefaultValue="http://localhost:37846/taskpane.html" />
   </DefaultSettings>
   <Permissions>ReadWriteDocument</Permissions>
   <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
@@ -66,12 +71,12 @@
     </Hosts>
     <Resources>
       <bt:Images>
-        <bt:Image id="Icon.16x16" DefaultValue="http://127.0.0.1:37846/assets/icon-16.png" />
-        <bt:Image id="Icon.32x32" DefaultValue="http://127.0.0.1:37846/assets/icon-32.png" />
-        <bt:Image id="Icon.80x80" DefaultValue="http://127.0.0.1:37846/assets/icon-80.png" />
+        <bt:Image id="Icon.16x16" DefaultValue="http://localhost:37846/assets/icon-16.png" />
+        <bt:Image id="Icon.32x32" DefaultValue="http://localhost:37846/assets/icon-32.png" />
+        <bt:Image id="Icon.80x80" DefaultValue="http://localhost:37846/assets/icon-80.png" />
       </bt:Images>
       <bt:Urls>
-        <bt:Url id="Taskpane.Url" DefaultValue="http://127.0.0.1:37846/taskpane.html" />
+        <bt:Url id="Taskpane.Url" DefaultValue="http://localhost:37846/taskpane.html" />
         <bt:Url id="GetStarted.LearnMoreUrl" DefaultValue="https://github.com/open-workbook/open-workbook" />
       </bt:Urls>
       <bt:ShortStrings>

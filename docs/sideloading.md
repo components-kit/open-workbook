@@ -6,8 +6,8 @@ Open Workbook does not require Microsoft AppSource. Users can sideload the Excel
 
 - The MCP server starts the local backend automatically.
 - The Excel add-in connects to that backend at `ws://127.0.0.1:37845/addin`.
-- The add-in taskpane is served locally at `http://127.0.0.1:37846/taskpane.html`.
-- The sideload manifest is `apps/excel-addin/manifest.xml`.
+- The add-in taskpane is served locally at `http://localhost:37846/taskpane.html`.
+- The source manifest is `apps/excel-addin/manifest.xml`; CLI sideload commands generate a runtime manifest with the active taskpane and backend URLs.
 
 ## Development Sideload
 
@@ -18,7 +18,13 @@ corepack pnpm dev:mcp
 corepack pnpm dev:addin
 ```
 
-Then sideload `apps/excel-addin/manifest.xml` into Excel.
+Then sideload a generated manifest into Excel. The source manifest is useful for development, but generated manifests include the active taskpane and backend URLs.
+
+You can inspect the generated manifest with:
+
+```bash
+node packages/cli/dist/index.js sideload manifest
+```
 
 ## macOS Manual Sideload
 
@@ -28,22 +34,43 @@ For Excel on macOS, copy the manifest to the Office add-ins sideload folder:
 corepack pnpm sideload:mac
 ```
 
+With the CLI directly:
+
+```bash
+owb sideload mac
+```
+
 Then restart Excel and open the add-in from the ribbon or Insert > Add-ins, depending on the Excel version.
 
 ## Windows Manual Sideload
 
-For Windows desktop Excel, use a trusted catalog share:
+For Windows desktop Excel, use a trusted shared-folder catalog:
 
-1. Create a folder for add-in manifests.
-2. Copy `apps/excel-addin/manifest.xml` into that folder.
-3. In Excel, open Trust Center settings and add that folder as a trusted add-in catalog.
-4. Restart Excel and insert the shared-folder add-in.
+1. Create a folder for add-in manifests, such as `C:\open-workbook-addins`.
+2. Share that folder in Windows and note its UNC path, such as `\\YOUR-PC\open-workbook-addins`.
+3. Generate the Open Workbook manifest and copy it into the shared folder.
+4. In Excel, open Trust Center settings and add the UNC path as a trusted add-in catalog.
+5. Select `Show in Menu`, restart Excel, and insert the shared-folder add-in.
 
-The helper command prints the source manifest path and expected catalog setup:
+The helper command writes a generated manifest and prints the expected catalog setup:
 
 ```bash
 corepack pnpm sideload:windows
 ```
+
+With the CLI directly:
+
+```bash
+owb sideload windows --out open-workbook.xml
+```
+
+Custom local ports can be passed to every manifest-producing command:
+
+```bash
+owb sideload manifest --addin-url http://127.0.0.1:37846 --backend-url ws://127.0.0.1:37845/addin
+```
+
+For local desktop sideloading, the default URLs use loopback HTTP and WebSocket endpoints. HTTPS is still recommended for broader deployment, Office on the web, external services, and any future production installer.
 
 ## User Install Shape
 

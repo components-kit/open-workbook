@@ -1,13 +1,36 @@
 {
   "name": "@open-workbook/mcp-server",
   "version": "0.1.0",
-  "private": true,
+  "description": "MCP stdio server exposing Open Workbook Excel automation tools.",
+  "license": "MIT",
   "type": "module",
+  "homepage": "https://github.com/open-workbook/open-workbook#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-workbook/open-workbook.git",
+    "directory": "apps/mcp-server"
+  },
+  "bugs": {
+    "url": "https://github.com/open-workbook/open-workbook/issues"
+  },
+  "keywords": [
+    "mcp",
+    "excel",
+    "office-js",
+    "spreadsheet",
+    "automation"
+  ],
   "bin": {
     "open-workbook-mcp": "dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').chmodSync('dist/index.js', 0o755)\"",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "dev": "node --enable-source-maps dist/index.js"

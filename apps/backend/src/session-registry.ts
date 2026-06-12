@@ -11,6 +11,7 @@ export interface AddinSession {
 
 export class SessionRegistry {
   private readonly sessions = new Map<ConnectionId, AddinSession>();
+  private activeConnectionId: ConnectionId | undefined;
 
   createSession(): AddinSession {
     const connectionId = makeId<ConnectionId>("conn");
@@ -21,6 +22,7 @@ export class SessionRegistry {
       lastSeenAt: now
     };
     this.sessions.set(connectionId, session);
+    this.activeConnectionId ??= connectionId;
     return session;
   }
 
@@ -41,6 +43,9 @@ export class SessionRegistry {
 
   remove(connectionId: ConnectionId): void {
     this.sessions.delete(connectionId);
+    if (this.activeConnectionId === connectionId) {
+      this.activeConnectionId = this.list().sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt))[0]?.connectionId;
+    }
   }
 
   list(): AddinSession[] {
@@ -48,6 +53,20 @@ export class SessionRegistry {
   }
 
   getActive(): AddinSession | undefined {
+    if (this.activeConnectionId) {
+      return this.sessions.get(this.activeConnectionId);
+    }
     return this.list().sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt))[0];
+  }
+
+  setActiveWorkbook(workbookIdOrName: string): AddinSession | undefined {
+    const session = this.list().find(
+      (candidate) =>
+        candidate.activeWorkbook?.workbookId === workbookIdOrName || candidate.activeWorkbook?.name === workbookIdOrName
+    );
+    if (session) {
+      this.activeConnectionId = session.connectionId;
+    }
+    return session;
   }
 }

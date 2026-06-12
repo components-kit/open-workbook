@@ -10,10 +10,18 @@ Open Workbook is built around workbook safety. Contributions should preserve the
 ## Development
 
 ```bash
-pnpm install
-pnpm check
-pnpm test
-pnpm build
+corepack pnpm install
+corepack pnpm check
+corepack pnpm test
+corepack pnpm build
+node packages/cli/dist/index.js doctor
+```
+
+Run the local runtime from source:
+
+```bash
+node packages/cli/dist/index.js mcp
+node packages/cli/dist/index.js addin serve
 ```
 
 ## Pull Request Expectations
@@ -21,3 +29,4 @@ pnpm build
 - Include tests for protocol, planning, backup, template, or engine behavior touched by the change.
 - Document new public tools or resources in `docs/tool-surface.md`.
 - Include performance notes for new read/write paths.
+- Update package README files when changing module responsibilities or public exports.

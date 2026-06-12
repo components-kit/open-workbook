@@ -1,0 +1,57 @@
+{
+  "name": "@open-workbook/cli",
+  "version": "0.1.0",
+  "description": "CLI for installing, sideloading, and running Open Workbook locally.",
+  "license": "MIT",
+  "type": "module",
+  "homepage": "https://github.com/open-workbook/open-workbook#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-workbook/open-workbook.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/open-workbook/open-workbook/issues"
+  },
+  "keywords": [
+    "excel",
+    "mcp",
+    "office-js",
+    "open-workbook",
+    "cli"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "owb": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "assets",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').chmodSync('dist/index.js', 0o755)\"",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "prepack": "node ../../scripts/package-cli-assets.mjs",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.7.0",
+    "@open-workbook/backend": "workspace:*",
+    "@open-workbook/excel-core": "workspace:*",
+    "@open-workbook/mcp-server": "workspace:*",
+    "@open-workbook/office-js-engine": "workspace:*",
+    "@open-workbook/protocol": "workspace:*",
+    "zod": "^3.24.1",
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

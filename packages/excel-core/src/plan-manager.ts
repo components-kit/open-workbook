@@ -101,7 +101,20 @@ export class PlanManager {
 
   markApplyResult(planId: PlanId, result: OperationResult): PlanRecord {
     const plan = this.requirePlan(planId);
+    if (result.ok && plan.preview) {
+      plan.preview = {
+        ...plan.preview,
+        requiredBackups: [...new Set([...plan.preview.requiredBackups, ...result.backups])]
+      };
+    }
     plan.status = result.ok ? "applied" : "failed";
+    plan.updatedAt = new Date().toISOString();
+    return plan;
+  }
+
+  markRolledBack(planId: PlanId): PlanRecord {
+    const plan = this.requirePlan(planId);
+    plan.status = "rolled_back";
     plan.updatedAt = new Date().toISOString();
     return plan;
   }
