@@ -18,6 +18,8 @@ export interface NativeFileBridgeServerOptions {
 }
 
 export interface NativeFileBridgeServerHandle {
+  url: string;
+  route: string;
   close(): Promise<void>;
 }
 
@@ -63,7 +65,11 @@ export function startNativeFileBridgeServer(options: NativeFileBridgeServerOptio
     server.once("error", reject);
     server.listen(options.port, options.host, () => {
       server.off("error", reject);
+      const address = server.address();
+      const port = typeof address === "object" && address !== null ? address.port : options.port;
       handle = {
+        url: `http://${options.host}:${port}`,
+        route,
         close: async () => {
           await new Promise<void>((closeResolve) => server.close(() => closeResolve()));
         }

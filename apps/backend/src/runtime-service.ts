@@ -2018,11 +2018,70 @@ export class RuntimeService {
 
   async validatePivotSource(request: PivotSelector) {
     const info = await this.getPivotTableInfo(request);
-    const source = (info as { info?: { source?: string } }).info?.source;
+    const pivotInfo = (info as {
+      ok?: boolean;
+      info?: {
+        source?: string;
+        sourceType?: string;
+        sheetName?: string;
+        range?: { address?: string };
+        rowHierarchies?: unknown[];
+        columnHierarchies?: unknown[];
+        filterHierarchies?: unknown[];
+        dataHierarchies?: unknown[];
+      };
+    }).info;
+    const issues: Array<{ code: string; severity: "info" | "warning" | "error"; message: string; details?: Record<string, unknown> }> = [];
+    if (!pivotInfo) {
+      issues.push({
+        code: "PIVOT_NOT_FOUND",
+        severity: "error",
+        message: `PivotTable not found or unavailable: ${request.pivotTableName}`
+      });
+    }
+    if (pivotInfo && !pivotInfo.source) {
+      issues.push({
+        code: "PIVOT_SOURCE_UNAVAILABLE",
+        severity: "warning",
+        message: "Pivot source string is unavailable from Office.js."
+      });
+    }
+    if (pivotInfo && !pivotInfo.sourceType) {
+      issues.push({
+        code: "PIVOT_SOURCE_TYPE_UNAVAILABLE",
+        severity: "warning",
+        message: "Pivot source type is unavailable from Office.js."
+      });
+    }
+    if (pivotInfo && (!pivotInfo.sheetName || !pivotInfo.range?.address)) {
+      issues.push({
+        code: "PIVOT_OUTPUT_RANGE_UNAVAILABLE",
+        severity: "warning",
+        message: "PivotTable output sheet or range is unavailable from Office.js."
+      });
+    }
+    if (pivotInfo && !pivotInfo.dataHierarchies?.length) {
+      issues.push({
+        code: "PIVOT_HAS_NO_DATA_FIELDS",
+        severity: "info",
+        message: "PivotTable has no data fields. It may be blank or only partially configured."
+      });
+    }
+    const hierarchyCount =
+      (pivotInfo?.rowHierarchies?.length ?? 0) +
+      (pivotInfo?.columnHierarchies?.length ?? 0) +
+      (pivotInfo?.filterHierarchies?.length ?? 0) +
+      (pivotInfo?.dataHierarchies?.length ?? 0);
     return {
-      ok: Boolean(source),
+      ok: issues.every((issue) => issue.severity !== "error"),
       info,
-      issues: source ? [] : [{ code: "PIVOT_SOURCE_UNAVAILABLE", severity: "warning", message: "Pivot source string is unavailable from Office.js." }]
+      summary: {
+        hasSource: Boolean(pivotInfo?.source),
+        sourceType: pivotInfo?.sourceType,
+        hasOutputRange: Boolean(pivotInfo?.sheetName && pivotInfo.range?.address),
+        hierarchyCount
+      },
+      issues
     };
   }
 

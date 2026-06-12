@@ -586,6 +586,64 @@ describe("RuntimeService PivotTable template copy", () => {
   });
 });
 
+describe("RuntimeService PivotTable validation", () => {
+  it("reports useful PivotTable metadata issues", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_pivot_validate" as WorkbookId;
+    const session = runtime.sessions.createSession();
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string) => {
+        if (method === "pivot.get_info") {
+          return {
+            ok: true,
+            info: {
+              workbookId,
+              pivotTableName: "EmptyPivot",
+              sheetName: "Report",
+              range: { address: "Report!A3:C10" },
+              sourceType: "Table",
+              dataHierarchies: []
+            }
+          };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const result = await runtime.validatePivotSource({
+      workbookId,
+      pivotTableName: "EmptyPivot"
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.summary.hasOutputRange).toBe(true);
+    expect(result.issues.some((issue) => issue.code === "PIVOT_SOURCE_UNAVAILABLE")).toBe(true);
+    expect(result.issues.some((issue) => issue.code === "PIVOT_HAS_NO_DATA_FIELDS")).toBe(true);
+  });
+
+  it("marks missing PivotTables as validation errors", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_pivot_missing" as WorkbookId;
+    const session = runtime.sessions.createSession();
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string) => {
+        if (method === "pivot.get_info") {
+          return { ok: false };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const result = await runtime.validatePivotSource({
+      workbookId,
+      pivotTableName: "MissingPivot"
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((issue) => issue.code === "PIVOT_NOT_FOUND" && issue.severity === "error")).toBe(true);
+  });
+});
+
 describe("RuntimeService native file bridge", () => {
   it("uses the configured bridge for workbook save_as", async () => {
     const workbookId = "workbook_file_bridge" as WorkbookId;

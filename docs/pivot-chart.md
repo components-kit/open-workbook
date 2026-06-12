@@ -12,7 +12,7 @@ Supported tools:
 - `excel.pivot.refresh`: refresh one PivotTable.
 - `excel.pivot.refresh_all`: refresh all PivotTables in the workbook.
 - `excel.pivot.copy_from_template`: replay deterministic PivotTable settings from a template PivotTable to a target PivotTable.
-- `excel.pivot.validate_source`: check whether source metadata is available.
+- `excel.pivot.validate_source`: check whether source, source type, output range, and data-field metadata are available.
 
 Capability-status tools:
 
@@ -23,6 +23,8 @@ Capability-status tools:
 `excel.pivot.create` accepts optional `rowFields`, `columnFields`, `filterFields`, `dataFields`, `layout`, and `refresh`. This lets agents create a usable summary PivotTable in one transaction instead of creating a blank PivotTable and requiring a second mutation. Field names must match the source table/range fields exposed by Excel.
 
 `excel.pivot.copy_from_template` requires `templatePivotTableName`. It creates a backup and transaction record, then replays settable PivotTable options, layout flags, axis membership/order, data hierarchy aggregation and number formats, and basic field settings when the target pivot exposes matching source field names. When Office.js reports the target PivotTable range, the backup is scoped to that range instead of the whole sheet. It intentionally does not claim source reassignment or PivotChart-specific styling.
+
+`excel.pivot.validate_source` returns a summary plus structured issues such as `PIVOT_SOURCE_UNAVAILABLE`, `PIVOT_OUTPUT_RANGE_UNAVAILABLE`, and `PIVOT_HAS_NO_DATA_FIELDS`, so agents can distinguish a missing pivot from a partially configured pivot.
 
 ## Charts
 
