@@ -35,6 +35,7 @@ Capability-unavailable responses are preferred over simulated success when Offic
 ## Release Gates
 
 - `corepack pnpm verify` passes. This runs build, tests, and synthetic core benchmarks.
+- MCP callable tool names stay in sync with the shared protocol catalog. `corepack pnpm verify` runs `scripts/validate-mcp-catalog.mjs` after build and fails if a stable or preview callable tool is missing from the MCP server or if the server registers a tool that is not in the callable catalog.
 - `git diff --check` passes.
 - GitHub Actions CI passes the same non-E2E verification plus `corepack pnpm pack:dry-run` for every publishable package.
 - Tool catalog, README, installation docs, and OpenCode docs match the exposed MCP surface.
