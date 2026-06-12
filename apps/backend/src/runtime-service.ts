@@ -1137,6 +1137,7 @@ export class RuntimeService {
     return {
       ok: true,
       activeAddinConnected: Boolean(activeSession),
+      fileBridge: this.fileBridge.getStatus(),
       sessions: this.sessions.list(),
       activeWorkbook: activeSession?.activeWorkbook
     };
@@ -1159,6 +1160,7 @@ export class RuntimeService {
           capabilities: session.capabilities
         })),
       catalog: getToolCatalogSummary(catalogOptions),
+      fileBridge: this.fileBridge.getStatus(),
       resources: ResourceCatalog,
       prompts: PromptCatalog
     };

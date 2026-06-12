@@ -52,6 +52,8 @@ The helper should return:
 
 Set `OPEN_WORKBOOK_FILE_BRIDGE_TIMEOUT_MS` to override the default 30000 ms bridge timeout. Set `OPEN_WORKBOOK_EXPORT_DIR` to control the default output directory for add-in compressed-file exports.
 
+`excel.runtime.get_status` and `excel.runtime.get_capabilities` include `fileBridge` status so agents can check whether native Save As is configured before requesting it.
+
 Local config export/import is different from workbook file export. It does not create or modify an `.xlsx`; it moves Open Workbook registry metadata so teams can version templates, semantic regions, and permission defaults alongside a project. Embedded local config modifies workbook metadata through Office.js custom XML parts and is guarded by workbook-level permissions.
 
 ## Backup Directory

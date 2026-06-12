@@ -392,6 +392,21 @@ describe("RuntimeService capabilities", () => {
     expect(capabilities.activeHostCapabilities.engine.name).toBe("open-workbook-daemon");
     expect(capabilities.activeHostCapabilities.hostCapabilities?.some((capability) => capability.status === "unknown")).toBe(true);
     expect(capabilities.connectedHostCapabilities).toHaveLength(0);
+    expect(capabilities.fileBridge.available).toBe(false);
+    expect(runtime.getStatus().fileBridge.available).toBe(false);
+  });
+
+  it("reports configured native file bridge status", () => {
+    const runtime = new RuntimeService({
+      persistState: false,
+      fileBridge: new NativeFileBridge({ url: "http://127.0.0.1:37999" })
+    });
+
+    expect(runtime.getStatus().fileBridge).toMatchObject({
+      available: true,
+      url: "http://127.0.0.1:37999"
+    });
+    expect(runtime.getCapabilities().fileBridge.available).toBe(true);
   });
 
   it("includes active add-in Office API set support when connected", () => {
