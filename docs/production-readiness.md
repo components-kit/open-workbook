@@ -37,6 +37,7 @@ Capability-unavailable responses are preferred over simulated success when Offic
 - `corepack pnpm verify` passes. This runs build, tests, and synthetic core benchmarks.
 - MCP callable tool names stay in sync with the shared protocol catalog. `corepack pnpm verify` runs `scripts/validate-mcp-catalog.mjs` after build and fails if a stable or preview callable tool is missing from the MCP server or if the server registers a tool that is not in the callable catalog.
 - Package metadata stays publishable. `corepack pnpm verify` runs `scripts/validate-package-metadata.mjs` and fails if package versions, repository metadata, public/private publish intent, README presence, or `dist` entrypoints drift.
+- CLI install smoke stays healthy. `corepack pnpm verify` runs `scripts/smoke-cli.mjs` and checks `doctor`, `paths`, OpenCode config generation, service wrapper generation, sideload manifest generation, and concise disconnected-daemon errors without requiring Excel or a bound local daemon.
 - `git diff --check` passes.
 - GitHub Actions CI passes the same non-E2E verification plus `corepack pnpm pack:dry-run` for every publishable package.
 - Tool catalog, README, installation docs, and OpenCode docs match the exposed MCP surface.
