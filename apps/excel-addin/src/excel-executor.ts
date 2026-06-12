@@ -574,6 +574,16 @@ export async function createPivotTable(request: PivotCreateRequest): Promise<{ o
     const destination = context.workbook.worksheets.getItem(request.destinationSheetName).getRange(stripSheetName(request.destinationAddress));
     const pivot = context.workbook.pivotTables.add(request.pivotTableName, source, destination);
     await context.sync();
+    if (hasPivotCreateLayout(request)) {
+      loadPivotTemplateReplayObjects(pivot);
+      await context.sync();
+      applyPivotCreateLayout(request, pivot);
+      await context.sync();
+      if (request.refresh !== false) {
+        pivot.refresh();
+        await context.sync();
+      }
+    }
     return { ok: true, info: await readPivotTableInfo(context, request.workbookId, pivot) };
   });
 }
@@ -2176,6 +2186,42 @@ function loadPivotTemplateReplayObjects(pivot: Excel.PivotTable): void {
   pivot.columnHierarchies.load("items/name,items/id,items/position");
   pivot.filterHierarchies.load("items/name,items/id,items/position,items/enableMultipleFilterItems");
   pivot.dataHierarchies.load("items/name,items/id,items/position");
+}
+
+function hasPivotCreateLayout(request: PivotCreateRequest): boolean {
+  return Boolean(
+    request.layout !== undefined ||
+      request.rowFields?.length ||
+      request.columnFields?.length ||
+      request.filterFields?.length ||
+      request.dataFields?.length
+  );
+}
+
+function applyPivotCreateLayout(request: PivotCreateRequest, targetPivot: Excel.PivotTable): void {
+  if (request.layout !== undefined) {
+    targetPivot.layout.set(request.layout as Excel.Interfaces.PivotLayoutUpdateData);
+  }
+  replayPivotAxis(targetPivot, "row", (request.rowFields ?? []).map(pivotAxisInfoFromName));
+  replayPivotAxis(targetPivot, "column", (request.columnFields ?? []).map(pivotAxisInfoFromName));
+  replayPivotAxis(targetPivot, "filter", (request.filterFields ?? []).map(pivotAxisInfoFromName));
+  replayPivotDataHierarchies(targetPivot, (request.dataFields ?? []).map((field, index) => {
+    const info: NonNullable<PivotTableInfo["dataHierarchies"]>[number] = {
+      name: field.name ?? field.sourceFieldName,
+      position: index,
+      field: { name: field.sourceFieldName }
+    };
+    assignIfDefined(info, "numberFormat", field.numberFormat);
+    assignIfDefined(info, "summarizeBy", field.summarizeBy);
+    return info;
+  }));
+}
+
+function pivotAxisInfoFromName(name: string, index: number): NonNullable<PivotTableInfo["rowHierarchies"]>[number] {
+  return {
+    name,
+    position: index
+  };
 }
 
 function applyPivotTemplateMetadata(source: PivotTableInfo, targetPivot: Excel.PivotTable): void {

@@ -3126,7 +3126,22 @@ function registerPivotTools(mcp: McpServer): void {
         sourceAddress: z.string().optional(),
         sourceTableName: z.string().optional(),
         destinationSheetName: z.string(),
-        destinationAddress: z.string()
+        destinationAddress: z.string(),
+        rowFields: z.array(z.string()).optional(),
+        columnFields: z.array(z.string()).optional(),
+        filterFields: z.array(z.string()).optional(),
+        dataFields: z
+          .array(
+            z.object({
+              sourceFieldName: z.string(),
+              name: z.string().optional(),
+              summarizeBy: z.string().optional(),
+              numberFormat: z.string().optional()
+            })
+          )
+          .optional(),
+        layout: z.record(z.string(), z.unknown()).optional(),
+        refresh: z.boolean().optional()
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
     },
@@ -4911,6 +4926,12 @@ function pivotCreateRequest(args: {
   sourceTableName?: string;
   destinationSheetName: string;
   destinationAddress: string;
+  rowFields?: string[];
+  columnFields?: string[];
+  filterFields?: string[];
+  dataFields?: PivotCreateRequest["dataFields"];
+  layout?: PivotCreateRequest["layout"];
+  refresh?: boolean;
 }): PivotCreateRequest {
   const request: PivotCreateRequest = {
     workbookId: args.workbookId as WorkbookId,
@@ -4926,6 +4947,24 @@ function pivotCreateRequest(args: {
   }
   if (args.sourceTableName !== undefined) {
     request.sourceTableName = args.sourceTableName;
+  }
+  if (args.rowFields !== undefined) {
+    request.rowFields = args.rowFields;
+  }
+  if (args.columnFields !== undefined) {
+    request.columnFields = args.columnFields;
+  }
+  if (args.filterFields !== undefined) {
+    request.filterFields = args.filterFields;
+  }
+  if (args.dataFields !== undefined) {
+    request.dataFields = args.dataFields;
+  }
+  if (args.layout !== undefined) {
+    request.layout = args.layout;
+  }
+  if (args.refresh !== undefined) {
+    request.refresh = args.refresh;
   }
   return request;
 }

@@ -824,6 +824,17 @@ export interface PivotCreateRequest {
   sourceTableName?: string;
   destinationSheetName: string;
   destinationAddress: string;
+  rowFields?: string[];
+  columnFields?: string[];
+  filterFields?: string[];
+  dataFields?: Array<{
+    sourceFieldName: string;
+    name?: string;
+    summarizeBy?: string;
+    numberFormat?: string;
+  }>;
+  layout?: PivotLayoutInfo;
+  refresh?: boolean;
 }
 
 export interface PivotCopyFromTemplateRequest extends PivotSelector {

@@ -8,7 +8,7 @@ Supported tools:
 
 - `excel.pivot.list`: list PivotTables in the workbook.
 - `excel.pivot.get_info`: return PivotTable metadata and source details where Office.js exposes them.
-- `excel.pivot.create`: create a PivotTable from a source range or structured table at a destination cell.
+- `excel.pivot.create`: create a PivotTable from a source range or structured table at a destination cell, optionally applying row fields, column fields, filter fields, data fields, aggregation, number formats, and layout flags.
 - `excel.pivot.refresh`: refresh one PivotTable.
 - `excel.pivot.refresh_all`: refresh all PivotTables in the workbook.
 - `excel.pivot.copy_from_template`: replay deterministic PivotTable settings from a template PivotTable to a target PivotTable.
@@ -19,6 +19,8 @@ Capability-status tools:
 - `excel.pivot.update_source`: Office.js does not expose a safe in-place source reassignment path in this runtime. Create a new PivotTable from the desired source.
 
 `excel.pivot.get_info` returns source metadata, the PivotTable output range, layout settings, row/column/filter/data hierarchy summaries, field settings, and source hierarchy names where Office.js exposes them.
+
+`excel.pivot.create` accepts optional `rowFields`, `columnFields`, `filterFields`, `dataFields`, `layout`, and `refresh`. This lets agents create a usable summary PivotTable in one transaction instead of creating a blank PivotTable and requiring a second mutation. Field names must match the source table/range fields exposed by Excel.
 
 `excel.pivot.copy_from_template` requires `templatePivotTableName`. It creates a backup and transaction record, then replays settable PivotTable options, layout flags, axis membership/order, data hierarchy aggregation and number formats, and basic field settings when the target pivot exposes matching source field names. When Office.js reports the target PivotTable range, the backup is scoped to that range instead of the whole sheet. It intentionally does not claim source reassignment or PivotChart-specific styling.
 
