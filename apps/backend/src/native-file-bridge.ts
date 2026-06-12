@@ -39,6 +39,53 @@ export class NativeFileBridge {
     };
   }
 
+  async probeStatus(): Promise<WorkbookFileBridgeStatus> {
+    const status = this.getStatus();
+    if (!this.url || !this.fetchImpl) {
+      return {
+        ...status,
+        reachable: false,
+        checkedAt: new Date().toISOString(),
+        error: "Native file bridge is not configured."
+      };
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await this.fetchImpl(this.statusUrl(), {
+        method: "GET",
+        signal: controller.signal
+      });
+      const payload = await response.json().catch(() => ({})) as {
+        ok?: boolean;
+        bridge?: string;
+        route?: string;
+        adapter?: Record<string, unknown>;
+        error?: string;
+      };
+      return {
+        ...status,
+        reachable: response.ok && payload.ok === true,
+        checkedAt: new Date().toISOString(),
+        statusCode: response.status,
+        ...(payload.bridge !== undefined ? { bridge: payload.bridge } : {}),
+        ...(payload.route !== undefined ? { route: payload.route } : {}),
+        ...(payload.adapter !== undefined ? { adapter: payload.adapter } : {}),
+        ...(payload.error !== undefined ? { error: payload.error } : {})
+      };
+    } catch (error) {
+      return {
+        ...status,
+        reachable: false,
+        checkedAt: new Date().toISOString(),
+        error: error instanceof Error ? error.message : String(error)
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async request(input: WorkbookFileBridgeRequest): Promise<WorkbookFileBridgeResponse> {
     if (!this.url || !this.fetchImpl) {
       return {
@@ -91,6 +138,11 @@ export class NativeFileBridge {
   private operationUrl(): string {
     const base = this.url ?? "";
     return base.endsWith("/") ? `${base.slice(0, -1)}${this.path}` : `${base}${this.path}`;
+  }
+
+  private statusUrl(): string {
+    const base = this.url ?? "";
+    return base.endsWith("/") ? `${base.slice(0, -1)}/status` : `${base}/status`;
   }
 }
 

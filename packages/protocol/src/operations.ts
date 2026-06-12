@@ -866,6 +866,13 @@ export interface WorkbookFileBridgeStatus {
   url?: string;
   path?: string;
   reason?: "not_configured" | "configured";
+  reachable?: boolean;
+  checkedAt?: string;
+  statusCode?: number;
+  bridge?: string;
+  route?: string;
+  adapter?: Record<string, unknown>;
+  error?: string;
 }
 
 export interface WorkbookFileBridgeResponse {

@@ -1144,6 +1144,14 @@ export class RuntimeService {
     };
   }
 
+  async getStatusWithFileBridgeProbe() {
+    const status = this.getStatus();
+    return {
+      ...status,
+      fileBridge: await this.fileBridge.probeStatus()
+    };
+  }
+
   getCapabilities(options: { includePreview?: boolean } = {}) {
     const catalogOptions = options.includePreview === undefined ? {} : { includePreview: options.includePreview };
     const sessions = this.sessions.list();

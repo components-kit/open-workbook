@@ -64,7 +64,7 @@ Before invoking Excel automation, the bridge resolves `targetPath` to an absolut
 
 Set `OPEN_WORKBOOK_FILE_BRIDGE_TIMEOUT_MS` to override the default 30000 ms backend-to-bridge timeout. Set `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` to a path-delimited allowlist of output directories for native Save As and Export Copy. Set `OPEN_WORKBOOK_EXPORT_DIR` to control the default output directory for add-in compressed-file exports.
 
-`excel.runtime.get_status` and `excel.runtime.get_capabilities` include `fileBridge` status, including the configured URL and route path, so agents can check whether native Save As or Export Copy is configured before requesting it.
+`excel.runtime.get_status` and `excel.runtime.get_capabilities` include `fileBridge` status, including the configured URL and route path, so agents can check whether native Save As or Export Copy is configured before requesting it. Pass `probeFileBridge: true` to `excel.runtime.get_status` when an agent needs a live `/status` health check with reachability, route, adapter platform, and supported-operation metadata.
 
 Local config export/import is different from workbook file export. It does not create or modify an `.xlsx`; it moves Open Workbook registry metadata so teams can version templates, semantic regions, and permission defaults alongside a project. Embedded local config modifies workbook metadata through Office.js custom XML parts and is guarded by workbook-level permissions.
 

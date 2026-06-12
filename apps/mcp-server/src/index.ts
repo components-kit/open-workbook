@@ -580,15 +580,17 @@ function registerRuntimeTools(mcp: McpServer): void {
     "excel.runtime.get_status",
     {
       title: "Get Excel runtime status",
-      description: "Return backend and Excel add-in connection status.",
-      inputSchema: {},
+      description: "Return backend, Excel add-in, and optional native file bridge health status.",
+      inputSchema: {
+        probeFileBridge: z.boolean().optional()
+      },
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
         openWorldHint: false
       }
     },
-    async () => jsonResult(runtime.getStatus())
+    async ({ probeFileBridge }: { probeFileBridge?: boolean }) => jsonResult(probeFileBridge ? await runtime.getStatusWithFileBridgeProbe() : runtime.getStatus())
   );
 
   registerMcpTool(
@@ -3242,27 +3244,7 @@ function registerPivotTools(mcp: McpServer): void {
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
-    async (args: any) => {
-      const request: PivotValidateSourceRequest = {
-        ...pivotSelector(args)
-      };
-      if (args.expectedFields !== undefined) {
-        request.expectedFields = args.expectedFields;
-      }
-      if (args.expectedRowFields !== undefined) {
-        request.expectedRowFields = args.expectedRowFields;
-      }
-      if (args.expectedColumnFields !== undefined) {
-        request.expectedColumnFields = args.expectedColumnFields;
-      }
-      if (args.expectedFilterFields !== undefined) {
-        request.expectedFilterFields = args.expectedFilterFields;
-      }
-      if (args.expectedDataFields !== undefined) {
-        request.expectedDataFields = args.expectedDataFields;
-      }
-      return jsonResult(await runtime.validatePivotSource(request));
-    }
+    async (args: any) => jsonResult(await runtime.validatePivotSource(pivotValidateSourceRequest(args)))
   );
 }
 
@@ -4955,6 +4937,25 @@ function pivotSelector(args: { workbookId: string; pivotTableName: string }): Pi
   return {
     workbookId: args.workbookId as WorkbookId,
     pivotTableName: args.pivotTableName
+  };
+}
+
+function pivotValidateSourceRequest(args: {
+  workbookId: string;
+  pivotTableName: string;
+  expectedFields?: string[];
+  expectedRowFields?: string[];
+  expectedColumnFields?: string[];
+  expectedFilterFields?: string[];
+  expectedDataFields?: string[];
+}): PivotValidateSourceRequest {
+  return {
+    ...pivotSelector(args),
+    ...(args.expectedFields !== undefined ? { expectedFields: args.expectedFields } : {}),
+    ...(args.expectedRowFields !== undefined ? { expectedRowFields: args.expectedRowFields } : {}),
+    ...(args.expectedColumnFields !== undefined ? { expectedColumnFields: args.expectedColumnFields } : {}),
+    ...(args.expectedFilterFields !== undefined ? { expectedFilterFields: args.expectedFilterFields } : {}),
+    ...(args.expectedDataFields !== undefined ? { expectedDataFields: args.expectedDataFields } : {})
   };
 }
 

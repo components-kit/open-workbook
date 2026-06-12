@@ -410,6 +410,31 @@ describe("RuntimeService capabilities", () => {
     expect(runtime.getCapabilities().fileBridge.available).toBe(true);
   });
 
+  it("can probe configured native file bridge status", async () => {
+    const runtime = new RuntimeService({
+      persistState: false,
+      fileBridge: new NativeFileBridge({
+        url: "http://127.0.0.1:37999",
+        fetchImpl: (async () => Response.json({
+          ok: true,
+          bridge: "open-workbook-native-file-bridge",
+          route: "/v1/workbook-file",
+          adapter: { platform: "win32", saveAsSupported: true }
+        })) as typeof fetch
+      })
+    });
+
+    const status = await runtime.getStatusWithFileBridgeProbe();
+
+    expect(status.fileBridge).toMatchObject({
+      available: true,
+      reachable: true,
+      bridge: "open-workbook-native-file-bridge",
+      route: "/v1/workbook-file",
+      adapter: { platform: "win32", saveAsSupported: true }
+    });
+  });
+
   it("includes active add-in Office API set support when connected", () => {
     const runtime = new RuntimeService({ persistState: false });
     const session = runtime.sessions.createSession();
