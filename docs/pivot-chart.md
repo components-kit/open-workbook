@@ -25,7 +25,7 @@ Capability-status tools:
 
 `excel.pivot.copy_from_template` requires `templatePivotTableName`. It creates a backup and transaction record, then replays settable PivotTable options, layout flags, axis membership/order, data hierarchy aggregation and number formats, and basic field settings when the target pivot exposes matching source field names. When Office.js reports the target PivotTable range, the backup is scoped to that range instead of the whole sheet. It intentionally does not claim source reassignment or PivotChart-specific styling.
 
-`excel.pivot.validate_source` returns a summary plus structured issues such as `PIVOT_SOURCE_UNAVAILABLE`, `PIVOT_OUTPUT_RANGE_UNAVAILABLE`, and `PIVOT_HAS_NO_DATA_FIELDS`, so agents can distinguish a missing pivot from a partially configured pivot.
+`excel.pivot.validate_source` returns a summary plus structured issues such as `PIVOT_SOURCE_UNAVAILABLE`, `PIVOT_OUTPUT_RANGE_UNAVAILABLE`, and `PIVOT_HAS_NO_DATA_FIELDS`, so agents can distinguish a missing pivot from a partially configured pivot. It also accepts optional `expectedFields`, `expectedRowFields`, `expectedColumnFields`, `expectedFilterFields`, and `expectedDataFields`. When Office.js exposes source hierarchy metadata, missing fields return `PIVOT_EXPECTED_FIELD_MISSING`; fields that exist but are not currently on the expected axis return `PIVOT_EXPECTED_LAYOUT_MISMATCH`. If source field metadata is unavailable, validation returns `PIVOT_SOURCE_FIELDS_UNAVAILABLE` as a warning instead of guessing.
 
 ## Charts
 

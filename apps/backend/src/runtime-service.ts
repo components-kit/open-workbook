@@ -68,6 +68,7 @@ import type {
   PivotCopyFromTemplateRequest,
   PivotCreateRequest,
   PivotSelector,
+  PivotValidateSourceRequest,
   PlanCreateRequest,
   PlanId,
   PlanRefreshResult,
@@ -2059,7 +2060,7 @@ export class RuntimeService {
     );
   }
 
-  async validatePivotSource(request: PivotSelector) {
+  async validatePivotSource(request: PivotValidateSourceRequest) {
     const info = await this.getPivotTableInfo(request);
     const pivotInfo = (info as {
       ok?: boolean;
@@ -2068,10 +2069,11 @@ export class RuntimeService {
         sourceType?: string;
         sheetName?: string;
         range?: { address?: string };
-        rowHierarchies?: unknown[];
-        columnHierarchies?: unknown[];
-        filterHierarchies?: unknown[];
-        dataHierarchies?: unknown[];
+        hierarchies?: Array<{ name: string }>;
+        rowHierarchies?: Array<{ name: string }>;
+        columnHierarchies?: Array<{ name: string }>;
+        filterHierarchies?: Array<{ name: string }>;
+        dataHierarchies?: Array<{ name: string; field?: { name: string } }>;
       };
     }).info;
     const issues: Array<{ code: string; severity: "info" | "warning" | "error"; message: string; details?: Record<string, unknown> }> = [];
@@ -2110,6 +2112,41 @@ export class RuntimeService {
         message: "PivotTable has no data fields. It may be blank or only partially configured."
       });
     }
+    const availableSourceFields = uniqueDefined((pivotInfo?.hierarchies ?? []).map((hierarchy) => hierarchy.name));
+    const rowFields = uniqueDefined((pivotInfo?.rowHierarchies ?? []).map((hierarchy) => hierarchy.name));
+    const columnFields = uniqueDefined((pivotInfo?.columnHierarchies ?? []).map((hierarchy) => hierarchy.name));
+    const filterFields = uniqueDefined((pivotInfo?.filterHierarchies ?? []).map((hierarchy) => hierarchy.name));
+    const dataFields = uniqueDefined((pivotInfo?.dataHierarchies ?? []).map((hierarchy) => hierarchy.field?.name ?? hierarchy.name));
+    const expectedSourceFields = uniqueDefined([
+      ...(request.expectedFields ?? []),
+      ...(request.expectedRowFields ?? []),
+      ...(request.expectedColumnFields ?? []),
+      ...(request.expectedFilterFields ?? []),
+      ...(request.expectedDataFields ?? [])
+    ]);
+    if (pivotInfo && expectedSourceFields.length > 0 && availableSourceFields.length === 0) {
+      issues.push({
+        code: "PIVOT_SOURCE_FIELDS_UNAVAILABLE",
+        severity: "warning",
+        message: "Pivot source field metadata is unavailable from Office.js, so expected fields cannot be verified.",
+        details: { expectedFields: expectedSourceFields }
+      });
+    }
+    if (availableSourceFields.length > 0) {
+      const missingSourceFields = expectedSourceFields.filter((field) => !availableSourceFields.includes(field));
+      for (const field of missingSourceFields) {
+        issues.push({
+          code: "PIVOT_EXPECTED_FIELD_MISSING",
+          severity: "error",
+          message: `Expected PivotTable source field is missing: ${field}`,
+          details: { field, availableSourceFields }
+        });
+      }
+    }
+    addExpectedPivotAxisIssues(issues, "row", request.expectedRowFields, rowFields);
+    addExpectedPivotAxisIssues(issues, "column", request.expectedColumnFields, columnFields);
+    addExpectedPivotAxisIssues(issues, "filter", request.expectedFilterFields, filterFields);
+    addExpectedPivotAxisIssues(issues, "data", request.expectedDataFields, dataFields);
     const hierarchyCount =
       (pivotInfo?.rowHierarchies?.length ?? 0) +
       (pivotInfo?.columnHierarchies?.length ?? 0) +
@@ -2122,7 +2159,13 @@ export class RuntimeService {
         hasSource: Boolean(pivotInfo?.source),
         sourceType: pivotInfo?.sourceType,
         hasOutputRange: Boolean(pivotInfo?.sheetName && pivotInfo.range?.address),
-        hierarchyCount
+        hierarchyCount,
+        sourceFieldCount: availableSourceFields.length,
+        sourceFields: availableSourceFields,
+        rowFields,
+        columnFields,
+        filterFields,
+        dataFields
       },
       issues
     };
@@ -5117,6 +5160,31 @@ function pivotDeleteScopes(request: PivotSelector, sheetName: string | undefined
       pivotName: request.pivotTableName
     }
   ]);
+}
+
+function uniqueDefined(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => typeof value === "string" && value.length > 0))];
+}
+
+function addExpectedPivotAxisIssues(
+  issues: Array<{ code: string; severity: "info" | "warning" | "error"; message: string; details?: Record<string, unknown> }>,
+  axis: "row" | "column" | "filter" | "data",
+  expectedFields: string[] | undefined,
+  actualFields: string[]
+): void {
+  if (!expectedFields?.length) {
+    return;
+  }
+  for (const field of uniqueDefined(expectedFields)) {
+    if (!actualFields.includes(field)) {
+      issues.push({
+        code: "PIVOT_EXPECTED_LAYOUT_MISMATCH",
+        severity: "error",
+        message: `Expected PivotTable ${axis} field is not present: ${field}`,
+        details: { axis, field, actualFields }
+      });
+    }
+  }
 }
 
 function nameMutationScopes(request: { workbookId: WorkbookId; name: string; sheetName?: string; reference?: string }): WorkbookScope[] {

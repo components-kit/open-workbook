@@ -27,6 +27,7 @@ import type {
   PivotCopyFromTemplateRequest,
   PivotCreateRequest,
   PivotSelector,
+  PivotValidateSourceRequest,
   PlanId,
   RegionRegisterRequest,
   RegionSelector,
@@ -3230,11 +3231,38 @@ function registerPivotTools(mcp: McpServer): void {
     "excel.pivot.validate_source",
     {
       title: "Validate PivotTable source",
-      description: "Validate that Office.js can report the PivotTable source metadata.",
-      inputSchema: pivotSelectorSchema(),
+      description: "Validate PivotTable source metadata and optional expected source/layout fields.",
+      inputSchema: {
+        ...pivotSelectorSchema(),
+        expectedFields: z.array(z.string()).optional(),
+        expectedRowFields: z.array(z.string()).optional(),
+        expectedColumnFields: z.array(z.string()).optional(),
+        expectedFilterFields: z.array(z.string()).optional(),
+        expectedDataFields: z.array(z.string()).optional()
+      },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
-    async (args: any) => jsonResult(await runtime.validatePivotSource(pivotSelector(args)))
+    async (args: any) => {
+      const request: PivotValidateSourceRequest = {
+        ...pivotSelector(args)
+      };
+      if (args.expectedFields !== undefined) {
+        request.expectedFields = args.expectedFields;
+      }
+      if (args.expectedRowFields !== undefined) {
+        request.expectedRowFields = args.expectedRowFields;
+      }
+      if (args.expectedColumnFields !== undefined) {
+        request.expectedColumnFields = args.expectedColumnFields;
+      }
+      if (args.expectedFilterFields !== undefined) {
+        request.expectedFilterFields = args.expectedFilterFields;
+      }
+      if (args.expectedDataFields !== undefined) {
+        request.expectedDataFields = args.expectedDataFields;
+      }
+      return jsonResult(await runtime.validatePivotSource(request));
+    }
   );
 }
 

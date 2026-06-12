@@ -681,6 +681,92 @@ describe("RuntimeService PivotTable validation", () => {
     expect(result.issues.some((issue) => issue.code === "PIVOT_HAS_NO_DATA_FIELDS")).toBe(true);
   });
 
+  it("validates expected PivotTable source and layout fields", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_pivot_validate_fields" as WorkbookId;
+    const session = runtime.sessions.createSession();
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string) => {
+        if (method === "pivot.get_info") {
+          return {
+            ok: true,
+            info: {
+              workbookId,
+              pivotTableName: "SalesPivot",
+              sheetName: "Report",
+              range: { address: "Report!A3:E20" },
+              source: "SalesTable",
+              sourceType: "Table",
+              hierarchies: [{ name: "Region" }, { name: "Month" }, { name: "Amount" }],
+              rowHierarchies: [{ name: "Region" }],
+              columnHierarchies: [{ name: "Month" }],
+              filterHierarchies: [],
+              dataHierarchies: [{ name: "Sum of Amount", field: { name: "Amount" } }]
+            }
+          };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const result = await runtime.validatePivotSource({
+      workbookId,
+      pivotTableName: "SalesPivot",
+      expectedFields: ["Region", "Month", "Amount"],
+      expectedRowFields: ["Region"],
+      expectedColumnFields: ["Month"],
+      expectedDataFields: ["Amount"]
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.summary.sourceFieldCount).toBe(3);
+    expect(result.summary.rowFields).toEqual(["Region"]);
+    expect(result.summary.dataFields).toEqual(["Amount"]);
+    expect(result.issues).toHaveLength(0);
+  });
+
+  it("reports missing and misplaced expected PivotTable fields", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_pivot_validate_bad_fields" as WorkbookId;
+    const session = runtime.sessions.createSession();
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string) => {
+        if (method === "pivot.get_info") {
+          return {
+            ok: true,
+            info: {
+              workbookId,
+              pivotTableName: "SalesPivot",
+              sheetName: "Report",
+              range: { address: "Report!A3:E20" },
+              source: "SalesTable",
+              sourceType: "Table",
+              hierarchies: [{ name: "Region" }, { name: "Amount" }],
+              rowHierarchies: [{ name: "Region" }],
+              columnHierarchies: [],
+              filterHierarchies: [],
+              dataHierarchies: [{ name: "Sum of Amount", field: { name: "Amount" } }]
+            }
+          };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const result = await runtime.validatePivotSource({
+      workbookId,
+      pivotTableName: "SalesPivot",
+      expectedFields: ["Region", "Customer"],
+      expectedColumnFields: ["Region"],
+      expectedDataFields: ["Customer"]
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((issue) => issue.code === "PIVOT_EXPECTED_FIELD_MISSING" && issue.details?.field === "Customer")).toBe(true);
+    expect(result.issues.some((issue) => issue.code === "PIVOT_EXPECTED_LAYOUT_MISMATCH" && issue.details?.axis === "column")).toBe(true);
+    expect(result.issues.some((issue) => issue.code === "PIVOT_EXPECTED_LAYOUT_MISMATCH" && issue.details?.axis === "data")).toBe(true);
+  });
+
   it("marks missing PivotTables as validation errors", async () => {
     const runtime = new RuntimeService({ persistState: false });
     const workbookId = "workbook_pivot_missing" as WorkbookId;

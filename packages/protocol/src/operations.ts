@@ -842,6 +842,14 @@ export interface PivotCopyFromTemplateRequest extends PivotSelector {
   templateId?: TemplateId;
 }
 
+export interface PivotValidateSourceRequest extends PivotSelector {
+  expectedFields?: string[];
+  expectedRowFields?: string[];
+  expectedColumnFields?: string[];
+  expectedFilterFields?: string[];
+  expectedDataFields?: string[];
+}
+
 export type WorkbookFileBridgeOperation = "workbook.save_as" | "workbook.export_copy" | "workbook.restore_file_backup";
 
 export interface WorkbookFileBridgeRequest {
