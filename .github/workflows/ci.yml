@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   verify:
-    name: Build, Test, And Synthetic Benchmark
+    name: Verify Release Gates
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
