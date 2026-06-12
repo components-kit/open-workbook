@@ -404,7 +404,8 @@ describe("RuntimeService capabilities", () => {
 
     expect(runtime.getStatus().fileBridge).toMatchObject({
       available: true,
-      url: "http://127.0.0.1:37999"
+      url: "http://127.0.0.1:37999",
+      path: "/v1/workbook-file"
     });
     expect(runtime.getCapabilities().fileBridge.available).toBe(true);
   });

@@ -856,6 +856,7 @@ export interface WorkbookFileBridgeRequest {
 export interface WorkbookFileBridgeStatus {
   available: boolean;
   url?: string;
+  path?: string;
   reason?: "not_configured" | "configured";
 }
 

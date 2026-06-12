@@ -14,6 +14,12 @@ describe("Native file bridge server", () => {
     workbookId: "Book1.xlsx" as WorkbookId,
     targetPath: path.join(tmpdir(), "open-workbook-save-as.xlsx")
   };
+  const exportRequest: WorkbookFileBridgeRequest = {
+    operation: "workbook.export_copy",
+    workbookId: "Book1.xlsx" as WorkbookId,
+    targetPath: path.join(tmpdir(), "open-workbook-export-copy.xlsx"),
+    sourceBackupId: "backup_1" as WorkbookFileBridgeRequest["sourceBackupId"]
+  };
 
   it("routes save_as requests through the configured adapter", async () => {
     const result = await handleWorkbookFileBridgeRequest(request, {
@@ -48,6 +54,56 @@ describe("Native file bridge server", () => {
     expect(args).toContain(request.targetPath);
   });
 
+  it("routes export_copy requests through the configured adapter", async () => {
+    const result = await handleWorkbookFileBridgeRequest(exportRequest, {
+      getStatus: () => ({ test: true }),
+      saveAs: async () => {
+        throw new Error("saveAs should not be called for export_copy");
+      },
+      exportCopy: async (input) => ({
+        ok: true,
+        operation: input.operation,
+        workbookId: input.workbookId,
+        targetPath: input.targetPath,
+        sourceBackupId: input.sourceBackupId,
+        filePath: input.targetPath
+      })
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.operation).toBe("workbook.export_copy");
+    expect(result.filePath).toBe(exportRequest.targetPath);
+    expect(result.sourceBackupId).toBe(exportRequest.sourceBackupId);
+  });
+
+  it("reports platform operation support in status", () => {
+    const adapter = createPlatformNativeHostBridgeAdapter("win32", async () => ({ code: 0, stdout: "", stderr: "" }));
+    const status = adapter.getStatus() as { operations?: Record<string, boolean>; exportCopySupported?: boolean };
+
+    expect(status.exportCopySupported).toBe(true);
+    expect(status.operations?.["workbook.save_as"]).toBe(true);
+    expect(status.operations?.["workbook.export_copy"]).toBe(true);
+    expect(status.operations?.["workbook.restore_file_backup"]).toBe(false);
+  });
+
+  it("runs the macOS Export Copy adapter through SaveCopyAs", async () => {
+    let command: string | undefined;
+    let args: string[] = [];
+    const adapter = createPlatformNativeHostBridgeAdapter("darwin", async (nextCommand, nextArgs) => {
+      command = nextCommand;
+      args = nextArgs;
+      return { code: 0, stdout: "copied", stderr: "" };
+    });
+
+    const result = await adapter.exportCopy?.(exportRequest);
+
+    expect(result?.ok).toBe(true);
+    expect(command).toBe("osascript");
+    expect(args.join("\n")).toContain("SaveCopyAs");
+    expect(args).toContain(exportRequest.workbookId);
+    expect(args).toContain(exportRequest.targetPath);
+  });
+
   it("blocks Save As targets outside configured allowed directories", async () => {
     const previous = process.env.OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS;
     process.env.OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS = path.join(tmpdir(), "allowed-open-workbook-exports");
@@ -58,6 +114,25 @@ describe("Native file bridge server", () => {
 
       expect(result.ok).toBe(false);
       expect(result.error).toContain("outside allowed bridge directories");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS;
+      } else {
+        process.env.OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS = previous;
+      }
+    }
+  });
+
+  it("blocks Export Copy targets outside configured allowed directories", async () => {
+    const previous = process.env.OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS;
+    process.env.OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS = path.join(tmpdir(), "allowed-open-workbook-exports");
+    try {
+      const adapter = createPlatformNativeHostBridgeAdapter("win32", async () => ({ code: 0, stdout: "", stderr: "" }));
+
+      const result = await adapter.exportCopy?.(exportRequest);
+
+      expect(result?.ok).toBe(false);
+      expect(result?.error).toContain("outside allowed bridge directories");
     } finally {
       if (previous === undefined) {
         delete process.env.OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS;

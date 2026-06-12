@@ -9,7 +9,7 @@ Open Workbook separates workbook state safety from local file-system control.
 - `excel.workbook.save_as` uses the configured native file bridge when `OPEN_WORKBOOK_FILE_BRIDGE_URL` is set; otherwise it reports capability status.
 - `excel.workbook.create_backup` creates a persistent JSON snapshot backup.
 - `excel.workbook.restore_backup` restores a persistent or in-memory snapshot backup.
-- `excel.workbook.export_copy` creates a persistent snapshot backup, then writes a true `.xlsx` file from Office.js compressed workbook slices on Excel desktop hosts. If `OPEN_WORKBOOK_FILE_BRIDGE_URL` is configured, the native bridge is tried first. If no `targetPath` is provided, the file is written under `.open-workbook/exports` or `OPEN_WORKBOOK_EXPORT_DIR`.
+- `excel.workbook.export_copy` creates a persistent snapshot backup, then writes a true `.xlsx` file. If `OPEN_WORKBOOK_FILE_BRIDGE_URL` is configured, the built-in native bridge uses Excel desktop `SaveCopyAs` automation first. If no bridge is configured or the bridge fails, Open Workbook falls back to Office.js compressed workbook slices on supported Excel desktop hosts. If no `targetPath` is provided, the file is written under `.open-workbook/exports` or `OPEN_WORKBOOK_EXPORT_DIR`.
 - `excel.workbook.export_local_config` exports versioned JSON metadata for Open Workbook templates, regions, and optional permissions.
 - `excel.workbook.import_local_config` imports that JSON into the local daemon registry.
 - `excel.workbook.embed_local_config` stores local config JSON in a namespaced workbook custom XML part when the Excel host supports it.
@@ -26,7 +26,7 @@ The MCP tools return explicit `CAPABILITY_UNAVAILABLE` errors instead of silentl
 
 ## Native File Bridge Contract
 
-Run `owb file-bridge start` to start Open Workbook's built-in native bridge. It listens on `http://127.0.0.1:37847` by default. Set `OPEN_WORKBOOK_FILE_BRIDGE_URL=http://127.0.0.1:37847` for the backend daemon so `excel.workbook.save_as` can use it.
+Run `owb file-bridge start` to start Open Workbook's built-in native bridge. It listens on `http://127.0.0.1:37847` by default. Set `OPEN_WORKBOOK_FILE_BRIDGE_URL=http://127.0.0.1:37847` for the backend daemon so `excel.workbook.save_as` and bridge-first `excel.workbook.export_copy` can use it. If you override the route with `OPEN_WORKBOOK_FILE_BRIDGE_PATH`, set the same value for the backend daemon and file bridge process.
 
 The bridge exposes:
 
@@ -58,11 +58,11 @@ The helper should return:
 }
 ```
 
-The built-in bridge uses AppleScript on macOS and PowerShell COM automation on Windows for `workbook.save_as`. It matches `workbookId` against the open Excel workbook name or full path. Linux returns an explicit unsupported result.
+The built-in bridge uses AppleScript on macOS and PowerShell COM automation on Windows for `workbook.save_as` and `workbook.export_copy`. `export_copy` calls Excel `SaveCopyAs`, which saves a copy of the workbook without changing the open workbook's file identity. It matches `workbookId` against the open Excel workbook name or full path. Linux returns an explicit unsupported result.
 
-Set `OPEN_WORKBOOK_FILE_BRIDGE_TIMEOUT_MS` to override the default 30000 ms backend-to-bridge timeout. Set `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` to a path-delimited allowlist of output directories for native Save As. Set `OPEN_WORKBOOK_EXPORT_DIR` to control the default output directory for add-in compressed-file exports.
+Set `OPEN_WORKBOOK_FILE_BRIDGE_TIMEOUT_MS` to override the default 30000 ms backend-to-bridge timeout. Set `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` to a path-delimited allowlist of output directories for native Save As and Export Copy. Set `OPEN_WORKBOOK_EXPORT_DIR` to control the default output directory for add-in compressed-file exports.
 
-`excel.runtime.get_status` and `excel.runtime.get_capabilities` include `fileBridge` status so agents can check whether native Save As is configured before requesting it.
+`excel.runtime.get_status` and `excel.runtime.get_capabilities` include `fileBridge` status, including the configured URL and route path, so agents can check whether native Save As or Export Copy is configured before requesting it.
 
 Local config export/import is different from workbook file export. It does not create or modify an `.xlsx`; it moves Open Workbook registry metadata so teams can version templates, semantic regions, and permission defaults alongside a project. Embedded local config modifies workbook metadata through Office.js custom XML parts and is guarded by workbook-level permissions.
 

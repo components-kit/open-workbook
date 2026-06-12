@@ -106,6 +106,13 @@ export function createPlatformNativeHostBridgeAdapter(
     getStatus: () => ({
       platform,
       saveAsSupported: platform === "darwin" || platform === "win32",
+      exportCopySupported: platform === "darwin" || platform === "win32",
+      restoreFileBackupSupported: false,
+      operations: {
+        "workbook.save_as": platform === "darwin" || platform === "win32",
+        "workbook.export_copy": platform === "darwin" || platform === "win32",
+        "workbook.restore_file_backup": false
+      },
       allowedDirs: allowedTargetDirectories()
     }),
     saveAs: async (request) => {
@@ -123,6 +130,22 @@ export function createPlatformNativeHostBridgeAdapter(
         return saveAsWithPowerShell(request, execute);
       }
       return bridgeError(request, `Native Save As is not supported on ${platform}.`);
+    },
+    exportCopy: async (request) => {
+      if (!request.targetPath) {
+        return bridgeError(request, "targetPath is required for workbook.export_copy.");
+      }
+      const pathError = validateTargetPath(request.targetPath);
+      if (pathError) {
+        return bridgeError(request, pathError);
+      }
+      if (platform === "darwin") {
+        return saveCopyAsWithAppleScript(request, execute);
+      }
+      if (platform === "win32") {
+        return saveCopyAsWithPowerShell(request, execute);
+      }
+      return bridgeError(request, `Native Export Copy is not supported on ${platform}.`);
     }
   };
 }
@@ -182,6 +205,59 @@ if ($null -eq $targetWorkbook) {
   throw "Workbook not found: $workbookName"
 }
 $targetWorkbook.SaveAs($targetPath)
+`;
+  return nativeSaveAsResult(request, await execute("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script, request.workbookId, request.targetPath!]));
+}
+
+async function saveCopyAsWithAppleScript(request: WorkbookFileBridgeRequest, execute: NativeCommandExecutor): Promise<WorkbookFileBridgeResponse> {
+  const script = `
+on run argv
+  set workbookName to item 1 of argv
+  set targetPath to item 2 of argv
+  tell application "Microsoft Excel"
+    if it is not running then error "Microsoft Excel is not running"
+    set targetWorkbook to missing value
+    repeat with candidateWorkbook in workbooks
+      if (name of candidateWorkbook as string) is workbookName or (full name of candidateWorkbook as string) is workbookName then
+        set targetWorkbook to candidateWorkbook
+        exit repeat
+      end if
+    end repeat
+    if targetWorkbook is missing value then error "Workbook not found: " & workbookName
+    activate object targetWorkbook
+    do Visual Basic "ActiveWorkbook.SaveCopyAs " & quote & my escapeForVbaString(targetPath) & quote
+  end tell
+end run
+
+on escapeForVbaString(valueText)
+  set oldDelimiters to AppleScript's text item delimiters
+  set AppleScript's text item delimiters to quote
+  set valueParts to text items of valueText
+  set AppleScript's text item delimiters to quote & quote
+  set escapedText to valueParts as text
+  set AppleScript's text item delimiters to oldDelimiters
+  return escapedText
+end escapeForVbaString
+`;
+  return nativeSaveAsResult(request, await execute("osascript", ["-e", script, request.workbookId, request.targetPath!]));
+}
+
+async function saveCopyAsWithPowerShell(request: WorkbookFileBridgeRequest, execute: NativeCommandExecutor): Promise<WorkbookFileBridgeResponse> {
+  const script = `
+$workbookName = $args[0]
+$targetPath = $args[1]
+$excel = [Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
+$targetWorkbook = $null
+foreach ($workbook in $excel.Workbooks) {
+  if ($workbook.Name -eq $workbookName -or $workbook.FullName -eq $workbookName) {
+    $targetWorkbook = $workbook
+    break
+  }
+}
+if ($null -eq $targetWorkbook) {
+  throw "Workbook not found: $workbookName"
+}
+$targetWorkbook.SaveCopyAs($targetPath)
 `;
   return nativeSaveAsResult(request, await execute("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script, request.workbookId, request.targetPath!]));
 }

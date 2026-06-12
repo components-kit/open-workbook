@@ -6,17 +6,20 @@ import type {
 
 export interface NativeFileBridgeOptions {
   url?: string;
+  path?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
 
 export class NativeFileBridge {
   private readonly url: string | undefined;
+  private readonly path: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch | undefined;
 
   constructor(options: NativeFileBridgeOptions = {}) {
     this.url = options.url ?? process.env.OPEN_WORKBOOK_FILE_BRIDGE_URL;
+    this.path = normalizeBridgePath(options.path ?? process.env.OPEN_WORKBOOK_FILE_BRIDGE_PATH ?? "/v1/workbook-file");
     this.timeoutMs = options.timeoutMs ?? Number(process.env.OPEN_WORKBOOK_FILE_BRIDGE_TIMEOUT_MS ?? 30000);
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
   }
@@ -31,6 +34,7 @@ export class NativeFileBridge {
     return {
       available: true,
       url: this.url,
+      path: this.path,
       reason: "configured"
     };
   }
@@ -86,6 +90,13 @@ export class NativeFileBridge {
 
   private operationUrl(): string {
     const base = this.url ?? "";
-    return base.endsWith("/") ? `${base}v1/workbook-file` : `${base}/v1/workbook-file`;
+    return base.endsWith("/") ? `${base.slice(0, -1)}${this.path}` : `${base}${this.path}`;
   }
+}
+
+function normalizeBridgePath(path: string): string {
+  if (!path) {
+    return "/v1/workbook-file";
+  }
+  return path.startsWith("/") ? path : `/${path}`;
 }
