@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+  xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
+  xsi:type="TaskPaneApp">
+  <Id>6f2d2ac1-69b0-4eb6-a256-0a1fcb000001</Id>
+  <Version>0.1.0.0</Version>
+  <ProviderName>Open Workbook</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Open Workbook" />
+  <Description DefaultValue="Local-first MCP bridge for safe, fast Excel automation." />
+  <IconUrl DefaultValue="http://127.0.0.1:37846/assets/icon-32.png" />
+  <HighResolutionIconUrl DefaultValue="http://127.0.0.1:37846/assets/icon-64.png" />
+  <SupportUrl DefaultValue="https://github.com/open-workbook/open-workbook" />
+  <AppDomains>
+    <AppDomain>http://127.0.0.1:37846</AppDomain>
+  </AppDomains>
+  <Hosts>
+    <Host Name="Workbook" />
+  </Hosts>
+  <DefaultSettings>
+    <SourceLocation DefaultValue="http://127.0.0.1:37846/taskpane.html" />
+  </DefaultSettings>
+  <Permissions>ReadWriteDocument</Permissions>
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
+    <Hosts>
+      <Host xsi:type="Workbook">
+        <DesktopFormFactor>
+          <GetStarted>
+            <Title resid="GetStarted.Title" />
+            <Description resid="GetStarted.Description" />
+            <LearnMoreUrl resid="GetStarted.LearnMoreUrl" />
+          </GetStarted>
+          <FunctionFile resid="Taskpane.Url" />
+          <ExtensionPoint xsi:type="PrimaryCommandSurface">
+            <OfficeTab id="TabHome">
+              <Group id="OpenWorkbook.Group">
+                <Label resid="OpenWorkbook.GroupLabel" />
+                <Icon>
+                  <bt:Image size="16" resid="Icon.16x16" />
+                  <bt:Image size="32" resid="Icon.32x32" />
+                  <bt:Image size="80" resid="Icon.80x80" />
+                </Icon>
+                <Control xsi:type="Button" id="OpenWorkbook.TaskpaneButton">
+                  <Label resid="OpenWorkbook.ButtonLabel" />
+                  <Supertip>
+                    <Title resid="OpenWorkbook.ButtonLabel" />
+                    <Description resid="OpenWorkbook.ButtonTooltip" />
+                  </Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="Icon.16x16" />
+                    <bt:Image size="32" resid="Icon.32x32" />
+                    <bt:Image size="80" resid="Icon.80x80" />
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>OpenWorkbook.Taskpane</TaskpaneId>
+                    <SourceLocation resid="Taskpane.Url" />
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+    </Hosts>
+    <Resources>
+      <bt:Images>
+        <bt:Image id="Icon.16x16" DefaultValue="http://127.0.0.1:37846/assets/icon-16.png" />
+        <bt:Image id="Icon.32x32" DefaultValue="http://127.0.0.1:37846/assets/icon-32.png" />
+        <bt:Image id="Icon.80x80" DefaultValue="http://127.0.0.1:37846/assets/icon-80.png" />
+      </bt:Images>
+      <bt:Urls>
+        <bt:Url id="Taskpane.Url" DefaultValue="http://127.0.0.1:37846/taskpane.html" />
+        <bt:Url id="GetStarted.LearnMoreUrl" DefaultValue="https://github.com/open-workbook/open-workbook" />
+      </bt:Urls>
+      <bt:ShortStrings>
+        <bt:String id="GetStarted.Title" DefaultValue="Open Workbook loaded" />
+        <bt:String id="OpenWorkbook.GroupLabel" DefaultValue="Open Workbook" />
+        <bt:String id="OpenWorkbook.ButtonLabel" DefaultValue="Connect" />
+      </bt:ShortStrings>
+      <bt:LongStrings>
+        <bt:String id="GetStarted.Description" DefaultValue="Open Workbook connects Excel to the local MCP runtime." />
+        <bt:String id="OpenWorkbook.ButtonTooltip" DefaultValue="Open the Open Workbook connection pane." />
+      </bt:LongStrings>
+    </Resources>
+  </VersionOverrides>
+</OfficeApp>

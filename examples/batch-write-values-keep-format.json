@@ -1,0 +1,28 @@
+{
+  "tool": "excel.batch.apply",
+  "arguments": {
+    "workbookId": "workbook_current",
+    "mode": "apply",
+    "confirmationToken": "confirm_after_preview",
+    "operations": [
+      {
+        "kind": "range.write_values",
+        "operationId": "op_write_invoice_rows",
+        "workbookId": "workbook_current",
+        "destructiveLevel": "values",
+        "reason": "Append reviewed invoice values into the template data region",
+        "target": {
+          "workbookId": "workbook_current",
+          "sheetName": "Invoices",
+          "address": "A10:F12"
+        },
+        "values": [
+          ["INV-1001", "2026-02-01", "Customer A", 1200, "THB", "Open"],
+          ["INV-1002", "2026-02-02", "Customer B", 900, "THB", "Paid"],
+          ["INV-1003", "2026-02-03", "Customer C", 1500, "THB", "Open"]
+        ],
+        "preserveFormats": true
+      }
+    ]
+  }
+}

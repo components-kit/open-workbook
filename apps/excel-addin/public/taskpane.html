@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Open Workbook</title>
+    <link rel="stylesheet" href="/taskpane.css" />
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1>Open Workbook</h1>
+      <p id="status">Connecting to local MCP runtime...</p>
+      <dl>
+        <div>
+          <dt>Backend</dt>
+          <dd>ws://127.0.0.1:37845/addin</dd>
+        </div>
+        <div>
+          <dt>Mode</dt>
+          <dd>Local sideload</dd>
+        </div>
+      </dl>
+    </main>
+    <script type="module" src="/dist/taskpane.js"></script>
+  </body>
+</html>

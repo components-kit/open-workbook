@@ -1,0 +1,25 @@
+{
+  "name": "@open-workbook/excel-addin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "dev": "npm-run-all --parallel dev:ts dev:server",
+    "dev:ts": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "dev:server": "node scripts/dev-server.mjs",
+    "serve": "node scripts/dev-server.mjs"
+  },
+  "dependencies": {
+    "@open-workbook/excel-core": "workspace:*",
+    "@open-workbook/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/office-js": "^1.0.492",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "@open-workbook/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./runtime": {
+      "types": "./dist/runtime-service.d.ts",
+      "default": "./dist/runtime-service.js"
+    },
+    "./server": {
+      "types": "./dist/addin-websocket-server.d.ts",
+      "default": "./dist/addin-websocket-server.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "dev": "node --enable-source-maps dist/index.js"
+  },
+  "dependencies": {
+    "@open-workbook/excel-core": "workspace:*",
+    "@open-workbook/office-js-engine": "workspace:*",
+    "@open-workbook/protocol": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "open-workbook",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first MCP runtime for fast, reversible, template-aware Excel automation.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "tsc -b --pretty false",
+    "check": "tsc -b --pretty false",
+    "test": "corepack pnpm -r test",
+    "dev:backend": "corepack pnpm --filter @open-workbook/backend dev",
+    "dev:mcp": "corepack pnpm --filter @open-workbook/mcp-server dev",
+    "dev:addin": "corepack pnpm --filter @open-workbook/excel-addin dev",
+    "sideload:mac": "node scripts/sideload-mac.mjs",
+    "sideload:windows": "node scripts/sideload-windows.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}
