@@ -3701,6 +3701,9 @@ export class RuntimeService {
           });
         }
         this.transactions.markBlocked(transaction.transactionId, "LOCK_CONFLICT", "Transaction conflicts with an active lock.");
+        if (request.taskId !== undefined) {
+          this.updateTask(request.taskId, { status: "blocked", currentStep: "Waiting for conflicting workbook lock" });
+        }
         this.persistState();
         return {
           ok: false,

@@ -547,6 +547,73 @@ describe("RuntimeService task progress", () => {
     expect(lockedDecision?.state).toBe("waiting_locks");
     expect(lockedDecision?.nextRetryAt).toBeDefined();
   });
+
+  it("smokes multi-agent contention with one writer waiting on a lock", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_multi_agent_smoke" as WorkbookId;
+    const agentA = "agent_cleaner" as AgentId;
+    const agentB = "agent_reporter" as AgentId;
+    runtime.registerAgent({ agentId: agentA, agentName: "Cleaner", clientType: "mcp" });
+    runtime.registerAgent({ agentId: agentB, agentName: "Reporter", clientType: "mcp" });
+    const cleaner = runtime.createTask({
+      workbookId,
+      goal: "Clean transaction log",
+      assignedAgentId: agentA,
+      allowedScopes: [{ type: "range", workbookId, sheetName: "Transactions", address: "A1:F20" }]
+    }).task;
+    const reporter = runtime.createTask({
+      workbookId,
+      goal: "Build formula summary",
+      assignedAgentId: agentB,
+      allowedScopes: [
+        { type: "formula", workbookId, sheetName: "Transactions", address: "H1:H20" },
+        { type: "range", workbookId, sheetName: "Transactions", address: "A1:A20" }
+      ]
+    }).task;
+    const lock = runtime.acquireLocks({
+      workbookId,
+      ownerAgentId: agentA,
+      taskId: cleaner.taskId,
+      scopes: [{ type: "range", workbookId, sheetName: "Transactions", address: "A1:F20" }],
+      mode: "write_values",
+      reason: "Cleaner is updating transaction log"
+    });
+    expect(lock.ok).toBe(true);
+
+    const schedule = runtime.evaluateTaskSchedule({ workbookId, lockMode: "write_formulas" });
+    expect(schedule.decisions.find((decision) => decision.taskId === reporter.taskId)?.state).toBe("waiting_locks");
+
+    const result = await runtime.applyBatch({
+      workbookId,
+      mode: "apply",
+      agentId: agentB,
+      taskId: reporter.taskId,
+      operations: [
+        {
+          kind: "range.write_formulas",
+          operationId: "op_multi_agent_formula_lock" as OperationId,
+          workbookId,
+          destructiveLevel: "values",
+          reason: "Write summary formula",
+          target: { workbookId, sheetName: "Transactions", address: "H1" },
+          formulas: [["=SUM(A1:A20)"]],
+          preserveFormats: true
+        }
+      ]
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.transactionId).toBeDefined();
+    const transaction = runtime.transactions.get(result.transactionId!);
+    expect(transaction?.status).toBe("blocked");
+    expect(transaction?.agentId).toBe(agentB);
+    expect(transaction?.taskId).toBe(reporter.taskId);
+    expect(runtime.getTask(reporter.taskId).task?.status).toBe("blocked");
+    const telemetry = runtime.getConflictTelemetry(workbookId);
+    expect(telemetry.openCount).toBe(1);
+    expect(telemetry.hotAgents.some((bucket) => bucket.key === agentA)).toBe(true);
+    expect(telemetry.hotTasks.some((bucket) => bucket.key === cleaner.taskId)).toBe(true);
+  });
 });
 
 describe("RuntimeService lock leases", () => {
