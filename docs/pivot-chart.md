@@ -12,6 +12,7 @@ Supported tools:
 - `excel.pivot.refresh`: refresh one PivotTable.
 - `excel.pivot.refresh_all`: refresh all PivotTables in the workbook.
 - `excel.pivot.copy_from_template`: replay deterministic PivotTable settings from a template PivotTable to a target PivotTable.
+- `excel.pivot.delete`: delete a PivotTable after capturing a transaction-backed backup of the reported output range when available.
 - `excel.pivot.validate_source`: check whether source, source type, output range, and data-field metadata are available.
 
 Capability-status tools:

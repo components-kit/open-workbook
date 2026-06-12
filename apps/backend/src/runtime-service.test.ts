@@ -588,6 +588,65 @@ describe("RuntimeService PivotTable template copy", () => {
 });
 
 describe("RuntimeService PivotTable validation", () => {
+  it("records a scoped backup and transaction before deleting a PivotTable", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_pivot_delete" as WorkbookId;
+    runtime.allowDestructiveActions(true);
+    const session = runtime.sessions.createSession();
+    const calls: Array<{ method: string; params: any }> = [];
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string, params: any) => {
+        calls.push({ method, params });
+        if (method === "pivot.get_info") {
+          return {
+            ok: true,
+            info: {
+              workbookId,
+              pivotTableName: params.pivotTableName,
+              sheetName: "Report",
+              range: { address: "Report!B4:F20", rowCount: 17, columnCount: 5 }
+            }
+          };
+        }
+        if (method === "workbook.snapshot_ranges") {
+          return {
+            workbookFingerprint: {
+              workbookId,
+              workbookHash: "pivot_delete_workbook",
+              structureHash: "structure",
+              capturedAt: new Date().toISOString()
+            },
+            rangeSnapshots: params.ranges.map((range: any) => ({
+              range,
+              values: [["pivot"]],
+              fingerprint: {
+                range,
+                hash: "pivot_delete_range",
+                cellCount: 1,
+                capturedAt: new Date().toISOString()
+              }
+            }))
+          };
+        }
+        if (method === "pivot.delete") {
+          return { ok: true, deleted: true };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const result = await runtime.deletePivotTable({
+      workbookId,
+      pivotTableName: "ReportPivot"
+    });
+
+    expect((result as { ok?: boolean }).ok).toBe(true);
+    expect((result as { transactionId?: string }).transactionId).toBeDefined();
+    expect(calls.some((call) => call.method === "workbook.snapshot_ranges" && call.params.ranges[0].address === "B4:F20")).toBe(true);
+    expect(calls.some((call) => call.method === "pivot.delete")).toBe(true);
+    expect(runtime.transactions.list(workbookId).some((transaction) => transaction.status === "applied" && transaction.backups.length === 1)).toBe(true);
+  });
+
   it("reports useful PivotTable metadata issues", async () => {
     const runtime = new RuntimeService({ persistState: false });
     const workbookId = "workbook_pivot_validate" as WorkbookId;

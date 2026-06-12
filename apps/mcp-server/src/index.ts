@@ -3215,6 +3215,18 @@ function registerPivotTools(mcp: McpServer): void {
 
   registerMcpTool(
     mcp,
+    "excel.pivot.delete",
+    {
+      title: "Delete PivotTable",
+      description: "Delete a PivotTable through a transaction-backed backup path.",
+      inputSchema: pivotSelectorSchema(),
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    async (args: any) => jsonResult(await runtime.deletePivotTable(pivotSelector(args)))
+  );
+
+  registerMcpTool(
+    mcp,
     "excel.pivot.validate_source",
     {
       title: "Validate PivotTable source",

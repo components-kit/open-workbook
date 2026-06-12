@@ -2016,6 +2016,49 @@ export class RuntimeService {
     );
   }
 
+  async deletePivotTable(request: PivotSelector) {
+    const client = this.getActiveAddinClient();
+    if (!client) {
+      return disconnectedError();
+    }
+    const targetInfo = await this.getPivotTableInfo(request);
+    const pivotInfo = (targetInfo as { ok?: boolean; info?: { sheetName?: string; range?: { address?: string } } }).info;
+    if (!(targetInfo as { ok?: boolean }).ok || !pivotInfo) {
+      return {
+        ok: false,
+        target: targetInfo,
+        error: runtimeError("NOT_FOUND", `PivotTable not found or unavailable: ${request.pivotTableName}`, { retryable: false })
+      };
+    }
+    const ranges = pivotInfo.sheetName && pivotInfo.range?.address
+      ? [{ workbookId: request.workbookId, sheetName: pivotInfo.sheetName, address: stripSheetName(pivotInfo.range.address) }]
+      : [];
+    const permissionWarnings = this.validateDirectMutation(request.workbookId, ranges, "structure");
+    if (permissionWarnings.length > 0) {
+      return permissionDenied("PivotTable deletion is blocked by the current Open Workbook permission policy.", permissionWarnings);
+    }
+    return this.applyDirectTransaction(
+      {
+        workbookId: request.workbookId,
+        goal: `Before deleting PivotTable ${request.pivotTableName}`,
+        scopes: pivotDeleteScopes(request, pivotInfo.sheetName, ranges),
+        destructiveLevel: "structure"
+      },
+      async () => {
+        const backupResult = await this.createWorkbookBackup({
+          workbookId: request.workbookId,
+          reason: `Before deleting PivotTable ${request.pivotTableName}`,
+          ...(ranges.length > 0 ? { ranges } : {})
+        });
+        if (!("backup" in backupResult)) {
+          return backupResult;
+        }
+        const result = await client.request("pivot.delete", request);
+        return { ok: true, backup: backupResult.backup, result };
+      }
+    );
+  }
+
   async validatePivotSource(request: PivotSelector) {
     const info = await this.getPivotTableInfo(request);
     const pivotInfo = (info as {
@@ -5060,6 +5103,18 @@ function pivotTemplateCopyScopes(
       workbookId: request.workbookId,
       sheetName: sourceSheetName,
       pivotName: request.templatePivotTableName
+    }
+  ]);
+}
+
+function pivotDeleteScopes(request: PivotSelector, sheetName: string | undefined, ranges: A1Range[]): WorkbookScope[] {
+  return dedupeScopes([
+    ...ranges.map(rangeScope),
+    {
+      type: "pivot",
+      workbookId: request.workbookId,
+      sheetName,
+      pivotName: request.pivotTableName
     }
   ]);
 }

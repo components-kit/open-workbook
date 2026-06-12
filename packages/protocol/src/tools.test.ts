@@ -45,6 +45,7 @@ describe("tool catalog", () => {
     expect(exposed.some((tool) => tool.name === "excel.clean.trim_whitespace")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.clean.fuzzy_match")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.pivot.create")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.pivot.delete")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.chart.create")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.runtime.get_capabilities")).toBe(false);
     expect(exposed.some((tool) => tool.name === "excel.ocr.read_file")).toBe(false);
