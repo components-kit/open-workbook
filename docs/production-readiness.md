@@ -44,6 +44,7 @@ Capability-unavailable responses are preferred over simulated success when Offic
 - Tool catalog, README, installation docs, and OpenCode docs match the exposed MCP surface.
 - Fresh local install can run `owb doctor`, generate a manifest, start `owb daemon`, connect `owb mcp`, and report runtime status. If the daemon cannot bind or cannot be reached, CLI commands must fail with concise user-facing errors.
 - Excel add-in can be sideloaded on macOS and Windows using the generated manifest.
+- Native file bridge host smoke passes on macOS and Windows with `owb file-bridge smoke --workbook <open-workbook-name> --target <copy.xlsx>`.
 - Real Excel smoke test covers read, write, batch apply, template repair, rollback preview/apply, and conflict detection.
 - Multi-agent smoke test covers two MCP clients planning concurrently, one writer waiting on a lock, and telemetry reporting the contention.
 - Known Office.js host limitations are documented as `CAPABILITY_UNAVAILABLE` or warnings.

@@ -896,6 +896,7 @@ describe("RuntimeService native file bridge", () => {
     const result = await runtime.saveWorkbookAs(workbookId, "/tmp/report.xlsx");
 
     expect(result.ok).toBe(true);
+    expect((result as { targetPath?: string }).targetPath).toBe("/tmp/report.xlsx");
     expect(requestBody).toMatchObject({
       operation: "workbook.save_as",
       workbookId,
@@ -955,6 +956,69 @@ describe("RuntimeService native file bridge", () => {
     expect((result as { ok?: boolean }).ok).toBe(true);
     expect(readFileSync(targetPath, "utf8")).toBe("xlsxdata");
     expect((result as { file?: { method?: string } }).file?.method).toBe("office-js-compressed-file");
+  });
+
+  it("returns the native bridge file path for workbook export copies", async () => {
+    const workbookId = "workbook_file_bridge_export" as WorkbookId;
+    const bridgeTargetPath = "/tmp/open-workbook/report-copy.xlsx";
+    let bridgeRequest: any;
+    const bridge = new NativeFileBridge({
+      url: "http://127.0.0.1:37999",
+      fetchImpl: (async (_url: string | URL | Request, init?: RequestInit) => {
+        bridgeRequest = JSON.parse(String(init?.body));
+        return Response.json({
+          ok: true,
+          operation: "workbook.export_copy",
+          workbookId,
+          targetPath: bridgeTargetPath,
+          filePath: bridgeTargetPath,
+          sourceBackupId: bridgeRequest.sourceBackupId
+        });
+      }) as typeof fetch
+    });
+    const runtime = new RuntimeService({ persistState: false, fileBridge: bridge });
+    const session = runtime.sessions.createSession();
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string, params: any) => {
+        if (method === "workbook.snapshot_ranges") {
+          return {
+            workbookFingerprint: {
+              workbookId,
+              workbookHash: "bridge_export_workbook",
+              structureHash: "structure",
+              capturedAt: new Date().toISOString()
+            },
+            rangeSnapshots: params.ranges.map((range: any) => ({
+              range,
+              values: [["snapshot"]],
+              fingerprint: {
+                range,
+                hash: "bridge_export_range",
+                cellCount: 1,
+                capturedAt: new Date().toISOString()
+              }
+            }))
+          };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const result = await runtime.exportWorkbookCopy({
+      workbookId,
+      targetPath: "relative-report-copy.xlsx",
+      ranges: [{ workbookId, sheetName: "Report", address: "A1:B2" }]
+    });
+
+    expect((result as { ok?: boolean }).ok).toBe(true);
+    expect((result as { targetPath?: string }).targetPath).toBe(bridgeTargetPath);
+    expect((result as { bridge?: { filePath?: string; sourceBackupId?: string } }).bridge?.filePath).toBe(bridgeTargetPath);
+    expect((result as { bridge?: { sourceBackupId?: string } }).bridge?.sourceBackupId).toBeDefined();
+    expect(bridgeRequest).toMatchObject({
+      operation: "workbook.export_copy",
+      workbookId,
+      targetPath: "relative-report-copy.xlsx"
+    });
   });
 });
 

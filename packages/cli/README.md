@@ -15,6 +15,7 @@ owb daemon status
 owb daemon stop
 owb file-bridge start
 owb file-bridge status
+owb file-bridge smoke --workbook Book1.xlsx --target ./book-copy.xlsx
 owb file-bridge stop
 owb mcp
 owb mcp --agent-name tx-cleaner
@@ -34,6 +35,7 @@ owb paths
 
 - `owb daemon start` starts the shared local coordinator used by the Excel add-in and multiple MCP adapters.
 - `owb file-bridge start` starts the native workbook file bridge used for Save As and host file operations.
+- `owb file-bridge smoke --workbook NAME --target ./copy.xlsx` verifies a running bridge against a real open Excel workbook using non-destructive `SaveCopyAs` export-copy automation. Use `--operation save-as --confirm-save-as` only when you intentionally want to test file identity-changing Save As behavior.
 - `owb mcp` starts an MCP adapter and attaches to the daemon when available.
 - `owb mcp --agent-name NAME` labels that adapter in collaboration status.
 - `owb mcp --standalone` starts a single-process MCP server with an embedded backend for one-agent use.

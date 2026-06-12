@@ -110,6 +110,58 @@ fileBridge
   });
 
 fileBridge
+  .command("smoke")
+  .description("Run a real Excel host smoke through the native file bridge")
+  .requiredOption("--workbook <nameOrPath>", "Open Excel workbook name or full path to match")
+  .option("--target <path>", "Target .xlsx path for the smoke output")
+  .option("--operation <operation>", "Operation: export-copy or save-as", "export-copy")
+  .option("--bridge-url <url>", "File bridge base URL", defaultFileBridgeUrl())
+  .option("--bridge-path <path>", "File bridge operation route path")
+  .option("--confirm-save-as", "Allow the smoke to run workbook.save_as, which changes the open workbook identity")
+  .action(async (options: { workbook: string; target?: string; operation: string; bridgeUrl: string; bridgePath?: string; confirmSaveAs?: boolean }) => {
+    const operation = normalizeFileBridgeSmokeOperation(options.operation);
+    if (operation === "workbook.save_as" && !options.confirmSaveAs) {
+      fail("Refusing to run save-as smoke without --confirm-save-as because it changes the open workbook file identity. Use the default export-copy smoke for non-destructive verification.");
+    }
+
+    const bridgeUrl = trimTrailingSlash(options.bridgeUrl);
+    const statusResponse = await fetchLocal(`${bridgeUrl}/status`, "File bridge smoke status", "owb file-bridge start");
+    if (!statusResponse.ok) {
+      fail(`File bridge smoke status failed: ${statusResponse.status} ${statusResponse.statusText}`);
+    }
+    const status = await statusResponse.json().catch(() => undefined) as { route?: string } | undefined;
+    if (!status || typeof status !== "object") {
+      fail("File bridge smoke status returned non-JSON output.");
+    }
+
+    const route = normalizeBridgePath(options.bridgePath ?? status.route ?? defaultFileBridgePath());
+    const targetPath = resolve(options.target ?? defaultHostSmokeTarget(operation));
+    const request = {
+      operation,
+      workbookId: options.workbook,
+      targetPath,
+      reason: "Open Workbook native file bridge smoke"
+    };
+    const smokeResponse = await fetchLocal(`${bridgeUrl}${route}`, "File bridge smoke operation", "owb file-bridge start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request)
+    });
+    if (!smokeResponse.ok) {
+      fail(`File bridge smoke operation failed: ${smokeResponse.status} ${smokeResponse.statusText}`);
+    }
+    const result = await smokeResponse.json().catch(() => undefined) as { ok?: boolean; error?: string } | undefined;
+    if (!result || typeof result !== "object") {
+      fail("File bridge smoke operation returned non-JSON output.");
+    }
+    if (result.ok !== true) {
+      fail(`File bridge smoke failed: ${result.error ?? "unknown bridge error"}`);
+    }
+
+    console.log(JSON.stringify({ ok: true, bridgeUrl, route, request, result }, null, 2));
+  });
+
+fileBridge
   .command("stop")
   .description("Stop the local native file bridge")
   .option("--bridge-url <url>", "File bridge base URL", defaultFileBridgeUrl())
@@ -452,6 +504,15 @@ function defaultFileBridgeUrl(): string {
   return `http://${host}:${port}`;
 }
 
+function defaultFileBridgePath(): string {
+  return process.env.OPEN_WORKBOOK_FILE_BRIDGE_PATH ?? "/v1/workbook-file";
+}
+
+function defaultHostSmokeTarget(operation: "workbook.export_copy" | "workbook.save_as"): string {
+  const suffix = operation === "workbook.export_copy" ? "export-copy" : "save-as";
+  return resolve(process.cwd(), ".open-workbook/host-smoke", `open-workbook-${suffix}-${Date.now()}.xlsx`);
+}
+
 function defaultServiceTarget(): ServiceTarget {
   if (process.platform === "darwin") {
     return "macos";
@@ -476,6 +537,20 @@ function defaultExportDir(): string {
 
 function trimTrailingSlash(value: string): string {
   return value.endsWith("/") ? value.slice(0, -1) : value;
+}
+
+function normalizeBridgePath(value: string): string {
+  return value.startsWith("/") ? value : `/${value}`;
+}
+
+function normalizeFileBridgeSmokeOperation(value: string): "workbook.export_copy" | "workbook.save_as" {
+  if (value === "export-copy" || value === "export_copy" || value === "workbook.export_copy") {
+    return "workbook.export_copy";
+  }
+  if (value === "save-as" || value === "save_as" || value === "workbook.save_as") {
+    return "workbook.save_as";
+  }
+  fail(`Unknown file bridge smoke operation: ${value}. Use export-copy or save-as.`);
 }
 
 function normalizeServiceTarget(value: string): ServiceTarget {

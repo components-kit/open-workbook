@@ -58,6 +58,11 @@ const checks = [
     assert: (result) => result.status === 0 && result.stdout.includes("ExecStart='owb' 'file-bridge' 'start'")
   },
   {
+    name: "file bridge smoke help",
+    args: ["file-bridge", "smoke", "--help"],
+    assert: (result) => result.status === 0 && result.stdout.includes("Run a real Excel host smoke") && result.stdout.includes("--workbook")
+  },
+  {
     name: "disconnected daemon status",
     args: ["daemon", "status", "--daemon-url", "http://127.0.0.1:37999"],
     assert: (result) =>

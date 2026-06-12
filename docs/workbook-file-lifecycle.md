@@ -28,6 +28,8 @@ The MCP tools return explicit `CAPABILITY_UNAVAILABLE` errors instead of silentl
 
 Run `owb file-bridge start` to start Open Workbook's built-in native bridge. It listens on `http://127.0.0.1:37847` by default. Set `OPEN_WORKBOOK_FILE_BRIDGE_URL=http://127.0.0.1:37847` for the backend daemon so `excel.workbook.save_as` and bridge-first `excel.workbook.export_copy` can use it. If you override the route with `OPEN_WORKBOOK_FILE_BRIDGE_PATH`, set the same value for the backend daemon and file bridge process.
 
+After opening a workbook in desktop Excel, run `owb file-bridge smoke --workbook Book1.xlsx --target ./book-copy.xlsx` to verify the running bridge against the real host with non-destructive `SaveCopyAs` export-copy automation. Use `--operation save-as --confirm-save-as` only for intentional Save As testing because it changes the open workbook's file identity.
+
 The bridge exposes:
 
 - `GET /status`
@@ -65,6 +67,23 @@ Before invoking Excel automation, the bridge resolves `targetPath` to an absolut
 Set `OPEN_WORKBOOK_FILE_BRIDGE_TIMEOUT_MS` to override the default 30000 ms backend-to-bridge timeout. Set `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` to a path-delimited allowlist of output directories for native Save As and Export Copy. Set `OPEN_WORKBOOK_EXPORT_DIR` to control the default output directory for add-in compressed-file exports.
 
 `excel.runtime.get_status` and `excel.runtime.get_capabilities` include `fileBridge` status, including the configured URL and route path, so agents can check whether native Save As or Export Copy is configured before requesting it. Pass `probeFileBridge: true` to `excel.runtime.get_status` when an agent needs a live `/status` health check with reachability, route, adapter platform, and supported-operation metadata.
+
+## Real Host Smoke
+
+Use the CLI smoke command to verify the native bridge against a real open Excel desktop workbook:
+
+```bash
+owb file-bridge start
+owb file-bridge smoke --workbook Book1.xlsx --target ./open-workbook-smoke-copy.xlsx
+```
+
+The default smoke uses `workbook.export_copy`, which calls Excel `SaveCopyAs` and should not change the open workbook's file identity. The command first checks `GET /status`, then posts to the bridge operation route and fails if Excel is not running, the workbook cannot be matched by name/full path, or the target file cannot be written.
+
+To test file identity-changing Save As behavior, use an explicit confirmation flag:
+
+```bash
+owb file-bridge smoke --workbook Book1.xlsx --operation save-as --confirm-save-as --target ./open-workbook-save-as.xlsx
+```
 
 Local config export/import is different from workbook file export. It does not create or modify an `.xlsx`; it moves Open Workbook registry metadata so teams can version templates, semantic regions, and permission defaults alongside a project. Embedded local config modifies workbook metadata through Office.js custom XML parts and is guarded by workbook-level permissions.
 

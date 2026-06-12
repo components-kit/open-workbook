@@ -1637,7 +1637,7 @@ export class RuntimeService {
       }
       const bridge = await this.fileBridge.request(bridgeRequest);
       if (bridge.ok) {
-        return { ok: true, workbookId, targetPath, bridge };
+        return { ok: true, workbookId, targetPath: bridge.filePath ?? bridge.targetPath ?? targetPath, bridge };
       }
       return {
         ok: false,
@@ -1701,10 +1701,11 @@ export class RuntimeService {
       }
       bridge = await this.fileBridge.request(bridgeRequest);
       if (bridge.ok) {
+        const exportedPath = bridge.filePath ?? bridge.targetPath ?? input.targetPath;
         return {
           ok: true,
           workbookId: input.workbookId,
-          targetPath: input.targetPath,
+          targetPath: exportedPath,
           backup,
           bridge
         };
