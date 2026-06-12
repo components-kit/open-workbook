@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { mkdir } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -116,34 +117,28 @@ export function createPlatformNativeHostBridgeAdapter(
       allowedDirs: allowedTargetDirectories()
     }),
     saveAs: async (request) => {
-      if (!request.targetPath) {
-        return bridgeError(request, "targetPath is required for workbook.save_as.");
-      }
-      const pathError = validateTargetPath(request.targetPath);
-      if (pathError) {
-        return bridgeError(request, pathError);
+      const prepared = await prepareTargetFileRequest(request, "workbook.save_as");
+      if (!prepared.ok) {
+        return prepared.response;
       }
       if (platform === "darwin") {
-        return saveAsWithAppleScript(request, execute);
+        return saveAsWithAppleScript(prepared.request, execute);
       }
       if (platform === "win32") {
-        return saveAsWithPowerShell(request, execute);
+        return saveAsWithPowerShell(prepared.request, execute);
       }
       return bridgeError(request, `Native Save As is not supported on ${platform}.`);
     },
     exportCopy: async (request) => {
-      if (!request.targetPath) {
-        return bridgeError(request, "targetPath is required for workbook.export_copy.");
-      }
-      const pathError = validateTargetPath(request.targetPath);
-      if (pathError) {
-        return bridgeError(request, pathError);
+      const prepared = await prepareTargetFileRequest(request, "workbook.export_copy");
+      if (!prepared.ok) {
+        return prepared.response;
       }
       if (platform === "darwin") {
-        return saveCopyAsWithAppleScript(request, execute);
+        return saveCopyAsWithAppleScript(prepared.request, execute);
       }
       if (platform === "win32") {
-        return saveCopyAsWithPowerShell(request, execute);
+        return saveCopyAsWithPowerShell(prepared.request, execute);
       }
       return bridgeError(request, `Native Export Copy is not supported on ${platform}.`);
     }
@@ -165,6 +160,39 @@ async function handleWorkbookFileBridgeHttpRequest(
       error: error instanceof Error ? error.message : String(error)
     });
   }
+}
+
+type PreparedBridgeTarget =
+  | { ok: true; request: WorkbookFileBridgeRequest & { targetPath: string } }
+  | { ok: false; response: WorkbookFileBridgeResponse };
+
+async function prepareTargetFileRequest(
+  request: WorkbookFileBridgeRequest,
+  operation: "workbook.save_as" | "workbook.export_copy"
+): Promise<PreparedBridgeTarget> {
+  if (!request.targetPath) {
+    return { ok: false, response: bridgeError(request, `targetPath is required for ${operation}.`) };
+  }
+  const resolvedTargetPath = path.resolve(request.targetPath);
+  const pathError = validateTargetPath(resolvedTargetPath);
+  if (pathError) {
+    return { ok: false, response: bridgeError(request, pathError) };
+  }
+  try {
+    await mkdir(path.dirname(resolvedTargetPath), { recursive: true });
+  } catch (error) {
+    return {
+      ok: false,
+      response: bridgeError(request, `Failed to create target directory for ${operation}: ${error instanceof Error ? error.message : String(error)}`)
+    };
+  }
+  return {
+    ok: true,
+    request: {
+      ...request,
+      targetPath: resolvedTargetPath
+    }
+  };
 }
 
 async function saveAsWithAppleScript(request: WorkbookFileBridgeRequest, execute: NativeCommandExecutor): Promise<WorkbookFileBridgeResponse> {
@@ -269,6 +297,7 @@ function nativeSaveAsResult(request: WorkbookFileBridgeRequest, result: Awaited<
       operation: request.operation,
       workbookId: request.workbookId,
       targetPath: request.targetPath!,
+      ...(request.sourceBackupId !== undefined ? { sourceBackupId: request.sourceBackupId } : {}),
       filePath: request.targetPath!,
       metadata: {
         stdout: result.stdout.trim()

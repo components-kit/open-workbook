@@ -60,6 +60,8 @@ The helper should return:
 
 The built-in bridge uses AppleScript on macOS and PowerShell COM automation on Windows for `workbook.save_as` and `workbook.export_copy`. `export_copy` calls Excel `SaveCopyAs`, which saves a copy of the workbook without changing the open workbook's file identity. It matches `workbookId` against the open Excel workbook name or full path. Linux returns an explicit unsupported result.
 
+Before invoking Excel automation, the bridge resolves `targetPath` to an absolute path, validates it against `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` when configured, and creates missing parent directories. Successful `export_copy` responses preserve `sourceBackupId` so audit logs can connect the exported file to the safety snapshot captured before the file write.
+
 Set `OPEN_WORKBOOK_FILE_BRIDGE_TIMEOUT_MS` to override the default 30000 ms backend-to-bridge timeout. Set `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` to a path-delimited allowlist of output directories for native Save As and Export Copy. Set `OPEN_WORKBOOK_EXPORT_DIR` to control the default output directory for add-in compressed-file exports.
 
 `excel.runtime.get_status` and `excel.runtime.get_capabilities` include `fileBridge` status, including the configured URL and route path, so agents can check whether native Save As or Export Copy is configured before requesting it.

@@ -51,7 +51,7 @@ describe("Native file bridge server", () => {
     expect(result.ok).toBe(true);
     expect(command).toBe("osascript");
     expect(args).toContain(request.workbookId);
-    expect(args).toContain(request.targetPath);
+    expect(args).toContain(path.resolve(request.targetPath!));
   });
 
   it("routes export_copy requests through the configured adapter", async () => {
@@ -101,7 +101,28 @@ describe("Native file bridge server", () => {
     expect(command).toBe("osascript");
     expect(args.join("\n")).toContain("SaveCopyAs");
     expect(args).toContain(exportRequest.workbookId);
-    expect(args).toContain(exportRequest.targetPath);
+    expect(args).toContain(path.resolve(exportRequest.targetPath!));
+    expect(result?.sourceBackupId).toBe(exportRequest.sourceBackupId);
+    expect(result?.filePath).toBe(path.resolve(exportRequest.targetPath!));
+  });
+
+  it("creates missing parent directories before native file operations", async () => {
+    const targetPath = path.join(tmpdir(), "open-workbook-nested-export", `${Date.now()}`, "copy.xlsx");
+    let executed = false;
+    const adapter = createPlatformNativeHostBridgeAdapter("win32", async (_command, args) => {
+      executed = true;
+      expect(args).toContain(path.resolve(targetPath));
+      return { code: 0, stdout: "copied", stderr: "" };
+    });
+
+    const result = await adapter.exportCopy?.({
+      ...exportRequest,
+      targetPath
+    });
+
+    expect(executed).toBe(true);
+    expect(result?.ok).toBe(true);
+    expect(result?.filePath).toBe(path.resolve(targetPath));
   });
 
   it("blocks Save As targets outside configured allowed directories", async () => {
