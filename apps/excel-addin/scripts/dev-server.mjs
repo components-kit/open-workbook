@@ -6,10 +6,21 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const repoRoot = join(root, "../..");
+const packageScopeRoot = join(repoRoot, "..");
 const publicDir = join(root, "public");
 const workspaceModuleDirs = new Map([
-  ["/workspace/excel-core/", join(repoRoot, "packages/excel-core/dist")],
-  ["/workspace/protocol/", join(repoRoot, "packages/protocol/dist")]
+  ["/workspace/excel-core/", firstExistingPath([
+    join(repoRoot, "packages/excel-core/dist"),
+    join(repoRoot, "../excel-core/dist"),
+    join(repoRoot, "node_modules/@components-kit/open-workbook-excel-core/dist"),
+    join(packageScopeRoot, "open-workbook-excel-core/dist")
+  ])],
+  ["/workspace/protocol/", firstExistingPath([
+    join(repoRoot, "packages/protocol/dist"),
+    join(repoRoot, "../protocol/dist"),
+    join(repoRoot, "node_modules/@components-kit/open-workbook-protocol/dist"),
+    join(packageScopeRoot, "open-workbook-protocol/dist")
+  ])]
 ]);
 const port = Number(process.env.OPEN_WORKBOOK_ADDIN_PORT ?? 37846);
 const host = process.env.OPEN_WORKBOOK_ADDIN_HOST ?? "127.0.0.1";
@@ -73,17 +84,21 @@ function isAllowedPath(filePath) {
   return (
     filePath.startsWith(publicDir) ||
     filePath.startsWith(join(root, "dist")) ||
-    Array.from(workspaceModuleDirs.values()).some((moduleDir) => filePath.startsWith(moduleDir))
+    Array.from(workspaceModuleDirs.values()).some((moduleDir) => moduleDir && filePath.startsWith(moduleDir))
   );
 }
 
 function resolveWorkspaceModule(pathname) {
   for (const [prefix, moduleDir] of workspaceModuleDirs) {
-    if (pathname.startsWith(prefix)) {
+    if (moduleDir && pathname.startsWith(prefix)) {
       return join(moduleDir, pathname.slice(prefix.length));
     }
   }
   return undefined;
+}
+
+function firstExistingPath(paths) {
+  return paths.find((path) => existsSync(path));
 }
 
 function rewriteBrowserImports(source) {

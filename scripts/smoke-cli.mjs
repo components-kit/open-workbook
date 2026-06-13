@@ -2,7 +2,7 @@
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 const cli = "packages/cli/dist/index.js";
 const tempDir = mkdtempSync(join(tmpdir(), "open-workbook-cli-smoke-"));
@@ -120,6 +120,8 @@ for (const check of checks) {
   }
 }
 
+await smokePackagedAddinServer();
+
 if (failures.length > 0) {
   console.error("CLI smoke failed.");
   for (const failure of failures) {
@@ -134,4 +136,71 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(`CLI smoke passed: ${checks.length} command(s).`);
+console.log(`CLI smoke passed: ${checks.length + 1} command(s).`);
+
+async function smokePackagedAddinServer() {
+  const port = 37977;
+  const server = spawn(process.execPath, ["packages/cli/assets/excel-addin/scripts/dev-server.mjs"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      OPEN_WORKBOOK_ADDIN_PORT: String(port)
+    }
+  });
+  let stdout = "";
+  let stderr = "";
+  server.stdout?.on("data", (chunk) => {
+    stdout += String(chunk);
+  });
+  server.stderr?.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+
+  try {
+    await waitForHttp(`http://127.0.0.1:${port}/taskpane.html`);
+    const moduleChecks = await Promise.all([
+      fetchText(`http://127.0.0.1:${port}/workspace/excel-core/index.js`),
+      fetchText(`http://127.0.0.1:${port}/workspace/protocol/index.js`)
+    ]);
+    if (!moduleChecks.every((body) => body.includes("export"))) {
+      failures.push({
+        name: "packaged addin server workspace modules",
+        status: 1,
+        stdout,
+        stderr: `Expected workspace module endpoints to serve JavaScript exports.\n${stderr}`
+      });
+    }
+  } catch (error) {
+    failures.push({
+      name: "packaged addin server workspace modules",
+      status: server.exitCode,
+      stdout,
+      stderr: `${error instanceof Error ? error.message : String(error)}\n${stderr}`.trim()
+    });
+  } finally {
+    server.kill();
+  }
+}
+
+async function waitForHttp(url) {
+  const deadline = Date.now() + 5_000;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      await fetchText(url);
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  throw lastError ?? new Error(`Timed out waiting for ${url}`);
+}
+
+async function fetchText(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`${url} returned ${response.status}`);
+  }
+  return response.text();
+}

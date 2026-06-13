@@ -1,6 +1,6 @@
 {
   "name": "@components-kit/open-workbook-protocol",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Shared Open Workbook protocol types, tool catalog, resources, prompts, and JSON-RPC contracts.",
   "license": "MIT",
   "type": "module",

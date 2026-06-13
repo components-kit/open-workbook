@@ -4,6 +4,13 @@ All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
 
+## [0.1.1] - 2026-06-13
+
+### Fixed
+
+- Fixed npm-packaged Excel taskpane runtime module loading by resolving browser workspace module imports from installed `@components-kit` dependency packages.
+- Added a CLI smoke check that starts the packaged add-in server and verifies taskpane workspace module endpoints return JavaScript instead of 404 responses.
+
 ## [0.1.0] - 2026-06-13
 
 ### Added

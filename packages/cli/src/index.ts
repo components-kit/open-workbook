@@ -38,7 +38,7 @@ const dependencyPaths = {
 
 const program = new Command();
 
-program.name("owb").description("Open Workbook local CLI").version("0.1.0");
+program.name("owb").description("Open Workbook local CLI").version("0.1.1");
 
 program
   .command("mcp")

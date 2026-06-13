@@ -108,7 +108,7 @@ const runtime = await createRuntimeFacade();
 
 const server = new McpServer({
   name: "open-workbook",
-  version: "0.1.0"
+  version: "0.1.1"
 });
 
 registerRuntimeTools(server);

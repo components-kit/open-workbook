@@ -6703,7 +6703,7 @@ function disconnectedRuntimeCapabilities(): RuntimeCapabilities {
   return {
     engine: {
       name: "open-workbook-daemon",
-      version: "0.1.0",
+      version: "0.1.1",
       platform: "unknown"
     },
     apiSets: [],
