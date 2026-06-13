@@ -4,6 +4,19 @@ All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
 
+## [0.1.2] - 2026-06-13
+
+### Added
+
+- Added version-aware local runtime checks so `owb mcp` fails fast instead of silently reusing an older running Excel taskpane asset server.
+- Added add-in server `/status` metadata with runtime version, process id, taskpane/backend URLs, and packaged workspace module health.
+- Added `setup` and `doctor` update notices that warn when a newer `@components-kit/open-workbook` npm version is available and remind users to restart their MCP host after upgrading.
+
+### Changed
+
+- Runtime status now includes backend package/version/process metadata, and MCP server metadata follows the CLI-launched package version.
+- CLI smoke coverage now verifies packaged add-in server health, stale-runtime rejection, and upgrade notice output.
+
 ## [0.1.1] - 2026-06-13
 
 ### Fixed

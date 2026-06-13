@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import { createServer } from "node:http";
 
 const cli = "packages/cli/dist/index.js";
 const tempDir = mkdtempSync(join(tmpdir(), "open-workbook-cli-smoke-"));
@@ -34,7 +35,8 @@ const checks = [
       result.stdout.includes("npx skills add components-kit/open-workbook --skill open-workbook-excel") &&
       result.stdout.includes("\"mcp\"") &&
       result.stdout.includes("instructions.md") &&
-      result.stdout.includes("setup-manifest.xml")
+      result.stdout.includes("setup-manifest.xml") &&
+      result.stdout.includes("restart the agent UI or MCP host")
   },
   {
     name: "instructions",
@@ -107,6 +109,7 @@ for (const check of checks) {
     encoding: "utf8",
     env: {
       ...process.env,
+      OPEN_WORKBOOK_DISABLE_UPDATE_CHECK: "1",
       OPEN_WORKBOOK_STATE_DIR: join(tempDir, "state")
     }
   });
@@ -121,6 +124,8 @@ for (const check of checks) {
 }
 
 await smokePackagedAddinServer();
+await smokeStaleAddinServerGuard();
+await smokeLatestVersionNotice();
 
 if (failures.length > 0) {
   console.error("CLI smoke failed.");
@@ -136,7 +141,7 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(`CLI smoke passed: ${checks.length + 1} command(s).`);
+console.log(`CLI smoke passed: ${checks.length + 3} command(s).`);
 
 async function smokePackagedAddinServer() {
   const port = 37977;
@@ -158,21 +163,28 @@ async function smokePackagedAddinServer() {
 
   try {
     await waitForHttp(`http://127.0.0.1:${port}/taskpane.html`);
+    const status = JSON.parse(await fetchText(`http://127.0.0.1:${port}/status`));
     const moduleChecks = await Promise.all([
       fetchText(`http://127.0.0.1:${port}/workspace/excel-core/index.js`),
       fetchText(`http://127.0.0.1:${port}/workspace/protocol/index.js`)
     ]);
-    if (!moduleChecks.every((body) => body.includes("export"))) {
+    if (
+      status.service !== "open-workbook-addin-server" ||
+      typeof status.version !== "string" ||
+      status.workspaceModules?.["excel-core"]?.available !== true ||
+      status.workspaceModules?.protocol?.available !== true ||
+      !moduleChecks.every((body) => body.includes("export"))
+    ) {
       failures.push({
-        name: "packaged addin server workspace modules",
+        name: "packaged addin server status and workspace modules",
         status: 1,
         stdout,
-        stderr: `Expected workspace module endpoints to serve JavaScript exports.\n${stderr}`
+        stderr: `Expected status and workspace module endpoints to report healthy JavaScript assets.\nstatus=${JSON.stringify(status)}\n${stderr}`
       });
     }
   } catch (error) {
     failures.push({
-      name: "packaged addin server workspace modules",
+      name: "packaged addin server status and workspace modules",
       status: server.exitCode,
       stdout,
       stderr: `${error instanceof Error ? error.message : String(error)}\n${stderr}`.trim()
@@ -180,6 +192,106 @@ async function smokePackagedAddinServer() {
   } finally {
     server.kill();
   }
+}
+
+async function smokeStaleAddinServerGuard() {
+  const port = 37978;
+  const server = createServer((request, response) => {
+    if (request.url === "/status") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, service: "open-workbook-addin-server", version: "0.0.1" }));
+      return;
+    }
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "not_found" }));
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
+
+  try {
+    const result = await spawnCli(["mcp"], {
+      OPEN_WORKBOOK_ADDIN_PORT: String(port),
+      OPEN_WORKBOOK_DISABLE_UPDATE_CHECK: "1",
+      OPEN_WORKBOOK_STATE_DIR: join(tempDir, "stale-state")
+    });
+    if (result.status !== 1 || !result.stderr.includes("add-in server 0.0.1") || !result.stderr.includes("Restart your MCP host")) {
+      failures.push({
+        name: "stale addin server guard",
+        status: result.status,
+        stdout: result.stdout,
+        stderr: result.stderr
+      });
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function smokeLatestVersionNotice() {
+  const port = 37979;
+  const server = createServer((request, response) => {
+    if (request.url === "/latest") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ version: "99.0.0" }));
+      return;
+    }
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "not_found" }));
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
+
+  try {
+    const result = await spawnCli(["doctor"], {
+      OPEN_WORKBOOK_ADDIN_PORT: "37980",
+      OPEN_WORKBOOK_UPDATE_CHECK_URL: `http://127.0.0.1:${port}/latest`,
+      OPEN_WORKBOOK_STATE_DIR: join(tempDir, "update-check-state")
+    });
+    if (result.status !== 0 || !result.stdout.includes("Open Workbook 99.0.0 is available") || !result.stdout.includes("Upgrade/setup: npx -y @components-kit/open-workbook@latest setup")) {
+      failures.push({
+        name: "latest version notice",
+        status: result.status,
+        stdout: result.stdout,
+        stderr: result.stderr
+      });
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+function spawnCli(args, env) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [cli, ...args], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        ...env
+      }
+    });
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill();
+      resolve({ status: -1, stdout, stderr: `${stderr}\nTimed out waiting for CLI process.`.trim() });
+    }, 5_000);
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timeout);
+      resolve({ status: code, stdout, stderr });
+    });
+  });
 }
 
 async function waitForHttp(url) {

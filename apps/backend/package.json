@@ -1,6 +1,6 @@
 {
   "name": "@components-kit/open-workbook-backend",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Local backend broker for Open Workbook add-in sessions, backups, snapshots, plans, and permissions.",
   "license": "MIT",
   "type": "module",

@@ -150,6 +150,8 @@ import type { AddinRpcClient } from "./addin-rpc-client.js";
 import { NativeFileBridge } from "./native-file-bridge.js";
 import { RuntimeStateStore } from "./state-store.js";
 
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.2";
+
 export interface RuntimeServiceOptions {
   stateDir?: string;
   persistState?: boolean;
@@ -1152,6 +1154,12 @@ export class RuntimeService {
     const activeSession = this.sessions.getActive();
     return {
       ok: true,
+      runtime: {
+        service: "open-workbook-backend",
+        packageName: "@components-kit/open-workbook-backend",
+        version: runtimeVersion,
+        pid: process.pid
+      },
       activeAddinConnected: Boolean(activeSession),
       fileBridge: this.fileBridge.getStatus(),
       sessions: this.sessions.list(),
@@ -6703,7 +6711,7 @@ function disconnectedRuntimeCapabilities(): RuntimeCapabilities {
   return {
     engine: {
       name: "open-workbook-daemon",
-      version: "0.1.1",
+      version: runtimeVersion,
       platform: "unknown"
     },
     apiSets: [],

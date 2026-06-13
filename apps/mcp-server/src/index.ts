@@ -105,10 +105,11 @@ const STYLE_COPY_TOOL_DIMENSIONS: Record<string, StyleDimension> = {
 };
 
 const runtime = await createRuntimeFacade();
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.2";
 
 const server = new McpServer({
   name: "open-workbook",
-  version: "0.1.1"
+  version: runtimeVersion
 });
 
 registerRuntimeTools(server);

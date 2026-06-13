@@ -10,6 +10,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../../..");
 const packageRoot = resolve(__dirname, "..");
 const publicPackageName = "@components-kit/open-workbook";
+const currentVersion = readPackageVersion([join(packageRoot, "package.json"), join(repoRoot, "package.json")]) ?? "0.1.2";
 const instructionFileName = "open-workbook-excel.md";
 const sourcePaths = {
   mcpServer: resolve(repoRoot, "apps/mcp-server/dist/index.js"),
@@ -38,7 +39,7 @@ const dependencyPaths = {
 
 const program = new Command();
 
-program.name("owb").description("Open Workbook local CLI").version("0.1.1");
+program.name("owb").description("Open Workbook local CLI").version(currentVersion);
 
 program
   .command("mcp")
@@ -76,7 +77,7 @@ program
   .option("--manifest-out <path>", "Manifest path for non-macOS setup", defaultSetupManifestPath())
   .option("--addin-url <url>", "Taskpane base URL", defaultAddinUrl())
   .option("--backend-url <url>", "Backend WebSocket URL", defaultBackendUrl())
-  .action((options: { dryRun?: boolean; instructionsOut: string; manifestOut: string; addinUrl: string; backendUrl: string }) => {
+  .action(async (options: { dryRun?: boolean; instructionsOut: string; manifestOut: string; addinUrl: string; backendUrl: string }) => {
     const instructionsPath = resolve(options.instructionsOut);
     const manifestPath = setupManifestPath(options.manifestOut);
     const instructions = generateGenericInstructions();
@@ -107,6 +108,8 @@ program
     console.log("");
     console.log("The fallback instruction file above is for clients that do not support skills.sh.");
     console.log("Start the agent UI before opening the Excel add-in so `npx ... mcp` can serve the taskpane and backend.");
+    console.log("After upgrading Open Workbook, restart the agent UI or MCP host so `@latest` starts the new runtime.");
+    await printLatestVersionNotice();
   });
 
 program
@@ -401,7 +404,7 @@ program
 program
   .command("doctor")
   .description("Check local Open Workbook install assets")
-  .action(() => {
+  .action(async () => {
     const checks = [
       checkPath("MCP server", resolveAsset("mcpServer")),
       checkPath("Backend daemon", resolveAsset("backend")),
@@ -420,6 +423,8 @@ program
     console.log(`Taskpane URL: ${defaultAddinUrl()}`);
     console.log(`Backend URL: ${defaultBackendUrl()}`);
     console.log(`File bridge URL: ${defaultFileBridgeUrl()}`);
+    await printAddinServerStatus(defaultAddinUrl());
+    await printLatestVersionNotice();
   });
 
 program.parse();
@@ -454,7 +459,7 @@ function runNode(entrypoint: string, args: string[] = [], companionProcesses: Ch
 
   const child = spawn(process.execPath, [entrypoint, ...args], {
     stdio: "inherit",
-    env: process.env
+    env: childEnv()
   });
 
   process.once("SIGINT", () => {
@@ -476,8 +481,31 @@ function runNode(entrypoint: string, args: string[] = [], companionProcesses: Ch
 }
 
 async function startAddinServerIfNeeded(): Promise<ChildProcess | undefined> {
-  if (await urlAvailable(defaultAddinUrl())) {
-    return undefined;
+  const addinUrl = defaultAddinUrl();
+  const status = await fetchAddinServerStatus(addinUrl);
+  if (status.kind === "open-workbook") {
+    if (status.version === currentVersion) {
+      return undefined;
+    }
+    fail(
+      [
+        `Open Workbook add-in server ${status.version} is already running at ${addinUrl}, but this CLI is ${currentVersion}.`,
+        "Restart your MCP host or agent UI so it starts the new runtime.",
+        `Then run: npx -y ${publicPackageName}@latest mcp`
+      ].join("\n")
+    );
+  }
+  if (status.kind === "unknown") {
+    fail(
+      [
+        `A server is already running at ${addinUrl}, but it did not identify as the current Open Workbook add-in server.`,
+        "This is usually a stale Open Workbook runtime from an older npm version.",
+        "Restart your MCP host or agent UI, or stop the process using that port, then try again."
+      ].join("\n")
+    );
+  }
+  if (await urlAvailable(addinUrl)) {
+    fail(`A non-Open Workbook server is already responding at ${addinUrl}. Stop that process or set OPEN_WORKBOOK_ADDIN_PORT to another port.`);
   }
   const entrypoint = resolveAsset("addinServer");
   if (!existsSync(entrypoint)) {
@@ -485,8 +513,36 @@ async function startAddinServerIfNeeded(): Promise<ChildProcess | undefined> {
   }
   return spawn(process.execPath, [entrypoint], {
     stdio: ["ignore", "ignore", "inherit"],
-    env: process.env
+    env: childEnv()
   });
+}
+
+function childEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    OPEN_WORKBOOK_VERSION: process.env.OPEN_WORKBOOK_VERSION ?? currentVersion
+  };
+}
+
+type AddinServerStatus =
+  | { kind: "absent" }
+  | { kind: "unknown"; statusCode?: number }
+  | { kind: "open-workbook"; version: string; payload: Record<string, unknown> };
+
+async function fetchAddinServerStatus(addinUrl: string): Promise<AddinServerStatus> {
+  try {
+    const response = await fetch(`${trimTrailingSlash(addinUrl)}/status`);
+    if (!response.ok) {
+      return { kind: "unknown", statusCode: response.status };
+    }
+    const payload = await response.json().catch(() => undefined) as Record<string, unknown> | undefined;
+    if (payload?.service === "open-workbook-addin-server" && typeof payload.version === "string") {
+      return { kind: "open-workbook", version: payload.version, payload };
+    }
+    return { kind: "unknown", statusCode: response.status };
+  } catch {
+    return { kind: "absent" };
+  }
 }
 
 async function urlAvailable(url: string): Promise<boolean> {
@@ -495,6 +551,23 @@ async function urlAvailable(url: string): Promise<boolean> {
     return response.ok;
   } catch {
     return false;
+  }
+}
+
+async function printAddinServerStatus(addinUrl: string): Promise<void> {
+  const status = await fetchAddinServerStatus(addinUrl);
+  if (status.kind === "absent") {
+    console.log("Add-in server: not running");
+    return;
+  }
+  if (status.kind === "unknown") {
+    console.log(`Add-in server: unknown service at ${addinUrl}`);
+    return;
+  }
+  const marker = status.version === currentVersion ? "ok" : "stale";
+  console.log(`Add-in server: ${marker} ${status.version} at ${addinUrl}`);
+  if (status.version !== currentVersion) {
+    console.log("Restart the agent UI or MCP host before loading the Excel add-in.");
   }
 }
 
@@ -558,6 +631,87 @@ function genericMcpConfig(): unknown {
       }
     }
   };
+}
+
+async function printLatestVersionNotice(): Promise<void> {
+  const latest = await fetchLatestPackageVersion();
+  if (latest.status === "disabled") {
+    return;
+  }
+  if (latest.status === "unavailable") {
+    console.log(`Update check: unavailable (${latest.reason})`);
+    return;
+  }
+  if (compareSemver(latest.version, currentVersion) <= 0) {
+    console.log(`Update check: current ${currentVersion}`);
+    return;
+  }
+  console.log("");
+  console.log(`Open Workbook ${latest.version} is available. Current CLI: ${currentVersion}.`);
+  console.log(`Upgrade/setup: npx -y ${publicPackageName}@latest setup`);
+  console.log("After upgrading, restart OpenCode or your MCP host so it starts the new runtime.");
+}
+
+type LatestVersionResult =
+  | { status: "disabled" }
+  | { status: "unavailable"; reason: string }
+  | { status: "available"; version: string };
+
+async function fetchLatestPackageVersion(): Promise<LatestVersionResult> {
+  if (process.env.OPEN_WORKBOOK_DISABLE_UPDATE_CHECK === "1") {
+    return { status: "disabled" };
+  }
+  try {
+    const registryUrl = process.env.OPEN_WORKBOOK_UPDATE_CHECK_URL ?? `https://registry.npmjs.org/${encodeURIComponent(publicPackageName)}/latest`;
+    const response = await fetch(registryUrl, {
+      signal: AbortSignal.timeout(1_500)
+    });
+    if (!response.ok) {
+      return { status: "unavailable", reason: `${response.status} ${response.statusText}` };
+    }
+    const payload = await response.json().catch(() => undefined) as { version?: unknown } | undefined;
+    if (typeof payload?.version !== "string") {
+      return { status: "unavailable", reason: "registry response did not include a version" };
+    }
+    return { status: "available", version: payload.version };
+  } catch (error) {
+    return { status: "unavailable", reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function compareSemver(left: string, right: string): number {
+  const leftParts = parseSemverCore(left);
+  const rightParts = parseSemverCore(right);
+  for (let index = 0; index < 3; index += 1) {
+    const delta = leftParts[index]! - rightParts[index]!;
+    if (delta !== 0) {
+      return delta;
+    }
+  }
+  return 0;
+}
+
+function parseSemverCore(value: string): [number, number, number] {
+  const core = value.split("-", 1)[0] ?? "";
+  const parts = core.split(".").map((part) => Number.parseInt(part, 10));
+  return [
+    Number.isFinite(parts[0]) ? parts[0]! : 0,
+    Number.isFinite(parts[1]) ? parts[1]! : 0,
+    Number.isFinite(parts[2]) ? parts[2]! : 0
+  ];
+}
+
+function readPackageVersion(paths: string[]): string | undefined {
+  for (const packageJsonPath of paths) {
+    if (!existsSync(packageJsonPath)) {
+      continue;
+    }
+    const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { version?: unknown };
+    if (typeof parsed.version === "string") {
+      return parsed.version;
+    }
+  }
+  return undefined;
 }
 
 function printManifestNextSteps(manifestPath: string): void {

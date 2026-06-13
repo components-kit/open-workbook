@@ -26,6 +26,7 @@ const port = Number(process.env.OPEN_WORKBOOK_ADDIN_PORT ?? 37846);
 const host = process.env.OPEN_WORKBOOK_ADDIN_HOST ?? "127.0.0.1";
 const httpsEnabled = process.env.OPEN_WORKBOOK_ADDIN_HTTPS === "1" || process.env.OPEN_WORKBOOK_ADDIN_PROTOCOL === "https";
 const protocol = httpsEnabled ? "https" : "http";
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? readPackageVersion() ?? "0.1.1";
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -37,6 +38,14 @@ const contentTypes = new Map([
 
 const requestHandler = (request, response) => {
   const url = new URL(request.url ?? "/", `${protocol}://${host}:${port}`);
+  if (request.method === "GET" && url.pathname === "/status") {
+    response.writeHead(200, {
+      "content-type": "application/json",
+      "cache-control": "no-store"
+    });
+    response.end(JSON.stringify(getStatus()));
+    return;
+  }
   if (url.pathname.startsWith("/assets/icon-") && url.pathname.endsWith(".png")) {
     response.writeHead(200, {
       "content-type": "image/png",
@@ -109,6 +118,26 @@ function rewriteBrowserImports(source) {
     .replaceAll("'@components-kit/open-workbook-protocol'", "'/workspace/protocol/index.js'");
 }
 
+function getStatus() {
+  const addinUrl = trimTrailingSlash(process.env.OPEN_WORKBOOK_ADDIN_URL ?? `${protocol}://${host}:${port}`);
+  const backendUrl = process.env.OPEN_WORKBOOK_BACKEND_URL ?? `ws://${process.env.OPEN_WORKBOOK_HOST ?? "127.0.0.1"}:${process.env.OPEN_WORKBOOK_PORT ?? 37845}${process.env.OPEN_WORKBOOK_ADDIN_PATH ?? "/addin"}`;
+  return {
+    ok: true,
+    service: "open-workbook-addin-server",
+    packageName: "@components-kit/open-workbook",
+    version: runtimeVersion,
+    pid: process.pid,
+    taskpaneUrl: `${addinUrl}/taskpane.html?backendUrl=${encodeURIComponent(backendUrl)}`,
+    backendUrl,
+    workspaceModules: Object.fromEntries(
+      Array.from(workspaceModuleDirs.entries()).map(([prefix, moduleDir]) => [
+        prefix.replace(/^\/workspace\//, "").replace(/\/$/, ""),
+        { available: Boolean(moduleDir) }
+      ])
+    )
+  };
+}
+
 function generateManifest() {
   const addinUrl = trimTrailingSlash(process.env.OPEN_WORKBOOK_ADDIN_URL ?? `${protocol}://${host}:${port}`);
   const backendUrl = process.env.OPEN_WORKBOOK_BACKEND_URL ?? `ws://${process.env.OPEN_WORKBOOK_HOST ?? "127.0.0.1"}:${process.env.OPEN_WORKBOOK_PORT ?? 37845}${process.env.OPEN_WORKBOOK_ADDIN_PATH ?? "/addin"}`;
@@ -137,6 +166,23 @@ function readHttpsOptions() {
 
 function trimTrailingSlash(value) {
   return value.endsWith("/") ? value.slice(0, -1) : value;
+}
+
+function readPackageVersion() {
+  for (const packageJsonPath of [join(root, "package.json"), join(repoRoot, "package.json")]) {
+    if (!existsSync(packageJsonPath)) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+      if (typeof parsed.version === "string") {
+        return parsed.version;
+      }
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 const ICON_PNG_BASE64 =
