@@ -1,0 +1,66 @@
+# Open Workbook
+
+> Local-first MCP runtime for fast, reversible, template-aware Excel automation through Office.js, a local backend, and MCP clients such as OpenCode.
+
+Open Workbook lets agents work with live desktop Excel workbooks while preserving templates, styling, formulas, filters, tables, charts, pivots, backups, rollback records, permissions, and multi-agent transaction safety. It is designed for local-first workflows where teams can use OpenRouter or any MCP-capable agent without locking Excel automation to one frontier AI provider.
+
+Key patterns:
+- **Local-first Excel runtime**: MCP server, backend broker, Office.js add-in, and CLI run locally.
+- **Safety lifecycle**: Mutations go through permissions, scoped locks, snapshots, backups, fingerprint checks, Office.js execution, validation, audit events, and rollback metadata.
+- **Template fidelity**: Registered templates, style fingerprints, formula pattern checks, table/filter/sort preservation, validation, and repair workflows.
+- **Fast reads/writes**: Range and batch operations use Office.js payloads instead of per-cell automation.
+- **Multi-agent coordination**: Task registry, leases, transaction queue, conflict guidance, rollback preview, and rollback chains.
+- **Capability honesty**: Host-limited Office.js paths return explicit warnings or `CAPABILITY_UNAVAILABLE` instead of pretending to work.
+
+Install from source:
+
+```bash
+git clone https://github.com/open-workbook/open-workbook.git
+cd open-workbook
+corepack pnpm install
+corepack pnpm build
+node packages/cli/dist/index.js doctor
+```
+
+Common installed commands:
+
+```bash
+owb doctor
+owb daemon start
+owb file-bridge start
+owb mcp
+owb addin serve
+owb sideload mac
+owb sideload windows --out open-workbook.xml
+owb opencode config --id open-workbook --agent-name finance-agent
+```
+
+## Docs
+
+- [Full LLM Reference](https://raw.githubusercontent.com/open-workbook/open-workbook/main/llms-full.txt): Complete generated project reference in one file
+- [README](https://github.com/open-workbook/open-workbook/blob/main/README.md): Project overview, architecture, setup, and safety contract
+- [Installation](https://github.com/open-workbook/open-workbook/blob/main/docs/installation.md): Local install and startup flow
+- [Tool Surface](https://github.com/open-workbook/open-workbook/blob/main/docs/tool-surface.md): Stable, preview, and capability-limited MCP tools
+- [Architecture](https://github.com/open-workbook/open-workbook/blob/main/docs/architecture.md): Runtime components and catalog policy
+- [Backup Lifecycle](https://github.com/open-workbook/open-workbook/blob/main/docs/backup-lifecycle.md): Snapshot, file backup, restore, retention, and rollback model
+- [Template System](https://github.com/open-workbook/open-workbook/blob/main/docs/template-system.md): Template detection, registration, creation, validation, and repair
+- [Style Fidelity](https://github.com/open-workbook/open-workbook/blob/main/docs/style-fidelity.md): Style fingerprints and native Office.js format copy behavior
+- [Formula Intelligence](https://github.com/open-workbook/open-workbook/blob/main/docs/formula-intelligence.md): Formula patterns, dependencies, validation, repair, and explanations
+- [Tables, Filters, and Sorts](https://github.com/open-workbook/open-workbook/blob/main/docs/table-filter-sort.md): Table, filter, and sort operations
+- [PivotTables and Charts](https://github.com/open-workbook/open-workbook/blob/main/docs/pivot-chart.md): Pivot/chart creation, validation, fingerprints, repair, and capability limits
+- [Multi-Agent Runtime](https://github.com/open-workbook/open-workbook/blob/main/docs/multi-agent-runtime.md): Tasks, locks, serialized commits, conflicts, and rollback chains
+- [Workbook File Lifecycle](https://github.com/open-workbook/open-workbook/blob/main/docs/workbook-file-lifecycle.md): Save-as, export copy, native file bridge, and full-file backup restore
+- [Performance Contract](https://github.com/open-workbook/open-workbook/blob/main/docs/performance.md): Batch sizing and latency expectations
+- [Production Readiness](https://github.com/open-workbook/open-workbook/blob/main/docs/production-readiness.md): Release gates and known host limitations
+- [OpenCode Configuration](https://github.com/open-workbook/open-workbook/blob/main/docs/opencode.md): OpenCode MCP setup
+- [Sideloading](https://github.com/open-workbook/open-workbook/blob/main/docs/sideloading.md): Excel add-in sideloading on macOS and Windows
+
+## Packages
+
+- [@open-workbook/protocol](https://github.com/open-workbook/open-workbook/tree/main/packages/protocol): Tool catalog, JSON-RPC contracts, resources, prompts, errors, and workbook types
+- [@open-workbook/excel-core](https://github.com/open-workbook/open-workbook/tree/main/packages/excel-core): Planning, backups, snapshots, templates, fingerprints, permissions, locks, and transactions
+- [@open-workbook/office-js-engine](https://github.com/open-workbook/open-workbook/tree/main/packages/office-js-engine): Office.js engine adapter contracts
+- [@open-workbook/cli](https://github.com/open-workbook/open-workbook/tree/main/packages/cli): `owb` CLI for MCP, daemon, add-in serving, sideloading, diagnostics, and config generation
+- [@open-workbook/backend](https://github.com/open-workbook/open-workbook/tree/main/apps/backend): Local broker and runtime service
+- [@open-workbook/mcp-server](https://github.com/open-workbook/open-workbook/tree/main/apps/mcp-server): MCP stdio server
+- [@open-workbook/excel-addin](https://github.com/open-workbook/open-workbook/tree/main/apps/excel-addin): Office.js add-in runtime

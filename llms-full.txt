@@ -1,0 +1,2267 @@
+# Open Workbook
+
+> Local-first MCP runtime for fast, reversible, template-aware Excel automation through Office.js, a local backend, and MCP clients such as OpenCode.
+
+This file is generated for LLM and agent context. It combines the project README, core documentation, and workspace package READMEs into one reference.
+
+## Quick Start
+
+```bash
+corepack pnpm install
+corepack pnpm build
+node packages/cli/dist/index.js doctor
+node packages/cli/dist/index.js daemon start
+node packages/cli/dist/index.js mcp
+node packages/cli/dist/index.js addin serve
+```
+
+## Production Rules
+
+- Use stable MCP tools by default.
+- Use `excel.runtime.get_capabilities` to inspect tool catalog and host capabilities.
+- Use `excel.plan.*` or `excel.batch.*` for rollback-aware mutations.
+- Do not bypass permissions, snapshots, backups, fingerprint checks, or transaction logging.
+- Treat Office.js host limitations as capability-status metadata, not silent success.
+- For multi-agent work, use tasks, locks, serialized transactions, conflict guidance, and rollback previews.
+
+
+---
+
+Source: README.md
+
+## Open Workbook
+
+Open Workbook is a local-first MCP runtime for fast, reversible, template-aware Excel automation. It connects MCP clients such as OpenCode to live desktop Excel workbooks through an Office.js add-in and a local TypeScript backend, so teams can use OpenRouter or any MCP-capable agent without being locked into one frontier model vendor.
+
+## Why
+
+Daily spreadsheet work usually does not need the largest model available, but it does need reliable workbook handling. Open Workbook focuses on the parts generic agents often break:
+
+- preserving templates, headers, formulas, filters, tables, print layout, and styling
+- batching reads and writes through Office.js instead of slow per-cell automation
+- creating backups and rollback paths before changing workbooks
+- keeping workbook data local unless a user explicitly sends it elsewhere
+- exposing clear capability status for unsupported or host-limited Excel operations
+
+## Current Status
+
+The project is publishable for local development, MCP integration, and sideloaded desktop Excel testing on macOS and Windows. It is not a Microsoft AppSource add-in and does not attempt to install itself into Excel without user or admin trust approval.
+
+Stable areas include runtime connection, workbook/sheet/range operations, reversible batches, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, and OpenCode config generation. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
+
+The multi-agent foundation is implemented through a shared `owb daemon`: tasks, agent records, task progress and blockers, scoped locks with lease policy, serialized transactions, collaboration events, transaction audit records, conservative rollback previews, confirmed rollback chains, and safe plan refresh/rebase checks are available to multiple MCP adapters at once.
+
+## Architecture
+
+```text
+MCP client / agent
+       |
+       v
+apps/mcp-server  -- stdio MCP server
+       |
+       v
+apps/backend     -- local WebSocket broker, plans, backups, snapshots
+       |
+       v
+apps/excel-addin -- Office.js taskpane loaded by desktop Excel
+       |
+       v
+Excel workbook
+```
+
+Shared packages:
+
+- `packages/protocol`: tool catalog, JSON-RPC contracts, resources, prompts, errors, and workbook types
+- `packages/excel-core`: range parsing, planning, backups, snapshots, templates, permissions, fingerprints, and diffs
+- `packages/office-js-engine`: Office.js execution interface and defaults
+- `packages/cli`: `owb` CLI for running MCP, serving the add-in, generating manifests, sideloading, and diagnostics
+
+## Requirements
+
+- Node.js `>=20.11`
+- pnpm through Corepack
+- Desktop Microsoft Excel on macOS or Windows
+- An MCP client such as OpenCode
+- Network access only for installing packages or using whichever model provider your MCP client calls
+
+## Install From Source
+
+```bash
+git clone https://github.com/open-workbook/open-workbook.git
+cd open-workbook
+corepack pnpm install
+corepack pnpm build
+node packages/cli/dist/index.js doctor
+```
+
+Run the shared daemon:
+
+```bash
+node packages/cli/dist/index.js daemon start
+```
+
+Run the MCP adapter in another terminal:
+
+```bash
+node packages/cli/dist/index.js mcp
+```
+
+Serve the Excel add-in assets in a separate terminal:
+
+```bash
+node packages/cli/dist/index.js addin serve
+```
+
+Generate OpenCode config:
+
+```bash
+node packages/cli/dist/index.js opencode config --id open-workbook --command "node packages/cli/dist/index.js"
+```
+
+For an installed package, the same commands become:
+
+```bash
+owb doctor
+owb daemon start
+owb file-bridge start
+owb mcp
+owb addin serve
+owb opencode config --id open-workbook --agent-name finance-agent
+```
+
+## Sideload Excel Add-in
+
+macOS:
+
+```bash
+owb sideload mac
+```
+
+Windows:
+
+```bash
+owb sideload windows --out open-workbook.xml
+```
+
+Windows Excel uses a trusted shared-folder add-in catalog. Create a folder, share it, copy the generated manifest into that shared folder, add the UNC path in Excel Trust Center, select `Show in Menu`, restart Excel, and insert the add-in from Shared Folder.
+
+More detail is in [Local Excel Add-in Sideloading](docs/sideloading.md).
+
+## Runtime URLs
+
+Defaults:
+
+- Add-in taskpane: `http://127.0.0.1:37846/taskpane.html`
+- Add-in backend: `ws://127.0.0.1:37845/addin`
+- Native file bridge: `http://127.0.0.1:37847`
+
+Environment overrides:
+
+- `OPEN_WORKBOOK_ADDIN_HOST`
+- `OPEN_WORKBOOK_ADDIN_PORT`
+- `OPEN_WORKBOOK_ADDIN_URL`
+- `OPEN_WORKBOOK_HOST`
+- `OPEN_WORKBOOK_PORT`
+- `OPEN_WORKBOOK_ADDIN_PATH`
+- `OPEN_WORKBOOK_BACKUP_DIR`
+- `OPEN_WORKBOOK_EXPORT_DIR`
+- `OPEN_WORKBOOK_STATE_DIR`
+- `OPEN_WORKBOOK_FILE_BRIDGE_URL`
+- `OPEN_WORKBOOK_FILE_BRIDGE_PORT`
+- `OPEN_WORKBOOK_PREVIEW_TOOLS=1`
+
+## Common Commands
+
+```bash
+corepack pnpm check
+corepack pnpm test
+corepack pnpm build
+corepack pnpm verify
+corepack pnpm pack:dry-run
+node packages/cli/dist/index.js paths
+node packages/cli/dist/index.js daemon status
+node packages/cli/dist/index.js file-bridge status
+node packages/cli/dist/index.js sideload manifest --out open-workbook.xml
+```
+
+## Safety Contract
+
+Mutating operations should follow the same lifecycle:
+
+1. Resolve workbook, sheet, and range targets.
+2. Validate permissions, locked regions, and destructive-action policy.
+3. Capture affected-region snapshots.
+4. Create backups for rollback.
+5. Compile writes into batch operations.
+6. Check target fingerprints immediately before apply.
+7. Apply through Office.js.
+8. Validate template, style, formula, table, filter, and layout invariants where requested.
+9. Return telemetry, warnings, diff summaries, and rollback IDs.
+10. Roll back through stored snapshots when requested or when repair workflows fail validation.
+
+## Documentation
+
+- [Installation](docs/installation.md)
+- [Architecture](docs/architecture.md)
+- [Tool Surface](docs/tool-surface.md)
+- [Backup Lifecycle](docs/backup-lifecycle.md)
+- [Template System](docs/template-system.md)
+- [Style Fidelity](docs/style-fidelity.md)
+- [Formula Intelligence](docs/formula-intelligence.md)
+- [Tables, Filters, and Sorts](docs/table-filter-sort.md)
+- [Names and Regions](docs/names-regions.md)
+- [PivotTables and Charts](docs/pivot-chart.md)
+- [Advanced Range Reads](docs/advanced-range-reads.md)
+- [Validation and Repair](docs/validation-repair.md)
+- [Permissions and Cleaning](docs/permissions-cleaning.md)
+- [Workbook File Lifecycle](docs/workbook-file-lifecycle.md)
+- [Performance Contract](docs/performance.md)
+- [Multi-Agent Runtime](docs/multi-agent-runtime.md)
+- [Production Readiness](docs/production-readiness.md)
+- [Service Wrapper](docs/service-wrapper.md)
+- [OpenCode Configuration](docs/opencode.md)
+- [Packaging and Publishing](docs/packaging.md)
+- [Sideloading](docs/sideloading.md)
+- [Roadmap](docs/roadmap.md)
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The most important rule is that write tools must not bypass planning, snapshots, permission checks, and rollback-aware batches.
+
+## Security
+
+Open Workbook handles sensitive spreadsheet data. See [SECURITY.md](SECURITY.md). Workbook content stays local by default; integrations that send data to external services must be explicit and documented.
+
+## License
+
+MIT
+
+---
+
+Source: docs/installation.md
+
+## Installation
+
+Open Workbook is distributed as a local MCP runtime plus a sideloaded Excel Office.js add-in. It does not require Microsoft AppSource.
+
+## Requirements
+
+- Node.js `>=20.11`
+- Corepack and pnpm
+- Desktop Excel on macOS or Windows
+- An MCP client such as OpenCode
+- Permission to sideload or trust an Office add-in manifest
+
+## Source Install
+
+```bash
+git clone https://github.com/open-workbook/open-workbook.git
+cd open-workbook
+corepack pnpm install
+corepack pnpm build
+node packages/cli/dist/index.js doctor
+```
+
+Run the shared daemon:
+
+```bash
+node packages/cli/dist/index.js daemon start
+```
+
+Run the MCP adapter in another terminal:
+
+```bash
+node packages/cli/dist/index.js mcp
+```
+
+Run the add-in asset server:
+
+```bash
+node packages/cli/dist/index.js addin serve
+```
+
+Generate an OpenCode MCP config snippet:
+
+```bash
+node packages/cli/dist/index.js opencode config --id open-workbook --command "node packages/cli/dist/index.js"
+```
+
+## Installed CLI Shape
+
+After package installation, use `owb` directly:
+
+```bash
+owb doctor
+owb daemon start
+owb file-bridge start
+owb mcp
+owb addin serve
+owb opencode config --id open-workbook
+```
+
+The daemon starts the local backend WebSocket and owns shared workbook coordination. `owb file-bridge start` starts the optional native Save As bridge. `owb mcp` attaches to the daemon when it is running. The add-in asset server is a separate process because Excel loads the taskpane HTML from it.
+
+## Sideload On macOS
+
+```bash
+owb sideload mac
+```
+
+This writes a generated manifest to:
+
+```text
+~/Library/Containers/com.microsoft.Excel/Data/Documents/wef/open-workbook.xml
+```
+
+Restart Excel, then open the add-in from the ribbon or Insert > Add-ins, depending on your Excel version.
+
+## Sideload On Windows
+
+```bash
+owb sideload windows --out open-workbook.xml
+```
+
+Then:
+
+1. Create a folder such as `C:\open-workbook-addins`.
+2. Share the folder in Windows.
+3. Copy `open-workbook.xml` into the shared folder.
+4. In Excel, open `File > Options > Trust Center > Trust Center Settings > Trusted Add-in Catalogs`.
+5. Add the shared folder UNC path, such as `\\YOUR-PC\open-workbook-addins`.
+6. Select `Show in Menu`.
+7. Restart Excel and insert Open Workbook from Shared Folder.
+
+## Custom Ports
+
+```bash
+OPEN_WORKBOOK_PORT=37855 \
+OPEN_WORKBOOK_ADDIN_PORT=37856 \
+owb sideload manifest --out open-workbook.xml
+```
+
+## HTTPS Add-in Serving
+
+Loopback HTTP is the default for desktop sideload development. To serve the taskpane over HTTPS, provide a trusted local certificate and key:
+
+```bash
+owb addin serve --https \
+  --tls-cert ./certs/open-workbook.local.pem \
+  --tls-key ./certs/open-workbook.local-key.pem
+```
+
+Then generate a matching manifest:
+
+```bash
+OPEN_WORKBOOK_ADDIN_HTTPS=1 \
+owb sideload manifest --out open-workbook.xml
+```
+
+The CLI also honors `OPEN_WORKBOOK_ADDIN_PROTOCOL=https`, `OPEN_WORKBOOK_ADDIN_TLS_CERT`, and `OPEN_WORKBOOK_ADDIN_TLS_KEY`. Certificate trust is intentionally left to the user or organization.
+
+You can also pass URLs explicitly:
+
+```bash
+owb sideload manifest \
+  --addin-url http://127.0.0.1:37846 \
+  --backend-url ws://127.0.0.1:37845/addin \
+  --out open-workbook.xml
+```
+
+## Runtime Processes
+
+Use these together during local testing:
+
+```bash
+owb daemon start
+owb file-bridge start
+owb mcp
+owb addin serve
+```
+
+To generate an optional auto-start wrapper for the add-in asset server:
+
+```bash
+owb service manifest --target macos --service addin --out com.open-workbook.addin.plist
+owb service manifest --target systemd --service addin --out com.open-workbook.addin.service
+owb service manifest --target windows --service addin --out open-workbook-addin-task.ps1
+owb service manifest --target macos --service file-bridge --out com.open-workbook.file-bridge.plist
+```
+
+See [Service Wrapper](service-wrapper.md) for install examples.
+
+Then open Excel, load the sideloaded add-in, and call:
+
+```text
+excel.runtime.get_status
+excel.runtime.get_active_context
+excel.collab.get_status
+```
+
+from your MCP client.
+
+## Troubleshooting
+
+- Run `owb doctor` to confirm packaged assets are available.
+- Run `owb paths` to see the daemon state directory and packaged entrypoints.
+- Confirm the add-in server prints a manifest URL.
+- Confirm `owb daemon status` returns JSON.
+- Confirm the MCP process says it connected to the daemon, or use `owb mcp --standalone` for a single-process test.
+- If Excel cannot load the add-in, regenerate the manifest and repeat sideloading.
+- If Windows Excel does not show the add-in, confirm the trusted catalog is a shared-folder UNC path and `Show in Menu` is enabled.
+- If the add-in loads but does not connect, confirm the `backendUrl` query string in the generated manifest points at the running MCP backend.
+
+---
+
+Source: docs/architecture.md
+
+## Architecture
+
+Open Workbook separates agent-facing protocol from Excel execution.
+
+## Components
+
+- **MCP server**: exposes tools, resources, and prompts to agents.
+- **Backend broker**: owns sessions, permissions, backups, templates, snapshots, plans, diffs, and telemetry.
+- **Excel add-in**: runs inside Excel and executes Office.js operations over WebSocket JSON-RPC.
+- **Core packages**: define shared contracts and workbook-safe primitives.
+
+## Runtime Flow
+
+1. An MCP client calls an `excel.*` tool.
+2. The MCP server validates the request and uses the embedded backend broker.
+3. The backend creates or updates a plan, compiles batches, and records backup metadata.
+4. The backend asks the add-in to snapshot, validate, or apply workbook operations over WebSocket JSON-RPC.
+5. The add-in executes optimized Office.js calls inside `Excel.run`.
+6. The backend stores operation records and returns a structured result.
+
+The default `open-workbook-mcp` process starts both stdio MCP and the local add-in WebSocket endpoint so a desktop MCP client can launch one process.
+
+## Engine Policy
+
+Office.js is the primary engine for macOS and Windows desktop Excel. Other engines may be added behind the same compiled operation interface when Office.js cannot support a feature.
+
+Engine adapters must report capabilities. The Office.js add-in reports host platform, Office version when available, supported `ExcelApi` versions, and derived feature statuses during its WebSocket hello. Tools should fail honestly or degrade explicitly when a capability is unavailable.
+
+## Catalog Policy
+
+The protocol package owns the full tool, resource, and prompt catalog. MCP registration is capability-gated:
+
+- stable tools are registered by default
+- preview tools require `OPEN_WORKBOOK_PREVIEW_TOOLS=1`
+- planned tools are omitted from production catalogs until their contract and implementation are ready
+- unsupported host-specific capabilities are reported honestly by the relevant stable tools
+
+This keeps agents from calling incomplete tools while still letting stable tools report host limitations explicitly.
+
+---
+
+Source: docs/tool-surface.md
+
+## Tool Surface
+
+The full namespace is represented in the protocol catalog, but MCP only exposes capability-gated tools.
+
+## Status Model
+
+- `stable`: exposed by default.
+- `preview`: exposed only with `OPEN_WORKBOOK_PREVIEW_TOOLS=1`.
+- `planned`: intentionally omitted from the production MCP surface until the contract and implementation are ready.
+- `unsupported`: listed by capabilities only when a host or adapter cannot provide a deterministic implementation.
+
+`excel.runtime.get_capabilities` is the source of truth for the complete catalog, resources, prompts, runtime connection status, and active Excel host capability status. When an add-in is connected, it includes the host platform, Office version when available, Office API-set support such as `ExcelApi` versions, and derived feature statuses for ranges, tables, pivots, charts, and known host-limited paths. Without a connected add-in, it returns a daemon fallback that marks Excel host capabilities as `unknown`.
+
+## Stable Tool Groups
+
+- Runtime: `excel.runtime.get_status`, `excel.runtime.get_capabilities`, `excel.runtime.get_active_context`
+- Workbook: `excel.workbook.list_open_workbooks`, `excel.workbook.get_workbook_info`, `excel.workbook.get_workbook_map`, `excel.workbook.snapshot`, `excel.workbook.refresh_snapshot`, `excel.workbook.get_snapshot`, `excel.workbook.detect_external_changes`, `excel.workbook.calculate`, `excel.workbook.save`, `excel.workbook.save_as`, `excel.workbook.create_backup`, `excel.workbook.restore_backup`, `excel.workbook.export_copy`, `excel.workbook.export_local_config`, `excel.workbook.import_local_config`, `excel.workbook.embed_local_config`, `excel.workbook.read_embedded_local_config`, `excel.workbook.import_embedded_local_config`, `excel.workbook.close`
+- File backups: `excel.backup.create_file`, `excel.backup.list`, `excel.backup.get`, `excel.backup.verify`, `excel.backup.restore_file`, `excel.backup.delete`, `excel.backup.prune`, `excel.backup.pin`, `excel.backup.unpin`
+- Sheet: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.create`, `excel.sheet.copy`, `excel.sheet.rename`, `excel.sheet.delete`, `excel.sheet.hide`, `excel.sheet.unhide`, `excel.sheet.protect`, `excel.sheet.unprotect`, `excel.sheet.clear`, `excel.sheet.get_used_range`, `excel.sheet.set_tab_color`
+- Range: `excel.range.read_values`, `excel.range.read_formulas`, `excel.range.read_number_formats`, `excel.range.read_display_text`, `excel.range.read_styles`, `excel.range.read_full`, `excel.range.write_values`, `excel.range.write_formulas`, `excel.range.write_number_formats`, `excel.range.write_styles`, `excel.range.clear`, `excel.range.clear_values`, `excel.range.clear_formats`, `excel.range.clear_values_keep_format`, `excel.range.copy`, `excel.range.move`, `excel.range.insert_rows`, `excel.range.delete_rows`, `excel.range.insert_columns`, `excel.range.delete_columns`, `excel.range.autofit_columns`, `excel.range.autofit_rows`, `excel.range.merge`, `excel.range.unmerge`
+- Advanced range reads: `excel.range.read_hyperlinks`, `excel.range.read_comments`, `excel.range.read_notes`, `excel.range.read_merged_cells`, `excel.range.read_data_validation`, `excel.range.read_conditional_formatting`, `excel.range.search`, `excel.range.find_blank_cells`, `excel.range.find_errors`
+- Batch and plan: `excel.batch.validate`, `excel.batch.dry_run`, `excel.batch.apply`, `excel.plan.create`, `excel.plan.preview`, `excel.plan.refresh_preview`, `excel.plan.rebase`, `excel.plan.apply`, `excel.plan.rollback`
+- Multi-agent coordination: `excel.task.create`, `excel.task.claim`, `excel.task.update`, `excel.task.set_progress`, `excel.task.add_blocker`, `excel.task.resolve_blocker`, `excel.task.evaluate_schedule`, `excel.task.resume_ready`, `excel.task.complete`, `excel.task.fail`, `excel.task.cancel`, `excel.task.list`, `excel.task.get`, `excel.collab.get_status`, `excel.collab.list_agents`, `excel.collab.list_tasks`, `excel.collab.list_locks`, `excel.collab.list_transactions`, `excel.collab.get_conflicts`, `excel.collab.get_recent_events`, `excel.lock.get_policy`, `excel.lock.set_policy`, `excel.lock.acquire`, `excel.lock.renew`, `excel.lock.release`, `excel.conflict.get_guidance`, `excel.conflict.explain`, `excel.conflict.get_telemetry`, `excel.conflict.clear_telemetry`, `excel.transaction.list`, `excel.transaction.get`, `excel.transaction.preview_rollback`, `excel.transaction.rollback`, `excel.transaction.preview_rollback_chain`, `excel.transaction.rollback_chain`
+- Snapshot and diff: `excel.snapshot.create`, `excel.snapshot.refresh`, `excel.snapshot.get`, `excel.snapshot.compare`, `excel.snapshot.invalidate`, `excel.snapshot.list`, `excel.snapshot.delete`, `excel.diff.create`, `excel.diff.summarize`, `excel.diff.get_details`, `excel.diff.export_json`, `excel.diff.export_html`
+- Events: `excel.events.subscribe`, `excel.events.unsubscribe`, `excel.events.get_recent`, `excel.events.clear`, `excel.events.set_debounce`
+- Templates: `excel.template.detect_templates`, `excel.template.register`, `excel.template.unregister`, `excel.template.get`, `excel.template.list`, `excel.template.infer_regions`, `excel.template.create_sheet_from_template`, `excel.template.clear_data_regions`, `excel.template.fill_regions`, `excel.template.validate_sheet_against_template`, `excel.template.repair_sheet_from_template`
+- Style and formula preservation: `excel.style.get_fingerprint`, `excel.style.compare_fingerprint`, `excel.style.copy_from_template`, `excel.style.apply_style`, `excel.style.validate_consistency`, `excel.style.repair_consistency`, `excel.style.get_theme`, `excel.style.apply_theme`, `excel.style.copy_column_widths`, `excel.style.copy_row_heights`, `excel.style.copy_borders`, `excel.style.copy_fills`, `excel.style.copy_fonts`, `excel.style.copy_alignment`, `excel.style.copy_number_formats`, `excel.style.copy_conditional_formatting`, `excel.style.copy_data_validation`, `excel.style.copy_freeze_panes`, `excel.style.copy_print_settings`, `excel.style.copy_page_layout`, `excel.style.copy_hidden_rows_columns`, `excel.formula.read_patterns`, `excel.formula.copy_patterns`, `excel.formula.fill_down`, `excel.formula.fill_right`, `excel.formula.validate`, `excel.formula.validate_against_template`, `excel.formula.repair_patterns`, `excel.formula.find_errors`, `excel.formula.find_circular_references`, `excel.formula.get_dependency_graph`, `excel.formula.trace_precedents`, `excel.formula.trace_dependents`, `excel.formula.convert_to_values`, `excel.formula.recalculate`, `excel.formula.explain`
+- Tables: `excel.table.list`, `excel.table.get_info`, `excel.table.read`, `excel.table.create`, `excel.table.resize`, `excel.table.append_rows`, `excel.table.update_rows`, `excel.table.clear_data_keep_formulas`, `excel.table.clear_filters`, `excel.table.apply_filters`, `excel.table.preserve_filters`, `excel.table.sort`, `excel.table.set_total_row`, `excel.table.set_style`, `excel.table.copy_structure`, `excel.table.validate_against_template`
+- Filters and sort: `excel.filter.get_filters`, `excel.filter.apply`, `excel.filter.clear`, `excel.filter.preserve_from_template`, `excel.filter.validate`, `excel.sort.apply`, `excel.sort.clear`, `excel.sort.preserve_from_template`
+- PivotTables and charts: `excel.pivot.list`, `excel.pivot.get_info`, `excel.pivot.create`, `excel.pivot.refresh`, `excel.pivot.refresh_all`, `excel.pivot.update_source`, `excel.pivot.copy_from_template`, `excel.pivot.delete`, `excel.pivot.validate_source`, `excel.pivot.get_capability_matrix`, `excel.pivot.get_fingerprint`, `excel.pivot.compare_fingerprint`, `excel.pivot.diff`, `excel.pivot.repair_from_template`, `excel.pivot.rebuild_with_source`, `excel.chart.list`, `excel.chart.get_info`, `excel.chart.create`, `excel.chart.update_data_source`, `excel.chart.copy_from_template`, `excel.chart.refresh`, `excel.chart.delete`, `excel.chart.validate_against_template`
+- Names and regions: `excel.names.list`, `excel.names.get`, `excel.names.create`, `excel.names.update`, `excel.names.delete`, `excel.region.detect`, `excel.region.register`, `excel.region.list`, `excel.region.get`, `excel.region.clear_values`, `excel.region.write_values`, `excel.region.fill`
+- Validation: `excel.validate.workbook`, `excel.validate.sheet`, `excel.validate.template_consistency`, `excel.validate.formulas`, `excel.validate.styles`, `excel.validate.tables`, `excel.validate.filters`, `excel.validate.print_layout`, `excel.validate.no_broken_references`, `excel.validate.no_formula_errors`, `excel.validate.no_unintended_changes`
+- Repair: `excel.repair.style_from_template`, `excel.repair.formulas_from_template`, `excel.repair.filters_from_template`, `excel.repair.table_structure`, `excel.repair.print_layout`, `excel.repair.named_ranges`, `excel.repair.formula_errors`, `excel.repair.merged_cells`
+- Cleaning: `excel.clean.detect_header_row`, `excel.clean.normalize_headers`, `excel.clean.trim_whitespace`, `excel.clean.remove_duplicates`, `excel.clean.parse_dates`, `excel.clean.parse_numbers`, `excel.clean.standardize_currency`, `excel.clean.fill_missing_values`, `excel.clean.split_column`, `excel.clean.merge_columns`, `excel.clean.detect_outliers`, `excel.clean.fuzzy_match`
+- Permissions: `excel.permissions.get`, `excel.permissions.set`, `excel.permissions.require_confirmation`, `excel.permissions.set_scope`, `excel.permissions.allow_destructive_actions`, `excel.permissions.allow_macro_execution`, `excel.permissions.lock_regions`, `excel.permissions.unlock_regions`
+
+## Resources
+
+- `excel://runtime/status`
+- `excel://workbooks`
+- `excel://workbooks/{workbook_id}/map`
+- `excel://workbooks/{workbook_id}/sheets`
+- `excel://workbooks/{workbook_id}/sheets/{sheet_name}/used-range`
+- `excel://workbooks/{workbook_id}/sheets/{sheet_name}/style-fingerprint`
+- `excel://workbooks/{workbook_id}/sheets/{sheet_name}/formula-patterns`
+- `excel://workbooks/{workbook_id}/tables`
+- `excel://workbooks/{workbook_id}/templates`
+- `excel://workbooks/{workbook_id}/snapshots/{snapshot_id}`
+- `excel://workbooks/{workbook_id}/plans/{plan_id}/diff`
+
+Resources return JSON and are registered through the MCP server. Workbook/sheet resources that need live workbook state return explicit add-in disconnected or range unavailable errors when Excel is not connected instead of fabricating stale data.
+
+## Prompts
+
+Generic workbook prompts are registered with the MCP server and return safe tool-use workflows:
+
+- `excel.prompts.create_next_month_sheet`
+- `excel.prompts.clean_current_sheet`
+- `excel.prompts.fix_formula_errors`
+- `excel.prompts.format_like_template`
+- `excel.prompts.validate_report_before_saving`
+- `excel.prompts.create_summary_report`
+
+## Rule
+
+No mutating tool should bypass the backend safety lifecycle. It must validate permissions and create a backup before Excel receives writes, whether execution goes through the batch engine or a native Office.js object API.
+
+## Implementation Notes
+
+`excel.batch.apply`, `excel.plan.apply`, and all stable mutating sheet/range tools route through backend snapshots, backup records, target-region conflict checks, and add-in Office.js execution.
+
+`excel.plan.rollback` and `excel.workbook.restore_backup` restore captured range snapshots. Full file-copy restore is tracked separately because it requires file-level user or OS involvement.
+
+Multi-agent coordination runs through task, lock, and transaction records. The shared daemon serializes `excel.batch.apply` and `excel.plan.apply` through a transaction queue, attaches agent/task/transaction metadata to results, and exposes collaboration status for multiple MCP adapters.
+
+Plan refresh is conservative. `excel.plan.refresh_preview` and `excel.plan.rebase` re-snapshot planned target ranges and only refresh stored fingerprints when those target ranges are unchanged since the previous preview. If a user or another agent changed a target range, refresh/rebase returns `TARGET_REGION_CHANGED` and leaves the plan blocked until the agent creates a new plan.
+
+Transaction rollback is conservative. `excel.transaction.preview_rollback` checks for later applied transactions that overlap the target scopes. `excel.transaction.rollback` only delegates to plan rollback when the preview is clean and plan metadata exists.
+
+Rollback chains are explicit. `excel.transaction.preview_rollback_chain` finds later related transactions that must be rolled back newest-first with the target transaction. `excel.transaction.rollback_chain` requires the confirmation token returned by preview when more than one transaction is affected, and it blocks the chain if any included transaction lacks plan rollback metadata.
+
+Task progress is first-class collaboration state. `excel.task.set_progress` updates percentage and current step, while `excel.task.add_blocker` and `excel.task.resolve_blocker` let agents show waiting/conflict states such as "waiting for table lock" without hiding the task in generic failure status.
+
+Task scheduling uses dependencies, open blockers, and active lock conflicts. `excel.task.evaluate_schedule` returns ready/waiting/blocked decisions, and `excel.task.resume_ready` applies cleared wait states so agents can continue when dependencies and locks are resolved.
+
+Lock leases are explicit. `excel.lock.acquire`, `excel.lock.renew`, and `excel.lock.release` let agents reserve scopes during planning or guarded user workflows. `excel.lock.get_policy` and `excel.lock.set_policy` control default TTL, transaction TTL, maximum TTL, and whether manual locks are allowed. Lock conflicts include the active lock id and expiry timestamp where available, and scheduler decisions expose `nextRetryAt` for lock waits.
+
+Conflict payloads use specific codes where possible: `STRUCTURE_CONFLICT`, `TABLE_CONFLICT`, `FORMULA_DEPENDENCY_CONFLICT`, `DERIVED_OBJECT_CONFLICT`, `NAMED_RANGE_CONFLICT`, and `LOCK_CONFLICT`. `excel.collab.get_conflicts` includes guidance, while `excel.conflict.get_guidance` and `excel.conflict.explain` return structured resolution steps such as wait/retry, split scope, hand off to a task owner, refresh a plan, preview a rollback chain, repair from backup, or ask for manual review. `excel.conflict.get_telemetry` summarizes repeated contention by code, action, scope, task, and agent, including open versus cleared waits; `excel.conflict.clear_telemetry` resets that local telemetry.
+
+Workbook file lifecycle is explicit about host limitations. `excel.workbook.save` and `excel.workbook.close` use Office.js. `excel.workbook.save_as` requires a native file bridge configured with `OPEN_WORKBOOK_FILE_BRIDGE_URL`; without it the tool returns capability status. `excel.workbook.export_copy` creates a persistent snapshot backup, then writes a true `.xlsx` from Office.js compressed file slices on Excel desktop hosts, using the native bridge first when configured. `excel.backup.create_file` creates a durable file-backup manifest with path, size, checksum, source snapshot backup id when available, pin state, verification status, and restore status. `excel.backup.verify` checks file existence and checksum, `excel.backup.pin` and `excel.backup.unpin` control retention, and `excel.backup.prune` deletes only unpinned backups selected by age or per-workbook count. `excel.backup.restore_file` defaults to safe `open-as-new` recovery and returns the verified file path; `replace-open-workbook` requires confirmation, creates a pinned emergency backup, and uses the native bridge on macOS/Windows to close, replace, and reopen the workbook. `restore-into-open-workbook` remains unsupported because full workbook replacement inside an already-open workbook is not deterministic. `excel.runtime.get_status` accepts `probeFileBridge` for a live native bridge health check when agents need to confirm reachability and supported host operations.
+File-backup lifecycle operations also emit collaboration audit events so multi-agent clients can show backup creation, verification, restore, retention, and pin/unpin activity through `excel.collab.get_status`.
+
+Workbook local config is portable daemon metadata. `excel.workbook.export_local_config` returns versioned JSON for registered templates, regions, and workbook-scoped permission metadata. `excel.workbook.import_local_config` loads that JSON into the local registry with merge or overwrite behavior. `excel.workbook.embed_local_config` writes the same JSON into a namespaced workbook custom XML part when the connected Excel host exposes that Office.js API. `excel.workbook.read_embedded_local_config` and `excel.workbook.import_embedded_local_config` read it back from the workbook. Local config export/import does not save or mutate workbook cells; embedded config mutates workbook metadata and therefore runs through the transaction queue and workbook-level permission checks.
+
+Template repair creates a backup before mutating the target sheet, then copies template styles/formulas/layout through Office.js and validates the target sheet against the registered template fingerprint.
+
+Style fidelity tools capture granular style fingerprints for a sheet or address, compare dimensions independently, and create backups before copying style dimensions. Native Office.js format copy is used for fills, fonts, borders, alignment, number formats, conditional formatting, and data validation so Excel preserves more formatting detail than the protocol models manually. Column widths and row heights are copied explicitly. Workbook theme, freeze pane, print setting, page layout, and hidden row/column replay currently return capability-status warnings where Office.js does not expose a deterministic cross-platform replay path.
+
+Formula intelligence tools capture R1C1 formula patterns, compare pattern matrices, copy formulas from templates, fill formulas down or right, convert formulas to values with backup, recalculate workbooks, parse formula dependency edges, trace precedents/dependents, and return lightweight formula explanations. Dependency graph nodes distinguish local ranges, structured table references, and external workbook references; structured references resolve to precise header/data/totals/all table ranges when table metadata is available, and dynamic spill references expand when spill metadata is available. Formula writes include parsed local range/table dependencies in pre-commit lock checks. Formula error validation scans used ranges through Office.js special-cell APIs. Circular-reference enumeration currently returns explicit capability-status results until it can be normalized across Excel hosts.
+
+Table, filter, and sort mutations use native Office.js table APIs. The backend captures a backup over the affected table range or target structure range before mutating.
+
+PivotTable and chart tools use native Office.js APIs. Pivot creation supports source ranges or structured tables, destination cells, row/column/filter/data field layout, aggregation, number formats, and layout flags. Pivot reads include layout and hierarchy metadata where Office.js exposes it. Pivot capability matrix reports supported, partial, unsupported, and unknown dimensions for the active host. Pivot validation can check expected source fields, axis placement, data-field aggregation, number formats, and layout settings before an agent mutates a report. Pivot fingerprints hash deterministic source, layout, data-field, and output-shape metadata with warnings for Office.js-limited dimensions; compare and diff tools use those fingerprints for review. Pivot template copy replays deterministic options, layout, hierarchy order, data aggregation/number formats, and basic field settings through a transaction-backed path when the target pivot has matching source fields; agents can restrict replay with `dimensions`. Pivot copy/repair responses include `capabilityStatus` plus warnings for deep template dimensions that Office.js cannot safely replay, such as in-place source reassignment, PivotChart-specific settings, slicers/timelines, item-level manual filters/sorts, grouping details, calculated fields/items, and host-specific settings. Pivot repair runs template copy and returns before/after fingerprint comparison. Pivot rebuild creates a new PivotTable from a desired source and can replay a template; `replaceExisting` performs an explicit delete/create flow with separate backups and transactions. Chart creation/update supports source range, chart type, series orientation, title, position, and style. Chart template copy replays deterministic chart metadata such as type, style, title, and geometry through a transaction-backed path. Pivot source reassignment still returns capability-status metadata because Office.js does not expose a safe deterministic operation.
+
+Advanced range reads use native Office.js metadata APIs where available. Comments and legacy notes currently return explicit unsupported warnings because reliable address mapping is not implemented yet.
+
+Named-item tools use Office.js workbook and worksheet scoped `NamedItem` collections. Region tools maintain a runtime registry of reusable sheet/address targets and can resolve existing Excel named ranges as regions. Region writes and fills route through the standard batch lifecycle.
+
+Permission tools manage runtime policy for writes, destructive actions, workbook actions, confirmation requirements, sheet/region scope, and locked regions. `excel.batch.apply` and region/range cleaning writes are checked before Excel receives the request; direct table mutations also check scope and locked regions.
+
+Cleaning tools read range values, transform them in the backend, and write results through the same backup-aware batch path. Detection tools such as header detection, outlier detection, and fuzzy match are read-only.
+
+Validation tools return structured reports with `ok`, issue severity counts, categorized issues, and optional supporting data. Formula and broken-reference validators inspect workbook used ranges through compact Office.js range-area summaries. Template consistency validators reuse registered template fingerprints.
+
+Repair tools return structured repair reports. Style and formula repairs use registered templates and create backups before mutation. Table-structure repair uses the existing table copy path. Repair categories that Office.js cannot safely execute yet return `CAPABILITY_UNAVAILABLE` with a specific reason code.
+
+## Preview Runtime Tools
+
+Set `OPEN_WORKBOOK_PREVIEW_TOOLS=1` before starting `owb mcp` to expose:
+
+- `excel.runtime.connect_addin`
+- `excel.runtime.disconnect_addin`
+- `excel.runtime.ping_addin`
+- `excel.runtime.get_selection`
+- `excel.runtime.set_active_workbook`
+- `excel.runtime.set_active_sheet`
+
+These are marked preview because they establish runtime-control contracts that can affect session routing.
+
+---
+
+Source: docs/backup-lifecycle.md
+
+## Backup Lifecycle
+
+Backup is a core runtime invariant, not an optional feature.
+
+## Backup Tiers
+
+- **Region snapshot**: fast rollback for changed values, formulas, formats, comments, notes, validation, filters, table data, row heights, and column widths.
+- **Sheet snapshot**: rollback for sheet create, copy, rename, move, hide, and clear workflows.
+- **Workbook-copy backup**: disaster recovery for structural changes, broad clears, save-as, restore, or operations that risk workbook integrity.
+
+## Mutation Lifecycle
+
+Every write operation creates an operation record with:
+
+- operation ID
+- workbook ID
+- base snapshot ID
+- target ranges
+- before fingerprints
+- backup references
+- compiled batch
+- validation result
+- diff summary
+- rollback status
+- telemetry
+
+## Conflict Policy
+
+Plans use a target-region strict policy:
+
+- Stop if workbook structure changed.
+- Stop if a targeted sheet, table, or range fingerprint changed.
+- Continue with a warning when unrelated regions changed.
+- Revalidate template and formula invariants after apply.
+- Auto-rollback if post-apply validation fails and rollback data is available.
+
+## Retention
+
+Region snapshots are retained for the active session by default. Workbook-copy backups persist until explicit cleanup or configured retention removes them. Normal rollback must not delete backups.
+
+## Persistent Snapshot Backups
+
+Workbook-copy backups are persisted as JSON snapshot payloads under `OPEN_WORKBOOK_BACKUP_DIR` when set, otherwise `.open-workbook/backups` under the MCP process working directory.
+
+These backups are restorable through `excel.workbook.restore_backup` because they contain captured range values, formulas, number formats, display text, and basic styles. They are not full `.xlsx` file copies. True workbook export uses the native file bridge when configured or the Excel desktop compressed-file export path; `save_as` still requires the native bridge because Office.js does not expose a local save-as path API.
+
+## Implemented Rollback
+
+The current rollback path supports:
+
+- restoring values, formulas, number formats, and basic style metadata from captured range snapshots
+- deleting sheets created by `template.create_sheet_from_template`
+- applying rollback through the same batch and telemetry path as normal writes
+
+Full workbook-copy restore remains a disaster-recovery layer because replacing an open workbook file usually requires user or OS-level coordination.
+
+---
+
+Source: docs/template-system.md
+
+## Template System
+
+Registered templates are authoritative for template workflows.
+
+## Registry
+
+Templates live in two places:
+
+- **Workbook metadata** for workbook-specific structure and portability.
+- **Local registry** for reusable team templates across workbooks.
+
+Workbook templates win over local templates with the same ID unless the caller explicitly selects a local template version.
+
+The runtime stores both hashes and the captured fingerprint payload. Hashes are used for fast comparisons; payloads are retained so validation and repair can explain which component differs.
+
+Template metadata can be moved between environments with workbook local config:
+
+- `excel.workbook.export_local_config` exports registered templates, regions, and optional permission metadata as versioned JSON.
+- `excel.workbook.import_local_config` imports the JSON into another local daemon registry, either merging or overwriting matching ids.
+- `excel.workbook.embed_local_config` writes that JSON into the workbook's custom XML part when the connected Excel host supports the Office.js custom XML API.
+- `excel.workbook.import_embedded_local_config` reads embedded workbook metadata and imports it into the local daemon registry.
+
+Local config does not modify workbook cells or save the `.xlsx`; it only moves Open Workbook's registry layer. Embedded local config modifies workbook metadata, not cells, and is guarded by workbook-level permissions and the transaction queue.
+
+## Template Fingerprint
+
+A template captures:
+
+- sheet structure and named regions
+- headers and merged cells
+- row heights and column widths
+- formulas and formula patterns
+- number formats, fills, fonts, borders, and alignment
+- tables, filters, sorts, conditional formatting, and data validation
+- freeze panes, print settings, page layout, and hidden rows or columns
+
+## Template Workflows
+
+Creating a new accounting or reporting sheet must:
+
+1. Copy layout and styles from the registered template.
+2. Copy formula patterns separately from values.
+3. Clear only declared data-entry regions.
+4. Preserve filters, table structure, print layout, freeze panes, and named ranges.
+5. Validate against the template before returning success.
+
+If no registered template exists, the runtime may infer candidates but mutating template workflows must warn and require confirmation.
+
+## Implemented Flow
+
+Current stable MCP support covers:
+
+- detecting candidate template sheets
+- registering, listing, getting, and unregistering templates
+- creating a sheet from a registered template
+- clearing declared data regions while preserving formats
+- filling target regions while preserving existing formats
+- validating a target sheet against template structure, formulas, styles, filters, tables, and print-layout fingerprints
+- repairing target sheet styles, formulas, declared data regions, or full layout from the source template sheet
+
+Repair creates a backup before it mutates a target sheet. Validation ignores the sheet name when comparing structure, so a new period sheet can be named differently from the template without failing solely on identity.
+
+---
+
+Source: docs/style-fidelity.md
+
+## Style Fidelity
+
+Open Workbook treats styling as a first-class invariant for template-driven workbooks.
+
+## Lifecycle
+
+1. Capture a style fingerprint with `excel.style.get_fingerprint`.
+2. Compare a template/source sheet against a target with `excel.style.compare_fingerprint`.
+3. Copy one style dimension, or repair all template styles, with a backup created before mutation.
+4. Validate the target after copy so agents can decide whether to continue, repair, or roll back.
+
+## Covered Dimensions
+
+- Column widths and row heights are read and replayed explicitly.
+- Fills, fonts, borders, alignment, number formats, conditional formatting, and data validation use Excel native format copy for fast high-fidelity replay.
+- Direct style writes support fill color, font name/size/color/bold/italic, horizontal and vertical alignment, row height, and column width.
+- Fingerprints include bounded cell-level samples for fills, fonts, alignment, and number formats.
+
+## Performance
+
+`excel.style.get_fingerprint` accepts `maxCellSamples`. Large ranges still capture range-level and row/column layout data, but skip per-cell style sampling once the limit is exceeded. This keeps daily office tasks responsive while still allowing detailed checks on headers, report blocks, and template regions.
+
+Style copy operations are batched through Office.js and backed up before mutation. Agents should prefer copying a specific dimension or template region instead of reading and writing each cell individually.
+
+## Current Limits
+
+Excel does not have web-style padding or margins for cells; the closest controllable layout properties are row height, column width, wrapping, shrink-to-fit, indentation, alignment, and borders.
+
+Workbook theme replay, freeze panes, print settings, page layout, and hidden row/column replay are exposed as explicit capability-status paths until we can capture and replay them deterministically across supported Excel hosts.
+
+---
+
+Source: docs/formula-intelligence.md
+
+## Formula Intelligence
+
+Open Workbook treats formulas as reusable patterns, not only as raw cell text.
+
+## Pattern Model
+
+`excel.formula.read_patterns` reads a sheet or range and returns:
+
+- A1 formulas.
+- R1C1 formulas when Excel exposes them.
+- A pattern hash per formula cell.
+- Pattern groups with counts and relative cell positions.
+
+R1C1 patterns let agents validate that copied accounting/report formulas keep the same relative structure after they move to a new period, sheet, row, or column.
+
+## Mutations
+
+- `excel.formula.copy_patterns` copies formula patterns from a source range or template sheet to a target range and validates the result.
+- `excel.formula.fill_down` and `excel.formula.fill_right` fill target ranges with R1C1 formula semantics.
+- `excel.formula.repair_patterns` repairs formulas from a registered template.
+- `excel.formula.convert_to_values` replaces formulas with their calculated values after creating a rollback backup.
+- `excel.formula.recalculate` runs workbook recalculation.
+
+All formula mutations validate permissions and create backups before Excel receives writes.
+
+## Validation
+
+- `excel.formula.validate` and `excel.formula.find_errors` scan workbook, sheet, or range targets for formula error cells.
+- `excel.formula.validate_against_template` compares the target sheet against a registered template fingerprint.
+- Formula pattern comparisons report missing formulas, unexpected formulas, shape mismatches, and pattern mismatches.
+
+## Dependency Graph
+
+- `excel.formula.get_dependency_graph` parses formulas in a sheet or range and returns precedent edges.
+- `excel.formula.trace_precedents` returns parsed precedent ranges for a formula cell.
+- `excel.formula.trace_dependents` scans formulas on the sheet and returns formula cells that reference the target range.
+
+The parser handles normal A1 references, quoted sheet names, absolute references, rectangular ranges, whole-column references, dynamic array spill anchors, structured table references, and external workbook references. Structured references are represented as table dependency nodes and are also resolved to precise local ranges when table metadata is available, including data body, headers, totals, `#All`, and bounded column spans. Dynamic array spill references expand to the spill range when spill metadata is available and fall back to the anchor cell with a warning when it is not. External workbook references are represented as external dependency nodes and are not resolved to local workbook ranges.
+
+Formula writes use parsed local dependencies during pre-commit lock checks. If an agent writes `=SUM(A1:A10)` while another agent has a write lock on `A1:A10`, the formula write is blocked before Excel receives the mutation.
+
+## Current Limits
+
+`excel.formula.find_circular_references` is exposed as a deterministic capability-status tool until circular-reference enumeration can be normalized safely across Excel hosts.
+
+`excel.formula.explain` is intentionally lightweight. It summarizes functions, references, structured references, external references, and volatile functions; it is not a full Excel formula parser.
+
+---
+
+Source: docs/table-filter-sort.md
+
+## Tables, Filters, And Sort
+
+Structured table operations use native Office.js table APIs instead of range-only mutations.
+
+## Implemented Flow
+
+- Read table metadata, headers, values, formulas, text, number formats, filters, and sort state.
+- Create, resize, append rows, update rows, clear constants while keeping formulas, set total row, set style, and copy table structure.
+- Apply, clear, preserve, and validate table filters through Office.js filter criteria.
+- Apply, clear, and preserve table sort state through Office.js sort fields.
+
+## Safety
+
+Mutating table/filter/sort tools create a backup before execution. The backend backs up the current table range when mutating an existing table, or the target range when creating/copying a structure.
+
+## Template Behavior
+
+Table template validation currently compares live table metadata with registered template table fingerprints. Deeper table-structure repair will build on the same registered template payload used by style and formula repair.
+
+---
+
+Source: docs/names-regions.md
+
+## Names and Regions
+
+Names and regions give agents stable workbook targets that survive normal sheet edits better than ad hoc range addresses.
+
+## Named Items
+
+`excel.names.*` uses native Office.js named-item APIs.
+
+Supported tools:
+
+- `excel.names.list`: lists workbook and worksheet scoped names.
+- `excel.names.get`: returns one named item, including formula/value metadata and range address when the name resolves to a range.
+- `excel.names.create`: creates a workbook or worksheet scoped name from a formula or range reference.
+- `excel.names.update`: updates formula/reference, comment, or visibility.
+- `excel.names.delete`: deletes a named item.
+
+When `sheetName` is provided, the operation uses that worksheet's scoped name collection. Without `sheetName`, it uses workbook scope.
+
+## Regions
+
+`excel.region.*` is an Open Workbook registry over workbook areas that agents can address by intent, not only by A1 notation.
+
+Supported tools:
+
+- `excel.region.detect`: returns registered regions plus candidates from Excel named ranges and sheet used ranges.
+- `excel.region.register`: registers a reusable region and can optionally create a matching Excel named range.
+- `excel.region.list`: lists runtime-registered regions.
+- `excel.region.get`: resolves a registered region or an Excel named range.
+- `excel.region.clear_values`: clears values while preserving formatting.
+- `excel.region.write_values`: writes values while preserving formatting.
+- `excel.region.fill`: optionally clears first, then writes values.
+
+Region mutations compile to normal `range.*` batch operations, so they use the same backup, telemetry, and rollback path as direct range writes.
+
+Region metadata can be exported with `excel.workbook.export_local_config` and imported with `excel.workbook.import_local_config`. This is useful for open-source templates because the repo can carry JSON metadata for semantic regions while the workbook file stays unchanged. When the connected Excel host exposes Office.js custom XML APIs, `excel.workbook.embed_local_config` can also store the same region metadata inside the workbook file.
+
+## Current Limits
+
+The region registry is persisted in the daemon state file under `.open-workbook/state` by default, or under `OPEN_WORKBOOK_STATE_DIR` when configured. Local config export/import makes that registry portable outside the daemon state. Embedded local config makes it portable with the workbook file on Excel hosts that support custom XML parts.
+
+---
+
+Source: docs/pivot-chart.md
+
+## PivotTables and Charts
+
+Open Workbook exposes native Office.js PivotTable and chart tools for reporting workflows.
+
+## PivotTables
+
+Supported tools:
+
+- `excel.pivot.list`: list PivotTables in the workbook.
+- `excel.pivot.get_info`: return PivotTable metadata and source details where Office.js exposes them.
+- `excel.pivot.create`: create a PivotTable from a source range or structured table at a destination cell, optionally applying row fields, column fields, filter fields, data fields, aggregation, number formats, and layout flags.
+- `excel.pivot.refresh`: refresh one PivotTable.
+- `excel.pivot.refresh_all`: refresh all PivotTables in the workbook.
+- `excel.pivot.copy_from_template`: replay deterministic PivotTable settings from a template PivotTable to a target PivotTable.
+- `excel.pivot.delete`: delete a PivotTable after capturing a transaction-backed backup of the reported output range when available.
+- `excel.pivot.validate_source`: check whether source, source type, output range, and data-field metadata are available.
+- `excel.pivot.get_capability_matrix`: report supported, partial, unsupported, and unknown PivotTable dimensions for the active host.
+- `excel.pivot.get_fingerprint`: hash deterministic PivotTable source/layout/output metadata.
+- `excel.pivot.compare_fingerprint`: compare two PivotTable fingerprints.
+- `excel.pivot.diff`: return a review-friendly PivotTable diff.
+- `excel.pivot.repair_from_template`: replay a template PivotTable and return before/after comparison.
+- `excel.pivot.rebuild_with_source`: create a new PivotTable from a desired source and optionally replay a template.
+
+Capability-status tools:
+
+- `excel.pivot.update_source`: Office.js does not expose a safe in-place source reassignment path in this runtime. Create a new PivotTable from the desired source.
+
+`excel.pivot.update_source`, `excel.pivot.copy_from_template`, `excel.pivot.repair_from_template`, and `excel.pivot.rebuild_with_source` return machine-readable `capabilityStatus` metadata plus `warnings` when the operation is intentionally partial. Agents should inspect these fields before claiming a PivotTable is fully identical to a template. In-place source reassignment returns `CAPABILITY_UNAVAILABLE` with fallback `excel.pivot.rebuild_with_source`.
+
+`excel.pivot.get_info` returns source metadata, the PivotTable output range, layout settings, row/column/filter/data hierarchy summaries, field settings, and source hierarchy names where Office.js exposes them.
+
+`excel.pivot.create` accepts optional `rowFields`, `columnFields`, `filterFields`, `dataFields`, `layout`, and `refresh`. This lets agents create a usable summary PivotTable in one transaction instead of creating a blank PivotTable and requiring a second mutation. Field names must match the source table/range fields exposed by Excel.
+
+`excel.pivot.copy_from_template` requires `templatePivotTableName`. Before mutating, it compares the template pivot's required row, column, filter, and data source fields with the target pivot source fields when Office.js exposes both sides. If required fields are missing, it returns `TEMPLATE_MISMATCH` with `PIVOT_TEMPLATE_SOURCE_FIELD_MISSING` issues before creating a backup or changing Excel. Compatible copies create a backup and transaction record, then replay settable PivotTable options, layout flags, axis membership/order, data hierarchy aggregation and number formats, and basic field settings. Agents can restrict replay with `dimensions`, using any of `metadata`, `layout`, `fields`, `dataFields`, `numberFormats`, `filters`, and `refresh`. When Office.js reports the target PivotTable range, the backup is scoped to that range instead of the whole sheet. The response includes `PIVOT_TEMPLATE_COPY_PARTIAL` because source reassignment, PivotChart-specific settings, slicers/timelines, item-level manual filters/sorts, grouping details, calculated fields/items, and host-specific settings are replayed only when Office.js exposes deterministic read/write APIs.
+
+`excel.pivot.validate_source` returns a summary plus structured issues such as `PIVOT_SOURCE_UNAVAILABLE`, `PIVOT_OUTPUT_RANGE_UNAVAILABLE`, and `PIVOT_HAS_NO_DATA_FIELDS`, so agents can distinguish a missing pivot from a partially configured pivot. It also accepts optional `expectedFields`, `expectedRowFields`, `expectedColumnFields`, `expectedFilterFields`, `expectedDataFields`, `expectedDataFieldSettings`, and `expectedLayout`. When Office.js exposes source hierarchy metadata, missing fields return `PIVOT_EXPECTED_FIELD_MISSING`; fields that exist but are not currently on the expected axis return `PIVOT_EXPECTED_LAYOUT_MISMATCH`. Aggregation, number-format, and layout mismatches return `PIVOT_EXPECTED_AGGREGATION_MISMATCH`, `PIVOT_EXPECTED_NUMBER_FORMAT_MISMATCH`, and `PIVOT_EXPECTED_LAYOUT_SETTING_MISMATCH`. If source field metadata is unavailable, validation returns `PIVOT_SOURCE_FIELDS_UNAVAILABLE` as a warning instead of guessing.
+
+`excel.pivot.get_fingerprint` captures source type/value, source fields, row/column/filter/data fields, aggregation, number formats, layout flags, and output shape where Office.js exposes those dimensions. Missing dimensions become warnings, not fabricated values. `excel.pivot.compare_fingerprint` and `excel.pivot.diff` compare those captured dimensions so agents can review template drift before mutation.
+
+`excel.pivot.repair_from_template` runs fingerprint comparison, applies deterministic template copy, and compares again. Strict mode blocks when required fingerprint dimensions are unavailable. Successful repairs still return the same capability warnings as template copy when deep template dimensions cannot be proven or replayed. `excel.pivot.rebuild_with_source` is the safe source-change strategy: create a new PivotTable from the desired source and optionally replay template settings. With `replaceExisting`, it performs an explicit delete/create flow with separate backups and transactions instead of trying unsafe in-place source reassignment, and returns `PIVOT_REBUILD_NOT_IN_PLACE` so agents can explain the lifecycle accurately.
+
+## Charts
+
+Supported tools:
+
+- `excel.chart.list`: list charts across worksheets.
+- `excel.chart.get_info`: return chart metadata.
+- `excel.chart.create`: create a chart from a source range.
+- `excel.chart.update_data_source`: reset a chart's source range.
+- `excel.chart.copy_from_template`: copy deterministic chart metadata from a template chart to a target chart.
+- `excel.chart.refresh`: return current chart metadata. Excel updates chart visuals from source data.
+- `excel.chart.delete`: delete a chart.
+- `excel.chart.validate_against_template`: verify target and optional template chart metadata availability.
+
+`excel.chart.create` supports chart type, source address, series orientation, title, position, and style.
+
+`excel.chart.copy_from_template` currently copies chart type, style, title text, and geometry. It creates a backup and transaction record before mutating the target chart. Deep series formatting and PivotChart-specific controls remain capability-limited until Office.js exposes a deterministic replay path.
+
+## Safety
+
+Pivot/chart creation and source changes are structure-level operations. Pivot/chart template copy is a format/layout operation. These tools respect permission policy, sheet/region scope, and locked-region checks before calling Excel. The backend creates a range snapshot backup for known source and destination or used ranges before mutating where a range target is available.
+
+## Current Limits
+
+Direct PivotTable source reassignment, PivotChart-specific controls, unsupported host-specific PivotTable settings, and deep series-level chart fingerprints are future milestones.
+
+---
+
+Source: docs/advanced-range-reads.md
+
+## Advanced Range Reads
+
+Advanced range reads expose metadata that agents need before editing a workbook.
+
+## Implemented
+
+- Hyperlink metadata from `Range.hyperlink`
+- Merged areas from `Range.getMergedAreasOrNullObject`
+- Data validation metadata from `Range.dataValidation`
+- Conditional formatting metadata from `Range.conditionalFormats`
+- Search matches from worksheet `findAllOrNullObject`
+- Blank cells from special cells
+- Formula errors from special cells
+
+## Limitations
+
+Comments and legacy notes return explicit unsupported warnings for now. Office.js exposes workbook and worksheet comment collections, but this runtime still needs reliable range-address mapping before enabling agent-facing tools.
+
+Worksheet search currently ignores `searchDirection` because Office.js worksheet search criteria do not support it. The protocol keeps the field so a future range-level search implementation can honor it.
+
+---
+
+Source: docs/validation-repair.md
+
+## Validation and Repair
+
+Open Workbook exposes validation and repair tools so agents can check workbook integrity before and after writes, then recover safely when template-backed repair is available.
+
+## Validation Reports
+
+All `excel.validate.*` tools return a `ValidationReport`:
+
+- `ok`: false when any issue has `severity: "error"`.
+- `summary`: counts errors, warnings, and info messages.
+- `issues`: categorized findings with stable codes and optional targets.
+- `data`: supporting context such as workbook maps, table metadata, diffs, or template validation output.
+
+Implemented checks:
+
+- Workbook and sheet checks read workbook maps and scan used ranges for formula errors.
+- Formula checks use `range.find_errors` over the workbook, sheet, or explicit range.
+- Broken-reference checks search for `#REF!` over the workbook, sheet, or explicit range.
+- Template consistency checks compare a target sheet against a registered template fingerprint.
+- Style checks capture a sheet fingerprint or filter template consistency issues down to style/template categories.
+- Table and filter checks return current structured-table metadata for agent review.
+- Unintended-change checks compare two snapshots or detect current changes since a snapshot.
+- Print-layout validation currently reports Office.js capability limits unless template fingerprint comparison is requested.
+
+## Repair Reports
+
+All `excel.repair.*` tools return a `RepairReport`:
+
+- `ok`: true only when an implemented repair path ran successfully.
+- `backups`: backup IDs created before mutation.
+- `validation`: post-repair validation when available.
+- `error`: capability or execution error when the repair cannot run.
+
+Implemented repair paths:
+
+- `excel.repair.style_from_template` uses registered template styles and creates a rollback backup.
+- `excel.repair.formulas_from_template` uses registered template formulas and creates a rollback backup.
+- `excel.repair.table_structure` copies a table structure to a target range through the table mutation lifecycle.
+
+Capability-status repair paths:
+
+- `excel.repair.filters_from_template`
+- `excel.repair.print_layout`
+- `excel.repair.named_ranges`
+- `excel.repair.formula_errors`
+- `excel.repair.merged_cells`
+
+These return `CAPABILITY_UNAVAILABLE` until the add-in has safe, deterministic Office.js or host-bridge implementations for those repairs.
+
+## Agent Flow
+
+Recommended lifecycle for risky workbook changes:
+
+1. Run `excel.validate.workbook` or scoped validators.
+2. Create a snapshot with `excel.snapshot.create`.
+3. Apply plan or batch changes.
+4. Run `excel.validate.no_unintended_changes`, `excel.validate.no_formula_errors`, and template-specific validators.
+5. Use template-backed repairs or `excel.plan.rollback` / `excel.workbook.restore_backup` if validation fails.
+
+---
+
+Source: docs/permissions-cleaning.md
+
+## Permissions and Cleaning
+
+Permissions and cleaning are implemented together because bulk data cleanup must respect workbook safety rules.
+
+## Permissions
+
+`excel.permissions.*` manages runtime policy:
+
+- `excel.permissions.get`: returns current policy, scope, and locked regions.
+- `excel.permissions.set`: updates write, destructive-action, workbook-action, macro, confirmation, and scope settings.
+- `excel.permissions.require_confirmation`: sets destructive levels that require a confirmation token.
+- `excel.permissions.set_scope`: restricts mutations to a workbook, sheets, or registered regions.
+- `excel.permissions.allow_destructive_actions`: allows or blocks structure/workbook destructive actions.
+- `excel.permissions.allow_macro_execution`: records macro policy. Macro execution is not implemented.
+- `excel.permissions.lock_regions`: blocks writes that overlap registered regions.
+- `excel.permissions.unlock_regions`: removes region locks.
+
+Policy checks run before an apply-mode batch reaches Excel. Direct table mutations also check write scope and locked regions.
+
+Default runtime policy allows value/format writes, blocks structure/workbook destructive actions, blocks workbook actions, and has no confirmation requirement until configured.
+
+## Cleaning
+
+`excel.clean.*` reads values from Excel, transforms them in the backend, then writes through the standard batch path when mutation is needed.
+
+Mutating cleaners:
+
+- `excel.clean.normalize_headers`
+- `excel.clean.trim_whitespace`
+- `excel.clean.remove_duplicates`
+- `excel.clean.parse_dates`
+- `excel.clean.parse_numbers`
+- `excel.clean.standardize_currency`
+- `excel.clean.fill_missing_values`
+- `excel.clean.split_column`
+- `excel.clean.merge_columns`
+
+Read-only cleaners:
+
+- `excel.clean.detect_header_row`
+- `excel.clean.detect_outliers`
+- `excel.clean.fuzzy_match`
+
+Because writes use `range.write_values`, cleaning preserves formatting and participates in backup, telemetry, permission, and rollback behavior.
+
+## Current Limits
+
+The permission state and locked region list are persisted in the daemon state file under `.open-workbook/state` by default, or under `OPEN_WORKBOOK_STATE_DIR` when configured.
+
+Cleaning tools currently operate on values only. Formula-preserving table cleanup should use table-specific tools or template repair paths.
+
+---
+
+Source: docs/workbook-file-lifecycle.md
+
+## Workbook File Lifecycle
+
+Open Workbook separates workbook state safety from local file-system control.
+
+## Supported Now
+
+- `excel.workbook.save` saves the active workbook through Office.js.
+- `excel.workbook.close` closes the workbook through Office.js with `Save` or `SkipSave`.
+- `excel.workbook.save_as` uses the configured native file bridge when `OPEN_WORKBOOK_FILE_BRIDGE_URL` is set; otherwise it reports capability status.
+- `excel.workbook.create_backup` creates a persistent JSON snapshot backup.
+- `excel.workbook.restore_backup` restores a persistent or in-memory snapshot backup.
+- `excel.workbook.export_copy` creates a persistent snapshot backup, then writes a true `.xlsx` file. If `OPEN_WORKBOOK_FILE_BRIDGE_URL` is configured, the built-in native bridge uses Excel desktop `SaveCopyAs` automation first. If no bridge is configured or the bridge fails, Open Workbook falls back to Office.js compressed workbook slices on supported Excel desktop hosts. If no `targetPath` is provided, the file is written under `.open-workbook/exports` or `OPEN_WORKBOOK_EXPORT_DIR`.
+- `excel.backup.create_file` creates a durable full-file backup manifest with path, size, checksum, source snapshot backup id when available, pin state, verification time, and restore status.
+- `excel.backup.list`, `excel.backup.get`, and `excel.backup.verify` inspect durable file backups and detect missing or checksum-mismatched backup files.
+- `excel.backup.pin`, `excel.backup.unpin`, `excel.backup.prune`, and `excel.backup.delete` manage retention. Pinned backups are not pruned or deleted.
+- `excel.backup.restore_file` defaults to safe `open-as-new` recovery. `replace-open-workbook` requires explicit confirmation, verifies the source backup, creates a pinned emergency file backup, then calls the native bridge to close, replace, reopen, and verify through host automation. `restore-into-open-workbook` remains unsupported because it is not deterministic for full workbook fidelity.
+- `excel.workbook.export_local_config` exports versioned JSON metadata for Open Workbook templates, regions, and optional permissions.
+- `excel.workbook.import_local_config` imports that JSON into the local daemon registry.
+- `excel.workbook.embed_local_config` stores local config JSON in a namespaced workbook custom XML part when the Excel host supports it.
+- `excel.workbook.read_embedded_local_config` reads embedded local config from workbook custom XML.
+- `excel.workbook.import_embedded_local_config` imports embedded local config into the local daemon registry.
+
+## Not Supported By Office.js
+
+Office.js does not expose a local file path API for `save_as`. That operation needs a native host bridge or user-driven Excel UI.
+
+Office.js does expose compressed document file slices on Excel desktop hosts. Open Workbook uses that path for `export_copy` by asking the add-in for the workbook bytes and writing them from the local backend. Excel on the web does not expose compressed Excel workbook export through this API.
+
+The MCP tools return explicit `CAPABILITY_UNAVAILABLE` errors instead of silently pretending a file was written when no bridge is configured.
+
+## Native File Bridge Contract
+
+Run `owb file-bridge start` to start Open Workbook's built-in native bridge. It listens on `http://127.0.0.1:37847` by default. Set `OPEN_WORKBOOK_FILE_BRIDGE_URL=http://127.0.0.1:37847` for the backend daemon so `excel.workbook.save_as` and bridge-first `excel.workbook.export_copy` can use it. If you override the route with `OPEN_WORKBOOK_FILE_BRIDGE_PATH`, set the same value for the backend daemon and file bridge process.
+
+After opening a workbook in desktop Excel, run `owb file-bridge smoke --workbook Book1.xlsx --target ./book-copy.xlsx` to verify the running bridge against the real host with non-destructive `SaveCopyAs` export-copy automation. Use `--operation save-as --confirm-save-as` only for intentional Save As testing because it changes the open workbook's file identity.
+
+The bridge exposes:
+
+- `GET /status`
+- `POST /shutdown`
+- `POST /v1/workbook-file`
+
+The backend sends `POST /v1/workbook-file` with JSON:
+
+```json
+{
+  "operation": "workbook.save_as",
+  "workbookId": "workbook_...",
+  "targetPath": "/path/to/report.xlsx"
+}
+```
+
+Supported operations are `workbook.save_as`, `workbook.export_copy`, and `workbook.restore_file_backup`. `export_copy` includes the snapshot `sourceBackupId` so the helper can audit which safety backup was captured before writing a true file copy. `restore_file_backup` accepts `backupPath`, `restoreMode`, and optional `restoreTargetPath`; the built-in bridge supports `open-as-new` and `replace-open-workbook` on macOS and Windows, and rejects `restore-into-open-workbook`. If the bridge is not configured or fails, Open Workbook falls back to the add-in compressed-file export path where supported for export copy only.
+
+The helper should return:
+
+```json
+{
+  "ok": true,
+  "operation": "workbook.save_as",
+  "workbookId": "workbook_...",
+  "targetPath": "/path/to/report.xlsx",
+  "filePath": "/path/to/report.xlsx"
+}
+```
+
+The built-in bridge uses AppleScript on macOS and PowerShell COM automation on Windows for `workbook.save_as`, `workbook.export_copy`, and supported `workbook.restore_file_backup` modes. `export_copy` calls Excel `SaveCopyAs`, which saves a copy of the workbook without changing the open workbook's file identity. It matches `workbookId` against the open Excel workbook name or full path. Linux returns an explicit unsupported result.
+
+Before invoking Excel automation, the bridge resolves `targetPath` to an absolute path, validates it against `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` when configured, and creates missing parent directories. Successful `export_copy` responses preserve `sourceBackupId` so audit logs can connect the exported file to the safety snapshot captured before the file write.
+
+## Durable File Backup Lifecycle
+
+Durable file backups are separate from snapshot backups. Snapshot backups are used for range-level rollback through `excel.workbook.restore_backup`. File backups are disaster-recovery artifacts for the entire `.xlsx` file.
+
+`excel.backup.create_file` first captures the existing snapshot safety backup used by `excel.workbook.export_copy`, then writes a true `.xlsx` file through the native bridge or supported Office.js compressed-file fallback. The runtime records a `file-copy` backup with a manifest containing the backup file path, byte size, SHA-256 checksum, source snapshot backup id when present, verification status, pin state, and bridge/export metadata.
+
+`excel.backup.verify` re-checks that the backup file exists and matches its recorded checksum. Missing files are marked `missing`; checksum mismatches are marked `checksum_mismatch`. Agents should verify a file backup before presenting it as restorable.
+
+`excel.backup.restore_file` has explicit restore modes:
+
+- `open-as-new`: default safe mode. The runtime verifies the backup and returns the file path for recovery as a separate workbook.
+- `replace-open-workbook`: destructive mode. Requires confirmation. The runtime verifies the selected backup, creates a pinned emergency file backup, and asks the native bridge to close the matched workbook, copy the backup over the target path, and reopen it.
+- `restore-into-open-workbook`: unsupported. It would require deterministic sheet/table/name/pivot/chart replacement inside an already-open workbook, which is not safe enough to claim as full-file restore.
+
+The built-in bridge uses AppleScript on macOS and PowerShell COM automation on Windows for `replace-open-workbook`. It validates backup and target paths against `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` when configured. Production agents should still prefer snapshot rollback for in-workbook undo and use full-file replace restore only for explicit disaster recovery.
+
+File backup lifecycle operations emit collaboration audit events: `backup.created`, `backup.verified`, `backup.restored`, `backup.deleted`, `backup.pruned`, and `backup.updated`. These events appear in `excel.collab.get_status` so multi-agent clients can show which agent or workflow created, verified, restored, pinned, or removed a file backup.
+
+Set `OPEN_WORKBOOK_FILE_BRIDGE_TIMEOUT_MS` to override the default 30000 ms backend-to-bridge timeout. Set `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` to a path-delimited allowlist of output directories for native Save As and Export Copy. Set `OPEN_WORKBOOK_EXPORT_DIR` to control the default output directory for add-in compressed-file exports.
+
+`excel.runtime.get_status` and `excel.runtime.get_capabilities` include `fileBridge` status, including the configured URL and route path, so agents can check whether native Save As or Export Copy is configured before requesting it. Pass `probeFileBridge: true` to `excel.runtime.get_status` when an agent needs a live `/status` health check with reachability, route, adapter platform, and supported-operation metadata.
+
+## Real Host Smoke
+
+Use the CLI smoke command to verify the native bridge against a real open Excel desktop workbook:
+
+```bash
+owb file-bridge start
+owb file-bridge smoke --workbook Book1.xlsx --target ./open-workbook-smoke-copy.xlsx
+```
+
+The default smoke uses `workbook.export_copy`, which calls Excel `SaveCopyAs` and should not change the open workbook's file identity. The command first checks `GET /status`, then posts to the bridge operation route and fails if Excel is not running, the workbook cannot be matched by name/full path, or the target file cannot be written.
+
+To test file identity-changing Save As behavior, use an explicit confirmation flag:
+
+```bash
+owb file-bridge smoke --workbook Book1.xlsx --operation save-as --confirm-save-as --target ./open-workbook-save-as.xlsx
+```
+
+Local config export/import is different from workbook file export. It does not create or modify an `.xlsx`; it moves Open Workbook registry metadata so teams can version templates, semantic regions, and permission defaults alongside a project. Embedded local config modifies workbook metadata through Office.js custom XML parts and is guarded by workbook-level permissions.
+
+## Backup Directory
+
+Set `OPEN_WORKBOOK_BACKUP_DIR` to control where persistent snapshot backups are written. By default, backups are stored in `.open-workbook/backups` under the MCP process working directory.
+
+---
+
+Source: docs/performance.md
+
+## Performance Contract
+
+Open Workbook treats speed as a correctness requirement because slow workbook automation encourages unsafe shortcuts.
+
+## Rules
+
+- All writes route through the batch compiler.
+- Individual write tools are syntactic sugar over batch operations.
+- Do not call `context.sync()` inside per-cell loops.
+- Use 2D array assignments for values and formulas.
+- Load only requested Office.js properties.
+- Group operations by workbook, sheet, and contiguous range.
+- Chunk large payloads before Office.js limits.
+- Suspend calculation and screen updating only around large operations.
+
+## Large Range Execution
+
+Large matrix writes are split into row chunks before assignment to Office.js ranges:
+
+- values
+- formulas
+- number formats
+
+The chunker preserves whole rows and uses the configured cell limit to avoid sending very large matrices through a single Office.js range assignment. Structural operations such as row insertion, table resize, chart creation, and PivotTable creation remain native Office.js object calls because splitting them would change semantics.
+
+## Telemetry
+
+Every read/write result records:
+
+- duration in milliseconds
+- sync count
+- payload bytes
+- cells read or written
+- range count
+- chunk count
+- engine name and version
+- warning count
+
+Initial releases collect telemetry first, then set hard SLOs from real workbook tests.
+
+## Synthetic Core Benchmark
+
+Run:
+
+```bash
+corepack pnpm benchmark:synthetic
+```
+
+This builds the repo, then runs `scripts/benchmark-synthetic.mjs` against compiled core modules. The benchmark emits JSON for:
+
+- large value matrix chunking
+- large formula matrix chunking
+- batch compilation across many range writes
+
+These numbers are useful for detecting obvious core regressions in chunking and compilation overhead. They are not real Excel SLOs because they do not include Office.js, workbook calculation, add-in websocket latency, Excel rendering, or platform-specific host behavior.
+
+Real workbook SLOs should be calibrated from telemetry captured on macOS and Windows with representative workbook sizes before hard latency budgets are enforced in CI.
+
+---
+
+Source: docs/multi-agent-runtime.md
+
+## Multi-Agent Runtime
+
+Open Workbook treats a live Excel workbook as a transaction target, not as a directly concurrent write surface.
+
+## Core Rule
+
+Multiple agents may read, analyze, create tasks, and preview plans in parallel. Workbook mutations commit through a serialized transaction path so Excel receives one Office.js write batch at a time.
+
+```text
+parallel reads and planning
+        |
+        v
+task / plan / lock / transaction coordination
+        |
+        v
+single serialized Office.js writer
+```
+
+## Implemented Foundation
+
+- Agent records with `agentId`, optional name, client type, PID, and heartbeat timestamps.
+- Task registry for multi-agent workbook work with goal, role, priority, progress, current step, blockers, scope, dependencies, plans, transactions, and rollback backup references.
+- Lock manager for workbook, sheet, range, table, named range, chart, pivot, and template scopes.
+- Lock modes for read, values, formulas, styles, layout, table, chart, pivot, structure, and workbook actions.
+- Configurable lock lease policy for manual locks and transaction locks.
+- Transaction records for queued/applying/applied/failed/blocked commits.
+- Serialized writer queue around `excel.batch.apply` and `excel.plan.apply`.
+- Conservative plan refresh/rebase checks for stale plans.
+- Collaboration events for agent, task, transaction, lock, and conflict activity.
+- MCP tools for task, collaboration, and transaction inspection.
+- Shared `owb daemon` startup plus MCP adapter mode.
+- Durable local state for agents, tasks, locks, transactions, conflicts, conflict telemetry, collaboration events, templates, regions, permissions, plans, and backup indexes.
+- Confirmed rollback-chain preview/apply for related transactions.
+- Parsed formula dependency graph reads for precedent/dependent tracing.
+- Dependency-aware task schedule evaluation and ready-task resume.
+
+## Current Runtime Shape
+
+The current implementation runs coordination primitives inside the daemon-owned `RuntimeService`. This makes all batch and plan applies transaction-recorded and serialized through one coordinator when MCP adapters attach to the daemon.
+
+Runtime commands:
+
+```bash
+owb daemon start
+owb mcp --agent-name tx-cleaner
+owb mcp --agent-name dashboard-builder
+```
+
+`owb mcp` attaches to the daemon when it is available. `owb mcp --standalone` remains available for one-agent local testing.
+
+Daemon state is persisted by default under:
+
+```text
+.open-workbook/state/collaboration-state.json
+```
+
+Set `OPEN_WORKBOOK_STATE_DIR` to move it. On restart, active agents are marked disconnected, active locks are expired, and queued/applying transactions are marked blocked so agents do not mistake interrupted work for committed workbook changes. Template registrations, region registrations, permission policy, plan records, and backup indexes are restored from the same state file.
+
+## Conflict Model
+
+The lock manager allows non-overlapping range work and blocks dangerous overlap:
+
+- `Transactions!A1:F20` and `Transactions!H1:N20` can both be planned safely.
+- `Transactions!A1:F20` and `Transactions!D5:H10` conflict.
+- Sheet/workbook structure locks block child range writes.
+- Expired or released locks stop blocking future work.
+
+Pre-commit fingerprint checks remain active, so manual user edits after preview still force agents to refresh before applying.
+
+Conflict classification is dependency-aware:
+
+- `STRUCTURE_CONFLICT`: workbook/sheet structure scopes conflict with child work.
+- `TABLE_CONFLICT`: table resize, structure, filter, sort, or table data changes conflict with dependent ranges.
+- `FORMULA_DEPENDENCY_CONFLICT`: formula writes or formula-pattern repairs conflict with touched source/target ranges.
+- `DERIVED_OBJECT_CONFLICT`: chart and pivot source/object changes conflict with dependent ranges.
+- `NAMED_RANGE_CONFLICT`: named range changes conflict with ranges or formulas that may depend on those names.
+
+Direct table, formula, chart, pivot, and named-range mutations now create transaction records and acquire typed locks, not just backups. This keeps object-level changes visible in `excel.transaction.*` and `excel.collab.*`.
+
+## Public Tools
+
+Tasks:
+
+- `excel.task.create`
+- `excel.task.claim`
+- `excel.task.update`
+- `excel.task.set_progress`
+- `excel.task.add_blocker`
+- `excel.task.resolve_blocker`
+- `excel.task.evaluate_schedule`
+- `excel.task.resume_ready`
+- `excel.task.complete`
+- `excel.task.fail`
+- `excel.task.cancel`
+- `excel.task.list`
+- `excel.task.get`
+
+Collaboration:
+
+- `excel.collab.get_status`
+- `excel.collab.list_agents`
+- `excel.collab.list_tasks`
+- `excel.collab.list_locks`
+- `excel.collab.list_transactions`
+- `excel.collab.get_conflicts`
+- `excel.collab.get_recent_events`
+
+Locks:
+
+- `excel.lock.get_policy`
+- `excel.lock.set_policy`
+- `excel.lock.acquire`
+- `excel.lock.renew`
+- `excel.lock.release`
+
+Transactions:
+
+- `excel.transaction.list`
+- `excel.transaction.get`
+- `excel.transaction.preview_rollback`
+- `excel.transaction.rollback`
+- `excel.transaction.preview_rollback_chain`
+- `excel.transaction.rollback_chain`
+
+Plan safety:
+
+- `excel.plan.refresh_preview`
+- `excel.plan.rebase`
+
+## Safe Plan Refresh
+
+Plans store target range fingerprints during preview. Before an old plan is applied, agents can call `excel.plan.refresh_preview` or `excel.plan.rebase`.
+
+- If the planned target ranges are unchanged, Open Workbook refreshes the preview fingerprints and the plan can continue to the normal transaction apply path.
+- If any target range changed after preview, refresh/rebase is blocked with `TARGET_REGION_CHANGED`.
+- Structure-level changes, table resizes, sheet deletes, and other high-risk conflicts should still be handled by creating a new plan instead of trying to merge.
+
+## Transaction-Aware Rollback
+
+Rollback is transaction-aware. Before a transaction rollback applies, Open Workbook compares the target transaction scopes with later applied transactions in the same workbook.
+
+- If no later applied transaction overlaps the rollback scope, rollback can proceed through the plan rollback path.
+- If later work overlaps, rollback is blocked with `ROLLBACK_CONFLICT`.
+- If the transaction has no plan rollback metadata, rollback is blocked with `ROLLBACK_UNAVAILABLE` and the user should use backup repair or manual recovery.
+- Rollback previews are exposed through `excel.transaction.preview_rollback` so agents can explain risk before changing Excel.
+- When later related transactions must also be reverted, `excel.transaction.preview_rollback_chain` returns a newest-first rollback order and a confirmation token.
+- `excel.transaction.rollback_chain` applies that order only after the exact confirmation token is supplied, and stops if any step fails.
+
+## Task Progress And Blockers
+
+Tasks expose `progress`, `currentStep`, and `blockers` so agent status can be visible in a Cursor/OpenCode-like workflow.
+
+- Progress is a clamped `0..100` number with optional current-step text.
+- Blockers can be `info`, `warning`, or `blocked`, and can optionally point to a workbook scope.
+- A `blocked` blocker moves the task to `blocked` status without losing plan, transaction, or rollback history.
+
+## Task Scheduling
+
+`excel.task.evaluate_schedule` checks each task against explicit task dependencies, open blocking blockers, and active lock conflicts for the task's allowed scopes.
+
+- Ready tasks return `state: "ready"` with `suggestedAction` of `start` or `resume`.
+- Tasks waiting on incomplete dependencies return `state: "waiting_dependencies"`.
+- Tasks blocked by active locks return `state: "waiting_locks"`.
+- Lock-wait decisions include `nextRetryAt` when the active conflicting lock expiry is known.
+- `excel.task.resume_ready` applies the scheduler result and moves blocked tasks whose waits cleared back to `open` or `claimed`.
+
+## Lock Lease Policy
+
+Manual and transaction locks use a runtime lease policy:
+
+- `defaultTtlMs`: default TTL for manual locks.
+- `transactionTtlMs`: TTL for transaction writer locks.
+- `maxTtlMs`: upper bound applied to manual and transaction lock requests.
+- `allowManualLocks`: disables `excel.lock.acquire` when false while preserving internal transaction locks.
+
+The policy is persisted with daemon collaboration state and can also be initialized with `OPEN_WORKBOOK_LOCK_DEFAULT_TTL_MS`, `OPEN_WORKBOOK_LOCK_TRANSACTION_TTL_MS`, `OPEN_WORKBOOK_LOCK_MAX_TTL_MS`, and `OPEN_WORKBOOK_ALLOW_MANUAL_LOCKS=0`.
+
+## Formula Dependency Safety
+
+Formula graph parsing produces dependency nodes for local ranges, structured table references, and external workbook references. Structured table references resolve to precise header, data, totals, all, and column-span ranges when table metadata is available. Dynamic array spill references resolve to the spill range when metadata is available and otherwise fall back to the anchor cell with a warning.
+
+Formula write transactions add parsed local range and table dependencies to their lock scopes, so source edits and dependent formula writes cannot commit concurrently through separate agents.
+
+External workbook references remain graph-only because they cannot be locked inside the local workbook runtime.
+
+## Conflict Guidance
+
+Conflict records include structured guidance for agents and UI surfaces.
+
+- Lock conflicts recommend waiting or retrying after `lockExpiresAt`, coordinating with the lock owner, and splitting scope when possible.
+- Table, formula, chart, pivot, and named-range conflicts recommend task handoff and scope splitting before retry.
+- Structure conflicts stay blocked behind manual review.
+- Rollback conflicts point agents toward rollback-chain preview or backup/template repair.
+
+Use `excel.conflict.get_guidance` for recent runtime conflicts, or `excel.conflict.explain` to explain a supplied conflict record.
+
+## Conflict Telemetry
+
+Conflict telemetry records each persisted runtime conflict and tracks whether lock waits clear when the blocking lock is released.
+
+- `excel.conflict.get_telemetry` summarizes conflict counts, open/cleared counts, hot scopes, hot tasks, hot agents, codes, and primary actions.
+- `excel.conflict.clear_telemetry` clears telemetry for one workbook or the whole runtime.
+- Telemetry is persisted with daemon state and capped to the most recent runtime records.
+
+## Remaining Production Hardening
+
+The remaining production work is host verification around the implemented collaboration model:
+
+1. Keep structure-level merge conflicts blocked by default.
+2. Add real Excel sideload verification before declaring host-level production readiness.
+
+See [Production Readiness](production-readiness.md) for the invariant checklist and release gates.
+
+---
+
+Source: docs/production-readiness.md
+
+## Production Readiness
+
+This checklist defines what must remain true before Open Workbook is published or tagged as production ready.
+
+## Multi-Agent Invariants
+
+- Excel receives workbook mutations through one serialized writer queue per daemon.
+- Agents may read and plan in parallel, but commits must pass through task, lock, transaction, permission, backup, and validation paths.
+- Every mutating transaction records `agentId`, `taskId`, `workbookId`, operation scopes, lock ids, backups, warnings, and final status when that metadata is available.
+- Manual locks and transaction locks use bounded leases. Expired locks must not block future work.
+- Lock conflicts return owner/task/expiry metadata where possible, plus structured conflict guidance.
+- Formula writes include parsed local range and table dependencies in lock scopes.
+- Table, chart, pivot, named range, sheet, and workbook-structure operations use typed scopes, not only broad workbook locks.
+- User/manual edits after preview must be detected through fingerprint checks before commit.
+- Rollback must be previewed before apply. Later overlapping transactions block single rollback and require rollback-chain preview.
+- Rollback chains apply newest-first and require the preview confirmation token when more than one transaction is affected.
+- Daemon restart recovery must not present queued or applying transactions as committed work.
+- Local daemon state must restore templates, regions, permissions, plans, backup indexes, and collaboration records without requiring a real Excel reconnect.
+
+## Safety Lifecycle
+
+Every stable mutating MCP tool should follow this lifecycle:
+
+1. Validate permissions and destructive-action policy.
+2. Resolve workbook/sheet/range/object scopes.
+3. Capture snapshot or fingerprint data needed for stale-preview detection.
+4. Create a backup for rollback or repair.
+5. Acquire scoped transaction locks.
+6. Commit through the serialized writer queue.
+7. Validate result and record warnings.
+8. Release locks and persist task, event, and transaction state.
+
+Capability-unavailable responses are preferred over simulated success when Office.js cannot perform an operation safely across supported hosts.
+
+## Release Gates
+
+- `corepack pnpm verify` passes. This runs build, tests, and synthetic core benchmarks.
+- MCP callable tool names stay in sync with the shared protocol catalog. `corepack pnpm verify` runs `scripts/validate-mcp-catalog.mjs` after build and fails if a stable or preview callable tool is missing from the MCP server or if the server registers a tool that is not in the callable catalog.
+- Tool surface docs stay in sync with the callable catalog. `corepack pnpm verify` runs `scripts/validate-docs-surface.mjs` and fails if `docs/tool-surface.md` omits an exposed stable or preview tool.
+- Package metadata stays publishable. `corepack pnpm verify` runs `scripts/validate-package-metadata.mjs` and fails if package versions, repository metadata, public/private publish intent, README presence, or `dist` entrypoints drift.
+- CLI install smoke stays healthy. `corepack pnpm verify` runs `scripts/smoke-cli.mjs` and checks `doctor`, `paths`, OpenCode config generation, service wrapper generation, sideload manifest generation, and concise disconnected-daemon errors without requiring Excel or a bound local daemon.
+- `git diff --check` passes.
+- GitHub Actions CI passes the same non-E2E verification plus `corepack pnpm pack:dry-run` for every publishable package.
+- Tool catalog, README, installation docs, and OpenCode docs match the exposed MCP surface.
+- Fresh local install can run `owb doctor`, generate a manifest, start `owb daemon`, connect `owb mcp`, and report runtime status. If the daemon cannot bind or cannot be reached, CLI commands must fail with concise user-facing errors.
+- Excel add-in can be sideloaded on macOS and Windows using the generated manifest.
+- Native file bridge host smoke passes on macOS and Windows with `owb file-bridge smoke --workbook <open-workbook-name> --target <copy.xlsx>`.
+- Real Excel smoke test covers read, write, batch apply, template repair, rollback preview/apply, and conflict detection.
+- Multi-agent smoke test covers two MCP clients planning concurrently, one writer waiting on a lock, and telemetry reporting the contention.
+- Known Office.js host limitations are documented as `CAPABILITY_UNAVAILABLE` or warnings.
+
+## Host Verification Matrix
+
+- macOS Excel desktop: sideload manifest, connect add-in, read/write ranges, batch apply, backup, rollback.
+- Windows Excel desktop: sideload manifest, connect add-in, read/write ranges, batch apply, backup, rollback.
+- Excel on the web: optional until HTTPS hosting and tenant sideload instructions are finalized.
+
+## Structure-Level Conflicts
+
+Open Workbook should keep structure-level merge conflicts blocked by default. Sheet deletes, sheet renames, row/column insertions, table resizes, named-range changes, pivot source changes, and chart source changes can invalidate later operations in ways that are not equivalent to code text merges. Agents should create a new plan after refresh instead of auto-merging these changes.
+
+## Publish Notes
+
+Before publishing, bump versions consistently, regenerate CLI assets, and run the release gates above from a clean checkout. Do not claim production host readiness until the real Excel smoke tests pass on both macOS and Windows.
+
+---
+
+Source: docs/service-wrapper.md
+
+## Service Wrapper
+
+Open Workbook does not install login services automatically. The CLI can generate native wrapper files that users or administrators can review and install.
+
+## Generate Wrappers
+
+Add-in asset server:
+
+```bash
+owb service manifest --target macos --service addin --out com.open-workbook.addin.plist
+owb service manifest --target systemd --service addin --out com.open-workbook.addin.service
+owb service manifest --target windows --service addin --out open-workbook-addin-task.ps1
+```
+
+Shared daemon:
+
+```bash
+owb service manifest --target macos --service daemon --out com.open-workbook.daemon.plist
+owb service manifest --target systemd --service daemon --out com.open-workbook.daemon.service
+owb service manifest --target windows --service daemon --out open-workbook-daemon-task.ps1
+```
+
+Native file bridge:
+
+```bash
+owb service manifest --target macos --service file-bridge --out com.open-workbook.file-bridge.plist
+owb service manifest --target systemd --service file-bridge --out com.open-workbook.file-bridge.service
+owb service manifest --target windows --service file-bridge --out open-workbook-file-bridge-task.ps1
+```
+
+Use `--command` when the installed command is not `owb`.
+
+## Install Examples
+
+macOS launchd:
+
+```bash
+mkdir -p ~/Library/LaunchAgents
+cp com.open-workbook.addin.plist ~/Library/LaunchAgents/
+cp com.open-workbook.file-bridge.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.open-workbook.addin.plist
+launchctl load ~/Library/LaunchAgents/com.open-workbook.file-bridge.plist
+```
+
+Linux systemd user service:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp com.open-workbook.addin.service ~/.config/systemd/user/
+cp com.open-workbook.file-bridge.service ~/.config/systemd/user/
+systemctl --user enable --now com.open-workbook.addin.service
+systemctl --user enable --now com.open-workbook.file-bridge.service
+```
+
+Windows Task Scheduler:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\open-workbook-addin-task.ps1
+powershell -ExecutionPolicy Bypass -File .\open-workbook-file-bridge-task.ps1
+```
+
+The wrapper only starts the local process. Excel still requires the user or administrator to trust and sideload the add-in manifest. Configure the daemon with `OPEN_WORKBOOK_FILE_BRIDGE_URL=http://127.0.0.1:37847` when using the file bridge for native Save As.
+
+---
+
+Source: docs/opencode.md
+
+## OpenCode Configuration
+
+Open Workbook exposes Excel tools through MCP. OpenCode connects to an `owb mcp` adapter; the adapter attaches to the shared `owb daemon` when available. OpenRouter or another model provider is configured in OpenCode, not in Open Workbook.
+
+## Installed CLI
+
+```bash
+owb opencode config --id open-workbook --agent-name finance-agent
+```
+
+Example:
+
+```json
+{
+  "mcp": {
+    "open-workbook": {
+      "type": "local",
+      "command": ["owb", "mcp", "--agent-name", "finance-agent"],
+      "enabled": true
+    }
+  }
+}
+```
+
+Add the snippet to your OpenCode MCP configuration.
+
+## Source Checkout
+
+```bash
+corepack pnpm build
+node packages/cli/dist/index.js opencode config --id open-workbook --command "node packages/cli/dist/index.js" --agent-name finance-agent
+```
+
+Example:
+
+```json
+{
+  "mcp": {
+    "open-workbook": {
+      "type": "local",
+      "command": ["node packages/cli/dist/index.js", "mcp", "--agent-name", "finance-agent"],
+      "enabled": true
+    }
+  }
+}
+```
+
+## Runtime
+
+Start the shared daemon once:
+
+```bash
+owb daemon start
+```
+
+OpenCode launches `owb mcp`. That process:
+
+- MCP stdio server for `excel.*` tools
+- attaches to the shared daemon when available
+- falls back to standalone single-process runtime only when no daemon is running
+
+For one-agent local testing without a daemon:
+
+```bash
+owb mcp --standalone
+```
+
+Run the add-in asset server separately:
+
+```bash
+owb addin serve
+```
+
+Then sideload the generated Excel manifest once. See [Installation](installation.md) and [Sideloading](sideloading.md).
+
+## Recommended First Calls
+
+After Excel opens the add-in:
+
+```text
+excel.runtime.get_status
+excel.runtime.get_active_context
+excel.runtime.get_capabilities
+excel.workbook.get_workbook_map
+excel.collab.get_status
+```
+
+Use `excel.plan.*` or `excel.batch.*` for changes that should be previewed and rollback-aware. For stale plans, call `excel.plan.refresh_preview` or `excel.plan.rebase` before apply; both block if the target range changed since preview.
+
+For multi-agent workflows, update status with `excel.task.set_progress`, use `excel.task.add_blocker` when waiting for locks or user input, and use `excel.transaction.preview_rollback_chain` before reverting work that may have later dependent transactions.
+
+Use `excel.task.evaluate_schedule` before starting parallel work on the same workbook. It tells each agent whether its task is ready, waiting on another task, waiting on a lock, or blocked by an explicit blocker. Use `excel.formula.get_dependency_graph` or the trace tools before editing ranges that feed formulas, charts, pivots, or reports.
+
+For long planning work, use `excel.lock.acquire` to reserve a workbook scope, renew it with `excel.lock.renew`, and release it with `excel.lock.release` when the plan is applied or cancelled.
+
+When a transaction is blocked, call `excel.conflict.get_guidance`. It returns concrete next steps such as retry after lock expiry, split the task scope, hand off to the owner task, refresh the plan, or ask the user for manual review.
+
+Use `excel.conflict.get_telemetry` during longer sessions to find repeated contention on the same range, table, task, or agent before assigning more parallel work.
+
+---
+
+Source: docs/packaging.md
+
+## Packaging And Publishing
+
+Open Workbook is designed for local-first, non-AppSource distribution. The public entry point is the `owb` CLI, which carries the built MCP server and Excel add-in assets.
+
+## Packages
+
+Publishable packages:
+
+- `@open-workbook/cli`: user-facing CLI and bundled runtime assets
+- `@open-workbook/mcp-server`: MCP stdio server
+- `@open-workbook/backend`: local backend broker and runtime service
+- `@open-workbook/protocol`: shared contracts, tool catalog, resources, and prompts
+- `@open-workbook/excel-core`: planning, backups, snapshots, templates, permissions, and range utilities
+- `@open-workbook/office-js-engine`: Office.js engine interface and defaults
+
+Private workspace package:
+
+- `@open-workbook/excel-addin`: source for the sideloaded add-in; bundled into `@open-workbook/cli` assets rather than published as a standalone install target
+
+## Build
+
+```bash
+corepack pnpm install
+corepack pnpm build
+corepack pnpm test
+```
+
+The root build:
+
+1. Compiles all TypeScript projects.
+2. Copies built MCP server and add-in assets into `packages/cli/assets`.
+3. Ensures CLI binaries are executable.
+
+## CLI Asset Bundle
+
+`@open-workbook/cli` resolves runtime assets in this order:
+
+1. Source checkout paths, for contributors.
+2. Packaged `packages/cli/assets`, for installed users.
+3. Installed package dependencies, as a fallback for package-manager layouts.
+
+This lets the same command shape work from source and from an installed package:
+
+```bash
+owb mcp
+owb addin serve
+owb sideload mac
+owb sideload windows
+owb sideload manifest
+owb opencode config
+owb doctor
+owb paths
+```
+
+## Source Install Smoke Test
+
+```bash
+node packages/cli/dist/index.js doctor
+node packages/cli/dist/index.js paths
+node packages/cli/dist/index.js opencode config --id open-workbook --command "node packages/cli/dist/index.js"
+node packages/cli/dist/index.js sideload manifest --out /tmp/open-workbook.xml
+```
+
+## Package Dry Run
+
+```bash
+npm pack --dry-run ./packages/cli
+```
+
+The tarball should include:
+
+- `packages/cli/dist`
+- `packages/cli/assets/mcp-server/dist`
+- `packages/cli/assets/excel-addin/dist`
+- `packages/cli/assets/excel-addin/public`
+- `packages/cli/assets/excel-addin/scripts`
+- `packages/cli/assets/excel-addin/manifest.xml`
+- `packages/cli/README.md`
+
+## Publish Checklist
+
+Before publishing:
+
+1. Confirm package versions are aligned.
+2. Run `corepack pnpm verify`.
+3. Run `node packages/cli/dist/index.js doctor`.
+4. Run `corepack pnpm pack:dry-run`.
+5. Confirm generated manifests include the expected taskpane URL and `backendUrl`.
+6. Confirm `@open-workbook/excel-addin` remains private.
+7. Confirm npm publish access is public for publishable scoped packages.
+
+`corepack pnpm verify` runs `scripts/validate-package-metadata.mjs`, which enforces the package version, repository, public/private publish intent, `dist` entrypoints, README presence, and publish access rules above.
+
+## End-User Install Shape
+
+The intended user flow after package publishing:
+
+```bash
+npm install -g @open-workbook/cli
+owb doctor
+owb opencode config --id open-workbook
+owb addin serve
+owb sideload mac
+```
+
+Windows users should run:
+
+```bash
+owb sideload windows --out open-workbook.xml
+```
+
+and copy the generated manifest into a trusted shared-folder add-in catalog.
+
+## Native Installer Shape
+
+Native installers or administrator scripts can wrap the same commands:
+
+- install Node/runtime assets or embed a Node runtime
+- place `owb` on `PATH`
+- register an optional auto-start process from `owb service manifest`
+- guide or automate the Excel manifest trust step where the platform allows it
+
+Excel still requires user or admin trust approval for the add-in manifest outside AppSource.
+
+---
+
+Source: docs/sideloading.md
+
+## Local Excel Add-in Sideloading
+
+Open Workbook does not require Microsoft AppSource. Users can sideload the Excel add-in locally and run the MCP server on their machine.
+
+## Runtime Model
+
+- The MCP server starts the local backend automatically.
+- The Excel add-in connects to that backend at `ws://127.0.0.1:37845/addin`.
+- The add-in taskpane is served locally at `http://localhost:37846/taskpane.html`.
+- The source manifest is `apps/excel-addin/manifest.xml`; CLI sideload commands generate a runtime manifest with the active taskpane and backend URLs.
+
+## Development Sideload
+
+Run both processes:
+
+```bash
+corepack pnpm dev:mcp
+corepack pnpm dev:addin
+```
+
+Then sideload a generated manifest into Excel. The source manifest is useful for development, but generated manifests include the active taskpane and backend URLs.
+
+You can inspect the generated manifest with:
+
+```bash
+node packages/cli/dist/index.js sideload manifest
+```
+
+## macOS Manual Sideload
+
+For Excel on macOS, copy the manifest to the Office add-ins sideload folder:
+
+```bash
+corepack pnpm sideload:mac
+```
+
+With the CLI directly:
+
+```bash
+owb sideload mac
+```
+
+Then restart Excel and open the add-in from the ribbon or Insert > Add-ins, depending on the Excel version.
+
+## Windows Manual Sideload
+
+For Windows desktop Excel, use a trusted shared-folder catalog:
+
+1. Create a folder for add-in manifests, such as `C:\open-workbook-addins`.
+2. Share that folder in Windows and note its UNC path, such as `\\YOUR-PC\open-workbook-addins`.
+3. Generate the Open Workbook manifest and copy it into the shared folder.
+4. In Excel, open Trust Center settings and add the UNC path as a trusted add-in catalog.
+5. Select `Show in Menu`, restart Excel, and insert the shared-folder add-in.
+
+The helper command writes a generated manifest and prints the expected catalog setup:
+
+```bash
+corepack pnpm sideload:windows
+```
+
+With the CLI directly:
+
+```bash
+owb sideload windows --out open-workbook.xml
+```
+
+Custom local ports can be passed to every manifest-producing command:
+
+```bash
+owb sideload manifest --addin-url http://127.0.0.1:37846 --backend-url ws://127.0.0.1:37845/addin
+```
+
+For local desktop sideloading, the default URLs use loopback HTTP and WebSocket endpoints. HTTPS serving is available when you provide a trusted local certificate:
+
+```bash
+owb addin serve --https \
+  --tls-cert ./certs/open-workbook.local.pem \
+  --tls-key ./certs/open-workbook.local-key.pem
+
+OPEN_WORKBOOK_ADDIN_HTTPS=1 \
+owb sideload manifest --out open-workbook.xml
+```
+
+The CLI does not install or trust certificates automatically. Use a local tool such as `mkcert` or your organization's certificate process, then pass the certificate paths to the add-in server.
+
+## User Install Shape
+
+For non-store open-source distribution, the expected install flow is:
+
+1. Install/configure the MCP server in the MCP client.
+2. Run or auto-start the local add-in asset server.
+3. Sideload the manifest once.
+4. Open Excel; the add-in connects to the MCP-started backend.
+
+`owb service manifest` can generate launchd, systemd user, or Windows scheduled-task wrappers for auto-starting the add-in asset server. Excel still requires user or admin trust approval for the add-in manifest.
+
+---
+
+Source: docs/roadmap.md
+
+## Roadmap
+
+Open Workbook is ready for local source installs, packaged CLI testing, MCP integration, and sideloaded desktop Excel development. The roadmap below tracks what is implemented and what still needs hardening before broader production use.
+
+## Implemented Foundations
+
+- Monorepo package structure and publish metadata.
+- Shared protocol contracts and tool catalog.
+- MCP stdio server.
+- Local backend broker.
+- Excel Office.js add-in runtime.
+- CLI for running MCP, serving the add-in, generating manifests, sideloading, diagnostics, and OpenCode config.
+- Backup, snapshot, plan, permission, template, diff, and rollback primitives.
+- Runtime capability reporting by connected Office host, platform, Office version, and supported `ExcelApi` versions.
+- HTTPS add-in asset serving with user-provided local certificate and manifest URL generation.
+- Large matrix write chunking for values, formulas, and number formats, with chunk telemetry.
+- Persistent local state for templates, regions, permissions, plans, and backup indexes.
+- Workbook local config export/import for portable templates, regions, and permission metadata.
+- Workbook custom XML embedding/import for portable templates, regions, and permission metadata when the connected Excel host exposes the Office.js API.
+- Service wrapper manifest generation for add-in and daemon auto-start on macOS, Linux systemd user services, and Windows Task Scheduler.
+- Deterministic chart template metadata replay for chart type, style, title, and geometry.
+
+## Implemented Excel Surfaces
+
+- Runtime status, active workbook context, selection, active sheet switching.
+- Workbook map, snapshots, external-change detection, calculate, save, backup, restore, export fallback, close.
+- Sheet create/copy/rename/delete/hide/protect/clear/tab color operations.
+- Range reads, writes, formulas, formats, clears, copy/move, rows/columns, autofit, merge/unmerge, search, blanks, errors.
+- Batch validate, dry run, apply, result tracking.
+- Template register, infer, create sheet, previous-period sheet, clear/fill regions, validate, repair.
+- Style fingerprints, comparisons, repair, and granular style copy.
+- Formula pattern reads, copy, fill, validation, repair, convert to values, recalculate, explain.
+- Tables, filters, sorts, names, regions, validation, repair, cleaning, PivotTables, charts, events, snapshots, permissions.
+
+## Hardening Before Broader Production
+
+- Real Excel E2E matrix on macOS and Windows.
+- Larger workbook performance profiling and SLO calibration from real workbook traces.
+- Deeper PivotTable field-layout/template copying where Office.js exposes deterministic APIs.
+
+## Explicit Non-Goals For Now
+
+- Microsoft AppSource submission.
+- Macro execution.
+- Cloud storage of workbook data by default.
+
+---
+
+Source: packages/protocol/README.md
+
+## @open-workbook/protocol
+
+Shared protocol package for Open Workbook.
+
+It contains:
+
+- workbook, range, operation, snapshot, template, table, chart, pivot, and permission types
+- JSON-RPC envelope types
+- tool catalog and exposure rules
+- MCP resource catalog
+- prompt catalog
+- runtime error helpers
+
+## Usage
+
+```ts
+import { ToolCatalog, getToolCatalogSummary, runtimeError } from "@open-workbook/protocol";
+```
+
+Most users should install `@open-workbook/cli`; this package is published for integrators building clients, tests, or alternate engines.
+
+---
+
+Source: packages/excel-core/README.md
+
+## @open-workbook/excel-core
+
+Core workbook utilities for Open Workbook.
+
+It contains:
+
+- A1 range parsing and cell counting
+- stable fingerprints
+- batch compilation
+- backup records
+- snapshot comparison
+- template registry
+- plan manager
+- default permission policy
+
+## Usage
+
+```ts
+import { BatchCompiler, BackupManager, SnapshotManager, TemplateRegistry } from "@open-workbook/excel-core";
+```
+
+This package is runtime-agnostic. It does not depend on Office.js and can be reused by future Excel engines.
+
+---
+
+Source: packages/office-js-engine/README.md
+
+## @open-workbook/office-js-engine
+
+Office.js engine interface and defaults for Open Workbook.
+
+The live Office.js execution currently lives in the Excel add-in runtime. This package defines engine contracts and default options that future host bindings can share.
+
+## Usage
+
+```ts
+import { DefaultOfficeJsEngineOptions, OfficeJsEngine } from "@open-workbook/office-js-engine";
+```
+
+Most users should install `@open-workbook/cli`. This package is published for engine integration work and tests.
+
+---
+
+Source: packages/cli/README.md
+
+## @open-workbook/cli
+
+User-facing CLI for Open Workbook.
+
+```bash
+npm install -g @open-workbook/cli
+owb doctor
+```
+
+## Commands
+
+```bash
+owb daemon start
+owb daemon status
+owb daemon stop
+owb file-bridge start
+owb file-bridge status
+owb file-bridge smoke --workbook Book1.xlsx --target ./book-copy.xlsx
+owb file-bridge stop
+owb mcp
+owb mcp --agent-name tx-cleaner
+owb mcp --standalone
+owb addin serve
+owb service manifest --target macos --service addin
+owb service manifest --target macos --service file-bridge
+owb sideload mac
+owb sideload windows
+owb sideload manifest
+owb opencode config --id open-workbook
+owb doctor
+owb paths
+```
+
+## Runtime
+
+- `owb daemon start` starts the shared local coordinator used by the Excel add-in and multiple MCP adapters.
+- `owb file-bridge start` starts the native workbook file bridge used for Save As and host file operations.
+- `owb file-bridge smoke --workbook NAME --target ./copy.xlsx` verifies a running bridge against a real open Excel workbook using non-destructive `SaveCopyAs` export-copy automation. Use `--operation save-as --confirm-save-as` only when you intentionally want to test file identity-changing Save As behavior.
+- `owb mcp` starts an MCP adapter and attaches to the daemon when available.
+- `owb mcp --agent-name NAME` labels that adapter in collaboration status.
+- `owb mcp --standalone` starts a single-process MCP server with an embedded backend for one-agent use.
+- `owb addin serve` serves the sideloaded Excel taskpane, icons, and generated manifest.
+- `owb addin serve --https --tls-cert ./cert.pem --tls-key ./key.pem` serves the add-in over HTTPS with a trusted local certificate.
+- `owb service manifest` generates launchd, systemd user, or Windows Task Scheduler wrappers for `owb addin serve`, `owb daemon start`, or `owb file-bridge start`.
+- `owb sideload manifest` writes a manifest with the active taskpane and backend URLs.
+- `owb sideload mac` copies a generated manifest into Excel for macOS' WEF sideload folder.
+- `owb sideload windows` writes a generated manifest and prints trusted shared-folder catalog instructions.
+
+## OpenCode
+
+```bash
+owb opencode config --id open-workbook --agent-name finance-agent
+```
+
+Example output:
+
+```json
+{
+  "mcp": {
+    "open-workbook": {
+      "type": "local",
+      "command": ["owb", "mcp", "--agent-name", "finance-agent"],
+      "enabled": true
+    }
+  }
+}
+```
+
+## Asset Resolution
+
+The CLI resolves source-checkout assets first, packaged assets second, and installed dependency assets last. This lets the same command shape work for contributors and installed users.
+
+## Environment
+
+- `OPEN_WORKBOOK_HOST`
+- `OPEN_WORKBOOK_PORT`
+- `OPEN_WORKBOOK_ADDIN_PATH`
+- `OPEN_WORKBOOK_ADDIN_HOST`
+- `OPEN_WORKBOOK_ADDIN_PORT`
+- `OPEN_WORKBOOK_ADDIN_HTTPS=1`
+- `OPEN_WORKBOOK_ADDIN_PROTOCOL=https`
+- `OPEN_WORKBOOK_ADDIN_TLS_CERT`
+- `OPEN_WORKBOOK_ADDIN_TLS_KEY`
+- `OPEN_WORKBOOK_ADDIN_URL`
+- `OPEN_WORKBOOK_BACKEND_URL`
+- `OPEN_WORKBOOK_DAEMON_URL`
+- `OPEN_WORKBOOK_FILE_BRIDGE_URL`
+- `OPEN_WORKBOOK_FILE_BRIDGE_HOST`
+- `OPEN_WORKBOOK_FILE_BRIDGE_PORT`
+- `OPEN_WORKBOOK_FILE_BRIDGE_PATH`
+- `OPEN_WORKBOOK_FILE_BRIDGE_TIMEOUT_MS`
+- `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS`
+- `OPEN_WORKBOOK_AGENT_NAME`
+- `OPEN_WORKBOOK_MCP_STANDALONE=1`
+- `OPEN_WORKBOOK_SERVICE_COMMAND`
+- `OPEN_WORKBOOK_STATE_DIR`
+- `OPEN_WORKBOOK_BACKUP_DIR`
+- `OPEN_WORKBOOK_EXPORT_DIR`
+- `OPEN_WORKBOOK_PREVIEW_TOOLS=1`
+- `OPEN_WORKBOOK_LOCK_DEFAULT_TTL_MS`
+- `OPEN_WORKBOOK_LOCK_TRANSACTION_TTL_MS`
+- `OPEN_WORKBOOK_LOCK_MAX_TTL_MS`
+- `OPEN_WORKBOOK_ALLOW_MANUAL_LOCKS=0`
+
+---
+
+Source: apps/backend/README.md
+
+## @open-workbook/backend
+
+Local backend runtime for Open Workbook.
+
+The backend coordinates Excel add-in sessions, workbook snapshots, backups, plans, permissions, events, diffs, validation, repair, and rollback. It exposes a WebSocket endpoint for the Office.js add-in and is normally started by `@open-workbook/mcp-server`.
+
+## Exports
+
+```ts
+import { RuntimeService } from "@open-workbook/backend/runtime";
+import { startBackendServer } from "@open-workbook/backend/server";
+```
+
+## Environment
+
+- `OPEN_WORKBOOK_HOST`
+- `OPEN_WORKBOOK_PORT`
+- `OPEN_WORKBOOK_ADDIN_PATH`
+- `OPEN_WORKBOOK_BACKUP_DIR`
+
+## Notes
+
+Most users should install `@open-workbook/cli`. This package is published for embedding, testing, and advanced integrations.
+
+---
+
+Source: apps/mcp-server/README.md
+
+## @open-workbook/mcp-server
+
+MCP stdio server for Open Workbook.
+
+This package exposes `excel.*` tools, resources, and prompts to MCP clients. It also starts the local backend WebSocket used by the sideloaded Excel add-in.
+
+## Usage
+
+Installed CLI users should normally run:
+
+```bash
+owb mcp
+```
+
+Direct package binary:
+
+```bash
+open-workbook-mcp
+```
+
+## Environment
+
+- `OPEN_WORKBOOK_HOST`: backend host, default `127.0.0.1`
+- `OPEN_WORKBOOK_PORT`: backend port, default `37845`
+- `OPEN_WORKBOOK_ADDIN_PATH`: backend WebSocket path, default `/addin`
+- `OPEN_WORKBOOK_PREVIEW_TOOLS=1`: expose preview tools in addition to stable tools
+
+## Notes
+
+Use `@open-workbook/cli` for end-user installs. This package is published separately so advanced integrators can embed or run the MCP server directly.
+
+---
+
+Source: apps/excel-addin/README.md
+
+## @open-workbook/excel-addin
+
+Office.js Excel add-in runtime for Open Workbook.
+
+This workspace package contains the taskpane HTML, manifest template, static asset server, and Office.js executor. It is private because the built add-in assets are bundled into `@open-workbook/cli`.
+
+## Development
+
+```bash
+corepack pnpm --filter @open-workbook/excel-addin build
+corepack pnpm --filter @open-workbook/excel-addin dev
+```
+
+The development server serves:
+
+- `taskpane.html`
+- `/manifest.xml`
+- add-in icons
+- compiled JavaScript under `/dist`
+
+## Runtime
+
+The taskpane connects to the backend URL embedded in the generated manifest:
+
+```text
+ws://127.0.0.1:37845/addin
+```
+
+Use `owb sideload mac`, `owb sideload windows`, or `owb sideload manifest` to generate the manifest that Excel should load.
