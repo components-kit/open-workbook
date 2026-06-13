@@ -64,12 +64,15 @@ Cleaning writes must stay within the requested sheet, range, table, or registere
 ## Update Tables, Filters, Or Sorts
 
 1. Inspect with `excel.table.get_info` and `excel.filter.get_filters`.
-2. Use `excel.table.append_rows` or `excel.table.update_rows` for data.
-3. Use `excel.table.resize` only when structure must change.
-4. Preserve or reapply filters with `excel.filter.apply`, `excel.filter.preserve_from_template`, or `excel.table.preserve_filters`.
-5. Validate with `excel.validate.tables` and `excel.validate.filters`.
+2. Use projected `excel.table.read` options when only some columns or rows are needed.
+3. Use `excel.table.reorder_columns` for column order changes.
+4. Use `excel.table.append_rows` or `excel.table.update_rows` for data.
+5. Use `excel.table.resize` only when structure must change.
+6. Preserve or reapply filters with `excel.filter.apply`, `excel.filter.preserve_from_template`, or `excel.table.preserve_filters`.
+7. Validate with `excel.validate.tables` and `excel.validate.filters`.
 
 Avoid raw range writes inside table bodies when table tools can express the intent.
+Avoid full-table rewrites for layout changes such as column reorder; they are slow on large tables and can break table identity or dependent objects.
 
 ## Create Or Update Pivots And Charts
 

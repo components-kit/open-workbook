@@ -21,9 +21,9 @@ If capabilities are unknown because the add-in is disconnected, stop and ask for
 - Formatting: `excel.range.read_number_formats`, `excel.range.read_styles`
 - Full cell payload: `excel.range.read_full`
 - Search and diagnostics: `excel.range.search`, `excel.range.find_blank_cells`, `excel.range.find_errors`
-- Table-shaped data: `excel.table.read`
+- Table-shaped data: `excel.table.read`; pass `columns`, `rowOffset`, `rowLimit`, and include flags for large tables
 
-Use explicit sheet/address ranges whenever possible. Use used-range or workbook-wide scans only for audits, validation, search, or discovery.
+Use explicit sheet/address ranges whenever possible. Use used-range or workbook-wide scans only for audits, validation, search, or discovery. For simple reads, use the facet-specific range tools instead of `excel.range.read_full`.
 
 ## Writing Data
 
@@ -41,11 +41,13 @@ Prefer `excel.plan.*` when a user should review a diff, when formulas/templates 
 
 - Inspect tables: `excel.table.list`, `excel.table.get_info`, `excel.table.read`
 - Append or update rows: `excel.table.append_rows`, `excel.table.update_rows`
+- Reorder columns: `excel.table.reorder_columns`
 - Resize or structure changes: `excel.table.resize`, `excel.table.copy_structure`
 - Filters: `excel.filter.get_filters`, `excel.filter.apply`, `excel.filter.clear`, `excel.filter.validate`
 - Sorts: `excel.sort.apply`, `excel.sort.clear`
 
 Use table tools instead of range tools when the target is an Excel table. This preserves headers, totals rows, filters, structured references, and table styles.
+Do not clear and recreate a table to reorder columns; use `excel.table.reorder_columns`, or stop for confirmation before any destructive rebuild.
 
 ## Templates, Styles, And Formulas
 

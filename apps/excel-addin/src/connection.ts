@@ -51,6 +51,7 @@ import {
   readRangeNotes,
   readFormulaPatterns,
   readWorkbookEmbeddedLocalConfig,
+  reorderTableColumns,
   resizeTable,
   saveWorkbook,
   setActiveSheet,
@@ -316,6 +317,9 @@ export class AddinConnection {
           break;
         case "table.resize":
           this.sendSuccess(request.id, await resizeTable(request.params as Parameters<typeof resizeTable>[0]));
+          break;
+        case "table.reorder_columns":
+          this.sendSuccess(request.id, await reorderTableColumns(request.params as Parameters<typeof reorderTableColumns>[0]));
           break;
         case "table.append_rows":
           this.sendSuccess(request.id, await appendTableRows(request.params as Parameters<typeof appendTableRows>[0]));

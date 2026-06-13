@@ -22,6 +22,7 @@ Default runtime policy allows value/format writes, blocks structure/workbook des
 ## Cleaning
 
 `excel.clean.*` reads values from Excel, transforms them in the backend, then writes through the standard batch path when mutation is needed.
+`excel.clean.normalize_headers` writes only the normalized header row back to Excel, even when the source range includes body rows.
 
 Mutating cleaners:
 

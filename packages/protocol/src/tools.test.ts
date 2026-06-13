@@ -26,6 +26,7 @@ describe("tool catalog", () => {
     expect(exposed.some((tool) => tool.name === "excel.formula.fill_down")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.formula.convert_to_values")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.formula.explain")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.table.reorder_columns")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.table.append_rows")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.filter.apply")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.sort.apply")).toBe(true);

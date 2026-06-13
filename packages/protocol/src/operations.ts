@@ -15,6 +15,8 @@ export interface OperationTelemetry {
   engineName?: string;
   engineVersion?: string;
   warningCount?: number;
+  requestedFacets?: string[];
+  loadedFacets?: string[];
 }
 
 export interface OperationWarning {
@@ -34,6 +36,7 @@ export interface OperationBase {
 export interface ReadFullOperation extends OperationBase {
   kind: "range.read_full";
   target: A1Range;
+  facets?: Array<"values" | "formulas" | "numberFormat" | "text" | "style">;
   includeStyles?: boolean;
   includeFormulas?: boolean;
   includeValidation?: boolean;
@@ -643,6 +646,16 @@ export interface TableSelector {
   tableName: string;
 }
 
+export interface TableReadRequest extends TableSelector {
+  includeValues?: boolean;
+  includeFormulas?: boolean;
+  includeText?: boolean;
+  includeNumberFormats?: boolean;
+  columns?: Array<string | number>;
+  rowOffset?: number;
+  rowLimit?: number;
+}
+
 export interface TableColumnRef {
   id?: number;
   index: number;
@@ -672,10 +685,15 @@ export interface TableInfo {
 export interface TableReadResponse {
   info: TableInfo;
   headers: CellMatrix;
-  values: CellMatrix;
-  formulas: CellMatrix<string | null>;
-  text: string[][];
-  numberFormat: string[][];
+  values?: CellMatrix;
+  formulas?: CellMatrix<string | null>;
+  text?: string[][];
+  numberFormat?: string[][];
+  rowOffset?: number;
+  rowLimit?: number;
+  rowCount?: number;
+  truncated?: boolean;
+  projectedColumns?: TableColumnRef[];
 }
 
 export interface TableCreateRequest {
@@ -704,6 +722,10 @@ export interface TableUpdateRowsRequest extends TableSelector {
     index: number;
     values: CellMatrix[number];
   }>;
+}
+
+export interface TableReorderColumnsRequest extends TableSelector {
+  columnOrder: Array<string | number>;
 }
 
 export interface TableFilterSpec {

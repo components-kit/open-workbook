@@ -47,7 +47,9 @@ import type {
   TableCopyStructureRequest,
   TableCreateRequest,
   TableInfo,
+  TableReadRequest,
   TableReadResponse,
+  TableReorderColumnsRequest,
   TableResizeRequest,
   TableSelector,
   TableSetStyleRequest,
@@ -66,7 +68,10 @@ import { runtimeError } from "@components-kit/open-workbook-protocol";
 interface LoadedRangeSnapshot {
   target: A1Range;
   range: Excel.Range;
+  facets?: RangeSnapshotFacet[];
 }
+
+type RangeSnapshotFacet = "values" | "formulas" | "numberFormat" | "text" | "style";
 
 interface ExecutionCounters {
   syncCount: number;
@@ -833,7 +838,7 @@ export async function getTableInfo(request: TableSelector): Promise<{ ok: boolea
   });
 }
 
-export async function readTable(request: TableSelector): Promise<{ ok: boolean; table: TableReadResponse }> {
+export async function readTable(request: TableReadRequest): Promise<{ ok: boolean; table: TableReadResponse }> {
   return Excel.run(async (context) => {
     const table = context.workbook.tables.getItem(request.tableName);
     const loaded = loadTableInfoObjects(table);
@@ -841,22 +846,77 @@ export async function readTable(request: TableSelector): Promise<{ ok: boolean; 
 
     const headerRange = table.getHeaderRowRange();
     headerRange.load("values");
-    const dataRange = table.rows.count > 0 ? table.getDataBodyRange() : undefined;
+    const info = materializeTableInfo(request.workbookId, loaded);
+    const projectedIndexes = resolveTableColumnIndexes(info, request.columns);
+    const rowOffset = Math.max(0, request.rowOffset ?? 0);
+    const availableRows = Math.max(0, table.rows.count - rowOffset);
+    const requestedRowCount = request.rowLimit === undefined ? availableRows : Math.max(0, Math.min(request.rowLimit, availableRows));
+    const bodyRange = table.rows.count > 0 ? table.getDataBodyRange() : undefined;
+    const dataRange =
+      bodyRange && requestedRowCount > 0 && projectedIndexes.length > 0
+        ? bodyRange.getCell(rowOffset, 0).getResizedRange(requestedRowCount - 1, info.columnCount - 1)
+        : undefined;
+    const dataColumnRanges =
+      dataRange && projectedIndexes.length !== info.columnCount
+        ? projectedIndexes.map((columnIndex) => dataRange.getColumn(columnIndex))
+        : [];
+    const shouldLoadValues = request.includeValues ?? true;
+    const shouldLoadFormulas = request.includeFormulas ?? true;
+    const shouldLoadText = request.includeText ?? true;
+    const shouldLoadNumberFormats = request.includeNumberFormats ?? true;
     if (dataRange) {
-      dataRange.load("values,formulas,text,numberFormat");
+      const loadProperties = [
+        shouldLoadValues ? "values" : undefined,
+        shouldLoadFormulas ? "formulas" : undefined,
+        shouldLoadText ? "text" : undefined,
+        shouldLoadNumberFormats ? "numberFormat" : undefined
+      ].filter((property): property is string => property !== undefined);
+      if (loadProperties.length > 0) {
+        if (dataColumnRanges.length > 0) {
+          for (const columnRange of dataColumnRanges) {
+            columnRange.load(loadProperties.join(","));
+          }
+        } else {
+          dataRange.load(loadProperties.join(","));
+        }
+      }
     }
     await context.sync();
 
+    const headers = projectMatrix(headerRange.values as TableReadResponse["headers"], projectedIndexes);
+    const response: TableReadResponse = {
+      info,
+      headers,
+      rowOffset,
+      ...(request.rowLimit !== undefined ? { rowLimit: request.rowLimit } : {}),
+      rowCount: requestedRowCount,
+      truncated: rowOffset + requestedRowCount < table.rows.count,
+      projectedColumns: projectedIndexes.map((index) => info.columns[index]!).filter(Boolean)
+    };
+    if (dataRange && shouldLoadValues) {
+      response.values = materializeProjectedRangeFacet(dataRange, dataColumnRanges, "values", projectedIndexes) as NonNullable<TableReadResponse["values"]>;
+    } else if (shouldLoadValues) {
+      response.values = [];
+    }
+    if (dataRange && shouldLoadFormulas) {
+      response.formulas = materializeProjectedRangeFacet(dataRange, dataColumnRanges, "formulas", projectedIndexes) as NonNullable<TableReadResponse["formulas"]>;
+    } else if (shouldLoadFormulas) {
+      response.formulas = [];
+    }
+    if (dataRange && shouldLoadText) {
+      response.text = materializeProjectedRangeFacet(dataRange, dataColumnRanges, "text", projectedIndexes) as NonNullable<TableReadResponse["text"]>;
+    } else if (shouldLoadText) {
+      response.text = [];
+    }
+    if (dataRange && shouldLoadNumberFormats) {
+      response.numberFormat = materializeProjectedRangeFacet(dataRange, dataColumnRanges, "numberFormat", projectedIndexes) as NonNullable<TableReadResponse["numberFormat"]>;
+    } else if (shouldLoadNumberFormats) {
+      response.numberFormat = [];
+    }
+
     return {
       ok: true,
-      table: {
-        info: materializeTableInfo(request.workbookId, loaded),
-        headers: headerRange.values as TableReadResponse["headers"],
-        values: (dataRange?.values ?? []) as TableReadResponse["values"],
-        formulas: (dataRange?.formulas ?? []) as TableReadResponse["formulas"],
-        text: (dataRange?.text ?? []) as TableReadResponse["text"],
-        numberFormat: (dataRange?.numberFormat ?? []) as TableReadResponse["numberFormat"]
-      }
+      table: response
     };
   });
 }
@@ -886,6 +946,48 @@ export async function createTable(request: TableCreateRequest): Promise<{ ok: bo
 
 export async function resizeTable(request: TableResizeRequest): Promise<{ ok: boolean; info: TableInfo }> {
   return mutateTableAndReturnInfo(request, (table) => table.resize(request.address));
+}
+
+export async function reorderTableColumns(request: TableReorderColumnsRequest): Promise<{ ok: boolean; info: TableInfo; warnings: OperationWarning[] }> {
+  return Excel.run(async (context) => {
+    const table = context.workbook.tables.getItem(request.tableName);
+    const loaded = loadTableInfoObjects(table);
+    await context.sync();
+
+    const info = materializeTableInfo(request.workbookId, loaded);
+    const sourceIndexes = resolveTableColumnIndexes(info, request.columnOrder);
+    if (sourceIndexes.length !== info.columnCount) {
+      return {
+        ok: false,
+        info,
+        warnings: [
+          {
+            code: "TABLE_COLUMN_ORDER_INVALID",
+            message: "Column order must resolve to every table column exactly once.",
+            details: { columnOrder: request.columnOrder, resolvedIndexes: sourceIndexes }
+          }
+        ]
+      };
+    }
+
+    const tableRange = table.getRange();
+    tableRange.load("rowCount,columnCount");
+    await context.sync();
+
+    const scratchSheet = context.workbook.worksheets.add(`__owb_reorder_${Date.now().toString(36)}`);
+    const originalRange = scratchSheet.getRangeByIndexes(0, 0, tableRange.rowCount, tableRange.columnCount);
+    const reorderedRange = scratchSheet.getRangeByIndexes(0, tableRange.columnCount + 1, tableRange.rowCount, tableRange.columnCount);
+    originalRange.copyFrom(tableRange, Excel.RangeCopyType.all);
+    for (const [targetIndex, sourceIndex] of sourceIndexes.entries()) {
+      reorderedRange.getColumn(targetIndex).copyFrom(originalRange.getColumn(sourceIndex), Excel.RangeCopyType.all);
+    }
+    tableRange.copyFrom(reorderedRange, Excel.RangeCopyType.all);
+    scratchSheet.delete();
+
+    const reloaded = loadTableInfoObjects(table);
+    await context.sync();
+    return { ok: true, info: materializeTableInfo(request.workbookId, reloaded), warnings: [] };
+  });
 }
 
 export async function appendTableRows(request: TableAppendRowsRequest): Promise<{ ok: boolean; info: TableInfo }> {
@@ -1118,7 +1220,7 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
     }
 
     const result = await Excel.run(async (context) => {
-      const readOperations: Array<{ operation: ExcelOperation; range: Excel.Range }> = [];
+      const readOperations: Array<{ operation: ExcelOperation; range: Excel.Range; facets?: RangeSnapshotFacet[] }> = [];
       let formulasChanged = 0;
       let sheetsChanged = 0;
 
@@ -1128,8 +1230,9 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
         switch (operation.kind) {
           case "range.read_full": {
             const range = getRange(context, operation.target);
-            loadSnapshotProperties(range);
-            readOperations.push({ operation, range });
+            const facets = rangeSnapshotFacetsForOperation(operation);
+            loadSnapshotProperties(range, facets);
+            readOperations.push({ operation, range, facets });
             counters.cellsRead += payload.compiled.estimatedCellsTouched;
             break;
           }
@@ -1330,9 +1433,9 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
       await context.sync();
       counters.syncCount += 1;
 
-      const readData = readOperations.map(({ operation, range }) => ({
+      const readData = readOperations.map(({ operation, range, facets }) => ({
         operationId: operation.operationId,
-        snapshot: materializeSnapshot("target" in operation ? operation.target : payload.compiled.targetFingerprints[0]!.range, range)
+        snapshot: materializeSnapshot("target" in operation ? operation.target : payload.compiled.targetFingerprints[0]!.range, range, facets)
       }));
 
       const changedRanges = payload.compiled.targetFingerprints.map((fingerprint) => fingerprint.range);
@@ -2426,6 +2529,45 @@ function materializeTableInfo(workbookId: string, loaded: ReturnType<typeof load
   return info;
 }
 
+function resolveTableColumnIndexes(info: TableInfo, requestedColumns: Array<string | number> | undefined): number[] {
+  if (!requestedColumns?.length) {
+    return info.columns.map((column) => column.index);
+  }
+  const indexes: number[] = [];
+  for (const requested of requestedColumns) {
+    const column =
+      typeof requested === "number"
+        ? info.columns.find((candidate) => candidate.index === requested)
+        : info.columns.find((candidate) => candidate.name === requested);
+    if (column && !indexes.includes(column.index)) {
+      indexes.push(column.index);
+    }
+  }
+  return indexes;
+}
+
+function projectMatrix<T>(matrix: T[][], columnIndexes: number[]): T[][] {
+  return matrix.map((row) => columnIndexes.map((columnIndex) => row[columnIndex] as T));
+}
+
+function materializeProjectedRangeFacet(
+  dataRange: Excel.Range,
+  projectedColumnRanges: Excel.Range[],
+  property: "values" | "formulas" | "text" | "numberFormat",
+  projectedIndexes: number[]
+): unknown[][] {
+  if (projectedColumnRanges.length === 0) {
+    return projectMatrix((dataRange as unknown as Record<typeof property, unknown[][]>)[property] ?? [], projectedIndexes);
+  }
+  const columns = projectedColumnRanges.map((columnRange) => ((columnRange as unknown as Record<typeof property, unknown[][]>)[property] ?? []).map((row) => row[0]));
+  const rowCount = Math.max(0, ...columns.map((column) => column.length));
+  const rows: unknown[][] = [];
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+    rows.push(columns.map((column) => column[rowIndex]));
+  }
+  return rows;
+}
+
 async function mutateTableAndReturnInfo<TRequest extends TableSelector>(
   request: TRequest,
   mutate: (table: Excel.Table, context: Excel.RequestContext) => void
@@ -2443,29 +2585,64 @@ function getRange(context: Excel.RequestContext, target: A1Range): Excel.Range {
   return context.workbook.worksheets.getItem(target.sheetName).getRange(stripSheetName(target.address));
 }
 
-function loadSnapshotProperties(range: Excel.Range): void {
-  range.load("values, formulas, numberFormat, text, rowCount, columnCount");
-  range.format.load("horizontalAlignment, verticalAlignment, rowHeight, columnWidth");
-  range.format.fill.load("color");
-  range.format.font.load("name, size, color, bold, italic");
+function rangeSnapshotFacetsForOperation(operation: Extract<ExcelOperation, { kind: "range.read_full" }>): RangeSnapshotFacet[] {
+  if (operation.facets?.length) {
+    return [...new Set(operation.facets)];
+  }
+  const facets: RangeSnapshotFacet[] = ["values", "numberFormat", "text"];
+  if (operation.includeFormulas !== false) {
+    facets.push("formulas");
+  }
+  if (operation.includeStyles !== false) {
+    facets.push("style");
+  }
+  return facets;
 }
 
-function materializeSnapshot(target: A1Range, range: Excel.Range): RangeSnapshot {
-  const values = range.values as RangeSnapshot["values"];
-  const formulas = range.formulas as RangeSnapshot["formulas"];
-  const numberFormat = range.numberFormat as string[][];
-  const text = range.text as string[][];
+function allRangeSnapshotFacets(): RangeSnapshotFacet[] {
+  return ["values", "formulas", "numberFormat", "text", "style"];
+}
+
+function loadSnapshotProperties(range: Excel.Range, facets: RangeSnapshotFacet[] = allRangeSnapshotFacets()): void {
+  const properties = ["rowCount", "columnCount"];
+  if (facets.includes("values")) {
+    properties.push("values");
+  }
+  if (facets.includes("formulas")) {
+    properties.push("formulas");
+  }
+  if (facets.includes("numberFormat")) {
+    properties.push("numberFormat");
+  }
+  if (facets.includes("text")) {
+    properties.push("text");
+  }
+  range.load(properties.join(","));
+  if (facets.includes("style")) {
+    range.format.load("horizontalAlignment, verticalAlignment, rowHeight, columnWidth");
+    range.format.fill.load("color");
+    range.format.font.load("name, size, color, bold, italic");
+  }
+}
+
+function materializeSnapshot(target: A1Range, range: Excel.Range, facets: RangeSnapshotFacet[] = allRangeSnapshotFacets()): RangeSnapshot {
+  const values = facets.includes("values") ? range.values as RangeSnapshot["values"] : undefined;
+  const formulas = facets.includes("formulas") ? range.formulas as RangeSnapshot["formulas"] : undefined;
+  const numberFormat = facets.includes("numberFormat") ? range.numberFormat as string[][] : undefined;
+  const text = facets.includes("text") ? range.text as string[][] : undefined;
   const style: NonNullable<RangeSnapshot["style"]> = {};
-  assignIfDefined(style, "fillColor", optionalValue(range.format.fill.color));
-  assignIfDefined(style, "fontName", optionalValue(range.format.font.name));
-  assignIfDefined(style, "fontSize", optionalValue(range.format.font.size));
-  assignIfDefined(style, "fontColor", optionalValue(range.format.font.color));
-  assignIfDefined(style, "fontBold", optionalValue(range.format.font.bold));
-  assignIfDefined(style, "fontItalic", optionalValue(range.format.font.italic));
-  assignIfDefined(style, "horizontalAlignment", optionalValue(String(range.format.horizontalAlignment)));
-  assignIfDefined(style, "verticalAlignment", optionalValue(String(range.format.verticalAlignment)));
-  assignIfDefined(style, "rowHeight", optionalValue(range.format.rowHeight));
-  assignIfDefined(style, "columnWidth", optionalValue(range.format.columnWidth));
+  if (facets.includes("style")) {
+    assignIfDefined(style, "fillColor", optionalValue(range.format.fill.color));
+    assignIfDefined(style, "fontName", optionalValue(range.format.font.name));
+    assignIfDefined(style, "fontSize", optionalValue(range.format.font.size));
+    assignIfDefined(style, "fontColor", optionalValue(range.format.font.color));
+    assignIfDefined(style, "fontBold", optionalValue(range.format.font.bold));
+    assignIfDefined(style, "fontItalic", optionalValue(range.format.font.italic));
+    assignIfDefined(style, "horizontalAlignment", optionalValue(String(range.format.horizontalAlignment)));
+    assignIfDefined(style, "verticalAlignment", optionalValue(String(range.format.verticalAlignment)));
+    assignIfDefined(style, "rowHeight", optionalValue(range.format.rowHeight));
+    assignIfDefined(style, "columnWidth", optionalValue(range.format.columnWidth));
+  }
 
   const snapshot: RangeSnapshot = {
     fingerprint: createRangeFingerprint(target, {
@@ -2474,16 +2651,22 @@ function materializeSnapshot(target: A1Range, range: Excel.Range): RangeSnapshot
       numberFormat,
       text,
       style
-    }),
-    numberFormat,
-    text,
-    style
+    })
   };
   if (values !== undefined) {
     snapshot.values = values;
   }
   if (formulas !== undefined) {
     snapshot.formulas = formulas;
+  }
+  if (numberFormat !== undefined) {
+    snapshot.numberFormat = numberFormat;
+  }
+  if (text !== undefined) {
+    snapshot.text = text;
+  }
+  if (Object.keys(style).length > 0) {
+    snapshot.style = style;
   }
   return snapshot;
 }

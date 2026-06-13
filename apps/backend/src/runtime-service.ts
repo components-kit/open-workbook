@@ -10,6 +10,7 @@ import {
   extractFormulaReferences,
   hashStable,
   LockManager,
+  formatA1Address,
   parseA1Address,
   PlanManager,
   SnapshotManager,
@@ -103,6 +104,8 @@ import type {
   TableCopyStructureRequest,
   TableCreateRequest,
   TableInfo,
+  TableReadRequest,
+  TableReorderColumnsRequest,
   TableResizeRequest,
   TableSelector,
   TableSetStyleRequest,
@@ -3115,11 +3118,9 @@ export class RuntimeService {
       return cleaningError(input.workbookId, "normalize_headers", target, read.error);
     }
     const headerRowIndex = input.headerRowIndex ?? detectHeaderCandidates(read.values, 10)[0]?.rowIndex ?? 0;
-    const values = cloneMatrix(read.values);
-    const before = values[headerRowIndex] ?? [];
+    const before = read.values[headerRowIndex] ?? [];
     const normalized = dedupeHeaders(before.map((value) => normalizeHeader(String(value ?? ""))));
-    values[headerRowIndex] = normalized;
-    const result = await this.writeCleanValues(target, values, "Normalize headers");
+    const result = await this.writeCleanValues(headerRowTarget(target, headerRowIndex), [normalized], "Normalize headers");
     return cleaningReport(input.workbookId, "normalize_headers", target, changedCellCount([before], [normalized]), { headerRowIndex, headers: normalized }, result);
   }
 
@@ -3601,7 +3602,7 @@ export class RuntimeService {
     return client.request("table.get_info", request);
   }
 
-  async readTable(request: TableSelector) {
+  async readTable(request: TableReadRequest) {
     const client = this.getActiveAddinClient();
     if (!client) {
       return {
@@ -3620,6 +3621,23 @@ export class RuntimeService {
 
   async resizeTable(request: TableResizeRequest) {
     return this.mutateTable("table.resize", request, `Before resizing table ${request.tableName}`, await this.getTableBackupRanges(request));
+  }
+
+  async reorderTableColumns(request: TableReorderColumnsRequest) {
+    const infoResult = await this.getTableInfo(request);
+    const info = (infoResult as { ok?: boolean; info?: TableInfo }).info;
+    if (!info) {
+      return {
+        ok: false,
+        error: runtimeError("NOT_FOUND", `Table ${request.tableName} could not be read before column reorder.`, { retryable: false }),
+        table: infoResult
+      };
+    }
+    const validation = validateTableColumnOrder(info, request.columnOrder);
+    if (!validation.ok) {
+      return validation;
+    }
+    return this.mutateTable("table.reorder_columns", request, `Before reordering columns in table ${request.tableName}`, await this.getTableBackupRanges(request));
   }
 
   async appendTableRows(request: TableAppendRowsRequest) {
@@ -3772,7 +3790,7 @@ export class RuntimeService {
         workbookId: request.workbookId,
         goal: reason,
         scopes: tableMutationScopes(request, ranges),
-        destructiveLevel: method.includes("resize") || method.includes("copy_structure") ? "structure" : "values"
+        destructiveLevel: method.includes("resize") || method.includes("copy_structure") || method.includes("reorder_columns") ? "structure" : "values"
       },
       async () => {
         const backup = await this.createWorkbookBackup({
@@ -3780,8 +3798,11 @@ export class RuntimeService {
           reason,
           ranges
         });
+        if (!("backup" in backup)) {
+          return backup;
+        }
         const result = await client.request(method, request);
-        return { ok: true, backup, result };
+        return { ok: true, backup: backup.backup, result };
       }
     );
   }
@@ -6081,6 +6102,60 @@ function uniqueDefined(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => typeof value === "string" && value.length > 0))];
 }
 
+function validateTableColumnOrder(info: TableInfo, columnOrder: Array<string | number>) {
+  const issues: OperationWarning[] = [];
+  if (columnOrder.length !== info.columns.length) {
+    issues.push({
+      code: "TABLE_COLUMN_ORDER_LENGTH_MISMATCH",
+      message: `Column order must include exactly ${info.columns.length} column(s).`,
+      details: { expectedCount: info.columns.length, actualCount: columnOrder.length }
+    });
+  }
+  const seen = new Set<number>();
+  for (const requested of columnOrder) {
+    const column =
+      typeof requested === "number"
+        ? info.columns.find((candidate) => candidate.index === requested)
+        : info.columns.find((candidate) => candidate.name === requested);
+    if (!column) {
+      issues.push({
+        code: "TABLE_COLUMN_NOT_FOUND",
+        message: `Column ${String(requested)} is not present in table ${info.tableName}.`,
+        details: { requested, availableColumns: info.columns.map((candidate) => candidate.name) }
+      });
+      continue;
+    }
+    if (seen.has(column.index)) {
+      issues.push({
+        code: "TABLE_COLUMN_ORDER_DUPLICATE",
+        message: `Column ${column.name} appears more than once in the requested order.`,
+        details: { requested, column }
+      });
+    }
+    seen.add(column.index);
+  }
+  for (const column of info.columns) {
+    if (!seen.has(column.index)) {
+      issues.push({
+        code: "TABLE_COLUMN_ORDER_MISSING_COLUMN",
+        message: `Column ${column.name} is missing from the requested order.`,
+        details: { column }
+      });
+    }
+  }
+  if (issues.length > 0) {
+    return {
+      ok: false,
+      warnings: issues,
+      error: runtimeError("INVALID_ARGUMENT", "Table column reorder requires a complete, unique column order.", {
+        retryable: false,
+        details: { issues }
+      })
+    };
+  }
+  return { ok: true };
+}
+
 function addExpectedPivotAxisIssues(
   issues: Array<{ code: string; severity: "info" | "warning" | "error"; message: string; details?: Record<string, unknown> }>,
   axis: "row" | "column" | "filter" | "data",
@@ -6319,6 +6394,15 @@ function targetFromCleanInput(input: CleanRangeInput): A1Range {
     workbookId: input.workbookId,
     sheetName: input.sheetName,
     address: input.address
+  };
+}
+
+function headerRowTarget(target: A1Range, headerRowIndex: number): A1Range {
+  const parsed = parseA1Address(stripSheetName(target.address));
+  const row = parsed.startRow + headerRowIndex;
+  return {
+    ...target,
+    address: formatA1Address({ startColumn: parsed.startColumn, endColumn: parsed.endColumn, startRow: row, endRow: row })
   };
 }
 

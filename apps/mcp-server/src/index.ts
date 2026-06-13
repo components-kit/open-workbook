@@ -41,6 +41,8 @@ import type {
   TableApplyFiltersRequest,
   TableCopyStructureRequest,
   TableCreateRequest,
+  TableReadRequest,
+  TableReorderColumnsRequest,
   TableResizeRequest,
   TableSelector,
   TableSetStyleRequest,
@@ -1486,7 +1488,7 @@ function registerRangeTools(mcp: McpServer): void {
       name,
       {
         title: name.replace(/^excel\./, "").replace(/\./g, " "),
-        description: "Read a range facet using the full range snapshot path.",
+        description: "Read one range facet without loading unrelated cell payloads.",
         inputSchema: readSchema,
         annotations: {
           readOnlyHint: true,
@@ -1495,7 +1497,7 @@ function registerRangeTools(mcp: McpServer): void {
         }
       },
       async ({ workbookId, sheetName, address }: { workbookId: string; sheetName: string; address: string }) =>
-        jsonResult(await readRangeSnapshot(workbookId, sheetName, address))
+        jsonResult(await readRangeSnapshot(workbookId, sheetName, address, rangeReadFacets(name)))
     );
   }
 
@@ -2899,11 +2901,20 @@ function registerTableTools(mcp: McpServer): void {
     "excel.table.read",
     {
       title: "Read Excel table",
-      description: "Read table headers, values, formulas, text, number formats, and metadata.",
-      inputSchema: tableSelectorSchema(),
+      description: "Read table headers, selected data facets, optional columns, optional row page, and metadata.",
+      inputSchema: {
+        ...tableSelectorSchema(),
+        includeValues: z.boolean().optional(),
+        includeFormulas: z.boolean().optional(),
+        includeText: z.boolean().optional(),
+        includeNumberFormats: z.boolean().optional(),
+        columns: z.array(z.union([z.string(), z.number().int().min(0)])).optional(),
+        rowOffset: z.number().int().min(0).optional(),
+        rowLimit: z.number().int().min(0).optional()
+      },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
-    async (args: any) => jsonResult(await runtime.readTable(tableSelector(args)))
+    async (args: any) => jsonResult(await runtime.readTable(tableReadRequest(args)))
   );
 
   registerMcpTool(
@@ -2937,6 +2948,27 @@ function registerTableTools(mcp: McpServer): void {
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
     },
     async (args: any) => jsonResult(await runtime.resizeTable({ ...tableSelector(args), address: args.address } as TableResizeRequest))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.table.reorder_columns",
+    {
+      title: "Reorder Excel table columns",
+      description: "Reorder columns in an existing structured table without clearing or recreating the table.",
+      inputSchema: {
+        ...tableSelectorSchema(),
+        columnOrder: z.array(z.union([z.string(), z.number().int().min(0)]))
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    async (args: any) =>
+      jsonResult(
+        await runtime.reorderTableColumns({
+          ...tableSelector(args),
+          columnOrder: args.columnOrder
+        } as TableReorderColumnsRequest)
+      )
   );
 
   registerMcpTool(
@@ -5045,7 +5077,26 @@ function registerEventTools(mcp: McpServer): void {
   );
 }
 
-async function readRangeSnapshot(workbookId: string, sheetName: string, address: string) {
+type RangeReadFacet = "values" | "formulas" | "numberFormat" | "text" | "style";
+
+function rangeReadFacets(toolName: string): RangeReadFacet[] {
+  switch (toolName) {
+    case "excel.range.read_values":
+      return ["values"];
+    case "excel.range.read_formulas":
+      return ["formulas"];
+    case "excel.range.read_number_formats":
+      return ["numberFormat"];
+    case "excel.range.read_display_text":
+      return ["text"];
+    case "excel.range.read_styles":
+      return ["style"];
+    default:
+      return ["values", "formulas", "numberFormat", "text", "style"];
+  }
+}
+
+async function readRangeSnapshot(workbookId: string, sheetName: string, address: string, facets?: RangeReadFacet[]) {
   const operation: ExcelOperation = {
     kind: "range.read_full",
     operationId: makeId<OperationId>("op"),
@@ -5058,6 +5109,9 @@ async function readRangeSnapshot(workbookId: string, sheetName: string, address:
       address
     }
   };
+  if (facets !== undefined) {
+    operation.facets = facets;
+  }
   return runtime.applyBatch({
     workbookId: workbookId as WorkbookId,
     mode: "apply",
@@ -5086,6 +5140,42 @@ function tableSelector(args: { workbookId: string; tableName: string }): TableSe
     workbookId: args.workbookId as WorkbookId,
     tableName: args.tableName
   };
+}
+
+function tableReadRequest(args: {
+  workbookId: string;
+  tableName: string;
+  includeValues?: boolean;
+  includeFormulas?: boolean;
+  includeText?: boolean;
+  includeNumberFormats?: boolean;
+  columns?: Array<string | number>;
+  rowOffset?: number;
+  rowLimit?: number;
+}): TableReadRequest {
+  const request: TableReadRequest = tableSelector(args);
+  if (args.includeValues !== undefined) {
+    request.includeValues = args.includeValues;
+  }
+  if (args.includeFormulas !== undefined) {
+    request.includeFormulas = args.includeFormulas;
+  }
+  if (args.includeText !== undefined) {
+    request.includeText = args.includeText;
+  }
+  if (args.includeNumberFormats !== undefined) {
+    request.includeNumberFormats = args.includeNumberFormats;
+  }
+  if (args.columns !== undefined) {
+    request.columns = args.columns;
+  }
+  if (args.rowOffset !== undefined) {
+    request.rowOffset = args.rowOffset;
+  }
+  if (args.rowLimit !== undefined) {
+    request.rowLimit = args.rowLimit;
+  }
+  return request;
 }
 
 function tableCreateRequest(args: any): TableCreateRequest {
