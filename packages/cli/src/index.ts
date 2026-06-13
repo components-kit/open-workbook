@@ -3,32 +3,37 @@ import { Command } from "commander";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../../..");
 const packageRoot = resolve(__dirname, "..");
+const publicPackageName = "@component-kit/open-workbook";
+const instructionFileName = "open-workbook-excel.md";
 const sourcePaths = {
   mcpServer: resolve(repoRoot, "apps/mcp-server/dist/index.js"),
   backend: resolve(repoRoot, "apps/backend/dist/index.js"),
   fileBridge: resolve(repoRoot, "apps/backend/dist/file-bridge.js"),
   addinServer: resolve(repoRoot, "apps/excel-addin/scripts/dev-server.mjs"),
-  manifest: resolve(repoRoot, "apps/excel-addin/manifest.xml")
+  manifest: resolve(repoRoot, "apps/excel-addin/manifest.xml"),
+  instructions: resolve(repoRoot, "skills/open-workbook-excel")
 };
 const bundledPaths = {
   mcpServer: resolve(packageRoot, "assets/mcp-server/dist/index.js"),
   backend: resolve(packageRoot, "assets/backend/dist/index.js"),
   fileBridge: resolve(packageRoot, "assets/backend/dist/file-bridge.js"),
   addinServer: resolve(packageRoot, "assets/excel-addin/scripts/dev-server.mjs"),
-  manifest: resolve(packageRoot, "assets/excel-addin/manifest.xml")
+  manifest: resolve(packageRoot, "assets/excel-addin/manifest.xml"),
+  instructions: resolve(packageRoot, "assets/instructions/open-workbook-excel")
 };
 const dependencyPaths = {
-  mcpServer: resolve(packageRoot, "node_modules/@open-workbook/mcp-server/dist/index.js"),
-  backend: resolve(packageRoot, "node_modules/@open-workbook/backend/dist/index.js"),
-  fileBridge: resolve(packageRoot, "node_modules/@open-workbook/backend/dist/file-bridge.js"),
+  mcpServer: resolve(packageRoot, "node_modules/@component-kit/open-workbook-mcp-server/dist/index.js"),
+  backend: resolve(packageRoot, "node_modules/@component-kit/open-workbook-backend/dist/index.js"),
+  fileBridge: resolve(packageRoot, "node_modules/@component-kit/open-workbook-backend/dist/file-bridge.js"),
   addinServer: bundledPaths.addinServer,
-  manifest: bundledPaths.manifest
+  manifest: bundledPaths.manifest,
+  instructions: bundledPaths.instructions
 };
 
 const program = new Command();
@@ -37,11 +42,12 @@ program.name("owb").description("Open Workbook local CLI").version("0.1.0");
 
 program
   .command("mcp")
-  .description("Start the Open Workbook MCP adapter; attaches to daemon when available")
+  .description("Start the Open Workbook MCP adapter and local Excel add-in asset server")
   .option("--agent-name <name>", "Agent name shown in collaboration status")
   .option("--daemon-url <url>", "Daemon base URL", defaultDaemonUrl())
   .option("--standalone", "Start a single-process MCP server with embedded backend")
-  .action((options: { agentName?: string; daemonUrl: string; standalone?: boolean }) => {
+  .option("--no-addin-server", "Do not start the companion local Excel add-in asset server")
+  .action(async (options: { agentName?: string; daemonUrl: string; standalone?: boolean; addinServer?: boolean }) => {
     const args: string[] = [];
     if (options.agentName !== undefined) {
       args.push("--agent-name", options.agentName);
@@ -52,7 +58,69 @@ program
     if (options.standalone) {
       args.push("--standalone");
     }
-    runNode(resolveAsset("mcpServer"), args);
+    const companionProcesses: ChildProcess[] = [];
+    if (options.addinServer !== false) {
+      const addinServer = await startAddinServerIfNeeded();
+      if (addinServer) {
+        companionProcesses.push(addinServer);
+      }
+    }
+    runNode(resolveAsset("mcpServer"), args, companionProcesses);
+  });
+
+program
+  .command("setup")
+  .description("Initialize Open Workbook and prepare the Excel add-in manifest")
+  .option("--dry-run", "Print setup actions without writing files")
+  .option("--instructions-out <path>", "Instruction file path", defaultInstructionsPath())
+  .option("--manifest-out <path>", "Manifest path for non-macOS setup", defaultSetupManifestPath())
+  .option("--addin-url <url>", "Taskpane base URL", defaultAddinUrl())
+  .option("--backend-url <url>", "Backend WebSocket URL", defaultBackendUrl())
+  .action((options: { dryRun?: boolean; instructionsOut: string; manifestOut: string; addinUrl: string; backendUrl: string }) => {
+    const instructionsPath = resolve(options.instructionsOut);
+    const manifestPath = setupManifestPath(options.manifestOut);
+    const instructions = generateGenericInstructions();
+    const manifest = generateManifest({ addinUrl: options.addinUrl, backendUrl: options.backendUrl });
+
+    if (!options.dryRun) {
+      writeFileEnsuringDir(instructionsPath, instructions);
+      writeFileEnsuringDir(manifestPath, manifest);
+    }
+
+    console.log(options.dryRun ? "Open Workbook setup dry run" : "Open Workbook setup complete");
+    console.log("");
+    console.log(`${options.dryRun ? "Would write" : "Wrote"} fallback instructions: ${instructionsPath}`);
+    console.log(`${options.dryRun ? "Would write" : "Wrote"} Excel add-in manifest: ${manifestPath}`);
+    console.log(`Taskpane URL: ${options.addinUrl}`);
+    console.log(`Backend URL: ${options.backendUrl}`);
+    console.log("");
+    printManifestNextSteps(manifestPath);
+    console.log("");
+    console.log("Paste this generic MCP config into any MCP-capable agent UI:");
+    console.log(JSON.stringify(genericMcpConfig(), null, 2));
+    console.log("");
+    console.log("Install the Open Workbook Excel skill with skills.sh:");
+    console.log("npx skills add components-kit/open-workbook --skill open-workbook-excel");
+    console.log("");
+    console.log("For a global OpenCode install:");
+    console.log("npx skills add components-kit/open-workbook --skill open-workbook-excel -a opencode -g -y");
+    console.log("");
+    console.log("The fallback instruction file above is for clients that do not support skills.sh.");
+    console.log("Start the agent UI before opening the Excel add-in so `npx ... mcp` can serve the taskpane and backend.");
+  });
+
+program
+  .command("instructions")
+  .description("Print or write the generic Open Workbook Excel agent instructions")
+  .option("--out <path>", "Write instructions to a file instead of stdout")
+  .action((options: { out?: string }) => {
+    const instructions = generateGenericInstructions();
+    if (options.out) {
+      writeFileEnsuringDir(resolve(options.out), instructions);
+      console.log(`Wrote instructions to ${resolve(options.out)}`);
+      return;
+    }
+    console.log(instructions);
   });
 
 const daemon = program.command("daemon").description("Manage the shared Open Workbook daemon");
@@ -317,8 +385,10 @@ program
           fileBridge: resolveAsset("fileBridge"),
           addinServer: resolveAsset("addinServer"),
           manifest: resolveAsset("manifest"),
+          instructions: resolveAsset("instructions"),
           stateDir: defaultStateDir(),
           exportDir: defaultExportDir(),
+          userConfigDir: defaultUserConfigDir(),
           fileBridgeUrl: defaultFileBridgeUrl(),
           mode: existsSync(sourcePaths.mcpServer) ? "source" : "bundled"
         },
@@ -337,7 +407,8 @@ program
       checkPath("Backend daemon", resolveAsset("backend")),
       checkPath("File bridge", resolveAsset("fileBridge")),
       checkPath("Add-in server", resolveAsset("addinServer")),
-      checkPath("Manifest", resolveAsset("manifest"))
+      checkPath("Manifest", resolveAsset("manifest")),
+      checkPath("Instructions", resolveAsset("instructions"))
     ];
     for (const check of checks) {
       console.log(`${check.ok ? "ok" : "missing"} ${check.label}: ${check.path}`);
@@ -368,22 +439,63 @@ function resolveAsset(name: AssetName): string {
   return sourcePaths[name];
 }
 
-function runNode(entrypoint: string, args: string[] = []): void {
+function runNode(entrypoint: string, args: string[] = [], companionProcesses: ChildProcess[] = []): void {
   if (!existsSync(entrypoint)) {
     fail(`Missing built entrypoint: ${entrypoint}\nRun: corepack pnpm build`);
   }
+
+  const cleanup = () => {
+    for (const companion of companionProcesses) {
+      if (!companion.killed) {
+        companion.kill();
+      }
+    }
+  };
 
   const child = spawn(process.execPath, [entrypoint, ...args], {
     stdio: "inherit",
     env: process.env
   });
 
+  process.once("SIGINT", () => {
+    cleanup();
+    child.kill("SIGINT");
+  });
+  process.once("SIGTERM", () => {
+    cleanup();
+    child.kill("SIGTERM");
+  });
+
   child.on("exit", (code, signal) => {
+    cleanup();
     if (signal) {
       process.kill(process.pid, signal);
     }
     process.exit(code ?? 0);
   });
+}
+
+async function startAddinServerIfNeeded(): Promise<ChildProcess | undefined> {
+  if (await urlAvailable(defaultAddinUrl())) {
+    return undefined;
+  }
+  const entrypoint = resolveAsset("addinServer");
+  if (!existsSync(entrypoint)) {
+    fail(`Missing add-in server entrypoint: ${entrypoint}\nRun: corepack pnpm build`);
+  }
+  return spawn(process.execPath, [entrypoint], {
+    stdio: ["ignore", "ignore", "inherit"],
+    env: process.env
+  });
+}
+
+async function urlAvailable(url: string): Promise<boolean> {
+  try {
+    const response = await fetch(url);
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 function generateManifest(options: { addinUrl: string; backendUrl: string }): string {
@@ -396,6 +508,71 @@ function generateManifest(options: { addinUrl: string; backendUrl: string }): st
   return readFileSync(manifestPath, "utf8")
     .replaceAll("http://localhost:37846/taskpane.html", taskpaneUrl)
     .replaceAll("http://localhost:37846", addinUrl);
+}
+
+function generateGenericInstructions(): string {
+  const instructionsDir = resolveAsset("instructions");
+  const skillPath = join(instructionsDir, "SKILL.md");
+  if (!existsSync(skillPath)) {
+    fail(`Missing instruction source: ${skillPath}`);
+  }
+  const sections = [
+    "# Open Workbook Excel Instructions",
+    stripFrontmatter(readFileSync(skillPath, "utf8")).trim()
+  ];
+  const references = [
+    ["Tool Selection", "tool-selection.md"],
+    ["Workflows", "workflows.md"],
+    ["Reliability", "reliability.md"],
+    ["Performance", "performance.md"],
+    ["Multi-Agent", "multi-agent.md"]
+  ] as const;
+  for (const [title, fileName] of references) {
+    const referencePath = join(instructionsDir, "references", fileName);
+    if (existsSync(referencePath)) {
+      sections.push(`## ${title}\n\n${readFileSync(referencePath, "utf8").trim()}`);
+    }
+  }
+  return `${sections.join("\n\n")}\n`;
+}
+
+function stripFrontmatter(markdown: string): string {
+  if (!markdown.startsWith("---\n")) {
+    return markdown;
+  }
+  const end = markdown.indexOf("\n---\n", 4);
+  return end === -1 ? markdown : markdown.slice(end + 5);
+}
+
+function writeFileEnsuringDir(path: string, content: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, content, "utf8");
+}
+
+function genericMcpConfig(): unknown {
+  return {
+    mcpServers: {
+      "open-workbook": {
+        command: "npx",
+        args: ["-y", `${publicPackageName}@latest`, "mcp"]
+      }
+    }
+  };
+}
+
+function printManifestNextSteps(manifestPath: string): void {
+  if (process.platform === "darwin") {
+    console.log("Restart Excel, then open Insert > Add-ins > Open Workbook.");
+    return;
+  }
+  if (process.platform === "win32") {
+    console.log("Windows Excel sideloading requires a trusted shared-folder add-in catalog:");
+    console.log("1. Copy the manifest into a shared folder, for example C:\\open-workbook-addins.");
+    console.log("2. In Excel, open File > Options > Trust Center > Trust Center Settings > Trusted Add-in Catalogs.");
+    console.log("3. Add the shared-folder UNC path, select Show in Menu, restart Excel, and insert Open Workbook.");
+    return;
+  }
+  console.log(`Use the generated manifest at ${manifestPath} with an Office add-in catalog supported by your Excel host.`);
 }
 
 type ServiceTarget = "macos" | "systemd" | "windows";
@@ -533,6 +710,25 @@ function defaultStateDir(): string {
 
 function defaultExportDir(): string {
   return process.env.OPEN_WORKBOOK_EXPORT_DIR ?? resolve(process.cwd(), ".open-workbook/exports");
+}
+
+function defaultUserConfigDir(): string {
+  return process.env.OPEN_WORKBOOK_CONFIG_DIR ?? join(homedir(), ".open-workbook");
+}
+
+function defaultInstructionsPath(): string {
+  return join(defaultUserConfigDir(), "instructions", instructionFileName);
+}
+
+function defaultSetupManifestPath(): string {
+  return join(defaultUserConfigDir(), "open-workbook.xml");
+}
+
+function setupManifestPath(manifestOut: string): string {
+  if (process.platform === "darwin" && manifestOut === defaultSetupManifestPath()) {
+    return join(homedir(), "Library/Containers/com.microsoft.Excel/Data/Documents/wef/open-workbook.xml");
+  }
+  return resolve(manifestOut);
 }
 
 function trimTrailingSlash(value: string): string {

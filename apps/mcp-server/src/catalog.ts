@@ -1,4 +1,4 @@
-import { getExposedToolCatalog, ResourceCatalog } from "@open-workbook/protocol";
+import { getExposedToolCatalog, ResourceCatalog } from "@component-kit/open-workbook-protocol";
 
 export function getToolCatalog(options: { includePreview?: boolean } = {}) {
   return getExposedToolCatalog(options);

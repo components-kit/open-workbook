@@ -9,7 +9,7 @@ Open Workbook is ready for local source installs, packaged CLI testing, MCP inte
 - MCP stdio server.
 - Local backend broker.
 - Excel Office.js add-in runtime.
-- CLI for running MCP, serving the add-in, generating manifests, sideloading, diagnostics, and OpenCode config.
+- CLI for generic setup, running MCP, serving the add-in, generating manifests, sideloading, diagnostics, and fallback agent instructions; skills.sh is the primary skill distribution path.
 - Backup, snapshot, plan, permission, template, diff, and rollback primitives.
 - Runtime capability reporting by connected Office host, platform, Office version, and supported `ExcelApi` versions.
 - HTTPS add-in asset serving with user-provided local certificate and manifest URL generation.

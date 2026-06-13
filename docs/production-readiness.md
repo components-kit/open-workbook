@@ -38,11 +38,11 @@ Capability-unavailable responses are preferred over simulated success when Offic
 - MCP callable tool names stay in sync with the shared protocol catalog. `corepack pnpm verify` runs `scripts/validate-mcp-catalog.mjs` after build and fails if a stable or preview callable tool is missing from the MCP server or if the server registers a tool that is not in the callable catalog.
 - Tool surface docs stay in sync with the callable catalog. `corepack pnpm verify` runs `scripts/validate-docs-surface.mjs` and fails if `docs/tool-surface.md` omits an exposed stable or preview tool.
 - Package metadata stays publishable. `corepack pnpm verify` runs `scripts/validate-package-metadata.mjs` and fails if package versions, repository metadata, public/private publish intent, README presence, or `dist` entrypoints drift.
-- CLI install smoke stays healthy. `corepack pnpm verify` runs `scripts/smoke-cli.mjs` and checks `doctor`, `paths`, OpenCode config generation, service wrapper generation, sideload manifest generation, and concise disconnected-daemon errors without requiring Excel or a bound local daemon.
+- CLI install smoke stays healthy. `corepack pnpm verify` runs `scripts/smoke-cli.mjs` and checks `doctor`, `paths`, setup dry-run output, skills.sh guidance, fallback instruction generation, service wrapper generation, sideload manifest generation, and concise disconnected-runtime errors without requiring Excel or a bound local daemon.
 - `git diff --check` passes.
 - GitHub Actions CI passes the same non-E2E verification plus `corepack pnpm pack:dry-run` for every publishable package.
-- Tool catalog, README, installation docs, and OpenCode docs match the exposed MCP surface.
-- Fresh local install can run `owb doctor`, generate a manifest, start `owb daemon`, connect `owb mcp`, and report runtime status. If the daemon cannot bind or cannot be reached, CLI commands must fail with concise user-facing errors.
+- Tool catalog, README, installation docs, MCP client docs, and instruction docs match the exposed MCP surface.
+- Fresh local install can run `npx -y @component-kit/open-workbook setup`, install `open-workbook-excel` with `npx skills add components-kit/open-workbook --skill open-workbook-excel`, generate/install a manifest, launch `npx -y @component-kit/open-workbook@latest mcp`, and report runtime status. If the runtime cannot bind or cannot be reached, CLI commands must fail with concise user-facing errors.
 - Excel add-in can be sideloaded on macOS and Windows using the generated manifest.
 - Native file bridge host smoke passes on macOS and Windows with `owb file-bridge smoke --workbook <open-workbook-name> --target <copy.xlsx>`.
 - Real Excel smoke test covers read, write, batch apply, template repair, rollback preview/apply, and conflict detection.
@@ -61,4 +61,4 @@ Open Workbook should keep structure-level merge conflicts blocked by default. Sh
 
 ## Publish Notes
 
-Before publishing, bump versions consistently, regenerate CLI assets, and run the release gates above from a clean checkout. Do not claim production host readiness until the real Excel smoke tests pass on both macOS and Windows.
+Before publishing, bump versions consistently, regenerate CLI assets, confirm the public package is `@component-kit/open-workbook`, and run the release gates above from a clean checkout. Do not claim production host readiness until the real Excel smoke tests pass on both macOS and Windows.

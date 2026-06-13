@@ -16,7 +16,18 @@ const publishablePackages = [
   "apps/mcp-server",
   "packages/cli"
 ];
+const expectedPackageNames = new Map([
+  ["packages/protocol", "@component-kit/open-workbook-protocol"],
+  ["packages/excel-core", "@component-kit/open-workbook-excel-core"],
+  ["packages/office-js-engine", "@component-kit/open-workbook-office-js-engine"],
+  ["apps/backend", "@component-kit/open-workbook-backend"],
+  ["apps/mcp-server", "@component-kit/open-workbook-mcp-server"],
+  ["packages/cli", "@component-kit/open-workbook"]
+]);
 const privatePackages = ["apps/excel-addin"];
+const expectedPrivatePackageNames = new Map([
+  ["apps/excel-addin", "@component-kit/open-workbook-excel-addin"]
+]);
 
 const errors = [];
 
@@ -24,6 +35,7 @@ for (const packageDir of publishablePackages) {
   const packageJsonPath = join(packageDir, "package.json");
   const manifest = readJson(packageJsonPath);
   requireField(manifest.name, `${packageJsonPath} name`);
+  expect(manifest.name === expectedPackageNames.get(packageDir), `${packageJsonPath} name must be ${expectedPackageNames.get(packageDir)}`);
   requireField(manifest.description, `${packageJsonPath} description`);
   requireField(manifest.license, `${packageJsonPath} license`);
   requireField(manifest.type, `${packageJsonPath} type`);
@@ -64,6 +76,7 @@ for (const packageDir of publishablePackages) {
 for (const packageDir of privatePackages) {
   const packageJsonPath = join(packageDir, "package.json");
   const manifest = readJson(packageJsonPath);
+  expect(manifest.name === expectedPrivatePackageNames.get(packageDir), `${packageJsonPath} name must be ${expectedPrivatePackageNames.get(packageDir)}`);
   expect(manifest.version === rootVersion, `${packageJsonPath} version must match root ${rootVersion}`);
   expect(manifest.private === true, `${packageJsonPath} must remain private`);
   expect(manifest.publishConfig === undefined, `${packageJsonPath} must not declare publishConfig`);

@@ -2,7 +2,7 @@ import path from "node:path";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import type { WorkbookFileBridgeRequest, WorkbookId } from "@open-workbook/protocol";
+import type { WorkbookFileBridgeRequest, WorkbookId } from "@component-kit/open-workbook-protocol";
 import {
   createPlatformNativeHostBridgeAdapter,
   handleWorkbookFileBridgeRequest,

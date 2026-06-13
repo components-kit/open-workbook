@@ -1,14 +1,14 @@
-# @open-workbook/excel-addin
+# @component-kit/open-workbook-excel-addin
 
 Office.js Excel add-in runtime for Open Workbook.
 
-This workspace package contains the taskpane HTML, manifest template, static asset server, and Office.js executor. It is private because the built add-in assets are bundled into `@open-workbook/cli`.
+This workspace package contains the taskpane HTML, manifest template, static asset server, and Office.js executor. It is private because the built add-in assets are bundled into `@component-kit/open-workbook`.
 
 ## Development
 
 ```bash
-corepack pnpm --filter @open-workbook/excel-addin build
-corepack pnpm --filter @open-workbook/excel-addin dev
+corepack pnpm --filter @component-kit/open-workbook-excel-addin build
+corepack pnpm --filter @component-kit/open-workbook-excel-addin dev
 ```
 
 The development server serves:

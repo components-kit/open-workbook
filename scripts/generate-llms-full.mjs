@@ -8,20 +8,17 @@ const OUTPUT_FILE = join(ROOT, "llms-full.txt");
 
 const HEADER = `# Open Workbook
 
-> Local-first MCP runtime for fast, reversible, template-aware Excel automation through Office.js, a local backend, and MCP clients such as OpenCode.
+> Local-first MCP runtime for fast, reversible, template-aware Excel automation through Office.js, a local backend, and any MCP-capable agent UI.
 
 This file is generated for LLM and agent context. It combines the project README, core documentation, and workspace package READMEs into one reference.
 
 ## Quick Start
 
 \`\`\`bash
-corepack pnpm install
-corepack pnpm build
-node packages/cli/dist/index.js doctor
-node packages/cli/dist/index.js daemon start
-node packages/cli/dist/index.js mcp
-node packages/cli/dist/index.js addin serve
+npx -y @component-kit/open-workbook setup
 \`\`\`
+
+Then install the skill with \`npx skills add components-kit/open-workbook --skill open-workbook-excel\` and paste the printed MCP config into an agent UI.
 
 ## Production Rules
 
@@ -42,6 +39,9 @@ const SOURCE_FILES = [
   "skills/open-workbook-excel/references/performance.md",
   "skills/open-workbook-excel/references/multi-agent.md",
   "docs/installation.md",
+  "docs/mcp-clients.md",
+  "docs/instructions.md",
+  "docs/advanced-runtime.md",
   "docs/architecture.md",
   "docs/tool-surface.md",
   "docs/backup-lifecycle.md",

@@ -1,5 +1,5 @@
-import type { ConnectionId, RuntimeCapabilities, WorkbookRef } from "@open-workbook/protocol";
-import { makeId } from "@open-workbook/protocol";
+import type { ConnectionId, RuntimeCapabilities, WorkbookRef } from "@component-kit/open-workbook-protocol";
+import { makeId } from "@component-kit/open-workbook-protocol";
 
 export interface AddinSession {
   connectionId: ConnectionId;

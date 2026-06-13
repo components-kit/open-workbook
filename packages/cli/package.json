@@ -1,5 +1,5 @@
 {
-  "name": "@open-workbook/cli",
+  "name": "@component-kit/open-workbook",
   "version": "0.1.0",
   "description": "CLI for installing, sideloading, and running Open Workbook locally.",
   "license": "MIT",
@@ -41,11 +41,11 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.7.0",
-    "@open-workbook/backend": "workspace:*",
-    "@open-workbook/excel-core": "workspace:*",
-    "@open-workbook/mcp-server": "workspace:*",
-    "@open-workbook/office-js-engine": "workspace:*",
-    "@open-workbook/protocol": "workspace:*",
+    "@component-kit/open-workbook-backend": "workspace:*",
+    "@component-kit/open-workbook-excel-core": "workspace:*",
+    "@component-kit/open-workbook-mcp-server": "workspace:*",
+    "@component-kit/open-workbook-office-js-engine": "workspace:*",
+    "@component-kit/open-workbook-protocol": "workspace:*",
     "zod": "^3.24.1",
     "commander": "^13.1.0"
   },

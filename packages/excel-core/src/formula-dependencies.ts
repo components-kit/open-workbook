@@ -7,7 +7,7 @@ import type {
   OperationWarning,
   TableInfo,
   WorkbookId
-} from "@open-workbook/protocol";
+} from "@component-kit/open-workbook-protocol";
 import { columnNameToNumber, formatA1Address, parseA1Address } from "./range-address.js";
 
 const REFERENCE_RE = /(?:(?<sheet>'(?:[^']|'')+'|[A-Za-z_][A-Za-z0-9_ ]*)!)?(?<address>\$?[A-Z]{1,3}\$?\d+#|\$?[A-Z]{1,3}\$?\d+(?::\$?[A-Z]{1,3}\$?\d+)?|\$?[A-Z]{1,3}:\$?[A-Z]{1,3})/g;

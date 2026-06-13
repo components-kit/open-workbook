@@ -4,7 +4,7 @@ import type {
   DestructiveLevel,
   ExcelOperation,
   RangeFingerprint
-} from "@open-workbook/protocol";
+} from "@component-kit/open-workbook-protocol";
 import { createRangeFingerprint } from "./fingerprint.js";
 import { cellCount } from "./range-address.js";
 

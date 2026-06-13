@@ -68,8 +68,8 @@ Choose a supported tool path or ask for user/host setup. Do not claim that unsup
 
 If Excel is not connected:
 
-1. Ask the user to run `owb daemon start`.
-2. Ask the user to run `owb addin serve`.
+1. Ask the user to start the agent UI that has the Open Workbook MCP config.
+2. If troubleshooting manually, ask the user to run `npx -y @component-kit/open-workbook@latest mcp`.
 3. Ask the user to open Excel and load the Open Workbook add-in.
 4. Retry `excel.runtime.get_status`.
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { WorkbookId } from "@open-workbook/protocol";
+import type { WorkbookId } from "@component-kit/open-workbook-protocol";
 import { LockManager } from "./lock-manager.js";
 
 const workbookId = "workbook_test" as WorkbookId;

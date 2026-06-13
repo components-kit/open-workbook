@@ -1,4 +1,4 @@
-import type { DestructiveLevel } from "@open-workbook/protocol";
+import type { DestructiveLevel } from "@component-kit/open-workbook-protocol";
 
 export interface PermissionPolicy {
   allowWrites: boolean;

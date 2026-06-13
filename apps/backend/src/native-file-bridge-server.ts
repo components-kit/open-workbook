@@ -8,7 +8,7 @@ import {
   type WorkbookFileBridgeRequest,
   type WorkbookFileBridgeResponse,
   type WorkbookId
-} from "@open-workbook/protocol";
+} from "@component-kit/open-workbook-protocol";
 
 export interface NativeFileBridgeServerOptions {
   host: string;

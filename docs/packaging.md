@@ -1,21 +1,21 @@
 # Packaging And Publishing
 
-Open Workbook is designed for local-first, non-AppSource distribution. The public entry point is the `owb` CLI, which carries the built MCP server and Excel add-in assets.
+Open Workbook is designed for local-first, non-AppSource distribution. The public entry point is `@component-kit/open-workbook`, which can be run through `npx` and carries the built MCP server, Excel add-in assets, and fallback agent instructions. The primary skill install path is skills.sh against `skills/open-workbook-excel`.
 
 ## Packages
 
 Publishable packages:
 
-- `@open-workbook/cli`: user-facing CLI and bundled runtime assets
-- `@open-workbook/mcp-server`: MCP stdio server
-- `@open-workbook/backend`: local backend broker and runtime service
-- `@open-workbook/protocol`: shared contracts, tool catalog, resources, and prompts
-- `@open-workbook/excel-core`: planning, backups, snapshots, templates, permissions, and range utilities
-- `@open-workbook/office-js-engine`: Office.js engine interface and defaults
+- `@component-kit/open-workbook`: user-facing CLI and bundled runtime assets
+- `@component-kit/open-workbook-mcp-server`: MCP stdio server
+- `@component-kit/open-workbook-backend`: local backend broker and runtime service
+- `@component-kit/open-workbook-protocol`: shared contracts, tool catalog, resources, and prompts
+- `@component-kit/open-workbook-excel-core`: planning, backups, snapshots, templates, permissions, and range utilities
+- `@component-kit/open-workbook-office-js-engine`: Office.js engine interface and defaults
 
 Private workspace package:
 
-- `@open-workbook/excel-addin`: source for the sideloaded add-in; bundled into `@open-workbook/cli` assets rather than published as a standalone install target
+- `@component-kit/open-workbook-excel-addin`: source for the sideloaded add-in; bundled into `@component-kit/open-workbook` assets rather than published as a standalone install target
 
 ## Build
 
@@ -28,12 +28,12 @@ corepack pnpm test
 The root build:
 
 1. Compiles all TypeScript projects.
-2. Copies built MCP server and add-in assets into `packages/cli/assets`.
+2. Copies built MCP server, add-in assets, and fallback instructions into `packages/cli/assets`.
 3. Ensures CLI binaries are executable.
 
 ## CLI Asset Bundle
 
-`@open-workbook/cli` resolves runtime assets in this order:
+`@component-kit/open-workbook` resolves runtime assets in this order:
 
 1. Source checkout paths, for contributors.
 2. Packaged `packages/cli/assets`, for installed users.
@@ -44,10 +44,11 @@ This lets the same command shape work from source and from an installed package:
 ```bash
 owb mcp
 owb addin serve
+owb setup
+owb instructions
 owb sideload mac
 owb sideload windows
 owb sideload manifest
-owb opencode config
 owb doctor
 owb paths
 ```
@@ -57,14 +58,15 @@ owb paths
 ```bash
 node packages/cli/dist/index.js doctor
 node packages/cli/dist/index.js paths
-node packages/cli/dist/index.js opencode config --id open-workbook --command "node packages/cli/dist/index.js"
+node packages/cli/dist/index.js setup --dry-run
+node packages/cli/dist/index.js instructions
 node packages/cli/dist/index.js sideload manifest --out /tmp/open-workbook.xml
 ```
 
 ## Package Dry Run
 
 ```bash
-npm pack --dry-run ./packages/cli
+pnpm pack --dry-run ./packages/cli
 ```
 
 The tarball should include:
@@ -75,6 +77,8 @@ The tarball should include:
 - `packages/cli/assets/excel-addin/public`
 - `packages/cli/assets/excel-addin/scripts`
 - `packages/cli/assets/excel-addin/manifest.xml`
+- `packages/cli/assets/instructions/open-workbook-excel/SKILL.md`
+- `packages/cli/assets/instructions/open-workbook-excel/references`
 - `packages/cli/README.md`
 
 ## Publish Checklist
@@ -85,38 +89,52 @@ Before publishing:
 2. Run `corepack pnpm verify`.
 3. Run `node packages/cli/dist/index.js doctor`.
 4. Run `corepack pnpm pack:dry-run`.
-5. Confirm generated manifests include the expected taskpane URL and `backendUrl`.
-6. Confirm `@open-workbook/excel-addin` remains private.
-7. Confirm npm publish access is public for publishable scoped packages.
+5. Confirm `node packages/cli/dist/index.js setup --dry-run` prints the generic `npx @component-kit/open-workbook@latest mcp` config and `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
+6. Confirm generated manifests include the expected taskpane URL and `backendUrl`.
+7. Confirm `@component-kit/open-workbook-excel-addin` remains private.
+8. Confirm npm publish access is public for publishable scoped packages.
 
-`corepack pnpm verify` runs `scripts/validate-package-metadata.mjs`, which enforces the package version, repository, public/private publish intent, `dist` entrypoints, README presence, and publish access rules above.
+`corepack pnpm verify` runs `scripts/validate-package-metadata.mjs`, which enforces the package version, repository, public/private publish intent, `dist` entrypoints, README presence, and publish access rules above. Use pnpm for packing/publishing so workspace dependencies are rewritten to publishable semver ranges.
 
 ## End-User Install Shape
 
 The intended user flow after package publishing:
 
 ```bash
-npm install -g @open-workbook/cli
-owb doctor
-owb opencode config --id open-workbook
-owb addin serve
-owb sideload mac
+npx -y @component-kit/open-workbook setup
 ```
 
-Windows users should run:
+Users paste the printed MCP config into their agent UI:
+
+```json
+{
+  "mcpServers": {
+    "open-workbook": {
+      "command": "npx",
+      "args": ["-y", "@component-kit/open-workbook@latest", "mcp"]
+    }
+  }
+}
+```
+
+They install the skill with:
 
 ```bash
-owb sideload windows --out open-workbook.xml
+npx skills add components-kit/open-workbook --skill open-workbook-excel
 ```
 
-and copy the generated manifest into a trusted shared-folder add-in catalog.
+For OpenCode:
+
+```bash
+npx skills add components-kit/open-workbook --skill open-workbook-excel -a opencode -g -y
+```
 
 ## Native Installer Shape
 
 Native installers or administrator scripts can wrap the same commands:
 
 - install Node/runtime assets or embed a Node runtime
-- place `owb` on `PATH`
+- place `owb` on `PATH` or configure an equivalent `npx` command
 - register an optional auto-start process from `owb service manifest`
 - guide or automate the Excel manifest trust step where the platform allows it
 

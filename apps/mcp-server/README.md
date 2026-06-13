@@ -1,4 +1,4 @@
-# @open-workbook/mcp-server
+# @component-kit/open-workbook-mcp-server
 
 MCP stdio server for Open Workbook.
 
@@ -27,4 +27,4 @@ open-workbook-mcp
 
 ## Notes
 
-Use `@open-workbook/cli` for end-user installs. This package is published separately so advanced integrators can embed or run the MCP server directly.
+Use `@component-kit/open-workbook` for end-user installs. This package is published separately so advanced integrators can embed or run the MCP server directly.

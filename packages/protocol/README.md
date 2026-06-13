@@ -1,4 +1,4 @@
-# @open-workbook/protocol
+# @component-kit/open-workbook-protocol
 
 Shared protocol package for Open Workbook.
 
@@ -14,7 +14,7 @@ It contains:
 ## Usage
 
 ```ts
-import { ToolCatalog, getToolCatalogSummary, runtimeError } from "@open-workbook/protocol";
+import { ToolCatalog, getToolCatalogSummary, runtimeError } from "@component-kit/open-workbook-protocol";
 ```
 
-Most users should install `@open-workbook/cli`; this package is published for integrators building clients, tests, or alternate engines.
+Most users should install `@component-kit/open-workbook`; this package is published for integrators building clients, tests, or alternate engines.

@@ -1,4 +1,4 @@
-import type { A1Range, RangeFingerprint, WorkbookFingerprint, WorkbookId } from "@open-workbook/protocol";
+import type { A1Range, RangeFingerprint, WorkbookFingerprint, WorkbookId } from "@component-kit/open-workbook-protocol";
 import { cellCount } from "./range-address.js";
 
 export function createRangeFingerprint(range: A1Range, payload: unknown, capturedAt = new Date().toISOString()): RangeFingerprint {

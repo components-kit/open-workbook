@@ -1,4 +1,4 @@
-import type { JsonRpcMessage, JsonRpcRequest } from "@open-workbook/protocol";
+import type { JsonRpcMessage, JsonRpcRequest } from "@component-kit/open-workbook-protocol";
 import {
   calculateWorkbook,
   appendTableRows,

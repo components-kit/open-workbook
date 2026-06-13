@@ -19,7 +19,7 @@ excel.workbook.get_workbook_map
 excel.collab.get_status
 ```
 
-If the add-in is disconnected, ask the user to start `owb daemon start`, `owb addin serve`, open Excel, and load the Open Workbook add-in. Do not fake workbook state from stale assumptions.
+If the add-in is disconnected, ask the user to start their agent UI so it launches the configured Open Workbook MCP command, then open Excel and load the Open Workbook add-in. For manual troubleshooting, run `npx -y @component-kit/open-workbook@latest mcp` and retry. Do not fake workbook state from stale assumptions.
 
 ## Tool Selection
 

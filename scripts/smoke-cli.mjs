@@ -22,8 +22,28 @@ const checks = [
         return false;
       }
       const parsed = JSON.parse(result.stdout);
-      return Boolean(parsed.mcpServer) && Boolean(parsed.backend) && Boolean(parsed.fileBridge) && Boolean(parsed.addinServer) && Boolean(parsed.manifest) && Boolean(parsed.fileBridgeUrl);
+      return Boolean(parsed.mcpServer) && Boolean(parsed.backend) && Boolean(parsed.fileBridge) && Boolean(parsed.addinServer) && Boolean(parsed.manifest) && Boolean(parsed.instructions) && Boolean(parsed.fileBridgeUrl);
     }
+  },
+  {
+    name: "setup dry run",
+    args: ["setup", "--dry-run", "--manifest-out", join(tempDir, "setup-manifest.xml"), "--instructions-out", join(tempDir, "instructions.md")],
+    assert: (result) =>
+      result.status === 0 &&
+      result.stdout.includes("@component-kit/open-workbook@latest") &&
+      result.stdout.includes("npx skills add components-kit/open-workbook --skill open-workbook-excel") &&
+      result.stdout.includes("\"mcp\"") &&
+      result.stdout.includes("instructions.md") &&
+      result.stdout.includes("setup-manifest.xml")
+  },
+  {
+    name: "instructions",
+    args: ["instructions"],
+    assert: (result) =>
+      result.status === 0 &&
+      result.stdout.includes("# Open Workbook Excel Instructions") &&
+      result.stdout.includes("excel.runtime.get_status") &&
+      result.stdout.includes("## Tool Selection")
   },
   {
     name: "opencode config",

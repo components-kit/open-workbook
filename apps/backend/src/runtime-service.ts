@@ -18,10 +18,10 @@ import {
   TransactionManager,
   traceDependents,
   tracePrecedents
-} from "@open-workbook/excel-core";
-import { makeRollbackConflict } from "@open-workbook/excel-core";
-import type { BackupRecord, PermissionPolicy } from "@open-workbook/excel-core";
-import type { TemplateRecord } from "@open-workbook/excel-core";
+} from "@component-kit/open-workbook-excel-core";
+import { makeRollbackConflict } from "@component-kit/open-workbook-excel-core";
+import type { BackupRecord, PermissionPolicy } from "@component-kit/open-workbook-excel-core";
+import type { TemplateRecord } from "@component-kit/open-workbook-excel-core";
 import type {
   AddinTemplateRepairRequest,
   AddinExecuteBatchRequest,
@@ -143,8 +143,8 @@ import type {
   WorkbookLocalConfigImportResponse,
   WorkbookRef,
   WorkbookSnapshotResponse
-} from "@open-workbook/protocol";
-import { getToolCatalogSummary, PromptCatalog, ResourceCatalog, makeId, runtimeError } from "@open-workbook/protocol";
+} from "@component-kit/open-workbook-protocol";
+import { getToolCatalogSummary, PromptCatalog, ResourceCatalog, makeId, runtimeError } from "@component-kit/open-workbook-protocol";
 import { SessionRegistry } from "./session-registry.js";
 import type { AddinRpcClient } from "./addin-rpc-client.js";
 import { NativeFileBridge } from "./native-file-bridge.js";

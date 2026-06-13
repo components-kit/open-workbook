@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { WorkbookFileBridgeRequest, WorkbookId } from "@open-workbook/protocol";
+import type { WorkbookFileBridgeRequest, WorkbookId } from "@component-kit/open-workbook-protocol";
 import { NativeFileBridge } from "./native-file-bridge.js";
 
 describe("NativeFileBridge", () => {

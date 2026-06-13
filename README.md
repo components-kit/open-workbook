@@ -1,6 +1,6 @@
 # Open Workbook
 
-Open Workbook is a local-first MCP runtime for fast, reversible, template-aware Excel automation. It connects MCP clients such as OpenCode to live desktop Excel workbooks through an Office.js add-in and a local TypeScript backend, so teams can use OpenRouter or any MCP-capable agent without being locked into one frontier model vendor.
+Open Workbook is a local-first MCP runtime for fast, reversible, template-aware Excel automation. It connects any MCP-capable agent UI to live desktop Excel workbooks through an Office.js add-in and a local TypeScript backend, so teams can use their preferred agent without being locked into one client or model vendor.
 
 ## Why
 
@@ -14,11 +14,11 @@ Daily spreadsheet work usually does not need the largest model available, but it
 
 ## Current Status
 
-The project is publishable for local development, MCP integration, and sideloaded desktop Excel testing on macOS and Windows. It is not a Microsoft AppSource add-in and does not attempt to install itself into Excel without user or admin trust approval.
+The project is being prepared for npm distribution as `@component-kit/open-workbook`. It is not a Microsoft AppSource add-in and does not attempt to install itself into Excel without user or admin trust approval.
 
-Stable areas include runtime connection, workbook/sheet/range operations, reversible batches, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, and OpenCode config generation. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
+Stable areas include runtime connection, workbook/sheet/range operations, reversible batches, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
 
-The multi-agent foundation is implemented through a shared `owb daemon`: tasks, agent records, task progress and blockers, scoped locks with lease policy, serialized transactions, collaboration events, transaction audit records, conservative rollback previews, confirmed rollback chains, and safe plan refresh/rebase checks are available to multiple MCP adapters at once.
+The simple flow is MCP-owned: `npx ... mcp` starts the MCP adapter, the local add-in taskpane server, and an embedded backend when no shared daemon is running. The shared `owb daemon` remains available for advanced multi-client coordination.
 
 ## Architecture
 
@@ -43,78 +43,81 @@ Shared packages:
 - `packages/protocol`: tool catalog, JSON-RPC contracts, resources, prompts, errors, and workbook types
 - `packages/excel-core`: range parsing, planning, backups, snapshots, templates, permissions, fingerprints, and diffs
 - `packages/office-js-engine`: Office.js execution interface and defaults
-- `packages/cli`: `owb` CLI for running MCP, serving the add-in, generating manifests, sideloading, and diagnostics
+- `packages/cli`: `owb` CLI for setup, running MCP, serving the add-in, generating manifests, sideloading, fallback instructions, and diagnostics
 
 ## Requirements
 
 - Node.js `>=20.11`
-- pnpm through Corepack
 - Desktop Microsoft Excel on macOS or Windows
-- An MCP client such as OpenCode
-- Network access only for installing packages or using whichever model provider your MCP client calls
+- An MCP-capable agent UI
+- Network access for `npx` package installation and whichever model provider your agent UI uses
 
-## Install From Source
+## Quickstart
+
+Run setup:
+
+```bash
+npx -y @component-kit/open-workbook setup
+```
+
+Setup prepares the Excel add-in manifest and prints the MCP config to add to your agent UI.
+
+Install the agent skill with skills.sh:
+
+```bash
+npx skills add components-kit/open-workbook --skill open-workbook-excel
+```
+
+Paste the printed MCP config into any MCP-capable agent UI:
+
+```json
+{
+  "mcpServers": {
+    "open-workbook": {
+      "command": "npx",
+      "args": ["-y", "@component-kit/open-workbook@latest", "mcp"]
+    }
+  }
+}
+```
+
+Start the agent UI before opening the Open Workbook add-in in Excel; the MCP command starts the local add-in asset server and backend for the simple flow.
+
+## Source Development
 
 ```bash
 git clone https://github.com/open-workbook/open-workbook.git
 cd open-workbook
 corepack pnpm install
 corepack pnpm build
+node packages/cli/dist/index.js setup --dry-run
 node packages/cli/dist/index.js doctor
 ```
 
-Run the shared daemon:
+Run setup from the checkout:
 
 ```bash
-node packages/cli/dist/index.js daemon start
+node packages/cli/dist/index.js setup
 ```
 
-Run the MCP adapter in another terminal:
+Use this MCP command in a local agent config:
 
-```bash
-node packages/cli/dist/index.js mcp
+```json
+{
+  "mcpServers": {
+    "open-workbook": {
+      "command": "node",
+      "args": ["packages/cli/dist/index.js", "mcp"]
+    }
+  }
+}
 ```
 
-Serve the Excel add-in assets in a separate terminal:
+## Excel Add-in
 
-```bash
-node packages/cli/dist/index.js addin serve
-```
+`setup` prepares the Excel add-in manifest. On macOS it copies the manifest into Excel's local WEF sideload folder. On Windows it writes the manifest and prints the Trusted Add-in Catalog steps.
 
-Generate OpenCode config:
-
-```bash
-node packages/cli/dist/index.js opencode config --id open-workbook --command "node packages/cli/dist/index.js"
-```
-
-For an installed package, the same commands become:
-
-```bash
-owb doctor
-owb daemon start
-owb file-bridge start
-owb mcp
-owb addin serve
-owb opencode config --id open-workbook --agent-name finance-agent
-```
-
-## Sideload Excel Add-in
-
-macOS:
-
-```bash
-owb sideload mac
-```
-
-Windows:
-
-```bash
-owb sideload windows --out open-workbook.xml
-```
-
-Windows Excel uses a trusted shared-folder add-in catalog. Create a folder, share it, copy the generated manifest into that shared folder, add the UNC path in Excel Trust Center, select `Show in Menu`, restart Excel, and insert the add-in from Shared Folder.
-
-More detail is in [Local Excel Add-in Sideloading](docs/sideloading.md).
+Manual sideloading and custom manifest generation are documented in [Sideloading](docs/sideloading.md).
 
 ## Runtime URLs
 
@@ -150,17 +153,18 @@ corepack pnpm pack:dry-run
 node packages/cli/dist/index.js paths
 node packages/cli/dist/index.js daemon status
 node packages/cli/dist/index.js file-bridge status
+node packages/cli/dist/index.js instructions
 node packages/cli/dist/index.js sideload manifest --out open-workbook.xml
 ```
 
-## Agent Skills
+## Agent Instructions
 
-Open Workbook includes agent skill source for fast, reliable live Excel automation through the MCP surface:
+Open Workbook includes generic agent instruction source for fast, reliable live Excel automation through the MCP surface:
 
 - `skills/open-workbook-excel/SKILL.md`
 - `skills/open-workbook-excel/references/`
 
-The skill teaches agents to inspect runtime capabilities, choose the narrowest efficient MCP tool, batch workbook writes, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews.
+Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`. The skill teaches agents to inspect runtime capabilities, choose the narrowest efficient MCP tool, batch workbook writes, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews. `owb instructions` remains available as a fallback for clients that do not support skills.sh.
 
 ## Safety Contract
 
@@ -180,6 +184,9 @@ Mutating operations should follow the same lifecycle:
 ## Documentation
 
 - [Installation](docs/installation.md)
+- [MCP Clients](docs/mcp-clients.md)
+- [Generic Instructions](docs/instructions.md)
+- [Advanced Runtime](docs/advanced-runtime.md)
 - [Architecture](docs/architecture.md)
 - [Tool Surface](docs/tool-surface.md)
 - [Backup Lifecycle](docs/backup-lifecycle.md)

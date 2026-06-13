@@ -1,5 +1,5 @@
 {
-  "name": "@open-workbook/mcp-server",
+  "name": "@component-kit/open-workbook-mcp-server",
   "version": "0.1.0",
   "description": "MCP stdio server exposing Open Workbook Excel automation tools.",
   "license": "MIT",
@@ -38,9 +38,9 @@
     "dev": "node --enable-source-maps dist/index.js"
   },
   "dependencies": {
-    "@open-workbook/backend": "workspace:*",
+    "@component-kit/open-workbook-backend": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.7.0",
-    "@open-workbook/protocol": "workspace:*",
+    "@component-kit/open-workbook-protocol": "workspace:*",
     "zod": "^3.24.1"
   },
   "devDependencies": {

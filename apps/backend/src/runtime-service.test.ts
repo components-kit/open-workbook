@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { AgentId, ExcelOperation, OperationId, PlanId, RuntimeCapabilities, TransactionRecord, WorkbookId, WorkbookScope } from "@open-workbook/protocol";
+import type { AgentId, ExcelOperation, OperationId, PlanId, RuntimeCapabilities, TransactionRecord, WorkbookId, WorkbookScope } from "@component-kit/open-workbook-protocol";
 import { NativeFileBridge } from "./native-file-bridge.js";
 import { RuntimeService } from "./runtime-service.js";
 

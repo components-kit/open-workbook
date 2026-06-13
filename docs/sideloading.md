@@ -4,9 +4,9 @@ Open Workbook does not require Microsoft AppSource. Users can sideload the Excel
 
 ## Runtime Model
 
-- The MCP server starts the local backend automatically.
+- The MCP command starts the local backend automatically.
 - The Excel add-in connects to that backend at `ws://127.0.0.1:37845/addin`.
-- The add-in taskpane is served locally at `http://localhost:37846/taskpane.html`.
+- The add-in taskpane is served locally at `http://localhost:37846/taskpane.html`; `owb mcp` starts that local taskpane server by default.
 - The source manifest is `apps/excel-addin/manifest.xml`; CLI sideload commands generate a runtime manifest with the active taskpane and backend URLs.
 
 ## Development Sideload
@@ -87,9 +87,9 @@ The CLI does not install or trust certificates automatically. Use a local tool s
 
 For non-store open-source distribution, the expected install flow is:
 
-1. Install/configure the MCP server in the MCP client.
-2. Run or auto-start the local add-in asset server.
-3. Sideload the manifest once.
-4. Open Excel; the add-in connects to the MCP-started backend.
+1. Run `npx -y @component-kit/open-workbook setup`.
+2. Add the printed MCP config to the agent UI.
+3. Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
+4. Open the agent UI, then Excel, then the Open Workbook add-in.
 
-`owb service manifest` can generate launchd, systemd user, or Windows scheduled-task wrappers for auto-starting the add-in asset server. Excel still requires user or admin trust approval for the add-in manifest.
+`owb service manifest` remains available for advanced deployments that want startup services. Excel still requires user or admin trust approval for the add-in manifest.

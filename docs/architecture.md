@@ -18,7 +18,7 @@ Open Workbook separates agent-facing protocol from Excel execution.
 5. The add-in executes optimized Office.js calls inside `Excel.run`.
 6. The backend stores operation records and returns a structured result.
 
-The default `open-workbook-mcp` process starts both stdio MCP and the local add-in WebSocket endpoint so a desktop MCP client can launch one process.
+The default `owb mcp` process starts stdio MCP and uses an embedded backend when no shared daemon is available. The user-facing CLI also starts the local add-in taskpane server when needed, so a desktop MCP client can launch one command for the simple flow.
 
 ## Engine Policy
 

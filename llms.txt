@@ -1,8 +1,8 @@
 # Open Workbook
 
-> Local-first MCP runtime for fast, reversible, template-aware Excel automation through Office.js, a local backend, and MCP clients such as OpenCode.
+> Local-first MCP runtime for fast, reversible, template-aware Excel automation through Office.js, a local backend, and any MCP-capable agent UI.
 
-Open Workbook lets agents work with live desktop Excel workbooks while preserving templates, styling, formulas, filters, tables, charts, pivots, backups, rollback records, permissions, and multi-agent transaction safety. It is designed for local-first workflows where teams can use OpenRouter or any MCP-capable agent without locking Excel automation to one frontier AI provider.
+Open Workbook lets agents work with live desktop Excel workbooks while preserving templates, styling, formulas, filters, tables, charts, pivots, backups, rollback records, permissions, and multi-agent transaction safety. It is designed for local-first workflows where teams can use any MCP-capable agent UI.
 
 Key patterns:
 - **Local-first Excel runtime**: MCP server, backend broker, Office.js add-in, and CLI run locally.
@@ -12,30 +12,32 @@ Key patterns:
 - **Multi-agent coordination**: Task registry, leases, transaction queue, conflict guidance, rollback preview, and rollback chains.
 - **Capability honesty**: Host-limited Office.js paths return explicit warnings or `CAPABILITY_UNAVAILABLE` instead of pretending to work.
 
-Install from source:
+Install:
 
 ```bash
-git clone https://github.com/open-workbook/open-workbook.git
-cd open-workbook
-corepack pnpm install
-corepack pnpm build
-node packages/cli/dist/index.js doctor
+npx -y @component-kit/open-workbook setup
 ```
 
-Common installed commands:
+Generic MCP config:
+
+```json
+{
+  "mcpServers": {
+    "open-workbook": {
+      "command": "npx",
+      "args": ["-y", "@component-kit/open-workbook@latest", "mcp"]
+    }
+  }
+}
+```
+
+Skill install:
 
 ```bash
-owb doctor
-owb daemon start
-owb file-bridge start
-owb mcp
-owb addin serve
-owb sideload mac
-owb sideload windows --out open-workbook.xml
-owb opencode config --id open-workbook --agent-name finance-agent
+npx skills add components-kit/open-workbook --skill open-workbook-excel
 ```
 
-Agent skill source:
+Agent instruction source:
 
 - `skills/open-workbook-excel/SKILL.md`
 - `skills/open-workbook-excel/references/`
@@ -45,7 +47,9 @@ Agent skill source:
 - [Full LLM Reference](https://raw.githubusercontent.com/open-workbook/open-workbook/main/llms-full.txt): Complete generated project reference in one file
 - [Agent Skill: Open Workbook Excel](https://github.com/open-workbook/open-workbook/tree/main/skills/open-workbook-excel): Skill source for fast, reliable live Excel automation through Open Workbook MCP
 - [README](https://github.com/open-workbook/open-workbook/blob/main/README.md): Project overview, architecture, setup, and safety contract
-- [Installation](https://github.com/open-workbook/open-workbook/blob/main/docs/installation.md): Local install and startup flow
+- [Installation](https://github.com/open-workbook/open-workbook/blob/main/docs/installation.md): npx setup, generic MCP config, and Excel add-in startup flow
+- [MCP Clients](https://github.com/open-workbook/open-workbook/blob/main/docs/mcp-clients.md): Generic MCP client configuration
+- [Generic Instructions](https://github.com/open-workbook/open-workbook/blob/main/docs/instructions.md): skills.sh install and fallback agent instructions
 - [Tool Surface](https://github.com/open-workbook/open-workbook/blob/main/docs/tool-surface.md): Stable, preview, and capability-limited MCP tools
 - [Architecture](https://github.com/open-workbook/open-workbook/blob/main/docs/architecture.md): Runtime components and catalog policy
 - [Backup Lifecycle](https://github.com/open-workbook/open-workbook/blob/main/docs/backup-lifecycle.md): Snapshot, file backup, restore, retention, and rollback model
@@ -63,10 +67,10 @@ Agent skill source:
 
 ## Packages
 
-- [@open-workbook/protocol](https://github.com/open-workbook/open-workbook/tree/main/packages/protocol): Tool catalog, JSON-RPC contracts, resources, prompts, errors, and workbook types
-- [@open-workbook/excel-core](https://github.com/open-workbook/open-workbook/tree/main/packages/excel-core): Planning, backups, snapshots, templates, fingerprints, permissions, locks, and transactions
-- [@open-workbook/office-js-engine](https://github.com/open-workbook/open-workbook/tree/main/packages/office-js-engine): Office.js engine adapter contracts
-- [@open-workbook/cli](https://github.com/open-workbook/open-workbook/tree/main/packages/cli): `owb` CLI for MCP, daemon, add-in serving, sideloading, diagnostics, and config generation
-- [@open-workbook/backend](https://github.com/open-workbook/open-workbook/tree/main/apps/backend): Local broker and runtime service
-- [@open-workbook/mcp-server](https://github.com/open-workbook/open-workbook/tree/main/apps/mcp-server): MCP stdio server
-- [@open-workbook/excel-addin](https://github.com/open-workbook/open-workbook/tree/main/apps/excel-addin): Office.js add-in runtime
+- [@component-kit/open-workbook-protocol](https://github.com/open-workbook/open-workbook/tree/main/packages/protocol): Tool catalog, JSON-RPC contracts, resources, prompts, errors, and workbook types
+- [@component-kit/open-workbook-excel-core](https://github.com/open-workbook/open-workbook/tree/main/packages/excel-core): Planning, backups, snapshots, templates, fingerprints, permissions, locks, and transactions
+- [@component-kit/open-workbook-office-js-engine](https://github.com/open-workbook/open-workbook/tree/main/packages/office-js-engine): Office.js engine adapter contracts
+- [@component-kit/open-workbook](https://github.com/open-workbook/open-workbook/tree/main/packages/cli): `owb` CLI for generic setup, MCP, add-in serving, sideloading, diagnostics, and fallback instructions
+- [@component-kit/open-workbook-backend](https://github.com/open-workbook/open-workbook/tree/main/apps/backend): Local broker and runtime service
+- [@component-kit/open-workbook-mcp-server](https://github.com/open-workbook/open-workbook/tree/main/apps/mcp-server): MCP stdio server
+- [@component-kit/open-workbook-excel-addin](https://github.com/open-workbook/open-workbook/tree/main/apps/excel-addin): Office.js add-in runtime

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { BackupRecord, PlanRecord, TemplateRecord } from "@open-workbook/excel-core";
+import type { BackupRecord, PlanRecord, TemplateRecord } from "@component-kit/open-workbook-excel-core";
 import type {
   AgentRecord,
   CollaborationEvent,
@@ -12,7 +12,7 @@ import type {
   TaskRecord,
   TransactionRecord,
   WorkbookRegion
-} from "@open-workbook/protocol";
+} from "@component-kit/open-workbook-protocol";
 
 export interface RuntimeStateSnapshot {
   version: 1;

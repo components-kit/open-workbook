@@ -5,7 +5,7 @@ import {
   type OperationId,
   type WorkbookId,
   makeId
-} from "@open-workbook/protocol";
+} from "@component-kit/open-workbook-protocol";
 
 export interface BackupRecord extends BackupRef {
   affectedRanges: A1Range[];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BatchRequest, OperationId, WorkbookId } from "@open-workbook/protocol";
+import type { BatchRequest, OperationId, WorkbookId } from "@component-kit/open-workbook-protocol";
 import { BatchCompiler } from "./batch-compiler.js";
 
 describe("BatchCompiler", () => {

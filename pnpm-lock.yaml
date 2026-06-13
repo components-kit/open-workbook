@@ -20,13 +20,13 @@ importers:
 
   apps/backend:
     dependencies:
-      '@open-workbook/excel-core':
+      '@component-kit/open-workbook-excel-core':
         specifier: workspace:*
         version: link:../../packages/excel-core
-      '@open-workbook/office-js-engine':
+      '@component-kit/open-workbook-office-js-engine':
         specifier: workspace:*
         version: link:../../packages/office-js-engine
-      '@open-workbook/protocol':
+      '@component-kit/open-workbook-protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
       ws:
@@ -45,10 +45,10 @@ importers:
 
   apps/excel-addin:
     dependencies:
-      '@open-workbook/excel-core':
+      '@component-kit/open-workbook-excel-core':
         specifier: workspace:*
         version: link:../../packages/excel-core
-      '@open-workbook/protocol':
+      '@component-kit/open-workbook-protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
     devDependencies:
@@ -70,10 +70,10 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.7.0
         version: 1.29.0(zod@3.25.76)
-      '@open-workbook/backend':
+      '@component-kit/open-workbook-backend':
         specifier: workspace:*
         version: link:../backend
-      '@open-workbook/protocol':
+      '@component-kit/open-workbook-protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
       zod:
@@ -92,19 +92,19 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.7.0
         version: 1.29.0(zod@3.25.76)
-      '@open-workbook/backend':
+      '@component-kit/open-workbook-backend':
         specifier: workspace:*
         version: link:../../apps/backend
-      '@open-workbook/excel-core':
+      '@component-kit/open-workbook-excel-core':
         specifier: workspace:*
         version: link:../excel-core
-      '@open-workbook/mcp-server':
+      '@component-kit/open-workbook-mcp-server':
         specifier: workspace:*
         version: link:../../apps/mcp-server
-      '@open-workbook/office-js-engine':
+      '@component-kit/open-workbook-office-js-engine':
         specifier: workspace:*
         version: link:../office-js-engine
-      '@open-workbook/protocol':
+      '@component-kit/open-workbook-protocol':
         specifier: workspace:*
         version: link:../protocol
       commander:
@@ -126,7 +126,7 @@ importers:
 
   packages/excel-core:
     dependencies:
-      '@open-workbook/protocol':
+      '@component-kit/open-workbook-protocol':
         specifier: workspace:*
         version: link:../protocol
     devDependencies:
@@ -139,7 +139,7 @@ importers:
 
   packages/office-js-engine:
     dependencies:
-      '@open-workbook/protocol':
+      '@component-kit/open-workbook-protocol':
         specifier: workspace:*
         version: link:../protocol
     devDependencies:
