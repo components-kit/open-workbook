@@ -30,8 +30,6 @@ export type ToolNamespace =
   | "validate"
   | "repair"
   | "clean"
-  | "reconcile"
-  | "ocr"
   | "permissions";
 
 export interface ToolContract {
@@ -638,21 +636,6 @@ const TOOL_NAMES = [
   "excel.clean.merge_columns",
   "excel.clean.detect_outliers",
   "excel.clean.fuzzy_match",
-  "excel.reconcile.tables",
-  "excel.reconcile.bank_statement",
-  "excel.reconcile.invoices",
-  "excel.reconcile.receipts",
-  "excel.reconcile.fuel_slips",
-  "excel.reconcile.driver_payroll",
-  "excel.reconcile.customer_statement",
-  "excel.ocr.read_file",
-  "excel.ocr.extract_tables",
-  "excel.ocr.extract_receipt",
-  "excel.ocr.extract_invoice",
-  "excel.ocr.extract_statement",
-  "excel.ocr.map_to_template",
-  "excel.ocr.insert_rows",
-  "excel.ocr.review_confidence",
   "excel.permissions.get",
   "excel.permissions.set",
   "excel.permissions.require_confirmation",
@@ -729,9 +712,6 @@ function getToolStatus(name: string, namespace: ToolNamespace): CatalogStatus {
   if (PREVIEW_TOOLS.has(name)) {
     return "preview";
   }
-  if (namespace === "ocr") {
-    return "unsupported";
-  }
   return "planned";
 }
 
@@ -758,9 +738,6 @@ function getDestructiveLevel(name: string, namespace: ToolNamespace): Destructiv
 }
 
 function getRequiredCapabilities(name: string, namespace: ToolNamespace): string[] {
-  if (namespace === "ocr") {
-    return ["external.ocr"];
-  }
   if (namespace === "runtime") {
     return ["runtime.session"];
   }

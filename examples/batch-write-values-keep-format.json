@@ -7,19 +7,19 @@
     "operations": [
       {
         "kind": "range.write_values",
-        "operationId": "op_write_invoice_rows",
+        "operationId": "op_write_data_rows",
         "workbookId": "workbook_current",
         "destructiveLevel": "values",
-        "reason": "Append reviewed invoice values into the template data region",
+        "reason": "Append reviewed values into the template data region",
         "target": {
           "workbookId": "workbook_current",
-          "sheetName": "Invoices",
+          "sheetName": "Data",
           "address": "A10:F12"
         },
         "values": [
-          ["INV-1001", "2026-02-01", "Customer A", 1200, "THB", "Open"],
-          ["INV-1002", "2026-02-02", "Customer B", 900, "THB", "Paid"],
-          ["INV-1003", "2026-02-03", "Customer C", 1500, "THB", "Open"]
+          ["ROW-1001", "2026-02-01", "Category A", 1200, "THB", "Open"],
+          ["ROW-1002", "2026-02-02", "Category B", 900, "THB", "Closed"],
+          ["ROW-1003", "2026-02-03", "Category C", 1500, "THB", "Open"]
         ],
         "preserveFormats": true
       }

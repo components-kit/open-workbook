@@ -500,18 +500,6 @@ function registerPrompts(mcp: McpServer): void {
     ]
   );
 
-  for (const name of [
-    "excel.prompts.import_receipts_to_table",
-    "excel.prompts.import_invoices_to_table",
-    "excel.prompts.reconcile_statement",
-    "excel.prompts.create_driver_payroll",
-    "excel.prompts.import_fuel_slips",
-    "excel.prompts.calculate_fuel_consumption",
-    "excel.prompts.create_customer_transport_report",
-    "excel.prompts.reconcile_job_payments"
-  ]) {
-    registerUnsupportedPrompt(mcp, name);
-  }
 }
 
 function registerWorkflowPrompt(
@@ -537,35 +525,6 @@ function registerWorkflowPrompt(
           content: {
             type: "text",
             text: body(args as Record<string, unknown>).filter(Boolean).join("\n")
-          }
-        }
-      ]
-    })
-  );
-}
-
-function registerUnsupportedPrompt(mcp: McpServer, name: string): void {
-  mcp.registerPrompt(
-    name,
-    {
-      title: name.replace(/^excel\.prompts\./, "").replace(/_/g, " "),
-      description: "This vertical workflow is intentionally unsupported in the current Open Workbook runtime.",
-      argsSchema: {
-        goal: z.string().optional()
-      }
-    },
-    () => ({
-      description: "Unsupported vertical workflow.",
-      messages: [
-        {
-          role: "user",
-          content: {
-            type: "text",
-            text: [
-              "This prompt is intentionally unsupported in the current Open Workbook runtime.",
-              "OCR and vertical reconciliation workflows are out of scope for now.",
-              "Use generic table, range, template, validation, and cleaning tools with explicit user-provided data instead."
-            ].join("\n")
           }
         }
       ]

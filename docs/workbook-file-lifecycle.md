@@ -80,7 +80,7 @@ Durable file backups are separate from snapshot backups. Snapshot backups are us
 
 - `open-as-new`: default safe mode. The runtime verifies the backup and returns the file path for recovery as a separate workbook.
 - `replace-open-workbook`: destructive mode. Requires confirmation. The runtime verifies the selected backup, creates a pinned emergency file backup, and asks the native bridge to close the matched workbook, copy the backup over the target path, and reopen it.
-- `restore-into-open-workbook`: unsupported. It would require deterministic sheet/table/name/pivot/chart reconciliation inside an already-open workbook, which is not safe enough to claim as full-file restore.
+- `restore-into-open-workbook`: unsupported. It would require deterministic sheet/table/name/pivot/chart replacement inside an already-open workbook, which is not safe enough to claim as full-file restore.
 
 The built-in bridge uses AppleScript on macOS and PowerShell COM automation on Windows for `replace-open-workbook`. It validates backup and target paths against `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` when configured. Production agents should still prefer snapshot rollback for in-workbook undo and use full-file replace restore only for explicit disaster recovery.
 

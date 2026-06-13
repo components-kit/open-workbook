@@ -43,4 +43,3 @@ Open Workbook is ready for local source installs, packaged CLI testing, MCP inte
 - Microsoft AppSource submission.
 - Macro execution.
 - Cloud storage of workbook data by default.
-- OCR and vertical reconciliation workflows.
