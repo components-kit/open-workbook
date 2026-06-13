@@ -84,9 +84,16 @@ export function numberToColumnName(columnNumber: number): string {
   return value;
 }
 
+export function formatA1Cell(row: number, column: number): string {
+  if (!Number.isInteger(row) || row < 1) {
+    throw new Error(`Invalid row number: ${row}`);
+  }
+  return `${numberToColumnName(column)}${row}`;
+}
+
 export function formatA1Address(parsed: ParsedA1Address): string {
-  const start = `${numberToColumnName(parsed.startColumn)}${parsed.startRow}`;
-  const end = `${numberToColumnName(parsed.endColumn)}${parsed.endRow}`;
+  const start = formatA1Cell(parsed.startRow, parsed.startColumn);
+  const end = formatA1Cell(parsed.endRow, parsed.endColumn);
   const range = start === end ? start : `${start}:${end}`;
   return parsed.sheetName ? `${quoteSheetName(parsed.sheetName)}!${range}` : range;
 }

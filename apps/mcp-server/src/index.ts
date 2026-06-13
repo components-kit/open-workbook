@@ -192,6 +192,9 @@ function createDaemonRuntimeProxy(baseUrl: string): unknown {
         if (typeof property !== "string") {
           return undefined;
         }
+        if (property === "then") {
+          return undefined;
+        }
         return (...args: unknown[]) => call(property, args);
       }
     }
@@ -647,7 +650,8 @@ function registerRuntimeTools(mcp: McpServer): void {
     "excel.runtime.get_selection",
     {
       title: "Get active Excel selection",
-      description: "Return the current selected range from the active Excel add-in.",
+      description:
+        "Return the current selected range from the active Excel add-in, including A1 address, top-left/start cell, bottom-right/end cell, one-based row/column numbers, zero-based row/column indexes, and range dimensions.",
       inputSchema: {},
       annotations: {
         readOnlyHint: true,

@@ -41,6 +41,8 @@
     "dev:backend": "corepack pnpm --filter @open-workbook/backend dev",
     "dev:mcp": "corepack pnpm --filter @open-workbook/mcp-server dev",
     "dev:addin": "corepack pnpm --filter @open-workbook/excel-addin dev",
+    "dev:local": "zsh scripts/dev-local.sh",
+    "dev:local:sideload": "zsh scripts/dev-local.sh --sideload-mac",
     "sideload:mac": "node scripts/sideload-mac.mjs",
     "sideload:windows": "node scripts/sideload-windows.mjs"
   },

@@ -5,7 +5,12 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
+const repoRoot = join(root, "../..");
 const publicDir = join(root, "public");
+const workspaceModuleDirs = new Map([
+  ["/workspace/excel-core/", join(repoRoot, "packages/excel-core/dist")],
+  ["/workspace/protocol/", join(repoRoot, "packages/protocol/dist")]
+]);
 const port = Number(process.env.OPEN_WORKBOOK_ADDIN_PORT ?? 37846);
 const host = process.env.OPEN_WORKBOOK_ADDIN_HOST ?? "127.0.0.1";
 const httpsEnabled = process.env.OPEN_WORKBOOK_ADDIN_HTTPS === "1" || process.env.OPEN_WORKBOOK_ADDIN_PROTOCOL === "https";
@@ -39,7 +44,8 @@ const requestHandler = (request, response) => {
   }
 
   const pathname = url.pathname === "/" ? "/taskpane.html" : url.pathname;
-  const filePath = pathname.startsWith("/dist/") ? join(root, pathname) : join(publicDir, pathname);
+  const workspaceModule = resolveWorkspaceModule(pathname);
+  const filePath = workspaceModule ?? (pathname.startsWith("/dist/") ? join(root, pathname) : join(publicDir, pathname));
 
   const normalized = normalize(filePath);
   if (!isAllowedPath(normalized) || !existsSync(normalized)) {
@@ -52,7 +58,8 @@ const requestHandler = (request, response) => {
     "content-type": contentTypes.get(extname(normalized)) ?? "application/octet-stream",
     "cache-control": "no-store"
   });
-  response.end(readFileSync(normalized));
+  const body = readFileSync(normalized);
+  response.end(extname(normalized) === ".js" ? rewriteBrowserImports(body.toString("utf8")) : body);
 };
 
 const server = httpsEnabled ? createHttpsServer(readHttpsOptions(), requestHandler) : createHttpServer(requestHandler);
@@ -63,7 +70,28 @@ server.listen(port, host, () => {
 });
 
 function isAllowedPath(filePath) {
-  return filePath.startsWith(publicDir) || filePath.startsWith(join(root, "dist"));
+  return (
+    filePath.startsWith(publicDir) ||
+    filePath.startsWith(join(root, "dist")) ||
+    Array.from(workspaceModuleDirs.values()).some((moduleDir) => filePath.startsWith(moduleDir))
+  );
+}
+
+function resolveWorkspaceModule(pathname) {
+  for (const [prefix, moduleDir] of workspaceModuleDirs) {
+    if (pathname.startsWith(prefix)) {
+      return join(moduleDir, pathname.slice(prefix.length));
+    }
+  }
+  return undefined;
+}
+
+function rewriteBrowserImports(source) {
+  return source
+    .replaceAll("\"@open-workbook/excel-core\"", "\"/workspace/excel-core/index.js\"")
+    .replaceAll("'@open-workbook/excel-core'", "'/workspace/excel-core/index.js'")
+    .replaceAll("\"@open-workbook/protocol\"", "\"/workspace/protocol/index.js\"")
+    .replaceAll("'@open-workbook/protocol'", "'/workspace/protocol/index.js'");
 }
 
 function generateManifest() {

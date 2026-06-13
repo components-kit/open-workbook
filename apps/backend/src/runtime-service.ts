@@ -92,6 +92,7 @@ import type {
   RegionRegisterRequest,
   RegionSelector,
   RuntimeCapabilities,
+  RuntimeSelectionResponse,
   SnapshotId,
   TaskId,
   TaskBlocker,
@@ -1497,7 +1498,7 @@ export class RuntimeService {
         error: runtimeError("ADDIN_DISCONNECTED", "No Excel add-in session is connected.", { retryable: true })
       };
     }
-    return client.request("runtime.get_selection");
+    return client.request<RuntimeSelectionResponse>("runtime.get_selection");
   }
 
   async getWorkbookInfo() {

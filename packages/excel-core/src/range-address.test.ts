@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cellCount, columnNameToNumber, formatA1Address, numberToColumnName, parseA1Address } from "./range-address.js";
+import { cellCount, columnNameToNumber, formatA1Address, formatA1Cell, numberToColumnName, parseA1Address } from "./range-address.js";
 
 describe("range address utilities", () => {
   it("converts column names and numbers", () => {
@@ -29,5 +29,16 @@ describe("range address utilities", () => {
     const parsed = parseA1Address("'Accounting Jan'!A1:D20");
     expect(formatA1Address(parsed)).toBe("'Accounting Jan'!A1:D20");
     expect(cellCount("A1:D20")).toBe(80);
+  });
+
+  it("formats one-based cell positions as A1 addresses", () => {
+    expect(formatA1Cell(1, 1)).toBe("A1");
+    expect(formatA1Cell(4, 2)).toBe("B4");
+    expect(formatA1Cell(1048576, 16384)).toBe("XFD1048576");
+  });
+
+  it("rejects invalid one-based cell positions", () => {
+    expect(() => formatA1Cell(0, 1)).toThrow("Invalid row number");
+    expect(() => formatA1Cell(1, 0)).toThrow("Invalid column number");
   });
 });

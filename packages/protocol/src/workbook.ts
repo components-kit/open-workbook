@@ -31,6 +31,30 @@ export interface A1Range {
   address: string;
 }
 
+export interface CellPosition {
+  workbookId: WorkbookId;
+  sheetName: string;
+  address: string;
+  row: number;
+  column: number;
+  rowIndex: number;
+  columnIndex: number;
+}
+
+export interface SelectionInfo extends A1Range {
+  startCell: CellPosition;
+  endCell: CellPosition;
+  rowCount: number;
+  columnCount: number;
+  cellCount: number;
+  isSingleCell: boolean;
+}
+
+export interface RuntimeSelectionResponse {
+  workbook: WorkbookRef | undefined;
+  selection?: SelectionInfo;
+}
+
 export interface RangeFingerprint {
   range: A1Range;
   hash: string;

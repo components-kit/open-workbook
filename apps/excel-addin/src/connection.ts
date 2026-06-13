@@ -71,17 +71,25 @@ import {
 export interface AddinConnectionOptions {
   backendUrl: string;
   heartbeatMs: number;
+  reconnectMs?: number;
+  onStatus?: (status: string) => void;
 }
 
 export class AddinConnection {
   private socket?: WebSocket;
   private heartbeat: number | undefined;
+  private reconnect: number | undefined;
+  private closedByUser = false;
 
   constructor(private readonly options: AddinConnectionOptions) {}
 
   connect(): void {
+    this.closedByUser = false;
+    this.stopReconnect();
+    this.options.onStatus?.(`Connecting to ${this.options.backendUrl}...`);
     this.socket = new WebSocket(this.options.backendUrl);
     this.socket.addEventListener("open", () => {
+      this.options.onStatus?.("Connected to local Open Workbook runtime.");
       this.sendNotification("addin.hello", {
         host: "excel",
         runtime: "office-js",
@@ -91,12 +99,35 @@ export class AddinConnection {
       this.startHeartbeat();
     });
     this.socket.addEventListener("message", (event) => this.handleMessage(JSON.parse(String(event.data))));
-    this.socket.addEventListener("close", () => this.stopHeartbeat());
+    this.socket.addEventListener("error", () => {
+      this.options.onStatus?.(`Could not connect to ${this.options.backendUrl}. Retrying...`);
+    });
+    this.socket.addEventListener("close", () => {
+      this.stopHeartbeat();
+      if (!this.closedByUser) {
+        this.options.onStatus?.("Disconnected from local runtime. Retrying...");
+        this.scheduleReconnect();
+      }
+    });
   }
 
   disconnect(): void {
+    this.closedByUser = true;
     this.stopHeartbeat();
+    this.stopReconnect();
     this.socket?.close();
+  }
+
+  private scheduleReconnect(): void {
+    this.stopReconnect();
+    this.reconnect = window.setTimeout(() => this.connect(), this.options.reconnectMs ?? 2_000);
+  }
+
+  private stopReconnect(): void {
+    if (this.reconnect !== undefined) {
+      window.clearTimeout(this.reconnect);
+      this.reconnect = undefined;
+    }
   }
 
   private startHeartbeat(): void {

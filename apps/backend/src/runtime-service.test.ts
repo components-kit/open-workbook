@@ -479,6 +479,59 @@ describe("RuntimeService capabilities", () => {
   });
 });
 
+describe("RuntimeService selection", () => {
+  it("passes through enriched selection metadata from the connected add-in", async () => {
+    const workbookId = "workbook_runtime_selection" as WorkbookId;
+    const runtime = new RuntimeService({ persistState: false });
+    const session = runtime.sessions.createSession();
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string) => {
+        expect(method).toBe("runtime.get_selection");
+        return {
+          workbook: {
+            workbookId,
+            name: "Selection.xlsx",
+            platform: "mac"
+          },
+          selection: {
+            workbookId,
+            sheetName: "Sheet1",
+            address: "B4:D10",
+            startCell: {
+              workbookId,
+              sheetName: "Sheet1",
+              address: "B4",
+              row: 4,
+              column: 2,
+              rowIndex: 3,
+              columnIndex: 1
+            },
+            endCell: {
+              workbookId,
+              sheetName: "Sheet1",
+              address: "D10",
+              row: 10,
+              column: 4,
+              rowIndex: 9,
+              columnIndex: 3
+            },
+            rowCount: 7,
+            columnCount: 3,
+            cellCount: 21,
+            isSingleCell: false
+          }
+        };
+      }
+    } as any);
+
+    const result = await runtime.getSelection();
+
+    expect(result.selection?.startCell).toMatchObject({ address: "B4", row: 4, column: 2 });
+    expect(result.selection?.endCell).toMatchObject({ address: "D10", row: 10, column: 4 });
+    expect(result.selection).toMatchObject({ rowCount: 7, columnCount: 3, cellCount: 21, isSingleCell: false });
+  });
+});
+
 describe("RuntimeService chart template copy", () => {
   it("records a backup and transaction for deterministic chart copy", async () => {
     const runtime = new RuntimeService({ persistState: false });

@@ -1,8 +1,9 @@
-import { chunkMatrixRows, createRangeFingerprint, createWorkbookFingerprint, hashStable, parseA1Address } from "@open-workbook/excel-core";
+import { chunkMatrixRows, createRangeFingerprint, createWorkbookFingerprint, formatA1Cell, hashStable, parseA1Address } from "@open-workbook/excel-core";
 import type {
   AddinExecuteBatchRequest,
   AddinTemplateRepairRequest,
   A1Range,
+  CellPosition,
   ChartCreateRequest,
   ChartInfo,
   ChartSelector,
@@ -31,6 +32,7 @@ import type {
   RangeSearchRequest,
   RangeSearchResponse,
   RangeSnapshot,
+  RuntimeSelectionResponse,
   TemplateCaptureRequest,
   TemplateCaptureResponse,
   SheetTemplateFingerprintRequest,
@@ -188,11 +190,11 @@ export async function getActiveWorkbookContext(): Promise<WorkbookRef | undefine
   });
 }
 
-export async function getSelection(): Promise<{ workbook: WorkbookRef | undefined; selection?: A1Range }> {
+export async function getSelection(): Promise<RuntimeSelectionResponse> {
   return Excel.run(async (context) => {
     const workbook = context.workbook;
     const selectedRange = workbook.getSelectedRange();
-    selectedRange.load("address");
+    selectedRange.load("address,rowIndex,columnIndex,rowCount,columnCount");
     selectedRange.worksheet.load("name");
     workbook.load("name");
     await context.sync();
@@ -208,7 +210,23 @@ export async function getSelection(): Promise<{ workbook: WorkbookRef | undefine
       selection: {
         workbookId: workbookRef.workbookId,
         sheetName: selectedRange.worksheet.name,
-        address: stripSheetName(selectedRange.address)
+        address: stripSheetName(selectedRange.address),
+        startCell: cellPositionFromZeroBased(
+          workbookRef.workbookId,
+          selectedRange.worksheet.name,
+          selectedRange.rowIndex,
+          selectedRange.columnIndex
+        ),
+        endCell: cellPositionFromZeroBased(
+          workbookRef.workbookId,
+          selectedRange.worksheet.name,
+          selectedRange.rowIndex + selectedRange.rowCount - 1,
+          selectedRange.columnIndex + selectedRange.columnCount - 1
+        ),
+        rowCount: selectedRange.rowCount,
+        columnCount: selectedRange.columnCount,
+        cellCount: selectedRange.rowCount * selectedRange.columnCount,
+        isSingleCell: selectedRange.rowCount === 1 && selectedRange.columnCount === 1
       }
     };
   });
@@ -2798,6 +2816,20 @@ function assignIfDefined<T extends object, K extends keyof T>(target: T, key: K,
 function stripSheetName(address: string): string {
   const bangIndex = address.lastIndexOf("!");
   return bangIndex >= 0 ? address.slice(bangIndex + 1) : address;
+}
+
+function cellPositionFromZeroBased(workbookId: WorkbookRef["workbookId"], sheetName: string, rowIndex: number, columnIndex: number): CellPosition {
+  const row = rowIndex + 1;
+  const column = columnIndex + 1;
+  return {
+    workbookId,
+    sheetName,
+    address: formatA1Cell(row, column),
+    row,
+    column,
+    rowIndex,
+    columnIndex
+  };
 }
 
 function quoteSheetName(sheetName: string): string {

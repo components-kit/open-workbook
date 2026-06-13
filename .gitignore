@@ -3,6 +3,7 @@ dist/
 packages/cli/assets/
 coverage/
 .turbo/
+.open-workbook/
 .DS_Store
 *.log
 *.tsbuildinfo
