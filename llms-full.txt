@@ -289,7 +289,7 @@ Source: skills/open-workbook-excel/SKILL.md
 
 ---
 name: open-workbook-excel
-description: Use when an agent needs to automate live Microsoft Excel workbooks through Open Workbook MCP: inspect workbooks, read or write ranges, update tables, preserve templates, repair formulas/styles, create pivots/charts, validate reports, save/export files, coordinate multiple agents, or choose the fastest reliable Excel MCP tool instead of slow manual spreadsheet automation.
+description: "Use when an agent needs to automate live Microsoft Excel workbooks through Open Workbook MCP, including inspecting workbooks, reading or writing ranges, updating tables, preserving templates, repairing formulas/styles, creating pivots/charts, validating reports, saving/exporting files, coordinating multiple agents, or choosing the fastest reliable Excel MCP tool instead of slow manual spreadsheet automation."
 ---
 
 # Open Workbook Excel
