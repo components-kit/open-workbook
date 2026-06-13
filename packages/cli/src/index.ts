@@ -77,40 +77,17 @@ program
   .option("--manifest-out <path>", "Manifest path for non-macOS setup", defaultSetupManifestPath())
   .option("--addin-url <url>", "Taskpane base URL", defaultAddinUrl())
   .option("--backend-url <url>", "Backend WebSocket URL", defaultBackendUrl())
-  .action(async (options: { dryRun?: boolean; instructionsOut: string; manifestOut: string; addinUrl: string; backendUrl: string }) => {
-    const instructionsPath = resolve(options.instructionsOut);
-    const manifestPath = setupManifestPath(options.manifestOut);
-    const instructions = generateGenericInstructions();
-    const manifest = generateManifest({ addinUrl: options.addinUrl, backendUrl: options.backendUrl });
+  .action((options: SetupOptions) => runSetup(options, "setup"));
 
-    if (!options.dryRun) {
-      writeFileEnsuringDir(instructionsPath, instructions);
-      writeFileEnsuringDir(manifestPath, manifest);
-    }
-
-    console.log(options.dryRun ? "Open Workbook setup dry run" : "Open Workbook setup complete");
-    console.log("");
-    console.log(`${options.dryRun ? "Would write" : "Wrote"} fallback instructions: ${instructionsPath}`);
-    console.log(`${options.dryRun ? "Would write" : "Wrote"} Excel add-in manifest: ${manifestPath}`);
-    console.log(`Taskpane URL: ${options.addinUrl}`);
-    console.log(`Backend URL: ${options.backendUrl}`);
-    console.log("");
-    printManifestNextSteps(manifestPath);
-    console.log("");
-    console.log("Paste this generic MCP config into any MCP-capable agent UI:");
-    console.log(JSON.stringify(genericMcpConfig(), null, 2));
-    console.log("");
-    console.log("Install the Open Workbook Excel skill with skills.sh:");
-    console.log("npx skills add components-kit/open-workbook --skill open-workbook-excel");
-    console.log("");
-    console.log("For a global OpenCode install:");
-    console.log("npx skills add components-kit/open-workbook --skill open-workbook-excel -a opencode -g -y");
-    console.log("");
-    console.log("The fallback instruction file above is for clients that do not support skills.sh.");
-    console.log("Start the agent UI before opening the Excel add-in so `npx ... mcp` can serve the taskpane and backend.");
-    console.log("After upgrading Open Workbook, restart the agent UI or MCP host so `@latest` starts the new runtime.");
-    await printLatestVersionNotice();
-  });
+program
+  .command("upgrade")
+  .description("Upgrade local Open Workbook setup assets and print the current MCP config")
+  .option("--dry-run", "Print upgrade actions without writing files")
+  .option("--instructions-out <path>", "Instruction file path", defaultInstructionsPath())
+  .option("--manifest-out <path>", "Manifest path for non-macOS setup", defaultSetupManifestPath())
+  .option("--addin-url <url>", "Taskpane base URL", defaultAddinUrl())
+  .option("--backend-url <url>", "Backend WebSocket URL", defaultBackendUrl())
+  .action((options: SetupOptions) => runSetup(options, "upgrade"));
 
 program
   .command("instructions")
@@ -622,6 +599,50 @@ function writeFileEnsuringDir(path: string, content: string): void {
   writeFileSync(path, content, "utf8");
 }
 
+type SetupOptions = {
+  dryRun?: boolean;
+  instructionsOut: string;
+  manifestOut: string;
+  addinUrl: string;
+  backendUrl: string;
+};
+
+async function runSetup(options: SetupOptions, mode: "setup" | "upgrade"): Promise<void> {
+  const instructionsPath = resolve(options.instructionsOut);
+  const manifestPath = setupManifestPath(options.manifestOut);
+  const instructions = generateGenericInstructions();
+  const manifest = generateManifest({ addinUrl: options.addinUrl, backendUrl: options.backendUrl });
+
+  if (!options.dryRun) {
+    writeFileEnsuringDir(instructionsPath, instructions);
+    writeFileEnsuringDir(manifestPath, manifest);
+  }
+
+  const action = mode === "upgrade" ? "upgrade" : "setup";
+  console.log(options.dryRun ? `Open Workbook ${action} dry run` : `Open Workbook ${action} complete`);
+  console.log("");
+  console.log(`${options.dryRun ? "Would write" : "Wrote"} fallback instructions: ${instructionsPath}`);
+  console.log(`${options.dryRun ? "Would write" : "Wrote"} Excel add-in manifest: ${manifestPath}`);
+  console.log(`Taskpane URL: ${options.addinUrl}`);
+  console.log(`Backend URL: ${options.backendUrl}`);
+  console.log("");
+  printManifestNextSteps(manifestPath);
+  console.log("");
+  console.log("Paste this generic MCP config into any MCP-capable agent UI:");
+  console.log(JSON.stringify(genericMcpConfig(), null, 2));
+  console.log("");
+  console.log("Install or update the Open Workbook Excel skill with skills.sh:");
+  console.log("npx skills add components-kit/open-workbook --skill open-workbook-excel");
+  console.log("");
+  console.log("For a global OpenCode install:");
+  console.log("npx skills add components-kit/open-workbook --skill open-workbook-excel -a opencode -g -y");
+  console.log("");
+  console.log("The fallback instruction file above is for clients that do not support skills.sh.");
+  console.log("Start the agent UI before opening the Excel add-in so `npx ... mcp` can serve the taskpane and backend.");
+  console.log("After upgrading Open Workbook, restart the agent UI or MCP host so `@latest` starts the new runtime.");
+  await printLatestVersionNotice();
+}
+
 function genericMcpConfig(): unknown {
   return {
     mcpServers: {
@@ -648,7 +669,7 @@ async function printLatestVersionNotice(): Promise<void> {
   }
   console.log("");
   console.log(`Open Workbook ${latest.version} is available. Current CLI: ${currentVersion}.`);
-  console.log(`Upgrade/setup: npx -y ${publicPackageName}@latest setup`);
+  console.log(`Upgrade: npx -y ${publicPackageName}@latest upgrade`);
   console.log("After upgrading, restart OpenCode or your MCP host so it starts the new runtime.");
 }
 

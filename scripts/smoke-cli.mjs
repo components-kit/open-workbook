@@ -39,6 +39,17 @@ const checks = [
       result.stdout.includes("restart the agent UI or MCP host")
   },
   {
+    name: "upgrade dry run",
+    args: ["upgrade", "--dry-run", "--manifest-out", join(tempDir, "upgrade-manifest.xml"), "--instructions-out", join(tempDir, "upgrade-instructions.md")],
+    assert: (result) =>
+      result.status === 0 &&
+      result.stdout.includes("Open Workbook upgrade dry run") &&
+      result.stdout.includes("upgrade-instructions.md") &&
+      result.stdout.includes("upgrade-manifest.xml") &&
+      result.stdout.includes("@components-kit/open-workbook@latest") &&
+      result.stdout.includes("restart the agent UI or MCP host")
+  },
+  {
     name: "instructions",
     args: ["instructions"],
     assert: (result) =>
@@ -253,7 +264,7 @@ async function smokeLatestVersionNotice() {
       OPEN_WORKBOOK_UPDATE_CHECK_URL: `http://127.0.0.1:${port}/latest`,
       OPEN_WORKBOOK_STATE_DIR: join(tempDir, "update-check-state")
     });
-    if (result.status !== 0 || !result.stdout.includes("Open Workbook 99.0.0 is available") || !result.stdout.includes("Upgrade/setup: npx -y @components-kit/open-workbook@latest setup")) {
+    if (result.status !== 0 || !result.stdout.includes("Open Workbook 99.0.0 is available") || !result.stdout.includes("Upgrade: npx -y @components-kit/open-workbook@latest upgrade")) {
       failures.push({
         name: "latest version notice",
         status: result.status,

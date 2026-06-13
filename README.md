@@ -61,6 +61,11 @@ npx -y @components-kit/open-workbook setup
 ```
 
 Setup prepares the Excel add-in manifest and prints the MCP config to add to your agent UI.
+For an existing install, refresh local setup assets after a package update with:
+
+```bash
+npx -y @components-kit/open-workbook@latest upgrade
+```
 
 Install the agent skill with skills.sh:
 

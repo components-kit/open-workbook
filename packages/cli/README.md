@@ -9,6 +9,7 @@ npx -y @components-kit/open-workbook setup
 ```
 
 Setup prepares the Excel add-in manifest and prints generic MCP config.
+For an existing install, run `npx -y @components-kit/open-workbook@latest upgrade` to refresh local setup assets after a package update.
 
 Install the Open Workbook Excel skill with skills.sh:
 
@@ -35,6 +36,7 @@ Paste the printed MCP config into any MCP-capable agent UI:
 
 ```bash
 owb setup
+owb upgrade
 owb mcp
 owb instructions
 owb doctor
@@ -51,6 +53,7 @@ owb service manifest --target macos --service addin
 ## Runtime
 
 - `owb setup` initializes the generic install flow.
+- `owb upgrade` refreshes the same local manifest and fallback instruction assets for an existing install.
 - `owb mcp` starts the MCP adapter, starts the local Excel add-in asset server when needed, and uses an embedded backend unless a shared daemon is available.
 - `owb instructions` prints fallback generic Excel instructions.
 - `owb doctor` checks packaged runtime assets.

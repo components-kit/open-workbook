@@ -36,10 +36,11 @@ corepack pnpm pack:dry-run
 ```bash
 node packages/cli/dist/index.js doctor
 node packages/cli/dist/index.js setup --dry-run
+node packages/cli/dist/index.js upgrade --dry-run
 node packages/cli/dist/index.js sideload manifest --out /tmp/open-workbook.xml
 ```
 
-6. Confirm `setup --dry-run` prints the intended npm install shape:
+6. Confirm `setup --dry-run` and `upgrade --dry-run` print the intended npm install shape:
 
 ```text
 npx -y @components-kit/open-workbook@latest mcp

@@ -45,6 +45,7 @@ This lets the same command shape work from source and from an installed package:
 owb mcp
 owb addin serve
 owb setup
+owb upgrade
 owb instructions
 owb sideload mac
 owb sideload windows
@@ -59,6 +60,7 @@ owb paths
 node packages/cli/dist/index.js doctor
 node packages/cli/dist/index.js paths
 node packages/cli/dist/index.js setup --dry-run
+node packages/cli/dist/index.js upgrade --dry-run
 node packages/cli/dist/index.js instructions
 node packages/cli/dist/index.js sideload manifest --out /tmp/open-workbook.xml
 ```
@@ -90,9 +92,10 @@ Before publishing:
 3. Run `node packages/cli/dist/index.js doctor`.
 4. Run `corepack pnpm pack:dry-run`.
 5. Confirm `node packages/cli/dist/index.js setup --dry-run` prints the generic `npx @components-kit/open-workbook@latest mcp` config and `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
-6. Confirm generated manifests include the expected taskpane URL and `backendUrl`.
-7. Confirm `@components-kit/open-workbook-excel-addin` remains private.
-8. Confirm npm publish access is public for publishable scoped packages.
+6. Confirm `node packages/cli/dist/index.js upgrade --dry-run` prints the same config with upgrade wording.
+7. Confirm generated manifests include the expected taskpane URL and `backendUrl`.
+8. Confirm `@components-kit/open-workbook-excel-addin` remains private.
+9. Confirm npm publish access is public for publishable scoped packages.
 
 `corepack pnpm verify` runs `scripts/validate-package-metadata.mjs`, which enforces the package version, repository, public/private publish intent, `dist` entrypoints, README presence, and publish access rules above. Use pnpm for packing/publishing so workspace dependencies are rewritten to publishable semver ranges.
 
@@ -102,6 +105,12 @@ The intended user flow after package publishing:
 
 ```bash
 npx -y @components-kit/open-workbook setup
+```
+
+Existing users refresh local setup assets after a package update with:
+
+```bash
+npx -y @components-kit/open-workbook@latest upgrade
 ```
 
 Users paste the printed MCP config into their agent UI:

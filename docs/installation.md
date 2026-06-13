@@ -57,11 +57,13 @@ The `mcp` command starts the MCP adapter and, in the default flow, starts the lo
 
 ```bash
 npx -y @components-kit/open-workbook doctor
+npx -y @components-kit/open-workbook@latest upgrade
 npx -y @components-kit/open-workbook instructions
 npx -y @components-kit/open-workbook sideload manifest --out open-workbook.xml
 ```
 
 `instructions` prints a fallback instruction bundle for clients that do not support skills.sh.
+Use `upgrade` after installing a newer package version; it refreshes the same local manifest and fallback instruction assets as setup, then reminds you to restart the agent UI or MCP host.
 
 Advanced shared-daemon, service-wrapper, custom-port, HTTPS, and file-bridge setup is documented in [Advanced Runtime](advanced-runtime.md).
 
