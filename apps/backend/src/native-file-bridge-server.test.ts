@@ -1,4 +1,5 @@
 import path from "node:path";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import type { WorkbookFileBridgeRequest, WorkbookId } from "@open-workbook/protocol";
@@ -78,12 +79,13 @@ describe("Native file bridge server", () => {
 
   it("reports platform operation support in status", () => {
     const adapter = createPlatformNativeHostBridgeAdapter("win32", async () => ({ code: 0, stdout: "", stderr: "" }));
-    const status = adapter.getStatus() as { operations?: Record<string, boolean>; exportCopySupported?: boolean };
+    const status = adapter.getStatus() as { operations?: Record<string, boolean>; exportCopySupported?: boolean; restoreFileBackupSupported?: boolean };
 
     expect(status.exportCopySupported).toBe(true);
+    expect(status.restoreFileBackupSupported).toBe(true);
     expect(status.operations?.["workbook.save_as"]).toBe(true);
     expect(status.operations?.["workbook.export_copy"]).toBe(true);
-    expect(status.operations?.["workbook.restore_file_backup"]).toBe(false);
+    expect(status.operations?.["workbook.restore_file_backup"]).toBe(true);
   });
 
   it("runs the macOS Export Copy adapter through SaveCopyAs", async () => {
@@ -123,6 +125,48 @@ describe("Native file bridge server", () => {
     expect(executed).toBe(true);
     expect(result?.ok).toBe(true);
     expect(result?.filePath).toBe(path.resolve(targetPath));
+  });
+
+  it("runs the macOS restore adapter for replace-open-workbook", async () => {
+    const backupPath = path.join(tmpdir(), `open-workbook-restore-${Date.now()}.xlsx`);
+    writeFileSync(backupPath, "backup", "utf8");
+    let command: string | undefined;
+    let args: string[] = [];
+    const adapter = createPlatformNativeHostBridgeAdapter("darwin", async (nextCommand, nextArgs) => {
+      command = nextCommand;
+      args = nextArgs;
+      return { code: 0, stdout: "/tmp/restored.xlsx", stderr: "" };
+    });
+
+    const result = await adapter.restoreFileBackup?.({
+      operation: "workbook.restore_file_backup",
+      workbookId: "Book1.xlsx" as WorkbookId,
+      backupPath,
+      restoreMode: "replace-open-workbook",
+      restoreTargetPath: path.join(tmpdir(), "open-workbook-restored.xlsx")
+    });
+
+    expect(result?.ok).toBe(true);
+    expect(command).toBe("osascript");
+    expect(args).toContain(path.resolve(backupPath));
+    expect(args).toContain("replace-open-workbook");
+    expect(result?.filePath).toBe("/tmp/restored.xlsx");
+  });
+
+  it("rejects unsupported restore-into-open-workbook mode", async () => {
+    const backupPath = path.join(tmpdir(), `open-workbook-restore-unsupported-${Date.now()}.xlsx`);
+    writeFileSync(backupPath, "backup", "utf8");
+    const adapter = createPlatformNativeHostBridgeAdapter("win32", async () => ({ code: 0, stdout: "", stderr: "" }));
+
+    const result = await adapter.restoreFileBackup?.({
+      operation: "workbook.restore_file_backup",
+      workbookId: "Book1.xlsx" as WorkbookId,
+      backupPath,
+      restoreMode: "restore-into-open-workbook"
+    });
+
+    expect(result?.ok).toBe(false);
+    expect(result?.error).toContain("restore-into-open-workbook is not supported");
   });
 
   it("blocks Save As targets outside configured allowed directories", async () => {

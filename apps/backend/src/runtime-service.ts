@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   BackupManager,
@@ -66,7 +67,13 @@ import type {
   OperationWarning,
   PermissionState,
   PivotCopyFromTemplateRequest,
+  PivotCompareFingerprintRequest,
   PivotCreateRequest,
+  PivotDiff,
+  PivotFingerprint,
+  PivotLayoutInfo,
+  PivotRebuildWithSourceRequest,
+  PivotRepairFromTemplateRequest,
   PivotSelector,
   PivotTableInfo,
   PivotValidateSourceRequest,
@@ -119,7 +126,11 @@ import type {
   StyleFingerprintResponse,
   ValidationIssue,
   ValidationReport,
+  WorkbookBackupRetentionRequest,
+  WorkbookCreateFileBackupRequest,
   WorkbookFileContent,
+  WorkbookFileBackupManifest,
+  WorkbookRestoreFileBackupRequest,
   WorkbookScope,
   WorkbookRegion,
   WorkbookId,
@@ -1783,6 +1794,386 @@ export class RuntimeService {
     };
   }
 
+  async createFileBackup(input: WorkbookCreateFileBackupRequest) {
+    const result = await this.exportWorkbookCopy({
+      workbookId: input.workbookId,
+      reason: input.reason ?? "Create full workbook file backup",
+      targetPath: input.targetPath ?? this.defaultWorkbookFileBackupPath(input.workbookId)
+    });
+    if (!(result as { ok?: boolean }).ok || !(result as { targetPath?: string }).targetPath) {
+      return result;
+    }
+    const filePath = (result as { targetPath: string }).targetPath;
+    const fileStat = await stat(filePath);
+    const checksum = await this.hashFile(filePath);
+    const sourceSnapshotBackupId = extractBackupIds(result)[0];
+    const manifest: WorkbookFileBackupManifest = {
+      backupId: makeId<BackupId>("backup"),
+      workbookId: input.workbookId,
+      createdAt: new Date().toISOString(),
+      reason: input.reason ?? "Create full workbook file backup",
+      filePath,
+      mode: input.mode ?? "export-copy",
+      size: fileStat.size,
+      checksum,
+      pinned: input.pin ?? false,
+      verifiedAt: new Date().toISOString(),
+      restoreStatus: "available",
+      metadata: {
+        exportResult: result
+      }
+    };
+    if (sourceSnapshotBackupId !== undefined) {
+      manifest.sourceSnapshotBackupId = sourceSnapshotBackupId;
+    }
+    const bridge = (result as { bridge?: WorkbookFileBackupManifest["bridge"] }).bridge;
+    if (bridge !== undefined) {
+      manifest.bridge = bridge;
+    }
+    const backup = this.backups.createBackup({
+      workbookId: input.workbookId,
+      kind: "file-copy",
+      reason: manifest.reason,
+      affectedRanges: [],
+      payloadRef: filePath,
+      payload: manifest
+    });
+    manifest.backupId = backup.backupId;
+    backup.payload = manifest;
+    backup.pinned = manifest.pinned ?? false;
+    backup.verifiedAt = manifest.verifiedAt ?? new Date().toISOString();
+    backup.restoreStatus = manifest.restoreStatus ?? "available";
+    this.recordCollabEvent({
+      type: "backup.created",
+      workbookId: input.workbookId,
+      message: `File backup created: ${backup.backupId}`,
+      details: { backupId: backup.backupId, filePath, checksum, size: fileStat.size, pinned: backup.pinned }
+    });
+    this.persistState();
+    return { ok: true, backup, manifest, export: result };
+  }
+
+  listFileBackups(workbookId?: WorkbookId) {
+    const backups = this.backups
+      .dump()
+      .filter((backup) => backup.kind === "file-copy")
+      .filter((backup) => workbookId === undefined || backup.workbookId === workbookId)
+      .map((backup) => ({ backup, manifest: backup.payload as WorkbookFileBackupManifest | undefined }));
+    return { ok: true, backups };
+  }
+
+  getFileBackup(backupId: BackupId) {
+    const backup = this.backups.getBackup(backupId);
+    if (!backup || backup.kind !== "file-copy") {
+      return {
+        ok: false,
+        error: runtimeError("BACKUP_UNAVAILABLE", `File backup not found: ${backupId}`, { retryable: false })
+      };
+    }
+    return { ok: true, backup, manifest: backup.payload as WorkbookFileBackupManifest | undefined };
+  }
+
+  async verifyFileBackup(backupId: BackupId) {
+    const backup = this.backups.getBackup(backupId);
+    const manifest = backup?.payload as WorkbookFileBackupManifest | undefined;
+    if (!backup || backup.kind !== "file-copy" || !manifest?.filePath) {
+      return {
+        ok: false,
+        error: runtimeError("BACKUP_UNAVAILABLE", `File backup cannot be verified: ${backupId}`, { retryable: false })
+      };
+    }
+    try {
+      const fileStat = await stat(manifest.filePath);
+      const checksum = await this.hashFile(manifest.filePath);
+      const restoreStatus = manifest.checksum !== undefined && checksum !== manifest.checksum ? "checksum_mismatch" : "available";
+      const updatedManifest: WorkbookFileBackupManifest = {
+        ...manifest,
+        size: fileStat.size,
+        checksum: manifest.checksum ?? checksum,
+        verifiedAt: new Date().toISOString(),
+        restoreStatus
+      };
+      const updated = this.backups.updateBackup(backupId, {
+        payload: updatedManifest,
+        verifiedAt: updatedManifest.verifiedAt ?? new Date().toISOString(),
+        restoreStatus
+      });
+      this.recordCollabEvent({
+        type: "backup.verified",
+        workbookId: backup.workbookId,
+        message: `File backup verified: ${backupId}`,
+        details: { backupId, ok: restoreStatus === "available", restoreStatus, checksum }
+      });
+      this.persistState();
+      return { ok: restoreStatus === "available", backup: updated, manifest: updatedManifest };
+    } catch (error) {
+      const updatedManifest: WorkbookFileBackupManifest = {
+        ...manifest,
+        verifiedAt: new Date().toISOString(),
+        restoreStatus: "missing",
+        metadata: { ...(manifest.metadata ?? {}), verifyError: error instanceof Error ? error.message : String(error) }
+      };
+      const updated = this.backups.updateBackup(backupId, {
+        payload: updatedManifest,
+        verifiedAt: updatedManifest.verifiedAt ?? new Date().toISOString(),
+        restoreStatus: "missing"
+      });
+      this.recordCollabEvent({
+        type: "backup.verified",
+        workbookId: backup.workbookId,
+        message: `File backup verification failed: ${backupId}`,
+        details: { backupId, ok: false, restoreStatus: "missing", error: error instanceof Error ? error.message : String(error) }
+      });
+      this.persistState();
+      return { ok: false, backup: updated, manifest: updatedManifest };
+    }
+  }
+
+  async restoreFileBackup(input: WorkbookRestoreFileBackupRequest) {
+    const verified = await this.verifyFileBackup(input.backupId);
+    const manifest = (verified as { manifest?: WorkbookFileBackupManifest }).manifest;
+    if (!(verified as { ok?: boolean }).ok || !manifest?.filePath) {
+      return verified;
+    }
+    const restorableManifest: WorkbookFileBackupManifest & { filePath: string } = { ...manifest, filePath: manifest.filePath };
+    const mode = input.mode ?? "open-as-new";
+    if (mode === "open-as-new") {
+      this.recordCollabEvent({
+        type: "backup.restored",
+        workbookId: input.workbookId,
+        message: `File backup verified for open-as-new recovery: ${input.backupId}`,
+        details: { backupId: input.backupId, mode, filePath: manifest.filePath }
+      });
+      return {
+        ok: true,
+        workbookId: input.workbookId,
+        backupId: input.backupId,
+        mode,
+        filePath: manifest.filePath,
+        note: "The file backup is verified and ready to open as a separate workbook. Open Workbook does not auto-open desktop Excel in headless MCP mode."
+      };
+    }
+    if (input.confirmationToken === undefined && input.force !== true) {
+      return {
+        ok: false,
+        workbookId: input.workbookId,
+        backupId: input.backupId,
+        mode,
+        error: runtimeError("CONFIRMATION_REQUIRED", "Replacing or restoring into an open workbook requires explicit confirmation.", {
+          retryable: false,
+          details: { requiredConfirmation: "restore_file_backup" }
+        })
+      };
+    }
+    const permissionWarnings = this.validateDirectMutation(input.workbookId, [], "workbook");
+    if (permissionWarnings.length > 0) {
+      return permissionDenied("Full-file restore is blocked by the current Open Workbook permission policy.", permissionWarnings);
+    }
+    const bridgeStatus = this.fileBridge.getStatus();
+    if (bridgeStatus.available) {
+      return this.applyDirectTransaction(
+        {
+          workbookId: input.workbookId,
+          goal: `Restore file backup ${input.backupId}`,
+          scopes: [{ type: "workbook", workbookId: input.workbookId }],
+          destructiveLevel: "workbook"
+        },
+        async () => this.restoreFileBackupThroughBridge(input, restorableManifest, mode, bridgeStatus)
+      );
+    }
+    return {
+      ok: false,
+      workbookId: input.workbookId,
+      backupId: input.backupId,
+      mode,
+      bridgeStatus,
+      error: runtimeError("CAPABILITY_UNAVAILABLE", "Full workbook file restore requires a native bridge with close/reopen support. Use open-as-new mode for verified recovery.", {
+        retryable: false,
+        details: { bridgeStatus }
+      })
+    };
+  }
+
+  private async restoreFileBackupThroughBridge(
+    input: WorkbookRestoreFileBackupRequest,
+    manifest: WorkbookFileBackupManifest & { filePath: string },
+    mode: NonNullable<WorkbookRestoreFileBackupRequest["mode"]>,
+    bridgeStatus: ReturnType<NativeFileBridge["getStatus"]>
+  ) {
+      const emergencyBackup = await this.createFileBackup({
+        workbookId: input.workbookId,
+        reason: `Emergency file backup before restoring ${input.backupId}`,
+        pin: true
+      });
+      if (!(emergencyBackup as { ok?: boolean }).ok) {
+        return {
+          ok: false,
+          workbookId: input.workbookId,
+          backupId: input.backupId,
+          mode,
+          emergencyBackup,
+          error: runtimeError("BACKUP_UNAVAILABLE", "Destructive file restore requires an emergency file backup before replacing the workbook.", {
+            retryable: true,
+            details: { bridgeStatus }
+          })
+        };
+      }
+      const bridge = await this.fileBridge.request({
+        operation: "workbook.restore_file_backup",
+        workbookId: input.workbookId,
+        targetPath: manifest.filePath,
+        backupPath: manifest.filePath,
+        ...(input.restoreTargetPath !== undefined ? { restoreTargetPath: input.restoreTargetPath } : {}),
+        restoreMode: mode,
+        sourceBackupId: input.backupId,
+        reason: `Restore file backup ${input.backupId}`
+      });
+      if (bridge.ok) {
+        const emergencyBackupId = (emergencyBackup as { manifest?: { backupId?: BackupId } }).manifest?.backupId;
+        const restoredManifest: WorkbookFileBackupManifest = {
+          ...manifest,
+          metadata: {
+            ...(manifest.metadata ?? {}),
+            lastRestoredAt: new Date().toISOString(),
+            lastRestoreMode: mode,
+            lastRestoreBridge: bridge,
+            emergencyBackupId
+          }
+        };
+        this.backups.updateBackup(input.backupId, { payload: restoredManifest });
+        this.recordCollabEvent({
+          type: "backup.restored",
+          workbookId: input.workbookId,
+          message: `File backup restored: ${input.backupId}`,
+          details: {
+            backupId: input.backupId,
+            mode,
+            bridge,
+            emergencyBackupId
+          }
+        });
+        this.persistState();
+        return {
+          ok: true,
+          workbookId: input.workbookId,
+          backupId: input.backupId,
+          mode,
+          bridge,
+          emergencyBackup,
+          ...((emergencyBackup as { backup?: unknown }).backup !== undefined ? { backup: (emergencyBackup as { backup: unknown }).backup } : {})
+        };
+      }
+      return {
+        ok: false,
+        workbookId: input.workbookId,
+        backupId: input.backupId,
+        mode,
+        bridge,
+        emergencyBackup,
+        error: runtimeError("OPERATION_FAILED", "The native file bridge failed to restore the workbook file backup.", {
+          retryable: false,
+          details: { bridgeStatus }
+        })
+      };
+  }
+
+  deleteFileBackup(backupId: BackupId) {
+    const backup = this.backups.getBackup(backupId);
+    if (!backup || backup.kind !== "file-copy") {
+      return {
+        ok: false,
+        error: runtimeError("BACKUP_UNAVAILABLE", `File backup not found: ${backupId}`, { retryable: false })
+      };
+    }
+    if (backup.pinned) {
+      return {
+        ok: false,
+        backup,
+        error: runtimeError("PERMISSION_DENIED", `File backup is pinned and cannot be deleted: ${backupId}`, { retryable: false })
+      };
+    }
+    void this.unlinkBackupPayloadIfSafe(backup);
+    const deleted = this.backups.deleteBackup(backupId);
+    this.recordCollabEvent({
+      type: "backup.deleted",
+      workbookId: backup.workbookId,
+      message: `File backup deleted: ${backupId}`,
+      details: { backupId, filePath: (backup.payload as WorkbookFileBackupManifest | undefined)?.filePath }
+    });
+    this.persistState();
+    return { ok: deleted, backupId };
+  }
+
+  pruneFileBackups(input: WorkbookBackupRetentionRequest) {
+    const now = Date.now();
+    const maxAgeMs = input.maxAgeDays !== undefined ? input.maxAgeDays * 24 * 60 * 60 * 1000 : undefined;
+    const byWorkbook = new Map<string, BackupRecord[]>();
+    for (const backup of this.backups.dump().filter((item) => item.kind === "file-copy")) {
+      if (input.workbookId !== undefined && backup.workbookId !== input.workbookId) {
+        continue;
+      }
+      const list = byWorkbook.get(backup.workbookId) ?? [];
+      list.push(backup);
+      byWorkbook.set(backup.workbookId, list);
+    }
+    const candidates = new Map<BackupId, BackupRecord>();
+    for (const backups of byWorkbook.values()) {
+      for (const backup of backups) {
+        if (!backup.pinned && maxAgeMs !== undefined && now - Date.parse(backup.createdAt) > maxAgeMs) {
+          candidates.set(backup.backupId, backup);
+        }
+      }
+      if (input.maxBackupsPerWorkbook !== undefined) {
+        const overflow = backups
+          .filter((backup) => !backup.pinned)
+          .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+          .slice(input.maxBackupsPerWorkbook);
+        for (const backup of overflow) {
+          candidates.set(backup.backupId, backup);
+        }
+      }
+    }
+    if (input.dryRun) {
+      return { ok: true, dryRun: true, candidates: [...candidates.values()] };
+    }
+    for (const backup of candidates.values()) {
+      void this.unlinkBackupPayloadIfSafe(backup);
+      this.backups.deleteBackup(backup.backupId);
+    }
+    this.recordCollabEvent({
+      type: "backup.pruned",
+      ...(input.workbookId !== undefined ? { workbookId: input.workbookId } : {}),
+      message: `File backups pruned: ${candidates.size}`,
+      details: { prunedBackupIds: [...candidates.keys()], criteria: input }
+    });
+    this.persistState();
+    return { ok: true, pruned: [...candidates.keys()] };
+  }
+
+  pinFileBackup(backupId: BackupId, pinned: boolean) {
+    const backup = this.backups.getBackup(backupId);
+    if (!backup || backup.kind !== "file-copy") {
+      return {
+        ok: false,
+        error: runtimeError("BACKUP_UNAVAILABLE", `File backup not found: ${backupId}`, { retryable: false })
+      };
+    }
+    const manifest = backup.payload as WorkbookFileBackupManifest | undefined;
+    const updatedManifest = manifest ? { ...manifest, pinned } : undefined;
+    const updated = this.backups.updateBackup(backupId, {
+      pinned,
+      ...(updatedManifest ? { payload: updatedManifest } : {})
+    });
+    this.recordCollabEvent({
+      type: "backup.updated",
+      workbookId: backup.workbookId,
+      message: `File backup ${pinned ? "pinned" : "unpinned"}: ${backupId}`,
+      details: { backupId, pinned }
+    });
+    this.persistState();
+    return { ok: true, backup: updated, manifest: updatedManifest };
+  }
+
   async closeWorkbook(workbookId: WorkbookId, closeBehavior?: "Save" | "SkipSave") {
     const client = this.getActiveAddinClient();
     if (!client) {
@@ -2112,6 +2503,7 @@ export class RuntimeService {
         columnHierarchies?: Array<{ name: string }>;
         filterHierarchies?: Array<{ name: string }>;
         dataHierarchies?: Array<{ name: string; field?: { name: string } }>;
+        layout?: PivotLayoutInfo;
       };
     }).info;
     const issues: Array<{ code: string; severity: "info" | "warning" | "error"; message: string; details?: Record<string, unknown> }> = [];
@@ -2185,6 +2577,8 @@ export class RuntimeService {
     addExpectedPivotAxisIssues(issues, "column", request.expectedColumnFields, columnFields);
     addExpectedPivotAxisIssues(issues, "filter", request.expectedFilterFields, filterFields);
     addExpectedPivotAxisIssues(issues, "data", request.expectedDataFields, dataFields);
+    addExpectedPivotDataSettingIssues(issues, request.expectedDataFieldSettings, pivotInfo?.dataHierarchies ?? []);
+    addExpectedPivotLayoutIssues(issues, request.expectedLayout, pivotInfo?.layout);
     const hierarchyCount =
       (pivotInfo?.rowHierarchies?.length ?? 0) +
       (pivotInfo?.columnHierarchies?.length ?? 0) +
@@ -2207,6 +2601,159 @@ export class RuntimeService {
       },
       issues
     };
+  }
+
+  getPivotCapabilityMatrix(workbookId?: WorkbookId) {
+    return {
+      ok: true,
+      matrix: {
+        workbookId,
+        hostPlatform: this.sessions.getActive()?.activeWorkbook?.platform,
+        capabilities: [
+          { capability: "create", status: "supported" },
+          { capability: "read_source_metadata", status: "partial", reason: "Office.js exposes source metadata inconsistently across hosts and pivot source types." },
+          { capability: "read_axis_fields", status: "partial", reason: "Available when the host exposes PivotTable hierarchy metadata." },
+          { capability: "write_axis_fields", status: "supported" },
+          { capability: "write_data_fields", status: "supported" },
+          { capability: "aggregation", status: "supported" },
+          { capability: "number_format", status: "supported" },
+          { capability: "layout_flags", status: "partial", reason: "Only deterministic Office.js layout fields are replayed." },
+          { capability: "refresh", status: "supported" },
+          { capability: "delete", status: "supported" },
+          { capability: "template_copy", status: "partial", reason: "Template copy replays deterministic fields and returns warnings for unavailable dimensions." },
+          { capability: "fingerprint", status: "partial", reason: "Fingerprint includes metadata Office.js exposes and marks missing dimensions as warnings." },
+          { capability: "diff", status: "partial", reason: "Diff is deterministic for captured fingerprint dimensions only." },
+          { capability: "rebuild_with_source", status: "partial", reason: "Rebuild creates a new PivotTable from the desired source; in-place replacement remains guarded." },
+          { capability: "source_reassignment", status: "unsupported", reason: "Office.js does not expose safe in-place source reassignment in this runtime." },
+          { capability: "pivot_chart", status: "partial", reason: "PivotChart-specific controls remain host/API limited." }
+        ]
+      }
+    };
+  }
+
+  async getPivotFingerprint(request: PivotSelector) {
+    const infoResult = await this.getPivotTableInfo(request);
+    const info = (infoResult as { ok?: boolean; info?: PivotTableInfo }).info;
+    if (!(infoResult as { ok?: boolean }).ok || !info) {
+      return {
+        ok: false,
+        info: infoResult,
+        error: runtimeError("NOT_FOUND", `PivotTable not found or unavailable: ${request.pivotTableName}`, { retryable: false })
+      };
+    }
+    const fingerprint = makePivotFingerprint(info);
+    return { ok: true, fingerprint, info };
+  }
+
+  async comparePivotFingerprint(request: PivotCompareFingerprintRequest) {
+    const source = await this.getPivotFingerprint(request);
+    const target = await this.getPivotFingerprint({
+      workbookId: request.workbookId,
+      pivotTableName: request.targetPivotTableName
+    });
+    if (!(source as { ok?: boolean }).ok || !(target as { ok?: boolean }).ok) {
+      return {
+        ok: false,
+        source,
+        target,
+        error: runtimeError("NOT_FOUND", "One or both PivotTables are unavailable for fingerprint comparison.", { retryable: false })
+      };
+    }
+    const sourceFingerprint = (source as { fingerprint: PivotFingerprint }).fingerprint;
+    const targetFingerprint = (target as { fingerprint: PivotFingerprint }).fingerprint;
+    const diff = diffPivotFingerprints(sourceFingerprint, targetFingerprint, request.targetPivotTableName);
+    return { ok: diff.changes.length === 0, source: sourceFingerprint, target: targetFingerprint, diff };
+  }
+
+  async diffPivotTables(request: PivotCompareFingerprintRequest): Promise<PivotDiff> {
+    const comparison = await this.comparePivotFingerprint(request);
+    if (!(comparison as { diff?: PivotDiff }).diff) {
+      return {
+        ok: false,
+        workbookId: request.workbookId,
+        sourcePivotTableName: request.pivotTableName,
+        targetPivotTableName: request.targetPivotTableName,
+        changes: [],
+        warnings: [{ code: "PIVOT_DIFF_UNAVAILABLE", message: "One or both PivotTable fingerprints are unavailable." }]
+      };
+    }
+    return (comparison as { diff: PivotDiff }).diff;
+  }
+
+  async repairPivotFromTemplate(request: PivotRepairFromTemplateRequest) {
+    const before = await this.comparePivotFingerprint({
+      workbookId: request.workbookId,
+      pivotTableName: request.templatePivotTableName,
+      targetPivotTableName: request.pivotTableName
+    });
+    if (request.strict && (before as { diff?: PivotDiff }).diff?.warnings.some((warning) => warning.code.includes("UNAVAILABLE"))) {
+      return {
+        ok: false,
+        before,
+        error: runtimeError("CAPABILITY_UNAVAILABLE", "Strict PivotTable repair cannot proceed because one or more fingerprint dimensions are unavailable.", {
+          retryable: false
+        })
+      };
+    }
+    const copy = await this.copyPivotFromTemplate(request);
+    if (!(copy as { ok?: boolean }).ok) {
+      return copy;
+    }
+    const after = await this.comparePivotFingerprint({
+      workbookId: request.workbookId,
+      pivotTableName: request.templatePivotTableName,
+      targetPivotTableName: request.pivotTableName
+    });
+    return { ok: true, before, copy, after };
+  }
+
+  async rebuildPivotWithSource(request: PivotRebuildWithSourceRequest) {
+    if (request.replaceExisting) {
+      if (request.templatePivotTableName === request.pivotTableName) {
+        return {
+          ok: false,
+          request,
+          error: runtimeError("INVALID_ARGUMENT", "replaceExisting cannot use the same PivotTable as its template because the target must be deleted first.", {
+            retryable: false
+          })
+        };
+      }
+      const deleted = await this.deletePivotTable({
+        workbookId: request.workbookId,
+        pivotTableName: request.pivotTableName
+      });
+      if (!(deleted as { ok?: boolean }).ok) {
+        return { ok: false, request, deleted };
+      }
+      const created = await this.createPivotTable(request);
+      if (!(created as { ok?: boolean }).ok || !request.templatePivotTableName) {
+        return { ok: (created as { ok?: boolean }).ok, deleted, created };
+      }
+      const repairRequest: PivotRepairFromTemplateRequest = {
+        workbookId: request.workbookId,
+        pivotTableName: request.pivotTableName,
+        templatePivotTableName: request.templatePivotTableName
+      };
+      if (request.strict !== undefined) {
+        repairRequest.strict = request.strict;
+      }
+      const repaired = await this.repairPivotFromTemplate(repairRequest);
+      return { ok: (repaired as { ok?: boolean }).ok, deleted, created, repaired };
+    }
+    const created = await this.createPivotTable(request);
+    if (!(created as { ok?: boolean }).ok || !request.templatePivotTableName) {
+      return created;
+    }
+    const repairRequest: PivotRepairFromTemplateRequest = {
+      workbookId: request.workbookId,
+      pivotTableName: request.pivotTableName,
+      templatePivotTableName: request.templatePivotTableName
+    };
+    if (request.strict !== undefined) {
+      repairRequest.strict = request.strict;
+    }
+    const repaired = await this.repairPivotFromTemplate(repairRequest);
+    return { ok: (repaired as { ok?: boolean }).ok, created, repaired };
   }
 
   async listCharts(workbookId: WorkbookId) {
@@ -4786,16 +5333,149 @@ export class RuntimeService {
     return path.join(this.getExportDirectory(), `${sanitizeFileName(workbookId)}-${timestamp}.xlsx`);
   }
 
+  private defaultWorkbookFileBackupPath(workbookId: WorkbookId): string {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    return path.join(this.getBackupDirectory(), "files", `${sanitizeFileName(workbookId)}-${timestamp}.xlsx`);
+  }
+
   private async writeWorkbookFileContent(targetPath: string, content: WorkbookFileContent): Promise<string> {
     const resolved = path.resolve(targetPath);
     await mkdir(path.dirname(resolved), { recursive: true });
     await writeFile(resolved, Buffer.from(content.base64, "base64"));
     return resolved;
   }
+
+  private async hashFile(filePath: string): Promise<string> {
+    const hash = createHash("sha256");
+    hash.update(await readFile(filePath));
+    return `sha256:${hash.digest("hex")}`;
+  }
+
+  private async unlinkBackupPayloadIfSafe(backup: BackupRecord): Promise<void> {
+    const manifest = backup.payload as WorkbookFileBackupManifest | undefined;
+    if (!manifest?.filePath) {
+      return;
+    }
+    try {
+      await unlink(manifest.filePath);
+    } catch {
+      // Missing backup files are reported by verify; deletion should remain idempotent.
+    }
+  }
 }
 
 function sanitizeFileName(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "workbook";
+}
+
+function makePivotFingerprint(info: PivotTableInfo): PivotFingerprint {
+  const warnings: PivotFingerprint["warnings"] = [];
+  if (!info.source) {
+    warnings.push({ code: "PIVOT_SOURCE_UNAVAILABLE", message: "Pivot source is unavailable from Office.js." });
+  }
+  if (!info.hierarchies?.length) {
+    warnings.push({ code: "PIVOT_SOURCE_FIELDS_UNAVAILABLE", message: "Pivot source fields are unavailable from Office.js." });
+  }
+  const source: NonNullable<PivotFingerprint["source"]> = {
+    fields: uniqueDefined((info.hierarchies ?? []).map((hierarchy) => hierarchy.name)).sort()
+  };
+  if (info.sourceType !== undefined) {
+    source.type = info.sourceType;
+  }
+  if (info.source !== undefined) {
+    source.value = info.source;
+  }
+  const dataFields: PivotFingerprint["layout"]["dataFields"] = (info.dataHierarchies ?? []).map((hierarchy) => {
+    const field: PivotFingerprint["layout"]["dataFields"][number] = { name: hierarchy.name };
+    if (hierarchy.field?.name !== undefined) {
+      field.sourceFieldName = hierarchy.field.name;
+    }
+    if (hierarchy.summarizeBy !== undefined) {
+      field.summarizeBy = hierarchy.summarizeBy;
+    }
+    if (hierarchy.numberFormat !== undefined) {
+      field.numberFormat = hierarchy.numberFormat;
+    }
+    return field;
+  });
+  const layout: PivotFingerprint["layout"] = {
+    rowFields: uniqueDefined((info.rowHierarchies ?? []).map((hierarchy) => hierarchy.name)),
+    columnFields: uniqueDefined((info.columnHierarchies ?? []).map((hierarchy) => hierarchy.name)),
+    filterFields: uniqueDefined((info.filterHierarchies ?? []).map((hierarchy) => hierarchy.name)),
+    dataFields
+  };
+  if (info.layout !== undefined) {
+    layout.flags = info.layout;
+  }
+  const fingerprint: Omit<PivotFingerprint, "hash"> = {
+    workbookId: info.workbookId,
+    pivotTableName: info.pivotTableName,
+    capturedAt: new Date().toISOString(),
+    source,
+    layout,
+    warnings
+  };
+  if (info.range !== undefined) {
+    fingerprint.output = { ...info.range };
+    if (info.sheetName !== undefined) {
+      fingerprint.output.sheetName = info.sheetName;
+    }
+  }
+  return {
+    ...fingerprint,
+    hash: hashStable(normalizePivotFingerprintForHash(fingerprint))
+  };
+}
+
+function normalizePivotFingerprintForHash(fingerprint: Omit<PivotFingerprint, "hash">): unknown {
+  return {
+    source: fingerprint.source,
+    layout: fingerprint.layout,
+    output: fingerprint.output
+      ? {
+          sheetName: fingerprint.output.sheetName,
+          rowCount: fingerprint.output.rowCount,
+          columnCount: fingerprint.output.columnCount
+        }
+      : undefined
+  };
+}
+
+function diffPivotFingerprints(source: PivotFingerprint, target: PivotFingerprint, targetPivotTableName: string): PivotDiff {
+  const changes: PivotDiff["changes"] = [];
+  addPivotDiff(changes, "source.type", source.source?.type, target.source?.type);
+  addPivotDiff(changes, "source.value", source.source?.value, target.source?.value);
+  addPivotDiff(changes, "source.fields", source.source?.fields ?? [], target.source?.fields ?? []);
+  addPivotDiff(changes, "layout.rowFields", source.layout.rowFields, target.layout.rowFields);
+  addPivotDiff(changes, "layout.columnFields", source.layout.columnFields, target.layout.columnFields);
+  addPivotDiff(changes, "layout.filterFields", source.layout.filterFields, target.layout.filterFields);
+  addPivotDiff(changes, "layout.dataFields", source.layout.dataFields, target.layout.dataFields);
+  addPivotDiff(changes, "layout.flags", source.layout.flags ?? {}, target.layout.flags ?? {});
+  addPivotDiff(changes, "output.shape", source.output ? { rowCount: source.output.rowCount, columnCount: source.output.columnCount } : undefined, target.output ? { rowCount: target.output.rowCount, columnCount: target.output.columnCount } : undefined);
+  return {
+    ok: changes.length === 0,
+    workbookId: source.workbookId,
+    sourcePivotTableName: source.pivotTableName,
+    targetPivotTableName,
+    source,
+    target,
+    changes,
+    warnings: [...source.warnings, ...target.warnings]
+  };
+}
+
+function addPivotDiff(changes: PivotDiff["changes"], pathName: string, before: unknown, after: unknown): void {
+  const beforeHash = hashStable(before);
+  const afterHash = hashStable(after);
+  if (beforeHash === afterHash) {
+    return;
+  }
+  changes.push({
+    path: pathName,
+    kind: before === undefined ? "added" : after === undefined ? "removed" : "changed",
+    before,
+    after
+  });
 }
 
 function compareTemplatePayload(
@@ -5252,6 +5932,78 @@ function addExpectedPivotAxisIssues(
         severity: "error",
         message: `Expected PivotTable ${axis} field is not present: ${field}`,
         details: { axis, field, actualFields }
+      });
+    }
+  }
+}
+
+function addExpectedPivotDataSettingIssues(
+  issues: Array<{ code: string; severity: "info" | "warning" | "error"; message: string; details?: Record<string, unknown> }>,
+  expectedSettings: PivotValidateSourceRequest["expectedDataFieldSettings"],
+  actualDataHierarchies: Array<{ name: string; summarizeBy?: string; numberFormat?: string; field?: { name: string } }>
+): void {
+  if (!expectedSettings?.length) {
+    return;
+  }
+  for (const expected of expectedSettings) {
+    const actual = actualDataHierarchies.find((hierarchy) => {
+      const sourceMatches = expected.sourceFieldName === undefined || hierarchy.field?.name === expected.sourceFieldName;
+      const nameMatches = expected.name === undefined || hierarchy.name === expected.name;
+      return sourceMatches && nameMatches;
+    });
+    if (!actual) {
+      issues.push({
+        code: "PIVOT_EXPECTED_DATA_FIELD_MISSING",
+        severity: "error",
+        message: `Expected PivotTable data field is missing: ${expected.sourceFieldName ?? expected.name ?? "unknown"}`,
+        details: { expected, actualDataFields: actualDataHierarchies.map((hierarchy) => ({ name: hierarchy.name, sourceFieldName: hierarchy.field?.name })) }
+      });
+      continue;
+    }
+    if (expected.summarizeBy !== undefined && actual.summarizeBy !== expected.summarizeBy) {
+      issues.push({
+        code: "PIVOT_EXPECTED_AGGREGATION_MISMATCH",
+        severity: "error",
+        message: `Expected PivotTable aggregation ${expected.summarizeBy} for ${actual.name}, found ${actual.summarizeBy ?? "unavailable"}.`,
+        details: { expected, actual: { name: actual.name, sourceFieldName: actual.field?.name, summarizeBy: actual.summarizeBy } }
+      });
+    }
+    if (expected.numberFormat !== undefined && actual.numberFormat !== expected.numberFormat) {
+      issues.push({
+        code: "PIVOT_EXPECTED_NUMBER_FORMAT_MISMATCH",
+        severity: "error",
+        message: `Expected PivotTable number format ${expected.numberFormat} for ${actual.name}, found ${actual.numberFormat ?? "unavailable"}.`,
+        details: { expected, actual: { name: actual.name, sourceFieldName: actual.field?.name, numberFormat: actual.numberFormat } }
+      });
+    }
+  }
+}
+
+function addExpectedPivotLayoutIssues(
+  issues: Array<{ code: string; severity: "info" | "warning" | "error"; message: string; details?: Record<string, unknown> }>,
+  expectedLayout: PivotValidateSourceRequest["expectedLayout"],
+  actualLayout: PivotLayoutInfo | undefined
+): void {
+  if (!expectedLayout || Object.keys(expectedLayout).length === 0) {
+    return;
+  }
+  if (!actualLayout) {
+    issues.push({
+      code: "PIVOT_LAYOUT_UNAVAILABLE",
+      severity: "warning",
+      message: "PivotTable layout metadata is unavailable from Office.js, so expected layout cannot be fully verified.",
+      details: { expectedLayout }
+    });
+    return;
+  }
+  for (const [key, expectedValue] of Object.entries(expectedLayout)) {
+    const actualValue = (actualLayout as Record<string, unknown>)[key];
+    if (actualValue !== expectedValue) {
+      issues.push({
+        code: "PIVOT_EXPECTED_LAYOUT_SETTING_MISMATCH",
+        severity: "error",
+        message: `Expected PivotTable layout ${key} to be ${String(expectedValue)}, found ${String(actualValue)}.`,
+        details: { key, expected: expectedValue, actual: actualValue }
       });
     }
   }

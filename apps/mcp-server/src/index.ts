@@ -24,8 +24,11 @@ import type {
   NameUpdateRequest,
   OperationId,
   PermissionState,
+  PivotCompareFingerprintRequest,
   PivotCopyFromTemplateRequest,
   PivotCreateRequest,
+  PivotRebuildWithSourceRequest,
+  PivotRepairFromTemplateRequest,
   PivotSelector,
   PivotValidateSourceRequest,
   PlanId,
@@ -48,6 +51,9 @@ import type {
   TransactionId,
   WorkbookScope,
   WorkbookId,
+  WorkbookBackupRetentionRequest,
+  WorkbookCreateFileBackupRequest,
+  WorkbookRestoreFileBackupRequest,
   WorkbookLocalConfig
 } from "@open-workbook/protocol";
 import { isToolExposed, makeId } from "@open-workbook/protocol";
@@ -107,6 +113,7 @@ const server = new McpServer({
 
 registerRuntimeTools(server);
 registerWorkbookTools(server);
+registerBackupTools(server);
 registerSheetTools(server);
 registerRangeTools(server);
 registerBatchTools(server);
@@ -1218,6 +1225,158 @@ function registerWorkbookTools(mcp: McpServer): void {
     },
     async ({ workbookId, closeBehavior }: { workbookId: string; closeBehavior?: "Save" | "SkipSave" }) =>
       jsonResult(await runtime.closeWorkbook(workbookId as WorkbookId, closeBehavior))
+  );
+}
+
+function registerBackupTools(mcp: McpServer): void {
+  registerMcpTool(
+    mcp,
+    "excel.backup.create_file",
+    {
+      title: "Create file backup",
+      description: "Create a verified full .xlsx file backup using native SaveCopyAs or the supported Office.js file export fallback.",
+      inputSchema: {
+        workbookId: z.string(),
+        reason: z.string().optional(),
+        targetPath: z.string().optional(),
+        mode: z.enum(["export-copy", "save-copy-as"]).optional(),
+        pin: z.boolean().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async (args: any) => {
+      const request: WorkbookCreateFileBackupRequest = { workbookId: args.workbookId as WorkbookId };
+      if (args.reason !== undefined) request.reason = args.reason;
+      if (args.targetPath !== undefined) request.targetPath = args.targetPath;
+      if (args.mode !== undefined) request.mode = args.mode;
+      if (args.pin !== undefined) request.pin = args.pin;
+      return jsonResult(await runtime.createFileBackup(request));
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.backup.list",
+    {
+      title: "List file backups",
+      description: "List durable full-file workbook backups.",
+      inputSchema: { workbookId: z.string().optional() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ workbookId }: { workbookId?: string }) => jsonResult(runtime.listFileBackups(workbookId as WorkbookId | undefined))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.backup.get",
+    {
+      title: "Get file backup",
+      description: "Return one durable full-file workbook backup manifest.",
+      inputSchema: { backupId: z.string() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ backupId }: { backupId: string }) => jsonResult(runtime.getFileBackup(backupId as BackupId))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.backup.verify",
+    {
+      title: "Verify file backup",
+      description: "Verify that a full-file backup exists and still matches its checksum.",
+      inputSchema: { backupId: z.string() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ backupId }: { backupId: string }) => jsonResult(await runtime.verifyFileBackup(backupId as BackupId))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.backup.restore_file",
+    {
+      title: "Restore file backup",
+      description: "Restore a full-file backup. open-as-new is safe; destructive modes require confirmation and native bridge support.",
+      inputSchema: {
+        workbookId: z.string(),
+        backupId: z.string(),
+        mode: z.enum(["open-as-new", "replace-open-workbook", "restore-into-open-workbook"]).optional(),
+        restoreTargetPath: z.string().optional(),
+        confirmationToken: z.string().optional(),
+        force: z.boolean().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    async (args: any) => {
+      const request: WorkbookRestoreFileBackupRequest = {
+        workbookId: args.workbookId as WorkbookId,
+        backupId: args.backupId as BackupId
+      };
+      if (args.mode !== undefined) request.mode = args.mode;
+      if (args.restoreTargetPath !== undefined) request.restoreTargetPath = args.restoreTargetPath;
+      if (args.confirmationToken !== undefined) request.confirmationToken = args.confirmationToken;
+      if (args.force !== undefined) request.force = args.force;
+      return jsonResult(await runtime.restoreFileBackup(request));
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.backup.delete",
+    {
+      title: "Delete file backup",
+      description: "Delete an unpinned durable full-file backup and its file payload when possible.",
+      inputSchema: { backupId: z.string() },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    async ({ backupId }: { backupId: string }) => jsonResult(runtime.deleteFileBackup(backupId as BackupId))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.backup.prune",
+    {
+      title: "Prune file backups",
+      description: "Prune unpinned durable file backups by age or per-workbook retention count.",
+      inputSchema: {
+        workbookId: z.string().optional(),
+        maxAgeDays: z.number().optional(),
+        maxBackupsPerWorkbook: z.number().optional(),
+        dryRun: z.boolean().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    async (args: any) => {
+      const request: WorkbookBackupRetentionRequest = {};
+      if (args.workbookId !== undefined) request.workbookId = args.workbookId as WorkbookId;
+      if (args.maxAgeDays !== undefined) request.maxAgeDays = args.maxAgeDays;
+      if (args.maxBackupsPerWorkbook !== undefined) request.maxBackupsPerWorkbook = args.maxBackupsPerWorkbook;
+      if (args.dryRun !== undefined) request.dryRun = args.dryRun;
+      return jsonResult(runtime.pruneFileBackups(request));
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.backup.pin",
+    {
+      title: "Pin file backup",
+      description: "Prevent a durable file backup from being pruned or deleted.",
+      inputSchema: { backupId: z.string() },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ backupId }: { backupId: string }) => jsonResult(runtime.pinFileBackup(backupId as BackupId, true))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.backup.unpin",
+    {
+      title: "Unpin file backup",
+      description: "Allow a durable file backup to be pruned or deleted.",
+      inputSchema: { backupId: z.string() },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ backupId }: { backupId: string }) => jsonResult(runtime.pinFileBackup(backupId as BackupId, false))
   );
 }
 
@@ -3201,7 +3360,13 @@ function registerPivotTools(mcp: McpServer): void {
     {
       title: "Copy PivotTable from template",
       description: "Replay deterministic PivotTable metadata and layout from a template PivotTable through the transaction-backed add-in path.",
-      inputSchema: { ...pivotSelectorSchema(), templatePivotTableName: z.string(), templateId: z.string().optional() },
+      inputSchema: {
+        ...pivotSelectorSchema(),
+        templatePivotTableName: z.string(),
+        templateId: z.string().optional(),
+        dimensions: z.array(z.enum(["metadata", "layout", "fields", "dataFields", "numberFormats", "filters", "refresh"])).optional(),
+        strict: z.boolean().optional()
+      },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
     },
     async (args: any) => {
@@ -3211,6 +3376,12 @@ function registerPivotTools(mcp: McpServer): void {
       };
       if (args.templateId !== undefined) {
         request.templateId = args.templateId as TemplateId;
+      }
+      if (args.dimensions !== undefined) {
+        request.dimensions = args.dimensions;
+      }
+      if (args.strict !== undefined) {
+        request.strict = args.strict;
       }
       return jsonResult(await runtime.copyPivotFromTemplate(request));
     }
@@ -3240,11 +3411,153 @@ function registerPivotTools(mcp: McpServer): void {
         expectedRowFields: z.array(z.string()).optional(),
         expectedColumnFields: z.array(z.string()).optional(),
         expectedFilterFields: z.array(z.string()).optional(),
-        expectedDataFields: z.array(z.string()).optional()
+        expectedDataFields: z.array(z.string()).optional(),
+        expectedDataFieldSettings: z
+          .array(
+            z.object({
+              sourceFieldName: z.string().optional(),
+              name: z.string().optional(),
+              summarizeBy: z.string().optional(),
+              numberFormat: z.string().optional()
+            })
+          )
+          .optional(),
+        expectedLayout: z.record(z.string(), z.unknown()).optional()
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
     async (args: any) => jsonResult(await runtime.validatePivotSource(pivotValidateSourceRequest(args)))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.pivot.get_capability_matrix",
+    {
+      title: "Get PivotTable capability matrix",
+      description: "Return deterministic PivotTable support status for the active Excel host.",
+      inputSchema: { workbookId: z.string().optional() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ workbookId }: { workbookId?: string }) => jsonResult(runtime.getPivotCapabilityMatrix(workbookId as WorkbookId | undefined))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.pivot.get_fingerprint",
+    {
+      title: "Get PivotTable fingerprint",
+      description: "Capture a deterministic PivotTable fingerprint from metadata Office.js exposes.",
+      inputSchema: pivotSelectorSchema(),
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async (args: any) => jsonResult(await runtime.getPivotFingerprint(pivotSelector(args)))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.pivot.compare_fingerprint",
+    {
+      title: "Compare PivotTable fingerprint",
+      description: "Compare two PivotTable fingerprints and return deterministic differences.",
+      inputSchema: { ...pivotSelectorSchema(), targetPivotTableName: z.string() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async (args: any) => {
+      const request: PivotCompareFingerprintRequest = {
+        ...pivotSelector(args),
+        targetPivotTableName: args.targetPivotTableName
+      };
+      return jsonResult(await runtime.comparePivotFingerprint(request));
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.pivot.diff",
+    {
+      title: "Diff PivotTables",
+      description: "Return a PivotTable diff based on captured fingerprint dimensions.",
+      inputSchema: { ...pivotSelectorSchema(), targetPivotTableName: z.string() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async (args: any) => {
+      const request: PivotCompareFingerprintRequest = {
+        ...pivotSelector(args),
+        targetPivotTableName: args.targetPivotTableName
+      };
+      return jsonResult(await runtime.diffPivotTables(request));
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.pivot.repair_from_template",
+    {
+      title: "Repair PivotTable from template",
+      description: "Repair a target PivotTable by replaying deterministic metadata from a template PivotTable, then diffing the result.",
+      inputSchema: {
+        ...pivotSelectorSchema(),
+        templatePivotTableName: z.string(),
+        templateId: z.string().optional(),
+        dimensions: z.array(z.enum(["metadata", "layout", "fields", "dataFields", "numberFormats", "filters", "refresh"])).optional(),
+        strict: z.boolean().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    async (args: any) => {
+      const request: PivotRepairFromTemplateRequest = {
+        ...pivotSelector(args),
+        templatePivotTableName: args.templatePivotTableName
+      };
+      if (args.templateId !== undefined) request.templateId = args.templateId as TemplateId;
+      if (args.dimensions !== undefined) request.dimensions = args.dimensions;
+      if (args.strict !== undefined) request.strict = args.strict;
+      return jsonResult(await runtime.repairPivotFromTemplate(request));
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.pivot.rebuild_with_source",
+    {
+      title: "Rebuild PivotTable with source",
+      description: "Create a new PivotTable from the desired source and optionally replay a template PivotTable.",
+      inputSchema: {
+        workbookId: z.string(),
+        pivotTableName: z.string(),
+        sourceSheetName: z.string().optional(),
+        sourceAddress: z.string().optional(),
+        sourceTableName: z.string().optional(),
+        destinationSheetName: z.string(),
+        destinationAddress: z.string(),
+        rowFields: z.array(z.string()).optional(),
+        columnFields: z.array(z.string()).optional(),
+        filterFields: z.array(z.string()).optional(),
+        dataFields: z
+          .array(
+            z.object({
+              sourceFieldName: z.string(),
+              name: z.string().optional(),
+              summarizeBy: z.string().optional(),
+              numberFormat: z.string().optional()
+            })
+          )
+          .optional(),
+        layout: z.record(z.string(), z.unknown()).optional(),
+        refresh: z.boolean().optional(),
+        templatePivotTableName: z.string().optional(),
+        replaceExisting: z.boolean().optional(),
+        strict: z.boolean().optional()
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    async (args: any) => {
+      const request = pivotCreateRequest(args) as PivotRebuildWithSourceRequest;
+      if (args.templatePivotTableName !== undefined) request.templatePivotTableName = args.templatePivotTableName;
+      if (args.replaceExisting !== undefined) request.replaceExisting = args.replaceExisting;
+      if (args.strict !== undefined) request.strict = args.strict;
+      return jsonResult(await runtime.rebuildPivotWithSource(request));
+    }
   );
 }
 
@@ -4948,6 +5261,8 @@ function pivotValidateSourceRequest(args: {
   expectedColumnFields?: string[];
   expectedFilterFields?: string[];
   expectedDataFields?: string[];
+  expectedDataFieldSettings?: PivotValidateSourceRequest["expectedDataFieldSettings"];
+  expectedLayout?: PivotValidateSourceRequest["expectedLayout"];
 }): PivotValidateSourceRequest {
   return {
     ...pivotSelector(args),
@@ -4955,7 +5270,9 @@ function pivotValidateSourceRequest(args: {
     ...(args.expectedRowFields !== undefined ? { expectedRowFields: args.expectedRowFields } : {}),
     ...(args.expectedColumnFields !== undefined ? { expectedColumnFields: args.expectedColumnFields } : {}),
     ...(args.expectedFilterFields !== undefined ? { expectedFilterFields: args.expectedFilterFields } : {}),
-    ...(args.expectedDataFields !== undefined ? { expectedDataFields: args.expectedDataFields } : {})
+    ...(args.expectedDataFields !== undefined ? { expectedDataFields: args.expectedDataFields } : {}),
+    ...(args.expectedDataFieldSettings !== undefined ? { expectedDataFieldSettings: args.expectedDataFieldSettings } : {}),
+    ...(args.expectedLayout !== undefined ? { expectedLayout: args.expectedLayout } : {})
   };
 }
 

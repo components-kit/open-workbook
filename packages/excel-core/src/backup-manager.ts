@@ -12,6 +12,9 @@ export interface BackupRecord extends BackupRef {
   retention: "session" | "persistent";
   payloadRef?: string;
   payload?: unknown;
+  pinned?: boolean;
+  verifiedAt?: string;
+  restoreStatus?: "available" | "missing" | "checksum_mismatch" | "unsupported";
 }
 
 export interface CreateBackupInput {
@@ -36,7 +39,7 @@ export class BackupManager {
       createdAt: new Date().toISOString(),
       reason: input.reason,
       affectedRanges: input.affectedRanges ?? [],
-      retention: input.kind === "workbook-copy" ? "persistent" : "session"
+      retention: input.kind === "workbook-copy" || input.kind === "file-copy" ? "persistent" : "session"
     };
     if (input.operationId !== undefined) {
       record.operationId = input.operationId;
@@ -57,6 +60,20 @@ export class BackupManager {
 
   getBackup(backupId: BackupId): BackupRecord | undefined {
     return this.backups.get(backupId);
+  }
+
+  updateBackup(backupId: BackupId, patch: Partial<BackupRecord>): BackupRecord | undefined {
+    const existing = this.backups.get(backupId);
+    if (!existing) {
+      return undefined;
+    }
+    const updated = { ...existing, ...patch, backupId: existing.backupId, workbookId: existing.workbookId };
+    this.backups.set(backupId, updated);
+    return { ...updated };
+  }
+
+  deleteBackup(backupId: BackupId): boolean {
+    return this.backups.delete(backupId);
   }
 
   load(records: BackupRecord[]): void {

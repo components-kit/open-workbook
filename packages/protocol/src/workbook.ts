@@ -56,7 +56,7 @@ export interface SnapshotRef {
 export interface BackupRef {
   backupId: BackupId;
   workbookId: WorkbookId;
-  kind: "region" | "sheet" | "workbook-copy";
+  kind: "region" | "sheet" | "workbook-copy" | "file-copy";
   createdAt: string;
   reason: string;
   operationId?: OperationId;

@@ -816,6 +816,70 @@ export interface PivotTableInfo {
   hierarchies?: Array<{ id?: string; name: string }>;
 }
 
+export interface PivotCapabilityMatrix {
+  workbookId?: WorkbookId;
+  hostPlatform?: string;
+  apiSets?: string[];
+  capabilities: Array<{
+    capability:
+      | "create"
+      | "read_source_metadata"
+      | "read_axis_fields"
+      | "write_axis_fields"
+      | "write_data_fields"
+      | "aggregation"
+      | "number_format"
+      | "layout_flags"
+      | "refresh"
+      | "delete"
+      | "template_copy"
+      | "fingerprint"
+      | "diff"
+      | "rebuild_with_source"
+      | "source_reassignment"
+      | "pivot_chart";
+    status: "supported" | "partial" | "unsupported" | "unknown";
+    reason?: string;
+  }>;
+}
+
+export interface PivotFingerprint {
+  workbookId: WorkbookId;
+  pivotTableName: string;
+  capturedAt: string;
+  hash: string;
+  source?: {
+    type?: string;
+    value?: string;
+    fields: string[];
+  };
+  layout: {
+    rowFields: string[];
+    columnFields: string[];
+    filterFields: string[];
+    dataFields: Array<{ name: string; sourceFieldName?: string; summarizeBy?: string; numberFormat?: string }>;
+    flags?: PivotLayoutInfo;
+  };
+  output?: PivotRangeInfo & { sheetName?: string };
+  warnings: Array<{ code: string; message: string }>;
+}
+
+export interface PivotDiff {
+  ok: boolean;
+  workbookId: WorkbookId;
+  sourcePivotTableName: string;
+  targetPivotTableName: string;
+  source?: PivotFingerprint;
+  target?: PivotFingerprint;
+  changes: Array<{
+    path: string;
+    kind: "added" | "removed" | "changed";
+    before?: unknown;
+    after?: unknown;
+  }>;
+  warnings: Array<{ code: string; message: string }>;
+}
+
 export interface PivotCreateRequest {
   workbookId: WorkbookId;
   pivotTableName: string;
@@ -840,6 +904,8 @@ export interface PivotCreateRequest {
 export interface PivotCopyFromTemplateRequest extends PivotSelector {
   templatePivotTableName: string;
   templateId?: TemplateId;
+  dimensions?: Array<"metadata" | "layout" | "fields" | "dataFields" | "numberFormats" | "filters" | "refresh">;
+  strict?: boolean;
 }
 
 export interface PivotValidateSourceRequest extends PivotSelector {
@@ -848,7 +914,26 @@ export interface PivotValidateSourceRequest extends PivotSelector {
   expectedColumnFields?: string[];
   expectedFilterFields?: string[];
   expectedDataFields?: string[];
+  expectedDataFieldSettings?: Array<{
+    sourceFieldName?: string;
+    name?: string;
+    summarizeBy?: string;
+    numberFormat?: string;
+  }>;
+  expectedLayout?: Partial<PivotLayoutInfo>;
 }
+
+export interface PivotCompareFingerprintRequest extends PivotSelector {
+  targetPivotTableName: string;
+}
+
+export interface PivotRebuildWithSourceRequest extends PivotCreateRequest {
+  templatePivotTableName?: string;
+  replaceExisting?: boolean;
+  strict?: boolean;
+}
+
+export type PivotRepairFromTemplateRequest = PivotCopyFromTemplateRequest;
 
 export type WorkbookFileBridgeOperation = "workbook.save_as" | "workbook.export_copy" | "workbook.restore_file_backup";
 
@@ -856,6 +941,9 @@ export interface WorkbookFileBridgeRequest {
   operation: WorkbookFileBridgeOperation;
   workbookId: WorkbookId;
   targetPath?: string;
+  backupPath?: string;
+  restoreTargetPath?: string;
+  restoreMode?: WorkbookFileRestoreMode;
   sourceBackupId?: BackupId;
   ranges?: A1Range[];
   reason?: string;
@@ -880,10 +968,60 @@ export interface WorkbookFileBridgeResponse {
   operation: WorkbookFileBridgeOperation;
   workbookId: WorkbookId;
   targetPath?: string;
+  backupPath?: string;
+  restoreTargetPath?: string;
+  restoreMode?: WorkbookFileRestoreMode;
   sourceBackupId?: BackupId;
   filePath?: string;
   metadata?: Record<string, unknown>;
   error?: string;
+}
+
+export type WorkbookFileBackupMode = "export-copy" | "save-copy-as";
+export type WorkbookFileRestoreMode = "open-as-new" | "replace-open-workbook" | "restore-into-open-workbook";
+
+export interface WorkbookFileBackupManifest {
+  backupId: BackupId;
+  workbookId: WorkbookId;
+  createdAt: string;
+  reason: string;
+  filePath?: string;
+  mode: WorkbookFileBackupMode;
+  size?: number;
+  checksum?: string;
+  sourceSnapshotBackupId?: BackupId;
+  pinned?: boolean;
+  verifiedAt?: string;
+  transactionId?: TransactionId;
+  taskId?: TaskId;
+  agentId?: AgentId;
+  restoreStatus?: "available" | "missing" | "checksum_mismatch" | "unsupported";
+  bridge?: WorkbookFileBridgeResponse;
+  metadata?: Record<string, unknown>;
+}
+
+export interface WorkbookCreateFileBackupRequest {
+  workbookId: WorkbookId;
+  reason?: string;
+  targetPath?: string;
+  mode?: WorkbookFileBackupMode;
+  pin?: boolean;
+}
+
+export interface WorkbookRestoreFileBackupRequest {
+  workbookId: WorkbookId;
+  backupId: BackupId;
+  mode?: WorkbookFileRestoreMode;
+  restoreTargetPath?: string;
+  confirmationToken?: string;
+  force?: boolean;
+}
+
+export interface WorkbookBackupRetentionRequest {
+  workbookId?: WorkbookId;
+  maxAgeDays?: number;
+  maxBackupsPerWorkbook?: number;
+  dryRun?: boolean;
 }
 
 export interface WorkbookFileContent {

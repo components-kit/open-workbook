@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { access, mkdir } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -108,11 +108,11 @@ export function createPlatformNativeHostBridgeAdapter(
       platform,
       saveAsSupported: platform === "darwin" || platform === "win32",
       exportCopySupported: platform === "darwin" || platform === "win32",
-      restoreFileBackupSupported: false,
+      restoreFileBackupSupported: platform === "darwin" || platform === "win32",
       operations: {
         "workbook.save_as": platform === "darwin" || platform === "win32",
         "workbook.export_copy": platform === "darwin" || platform === "win32",
-        "workbook.restore_file_backup": false
+        "workbook.restore_file_backup": platform === "darwin" || platform === "win32"
       },
       allowedDirs: allowedTargetDirectories()
     }),
@@ -141,6 +141,19 @@ export function createPlatformNativeHostBridgeAdapter(
         return saveCopyAsWithPowerShell(prepared.request, execute);
       }
       return bridgeError(request, `Native Export Copy is not supported on ${platform}.`);
+    },
+    restoreFileBackup: async (request) => {
+      const prepared = await prepareRestoreFileRequest(request);
+      if (!prepared.ok) {
+        return prepared.response;
+      }
+      if (platform === "darwin") {
+        return restoreFileBackupWithAppleScript(prepared.request, execute);
+      }
+      if (platform === "win32") {
+        return restoreFileBackupWithPowerShell(prepared.request, execute);
+      }
+      return bridgeError(request, `Native Restore File Backup is not supported on ${platform}.`);
     }
   };
 }
@@ -164,6 +177,10 @@ async function handleWorkbookFileBridgeHttpRequest(
 
 type PreparedBridgeTarget =
   | { ok: true; request: WorkbookFileBridgeRequest & { targetPath: string } }
+  | { ok: false; response: WorkbookFileBridgeResponse };
+
+type PreparedBridgeRestore =
+  | { ok: true; request: WorkbookFileBridgeRequest & { backupPath: string; restoreMode: NonNullable<WorkbookFileBridgeRequest["restoreMode"]> } }
   | { ok: false; response: WorkbookFileBridgeResponse };
 
 async function prepareTargetFileRequest(
@@ -193,6 +210,42 @@ async function prepareTargetFileRequest(
       targetPath: resolvedTargetPath
     }
   };
+}
+
+async function prepareRestoreFileRequest(request: WorkbookFileBridgeRequest): Promise<PreparedBridgeRestore> {
+  const backupPath = request.backupPath ?? request.targetPath;
+  if (!backupPath) {
+    return { ok: false, response: bridgeError(request, "backupPath or targetPath is required for workbook.restore_file_backup.") };
+  }
+  const restoreMode = request.restoreMode ?? "open-as-new";
+  if (restoreMode === "restore-into-open-workbook") {
+    return { ok: false, response: bridgeError(request, "restore-into-open-workbook is not supported by the native bridge. Use open-as-new or replace-open-workbook.") };
+  }
+  const resolvedBackupPath = path.resolve(backupPath);
+  const backupPathError = validateTargetPath(resolvedBackupPath);
+  if (backupPathError) {
+    return { ok: false, response: bridgeError(request, backupPathError.replace("targetPath", "backupPath")) };
+  }
+  try {
+    await access(resolvedBackupPath);
+  } catch {
+    return { ok: false, response: bridgeError(request, `Backup file does not exist: ${resolvedBackupPath}`) };
+  }
+  const prepared: WorkbookFileBridgeRequest & { backupPath: string; restoreMode: NonNullable<WorkbookFileBridgeRequest["restoreMode"]> } = {
+    ...request,
+    backupPath: resolvedBackupPath,
+    targetPath: resolvedBackupPath,
+    restoreMode
+  };
+  if (request.restoreTargetPath !== undefined) {
+    const resolvedRestoreTargetPath = path.resolve(request.restoreTargetPath);
+    const targetPathError = validateTargetPath(resolvedRestoreTargetPath);
+    if (targetPathError) {
+      return { ok: false, response: bridgeError(request, targetPathError.replace("targetPath", "restoreTargetPath")) };
+    }
+    prepared.restoreTargetPath = resolvedRestoreTargetPath;
+  }
+  return { ok: true, request: prepared };
 }
 
 async function saveAsWithAppleScript(request: WorkbookFileBridgeRequest, execute: NativeCommandExecutor): Promise<WorkbookFileBridgeResponse> {
@@ -290,6 +343,93 @@ $targetWorkbook.SaveCopyAs($targetPath)
   return nativeSaveAsResult(request, await execute("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script, request.workbookId, request.targetPath!]));
 }
 
+async function restoreFileBackupWithAppleScript(
+  request: WorkbookFileBridgeRequest & { backupPath: string; restoreMode: NonNullable<WorkbookFileBridgeRequest["restoreMode"]> },
+  execute: NativeCommandExecutor
+): Promise<WorkbookFileBridgeResponse> {
+  const script = `
+on run argv
+  set workbookName to item 1 of argv
+  set backupPath to item 2 of argv
+  set restoreMode to item 3 of argv
+  set explicitTargetPath to item 4 of argv
+  tell application "Microsoft Excel"
+    if it is not running then error "Microsoft Excel is not running"
+    if restoreMode is "open-as-new" then
+      open workbook workbook file name backupPath
+      return backupPath
+    end if
+    if restoreMode is not "replace-open-workbook" then error "Unsupported restore mode: " & restoreMode
+    set targetWorkbook to missing value
+    repeat with candidateWorkbook in workbooks
+      if (name of candidateWorkbook as string) is workbookName or (full name of candidateWorkbook as string) is workbookName then
+        set targetWorkbook to candidateWorkbook
+        exit repeat
+      end if
+    end repeat
+    if targetWorkbook is missing value then error "Workbook not found: " & workbookName
+    if explicitTargetPath is "" then
+      set restoreTargetPath to full name of targetWorkbook as string
+    else
+      set restoreTargetPath to explicitTargetPath
+    end if
+    close targetWorkbook saving no
+    do shell script "/bin/cp -f " & quoted form of backupPath & " " & quoted form of restoreTargetPath
+    open workbook workbook file name restoreTargetPath
+    return restoreTargetPath
+  end tell
+end run
+`;
+  return nativeRestoreResult(
+    request,
+    await execute("osascript", ["-e", script, request.workbookId, request.backupPath, request.restoreMode, request.restoreTargetPath ?? ""])
+  );
+}
+
+async function restoreFileBackupWithPowerShell(
+  request: WorkbookFileBridgeRequest & { backupPath: string; restoreMode: NonNullable<WorkbookFileBridgeRequest["restoreMode"]> },
+  execute: NativeCommandExecutor
+): Promise<WorkbookFileBridgeResponse> {
+  const script = `
+$workbookName = $args[0]
+$backupPath = $args[1]
+$restoreMode = $args[2]
+$explicitTargetPath = $args[3]
+$excel = [Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
+if ($restoreMode -eq "open-as-new") {
+  $excel.Workbooks.Open($backupPath) | Out-Null
+  Write-Output $backupPath
+  exit 0
+}
+if ($restoreMode -ne "replace-open-workbook") {
+  throw "Unsupported restore mode: $restoreMode"
+}
+$targetWorkbook = $null
+foreach ($workbook in $excel.Workbooks) {
+  if ($workbook.Name -eq $workbookName -or $workbook.FullName -eq $workbookName) {
+    $targetWorkbook = $workbook
+    break
+  }
+}
+if ($null -eq $targetWorkbook) {
+  throw "Workbook not found: $workbookName"
+}
+if ([string]::IsNullOrWhiteSpace($explicitTargetPath)) {
+  $restoreTargetPath = $targetWorkbook.FullName
+} else {
+  $restoreTargetPath = $explicitTargetPath
+}
+$targetWorkbook.Close($false)
+Copy-Item -LiteralPath $backupPath -Destination $restoreTargetPath -Force
+$excel.Workbooks.Open($restoreTargetPath) | Out-Null
+Write-Output $restoreTargetPath
+`;
+  return nativeRestoreResult(
+    request,
+    await execute("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script, request.workbookId, request.backupPath, request.restoreMode, request.restoreTargetPath ?? ""])
+  );
+}
+
 function nativeSaveAsResult(request: WorkbookFileBridgeRequest, result: Awaited<ReturnType<NativeCommandExecutor>>): WorkbookFileBridgeResponse {
   if (result.code === 0) {
     return {
@@ -303,6 +443,30 @@ function nativeSaveAsResult(request: WorkbookFileBridgeRequest, result: Awaited<
         stdout: result.stdout.trim()
       }
     };
+  }
+  return bridgeError(request, result.stderr.trim() || result.stdout.trim() || `Native command exited with code ${result.code}.`);
+}
+
+function nativeRestoreResult(request: WorkbookFileBridgeRequest, result: Awaited<ReturnType<NativeCommandExecutor>>): WorkbookFileBridgeResponse {
+  if (result.code === 0) {
+    const restoredPath = result.stdout.trim() || request.restoreTargetPath || request.backupPath || request.targetPath;
+    const response: WorkbookFileBridgeResponse = {
+      ok: true,
+      operation: request.operation,
+      workbookId: request.workbookId,
+      ...(request.targetPath !== undefined ? { targetPath: request.targetPath } : {}),
+      ...(request.backupPath !== undefined ? { backupPath: request.backupPath } : {}),
+      ...(request.restoreTargetPath !== undefined ? { restoreTargetPath: request.restoreTargetPath } : {}),
+      ...(request.restoreMode !== undefined ? { restoreMode: request.restoreMode } : {}),
+      ...(request.sourceBackupId !== undefined ? { sourceBackupId: request.sourceBackupId } : {}),
+      metadata: {
+        stdout: result.stdout.trim()
+      }
+    };
+    if (restoredPath !== undefined) {
+      response.filePath = restoredPath;
+    }
+    return response;
   }
   return bridgeError(request, result.stderr.trim() || result.stdout.trim() || `Native command exited with code ${result.code}.`);
 }
@@ -354,6 +518,9 @@ function bridgeError(request: Partial<WorkbookFileBridgeRequest>, message: strin
     operation: request.operation ?? "workbook.save_as",
     workbookId: (request.workbookId ?? "unknown") as WorkbookId,
     ...(request.targetPath !== undefined ? { targetPath: request.targetPath } : {}),
+    ...(request.backupPath !== undefined ? { backupPath: request.backupPath } : {}),
+    ...(request.restoreTargetPath !== undefined ? { restoreTargetPath: request.restoreTargetPath } : {}),
+    ...(request.restoreMode !== undefined ? { restoreMode: request.restoreMode } : {}),
     ...(request.sourceBackupId !== undefined ? { sourceBackupId: request.sourceBackupId } : {}),
     error: runtimeError("OPERATION_FAILED", message, { retryable: false }).message
   };

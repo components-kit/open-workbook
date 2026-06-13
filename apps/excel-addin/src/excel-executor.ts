@@ -629,25 +629,16 @@ export async function copyPivotTableFromTemplate(request: PivotCopyFromTemplateR
     const source = await readPivotTableInfo(context, request.workbookId, sourcePivot);
     loadPivotTemplateReplayObjects(targetPivot);
     await context.sync();
-    applyPivotTemplateMetadata(source, targetPivot);
+    const copied = applyPivotTemplateMetadata(source, targetPivot, request.dimensions);
     await context.sync();
-    targetPivot.refresh();
-    await context.sync();
+    if (!request.dimensions || request.dimensions.includes("refresh")) {
+      targetPivot.refresh();
+      await context.sync();
+    }
     const target = await readPivotTableInfo(context, request.workbookId, targetPivot);
     return {
       ok: true,
-      copied: [
-        "refreshOnOpen",
-        "useCustomSortLists",
-        "enableDataValueEditing",
-        "allowMultipleFiltersPerField",
-        "layout",
-        "rowHierarchyPositions",
-        "columnHierarchyPositions",
-        "filterHierarchyPositions",
-        "dataHierarchySettings",
-        "fieldSettings"
-      ],
+      copied,
       source,
       target
     };
@@ -2224,18 +2215,40 @@ function pivotAxisInfoFromName(name: string, index: number): NonNullable<PivotTa
   };
 }
 
-function applyPivotTemplateMetadata(source: PivotTableInfo, targetPivot: Excel.PivotTable): void {
-  targetPivot.refreshOnOpen = source.refreshOnOpen ?? targetPivot.refreshOnOpen;
-  targetPivot.useCustomSortLists = source.useCustomSortLists ?? targetPivot.useCustomSortLists;
-  targetPivot.enableDataValueEditing = source.enableDataValueEditing ?? targetPivot.enableDataValueEditing;
-  targetPivot.allowMultipleFiltersPerField = source.allowMultipleFiltersPerField ?? targetPivot.allowMultipleFiltersPerField;
-  if (source.layout !== undefined) {
-    targetPivot.layout.set(source.layout as Excel.Interfaces.PivotLayoutUpdateData);
+function applyPivotTemplateMetadata(source: PivotTableInfo, targetPivot: Excel.PivotTable, dimensions?: PivotCopyFromTemplateRequest["dimensions"]): string[] {
+  const includes = (dimension: NonNullable<PivotCopyFromTemplateRequest["dimensions"]>[number]) => !dimensions || dimensions.includes(dimension);
+  const copied: string[] = [];
+  if (includes("metadata")) {
+    targetPivot.refreshOnOpen = source.refreshOnOpen ?? targetPivot.refreshOnOpen;
+    targetPivot.useCustomSortLists = source.useCustomSortLists ?? targetPivot.useCustomSortLists;
+    targetPivot.enableDataValueEditing = source.enableDataValueEditing ?? targetPivot.enableDataValueEditing;
+    targetPivot.allowMultipleFiltersPerField = source.allowMultipleFiltersPerField ?? targetPivot.allowMultipleFiltersPerField;
+    copied.push("refreshOnOpen", "useCustomSortLists", "enableDataValueEditing", "allowMultipleFiltersPerField");
   }
-  replayPivotAxis(targetPivot, "row", source.rowHierarchies ?? []);
-  replayPivotAxis(targetPivot, "column", source.columnHierarchies ?? []);
-  replayPivotAxis(targetPivot, "filter", source.filterHierarchies ?? []);
-  replayPivotDataHierarchies(targetPivot, source.dataHierarchies ?? []);
+  if (includes("layout") && source.layout !== undefined) {
+    targetPivot.layout.set(source.layout as Excel.Interfaces.PivotLayoutUpdateData);
+    copied.push("layout");
+  }
+  if (includes("fields")) {
+    replayPivotAxis(targetPivot, "row", source.rowHierarchies ?? []);
+    replayPivotAxis(targetPivot, "column", source.columnHierarchies ?? []);
+    copied.push("rowHierarchyPositions", "columnHierarchyPositions", "fieldSettings");
+  }
+  if (includes("filters")) {
+    replayPivotAxis(targetPivot, "filter", source.filterHierarchies ?? []);
+    copied.push("filterHierarchyPositions");
+  }
+  if (includes("dataFields")) {
+    replayPivotDataHierarchies(targetPivot, source.dataHierarchies ?? [], includes("numberFormats"));
+    copied.push("dataHierarchySettings");
+    if (includes("numberFormats")) {
+      copied.push("dataHierarchyNumberFormats");
+    }
+  }
+  if (includes("refresh")) {
+    copied.push("refresh");
+  }
+  return copied;
 }
 
 function replayPivotAxis(
@@ -2280,7 +2293,7 @@ function replayFilterPivotAxis(targetPivot: Excel.PivotTable, hierarchies: NonNu
   }
 }
 
-function replayPivotDataHierarchies(targetPivot: Excel.PivotTable, hierarchies: NonNullable<PivotTableInfo["dataHierarchies"]>): void {
+function replayPivotDataHierarchies(targetPivot: Excel.PivotTable, hierarchies: NonNullable<PivotTableInfo["dataHierarchies"]>, includeNumberFormats = true): void {
   for (const existing of targetPivot.dataHierarchies.items) {
     targetPivot.dataHierarchies.remove(existing);
   }
@@ -2291,7 +2304,7 @@ function replayPivotDataHierarchies(targetPivot: Excel.PivotTable, hierarchies: 
     if (hierarchyInfo.name !== undefined) {
       added.name = hierarchyInfo.name;
     }
-    if (hierarchyInfo.numberFormat !== undefined) {
+    if (includeNumberFormats && hierarchyInfo.numberFormat !== undefined) {
       added.numberFormat = hierarchyInfo.numberFormat;
     }
     if (hierarchyInfo.summarizeBy !== undefined) {

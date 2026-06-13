@@ -258,6 +258,12 @@ export interface CollaborationEvent {
     | "transaction.failed"
     | "transaction.rollback_previewed"
     | "transaction.rolled_back"
+    | "backup.created"
+    | "backup.verified"
+    | "backup.restored"
+    | "backup.deleted"
+    | "backup.pruned"
+    | "backup.updated"
     | "conflict.detected";
   workbookId?: WorkbookId | undefined;
   agentId?: AgentId | undefined;

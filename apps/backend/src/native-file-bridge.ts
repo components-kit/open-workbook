@@ -93,6 +93,9 @@ export class NativeFileBridge {
         operation: input.operation,
         workbookId: input.workbookId,
         ...(input.targetPath !== undefined ? { targetPath: input.targetPath } : {}),
+        ...(input.backupPath !== undefined ? { backupPath: input.backupPath } : {}),
+        ...(input.restoreTargetPath !== undefined ? { restoreTargetPath: input.restoreTargetPath } : {}),
+        ...(input.restoreMode !== undefined ? { restoreMode: input.restoreMode } : {}),
         ...(input.sourceBackupId !== undefined ? { sourceBackupId: input.sourceBackupId } : {}),
         error: "Native file bridge is not configured."
       };
@@ -113,6 +116,9 @@ export class NativeFileBridge {
         operation: input.operation,
         workbookId: input.workbookId,
         ...(input.targetPath !== undefined ? { targetPath: input.targetPath } : {}),
+        ...(input.backupPath !== undefined ? { backupPath: input.backupPath } : {}),
+        ...(input.restoreTargetPath !== undefined ? { restoreTargetPath: input.restoreTargetPath } : {}),
+        ...(input.restoreMode !== undefined ? { restoreMode: input.restoreMode } : {}),
         ...(input.sourceBackupId !== undefined ? { sourceBackupId: input.sourceBackupId } : {}),
         ...payload
       };
@@ -127,6 +133,9 @@ export class NativeFileBridge {
         operation: input.operation,
         workbookId: input.workbookId,
         ...(input.targetPath !== undefined ? { targetPath: input.targetPath } : {}),
+        ...(input.backupPath !== undefined ? { backupPath: input.backupPath } : {}),
+        ...(input.restoreTargetPath !== undefined ? { restoreTargetPath: input.restoreTargetPath } : {}),
+        ...(input.restoreMode !== undefined ? { restoreMode: input.restoreMode } : {}),
         ...(input.sourceBackupId !== undefined ? { sourceBackupId: input.sourceBackupId } : {}),
         error: error instanceof Error ? error.message : String(error)
       };

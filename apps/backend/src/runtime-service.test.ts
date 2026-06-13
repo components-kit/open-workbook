@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -785,7 +785,8 @@ describe("RuntimeService PivotTable validation", () => {
               rowHierarchies: [{ name: "Region" }],
               columnHierarchies: [{ name: "Month" }],
               filterHierarchies: [],
-              dataHierarchies: [{ name: "Sum of Amount", field: { name: "Amount" } }]
+              dataHierarchies: [{ name: "Sum of Amount", field: { name: "Amount" }, summarizeBy: "sum", numberFormat: "$#,##0" }],
+              layout: { showRowGrandTotals: true }
             }
           };
         }
@@ -799,7 +800,9 @@ describe("RuntimeService PivotTable validation", () => {
       expectedFields: ["Region", "Month", "Amount"],
       expectedRowFields: ["Region"],
       expectedColumnFields: ["Month"],
-      expectedDataFields: ["Amount"]
+      expectedDataFields: ["Amount"],
+      expectedDataFieldSettings: [{ sourceFieldName: "Amount", summarizeBy: "sum", numberFormat: "$#,##0" }],
+      expectedLayout: { showRowGrandTotals: true }
     });
 
     expect(result.ok).toBe(true);
@@ -851,6 +854,45 @@ describe("RuntimeService PivotTable validation", () => {
     expect(result.issues.some((issue) => issue.code === "PIVOT_EXPECTED_LAYOUT_MISMATCH" && issue.details?.axis === "data")).toBe(true);
   });
 
+  it("reports PivotTable aggregation, number format, and layout mismatches", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_pivot_validate_settings" as WorkbookId;
+    const session = runtime.sessions.createSession();
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string) => {
+        if (method === "pivot.get_info") {
+          return {
+            ok: true,
+            info: {
+              workbookId,
+              pivotTableName: "SalesPivot",
+              sheetName: "Report",
+              range: { address: "Report!A3:E20" },
+              source: "SalesTable",
+              sourceType: "Table",
+              hierarchies: [{ name: "Amount" }],
+              dataHierarchies: [{ name: "Sum of Amount", field: { name: "Amount" }, summarizeBy: "sum", numberFormat: "$#,##0" }],
+              layout: { showRowGrandTotals: true }
+            }
+          };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const result = await runtime.validatePivotSource({
+      workbookId,
+      pivotTableName: "SalesPivot",
+      expectedDataFieldSettings: [{ sourceFieldName: "Amount", summarizeBy: "average", numberFormat: "0.00%" }],
+      expectedLayout: { showRowGrandTotals: false }
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((issue) => issue.code === "PIVOT_EXPECTED_AGGREGATION_MISMATCH")).toBe(true);
+    expect(result.issues.some((issue) => issue.code === "PIVOT_EXPECTED_NUMBER_FORMAT_MISMATCH")).toBe(true);
+    expect(result.issues.some((issue) => issue.code === "PIVOT_EXPECTED_LAYOUT_SETTING_MISMATCH")).toBe(true);
+  });
+
   it("marks missing PivotTables as validation errors", async () => {
     const runtime = new RuntimeService({ persistState: false });
     const workbookId = "workbook_pivot_missing" as WorkbookId;
@@ -871,6 +913,203 @@ describe("RuntimeService PivotTable validation", () => {
 
     expect(result.ok).toBe(false);
     expect(result.issues.some((issue) => issue.code === "PIVOT_NOT_FOUND" && issue.severity === "error")).toBe(true);
+  });
+
+  it("captures and diffs deterministic PivotTable fingerprints", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_pivot_fingerprint" as WorkbookId;
+    const session = runtime.sessions.createSession();
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string, params: any) => {
+        if (method === "pivot.get_info") {
+          const isTemplate = params.pivotTableName === "TemplatePivot";
+          return {
+            ok: true,
+            info: {
+              workbookId,
+              pivotTableName: params.pivotTableName,
+              sheetName: "Report",
+              range: { address: "Report!A3:E20", rowCount: 18, columnCount: 5 },
+              source: "SalesTable",
+              sourceType: "Table",
+              hierarchies: [{ name: "Region" }, { name: "Month" }, { name: "Amount" }],
+              rowHierarchies: [{ name: "Region" }],
+              columnHierarchies: isTemplate ? [{ name: "Month" }] : [],
+              filterHierarchies: [],
+              dataHierarchies: [{ name: "Sum of Amount", field: { name: "Amount" }, summarizeBy: "sum", numberFormat: "$#,##0" }],
+              layout: { showRowGrandTotals: true }
+            }
+          };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const fingerprint = await runtime.getPivotFingerprint({ workbookId, pivotTableName: "TemplatePivot" });
+    const diff = await runtime.diffPivotTables({
+      workbookId,
+      pivotTableName: "TemplatePivot",
+      targetPivotTableName: "ReportPivot"
+    });
+
+    expect((fingerprint as { ok?: boolean }).ok).toBe(true);
+    expect((fingerprint as { fingerprint?: { hash?: string } }).fingerprint?.hash).toMatch(/^[a-f0-9]{16}$/);
+    expect(diff.ok).toBe(false);
+    expect(diff.changes.some((change) => change.path === "layout.columnFields")).toBe(true);
+  });
+
+  it("rebuilds an existing PivotTable through explicit delete and create steps", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    runtime.allowDestructiveActions(true);
+    const workbookId = "workbook_pivot_rebuild_replace" as WorkbookId;
+    const session = runtime.sessions.createSession();
+    const calls: string[] = [];
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string, params: any) => {
+        calls.push(method);
+        if (method === "pivot.get_info") {
+          return {
+            ok: true,
+            info: {
+              workbookId,
+              pivotTableName: params.pivotTableName,
+              sheetName: "Report",
+              range: { address: "Report!B4:F20", rowCount: 17, columnCount: 5 }
+            }
+          };
+        }
+        if (method === "workbook.snapshot_ranges") {
+          return {
+            workbookFingerprint: {
+              workbookId,
+              workbookHash: "pivot_rebuild_workbook",
+              structureHash: "structure",
+              capturedAt: new Date().toISOString()
+            },
+            rangeSnapshots: params.ranges.map((range: any) => ({
+              range,
+              values: [["pivot"]],
+              fingerprint: { range, hash: "pivot_rebuild_range", cellCount: 1, capturedAt: new Date().toISOString() }
+            }))
+          };
+        }
+        if (method === "pivot.delete") {
+          return { ok: true, deleted: true };
+        }
+        if (method === "pivot.create") {
+          return { ok: true, info: { workbookId, pivotTableName: params.pivotTableName, sheetName: params.destinationSheetName } };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const result = await runtime.rebuildPivotWithSource({
+      workbookId,
+      pivotTableName: "SalesPivot",
+      sourceSheetName: "Data",
+      sourceAddress: "A1:D100",
+      destinationSheetName: "Report",
+      destinationAddress: "B4",
+      rowFields: ["Region"],
+      dataFields: [{ sourceFieldName: "Amount", summarizeBy: "sum" }],
+      replaceExisting: true
+    });
+
+    expect((result as { ok?: boolean }).ok).toBe(true);
+    expect(calls).toContain("pivot.delete");
+    expect(calls).toContain("pivot.create");
+    expect(runtime.transactions.list(workbookId).filter((transaction) => transaction.status === "applied")).toHaveLength(2);
+  });
+});
+
+describe("RuntimeService durable file backups", () => {
+  it("creates, verifies, pins, and prunes durable file backup manifests", async () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "open-workbook-file-backup-"));
+    const previousBackupDir = process.env.OPEN_WORKBOOK_BACKUP_DIR;
+    process.env.OPEN_WORKBOOK_BACKUP_DIR = path.join(stateDir, "backups");
+    const workbookId = "workbook_file_backup" as WorkbookId;
+    try {
+      const bridge = new NativeFileBridge({
+        url: "http://127.0.0.1:1",
+        fetchImpl: async (_input: RequestInfo | URL, init?: RequestInit) => {
+          const request = JSON.parse(String(init?.body ?? "{}")) as { operation?: string; targetPath?: string; restoreTargetPath?: string };
+          if (request.targetPath) {
+            mkdirSync(path.dirname(request.targetPath), { recursive: true });
+            writeFileSync(request.targetPath, "xlsx backup payload", "utf8");
+          }
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              operation: request.operation ?? "workbook.export_copy",
+              workbookId,
+              targetPath: request.targetPath,
+              filePath: request.restoreTargetPath ?? request.targetPath
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+      });
+      const runtime = new RuntimeService({ persistState: false, fileBridge: bridge });
+      runtime.setPermissions({ allowDestructiveActions: true, allowWorkbookActions: true });
+      const session = runtime.sessions.createSession();
+      runtime.attachAddinClient(session.connectionId, {
+        request: async (method: string, params: any) => {
+          if (method === "workbook.snapshot_ranges") {
+            return {
+              workbookFingerprint: {
+                workbookId,
+                workbookHash: "file_backup_workbook",
+                structureHash: "structure",
+                capturedAt: new Date().toISOString()
+              },
+              rangeSnapshots: (params.ranges ?? []).map((range: any) => ({
+                range,
+                values: [["snapshot"]],
+                fingerprint: { range, hash: "file_backup_range", cellCount: 1, capturedAt: new Date().toISOString() }
+              }))
+            };
+          }
+          if (method === "workbook.get_map") {
+            return { sheets: [{ name: "Sheet1", usedRange: { address: "A1:B2" } }] };
+          }
+          throw new Error(`Unexpected method ${method}`);
+        }
+      } as any);
+
+      const created = await runtime.createFileBackup({ workbookId, reason: "Before risky report edit", pin: true });
+      const backupId = (created as { manifest?: { backupId?: string } }).manifest?.backupId as any;
+      const verified = await runtime.verifyFileBackup(backupId);
+      const pinnedDelete = runtime.deleteFileBackup(backupId);
+      const restored = await runtime.restoreFileBackup({
+        workbookId,
+        backupId,
+        mode: "replace-open-workbook",
+        force: true,
+        restoreTargetPath: path.join(stateDir, "restored.xlsx")
+      });
+      const auditEvents = runtime.getCollaborationStatus(workbookId).events;
+      const unpinned = runtime.pinFileBackup(backupId, false);
+      const prunedDryRun = runtime.pruneFileBackups({ workbookId, maxBackupsPerWorkbook: 0, dryRun: true });
+
+      expect((created as { ok?: boolean }).ok).toBe(true);
+      expect((created as { manifest?: { checksum?: string; size?: number; pinned?: boolean } }).manifest?.checksum).toMatch(/^sha256:/);
+      expect((created as { manifest?: { size?: number } }).manifest?.size).toBeGreaterThan(0);
+      expect((verified as { ok?: boolean }).ok).toBe(true);
+      expect((pinnedDelete as { ok?: boolean }).ok).toBe(false);
+      expect((restored as { ok?: boolean }).ok).toBe(true);
+      expect((restored as { emergencyBackup?: { ok?: boolean } }).emergencyBackup?.ok).toBe(true);
+      expect(auditEvents.some((event) => event.type === "backup.created")).toBe(true);
+      expect(auditEvents.some((event) => event.type === "backup.verified")).toBe(true);
+      expect(auditEvents.some((event) => event.type === "backup.restored")).toBe(true);
+      expect((unpinned as { ok?: boolean }).ok).toBe(true);
+      expect((prunedDryRun as { candidates?: unknown[] }).candidates).toHaveLength(1);
+    } finally {
+      if (previousBackupDir === undefined) {
+        delete process.env.OPEN_WORKBOOK_BACKUP_DIR;
+      } else {
+        process.env.OPEN_WORKBOOK_BACKUP_DIR = previousBackupDir;
+      }
+    }
   });
 });
 
