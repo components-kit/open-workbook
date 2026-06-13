@@ -11,6 +11,20 @@ const packages = [
 ];
 
 const extraArgs = process.argv.slice(2);
+if (extraArgs.includes("--help") || extraArgs.includes("-h")) {
+  console.log(`Usage: corepack pnpm publish:npm -- [pnpm publish options]
+
+Publishes Open Workbook public npm packages in dependency order:
+${packages.map((packageName) => `- ${packageName}`).join("\n")}
+
+Examples:
+  corepack pnpm publish:npm
+  corepack pnpm publish:npm -- --otp 123456
+  corepack pnpm publish:npm -- --dry-run
+`);
+  process.exit(0);
+}
+
 const pnpmEntrypoint = process.env.npm_execpath;
 const command = pnpmEntrypoint ? process.execPath : "pnpm";
 let failed = false;
