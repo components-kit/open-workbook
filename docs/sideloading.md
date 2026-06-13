@@ -67,21 +67,10 @@ owb sideload windows --out open-workbook.xml
 Custom local ports can be passed to every manifest-producing command:
 
 ```bash
-owb sideload manifest --addin-url http://127.0.0.1:37846 --backend-url ws://127.0.0.1:37845/addin
+owb sideload manifest --addin-url http://localhost:37846 --backend-url ws://127.0.0.1:37845/addin
 ```
 
-For local desktop sideloading, the default URLs use loopback HTTP and WebSocket endpoints. HTTPS serving is available when you provide a trusted local certificate:
-
-```bash
-owb addin serve --https \
-  --tls-cert ./certs/open-workbook.local.pem \
-  --tls-key ./certs/open-workbook.local-key.pem
-
-OPEN_WORKBOOK_ADDIN_HTTPS=1 \
-owb sideload manifest --out open-workbook.xml
-```
-
-The CLI does not install or trust certificates automatically. Use a local tool such as `mkcert` or your organization's certificate process, then pass the certificate paths to the add-in server.
+For local desktop sideloading, the taskpane and backend use loopback HTTP and WebSocket endpoints. Ribbon and Developer Add-ins branding images are static PNG assets served from ComponentsKit over HTTPS so Excel can load branded icons without requiring local certificates.
 
 ## User Install Shape
 

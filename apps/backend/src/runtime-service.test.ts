@@ -441,7 +441,7 @@ describe("RuntimeService capabilities", () => {
     const reportedCapabilities: RuntimeCapabilities = {
       engine: {
         name: "office-js-addin",
-        version: "0.1.3",
+        version: "0.1.4",
         platform: "mac",
         host: "Excel",
         officeVersion: "16.99"

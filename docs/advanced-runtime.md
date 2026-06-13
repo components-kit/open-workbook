@@ -30,7 +30,7 @@ owb mcp
 The Excel manifest points at the local taskpane URL by default:
 
 ```text
-http://127.0.0.1:37846/taskpane.html
+http://localhost:37846/taskpane.html
 ```
 
 `owb mcp` starts that server automatically for the simple flow. You can also run it directly:
@@ -39,19 +39,7 @@ http://127.0.0.1:37846/taskpane.html
 owb addin serve
 ```
 
-For HTTPS local serving:
-
-```bash
-owb addin serve --https \
-  --tls-cert ./certs/open-workbook.local.pem \
-  --tls-key ./certs/open-workbook.local-key.pem
-```
-
-Then generate a matching manifest:
-
-```bash
-OPEN_WORKBOOK_ADDIN_HTTPS=1 owb sideload manifest --out open-workbook.xml
-```
+The taskpane server stays on local HTTP. The manifest uses hosted ComponentsKit HTTPS URLs only for static branding icons that Excel displays in the ribbon and Developer Add-ins gallery.
 
 ## File Bridge
 

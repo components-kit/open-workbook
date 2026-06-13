@@ -1,5 +1,4 @@
 import { createServer as createHttpServer } from "node:http";
-import { createServer as createHttpsServer } from "node:https";
 import { existsSync, readFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,9 +22,8 @@ const workspaceModuleDirs = new Map([
   ])]
 ]);
 const port = Number(process.env.OPEN_WORKBOOK_ADDIN_PORT ?? 37846);
-const host = process.env.OPEN_WORKBOOK_ADDIN_HOST ?? "127.0.0.1";
-const httpsEnabled = process.env.OPEN_WORKBOOK_ADDIN_HTTPS === "1" || process.env.OPEN_WORKBOOK_ADDIN_PROTOCOL === "https";
-const protocol = httpsEnabled ? "https" : "http";
+const host = process.env.OPEN_WORKBOOK_ADDIN_HOST ?? "localhost";
+const protocol = "http";
 const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? readPackageVersion() ?? "0.1.1";
 
 const contentTypes = new Map([
@@ -33,6 +31,7 @@ const contentTypes = new Map([
   [".css", "text/css; charset=utf-8"],
   [".js", "text/javascript; charset=utf-8"],
   [".png", "image/png"],
+  [".svg", "image/svg+xml; charset=utf-8"],
   [".xml", "application/xml; charset=utf-8"]
 ]);
 
@@ -44,14 +43,6 @@ const requestHandler = (request, response) => {
       "cache-control": "no-store"
     });
     response.end(JSON.stringify(getStatus()));
-    return;
-  }
-  if (url.pathname.startsWith("/assets/icon-") && url.pathname.endsWith(".png")) {
-    response.writeHead(200, {
-      "content-type": "image/png",
-      "cache-control": "no-store"
-    });
-    response.end(Buffer.from(ICON_PNG_BASE64, "base64"));
     return;
   }
   if (url.pathname === "/manifest.xml") {
@@ -82,7 +73,7 @@ const requestHandler = (request, response) => {
   response.end(extname(normalized) === ".js" ? rewriteBrowserImports(body.toString("utf8")) : body);
 };
 
-const server = httpsEnabled ? createHttpsServer(readHttpsOptions(), requestHandler) : createHttpServer(requestHandler);
+const server = createHttpServer(requestHandler);
 
 server.listen(port, host, () => {
   console.log(`Open Workbook add-in server listening on ${protocol}://${host}:${port}`);
@@ -147,23 +138,6 @@ function generateManifest() {
     .replaceAll("http://localhost:37846", addinUrl);
 }
 
-function readHttpsOptions() {
-  const keyPath = process.env.OPEN_WORKBOOK_ADDIN_TLS_KEY;
-  const certPath = process.env.OPEN_WORKBOOK_ADDIN_TLS_CERT;
-  if (!keyPath || !certPath) {
-    console.error("OPEN_WORKBOOK_ADDIN_TLS_KEY and OPEN_WORKBOOK_ADDIN_TLS_CERT are required when HTTPS add-in serving is enabled.");
-    process.exit(1);
-  }
-  if (!existsSync(keyPath) || !existsSync(certPath)) {
-    console.error(`Missing HTTPS certificate files: key=${keyPath} cert=${certPath}`);
-    process.exit(1);
-  }
-  return {
-    key: readFileSync(keyPath),
-    cert: readFileSync(certPath)
-  };
-}
-
 function trimTrailingSlash(value) {
   return value.endsWith("/") ? value.slice(0, -1) : value;
 }
@@ -184,6 +158,3 @@ function readPackageVersion() {
   }
   return undefined;
 }
-
-const ICON_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAFUlEQVR4nO3BAQEAAACCIP+vbkhAAQAAAO8GEABAAAGl9n6SAAAAAElFTkSuQmCC";

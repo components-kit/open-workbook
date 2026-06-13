@@ -10,7 +10,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../../..");
 const packageRoot = resolve(__dirname, "..");
 const publicPackageName = "@components-kit/open-workbook";
-const currentVersion = readPackageVersion([join(packageRoot, "package.json"), join(repoRoot, "package.json")]) ?? "0.1.3";
+const currentVersion = readPackageVersion([join(packageRoot, "package.json"), join(repoRoot, "package.json")]) ?? "0.1.4";
 const instructionFileName = "open-workbook-excel.md";
 const sourcePaths = {
   mcpServer: resolve(repoRoot, "apps/mcp-server/dist/index.js"),
@@ -250,22 +250,9 @@ program
   .command("addin")
   .description("Manage the local Excel add-in")
   .argument("<command>", "Command: serve")
-  .option("--https", "Serve the add-in over HTTPS with a local certificate")
-  .option("--tls-cert <path>", "TLS certificate PEM path for HTTPS add-in serving")
-  .option("--tls-key <path>", "TLS private key PEM path for HTTPS add-in serving")
-  .action((command: string, options: { https?: boolean; tlsCert?: string; tlsKey?: string }) => {
+  .action((command: string) => {
     if (command !== "serve") {
       fail(`Unknown addin command: ${command}`);
-    }
-    if (options.https) {
-      process.env.OPEN_WORKBOOK_ADDIN_HTTPS = "1";
-      process.env.OPEN_WORKBOOK_ADDIN_PROTOCOL = "https";
-    }
-    if (options.tlsCert !== undefined) {
-      process.env.OPEN_WORKBOOK_ADDIN_TLS_CERT = resolve(options.tlsCert);
-    }
-    if (options.tlsKey !== undefined) {
-      process.env.OPEN_WORKBOOK_ADDIN_TLS_KEY = resolve(options.tlsKey);
     }
     runNode(resolveAsset("addinServer"));
   });
@@ -828,10 +815,9 @@ Register-ScheduledTask -TaskName ${powerShellQuote(label)} -Description ${powerS
 }
 
 function defaultAddinUrl(): string {
-  const host = process.env.OPEN_WORKBOOK_ADDIN_HOST ?? "127.0.0.1";
+  const host = process.env.OPEN_WORKBOOK_ADDIN_HOST ?? "localhost";
   const port = process.env.OPEN_WORKBOOK_ADDIN_PORT ?? "37846";
-  const protocol = process.env.OPEN_WORKBOOK_ADDIN_HTTPS === "1" || process.env.OPEN_WORKBOOK_ADDIN_PROTOCOL === "https" ? "https" : "http";
-  return `${protocol}://${host}:${port}`;
+  return `http://${host}:${port}`;
 }
 
 function defaultBackendUrl(): string {

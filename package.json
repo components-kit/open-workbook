@@ -1,6 +1,6 @@
 {
   "name": "open-workbook",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "Local-first MCP runtime for fast, reversible, template-aware Excel automation.",
   "license": "MIT",
@@ -26,7 +26,7 @@
     "node": ">=20.11"
   },
   "scripts": {
-    "build": "node scripts/clean-dist.mjs && tsc -b --pretty false && node scripts/package-cli-assets.mjs && node scripts/chmod-bins.mjs",
+    "build": "node scripts/clean-dist.mjs && tsc -b --pretty false && corepack pnpm --filter @components-kit/open-workbook-excel-addin build:client && node scripts/package-cli-assets.mjs && node scripts/chmod-bins.mjs",
     "check": "tsc -b --pretty false",
     "test": "corepack pnpm -r test",
     "catalog:check": "node scripts/validate-mcp-catalog.mjs",

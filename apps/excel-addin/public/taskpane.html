@@ -3,8 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Open Workbook</title>
-    <link rel="stylesheet" href="/taskpane.css" />
+    <title>OpenWorkbook</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/taskpane.css?v=20260613-2" />
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
     <script type="importmap">
       {
@@ -16,20 +22,7 @@
     </script>
   </head>
   <body>
-    <main>
-      <h1>Open Workbook</h1>
-      <p id="status">Connecting to local MCP runtime...</p>
-      <dl>
-        <div>
-          <dt>Backend</dt>
-          <dd id="backend-url">ws://127.0.0.1:37845/addin</dd>
-        </div>
-        <div>
-          <dt>Mode</dt>
-          <dd>Local sideload</dd>
-        </div>
-      </dl>
-    </main>
-    <script type="module" src="/dist/taskpane.js?v=20260613-2"></script>
+    <div id="root"></div>
+    <script type="module" src="/dist/taskpane.bundle.js?v=20260613-1"></script>
   </body>
 </html>
