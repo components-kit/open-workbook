@@ -35,9 +35,15 @@ owb sideload windows --out open-workbook.xml
 owb opencode config --id open-workbook --agent-name finance-agent
 ```
 
+Agent skill source:
+
+- `skills/open-workbook-excel/SKILL.md`
+- `skills/open-workbook-excel/references/`
+
 ## Docs
 
 - [Full LLM Reference](https://raw.githubusercontent.com/open-workbook/open-workbook/main/llms-full.txt): Complete generated project reference in one file
+- [Agent Skill: Open Workbook Excel](https://github.com/open-workbook/open-workbook/tree/main/skills/open-workbook-excel): Skill source for fast, reliable live Excel automation through Open Workbook MCP
 - [README](https://github.com/open-workbook/open-workbook/blob/main/README.md): Project overview, architecture, setup, and safety contract
 - [Installation](https://github.com/open-workbook/open-workbook/blob/main/docs/installation.md): Local install and startup flow
 - [Tool Surface](https://github.com/open-workbook/open-workbook/blob/main/docs/tool-surface.md): Stable, preview, and capability-limited MCP tools

@@ -153,6 +153,15 @@ node packages/cli/dist/index.js file-bridge status
 node packages/cli/dist/index.js sideload manifest --out open-workbook.xml
 ```
 
+## Agent Skills
+
+Open Workbook includes agent skill source for fast, reliable live Excel automation through the MCP surface:
+
+- `skills/open-workbook-excel/SKILL.md`
+- `skills/open-workbook-excel/references/`
+
+The skill teaches agents to inspect runtime capabilities, choose the narrowest efficient MCP tool, batch workbook writes, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews.
+
 ## Safety Contract
 
 Mutating operations should follow the same lifecycle:

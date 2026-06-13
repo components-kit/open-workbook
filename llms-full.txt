@@ -184,6 +184,15 @@ node packages/cli/dist/index.js file-bridge status
 node packages/cli/dist/index.js sideload manifest --out open-workbook.xml
 ```
 
+## Agent Skills
+
+Open Workbook includes agent skill source for fast, reliable live Excel automation through the MCP surface:
+
+- `skills/open-workbook-excel/SKILL.md`
+- `skills/open-workbook-excel/references/`
+
+The skill teaches agents to inspect runtime capabilities, choose the narrowest efficient MCP tool, batch workbook writes, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews.
+
 ## Safety Contract
 
 Mutating operations should follow the same lifecycle:
@@ -235,6 +244,423 @@ Open Workbook handles sensitive spreadsheet data. See [SECURITY.md](SECURITY.md)
 ## License
 
 MIT
+
+---
+
+Source: skills/open-workbook-excel/SKILL.md
+
+---
+name: open-workbook-excel
+description: Use when an agent needs to automate live Microsoft Excel workbooks through Open Workbook MCP: inspect workbooks, read or write ranges, update tables, preserve templates, repair formulas/styles, create pivots/charts, validate reports, save/export files, coordinate multiple agents, or choose the fastest reliable Excel MCP tool instead of slow manual spreadsheet automation.
+---
+
+# Open Workbook Excel
+
+Use Open Workbook MCP for live desktop Excel work. Prefer it over manual UI automation, per-cell scripts, or offline `.xlsx` rewrites when the workbook is open in Excel and the user expects formatting, formulas, filters, tables, pivots, charts, backups, and rollback safety to survive.
+
+## First Calls
+
+Start every workbook session with:
+
+```text
+excel.runtime.get_status
+excel.runtime.get_active_context
+excel.runtime.get_capabilities
+excel.workbook.get_workbook_map
+excel.collab.get_status
+```
+
+If the add-in is disconnected, ask the user to start `owb daemon start`, `owb addin serve`, open Excel, and load the Open Workbook add-in. Do not fake workbook state from stale assumptions.
+
+## Tool Selection
+
+- Use `excel.range.read_*` for scoped cell data and metadata.
+- Use `excel.table.*` for structured table rows, filters, sorts, totals, and table resizing.
+- Use `excel.template.*`, `excel.style.*`, and `excel.formula.*` when preserving or repairing templates matters.
+- Use `excel.plan.*` for previewable multi-step changes that need rollback and stale-target checks.
+- Use `excel.batch.*` for compact, direct range mutations that still need backups, fingerprints, permissions, and transaction logging.
+- Use `excel.validate.*` before and after risky changes.
+- Use `excel.backup.*`, `excel.snapshot.*`, and `excel.transaction.*` for recovery, audit, rollback previews, and rollback chains.
+- Use `excel.task.*`, `excel.lock.*`, `excel.collab.*`, and `excel.conflict.*` for multi-agent workbook work.
+
+For detailed routing, read `references/tool-selection.md`.
+
+## Reliability Rules
+
+- Never bypass Open Workbook's safety lifecycle for mutations: permissions, scoped locks, snapshots, backups, fingerprints, Office.js execution, validation, transaction records, and rollback metadata.
+- Never write cell-by-cell loops. Batch values, formulas, number formats, and styles as 2D matrices over contiguous ranges.
+- Read only the workbook properties needed for the task. Avoid broad workbook scans unless the task is audit, validation, search, or repair.
+- Treat `CAPABILITY_UNAVAILABLE`, partial capability warnings, and Office.js host limits as real results. Explain them and choose a supported path.
+- Preserve existing template conventions over generic formatting rules.
+- After mutation, validate the affected area and surface backups, transaction IDs, warnings, diffs, and rollback options.
+
+## Workflow References
+
+- Read `references/tool-selection.md` to choose the most efficient MCP interface.
+- Read `references/workflows.md` for common Excel task recipes.
+- Read `references/reliability.md` for validation, rollback, stale-plan, and failure handling.
+- Read `references/performance.md` before large reads/writes or latency-sensitive tasks.
+- Read `references/multi-agent.md` when more than one agent or task may touch the same workbook.
+
+---
+
+Source: skills/open-workbook-excel/references/tool-selection.md
+
+## Tool Selection
+
+Choose the narrowest Open Workbook MCP interface that preserves workbook intent.
+
+## Session And Discovery
+
+- Runtime health: `excel.runtime.get_status`
+- Active workbook and selection context: `excel.runtime.get_active_context`
+- Host/tool capability matrix: `excel.runtime.get_capabilities`
+- Workbook structure: `excel.workbook.get_workbook_map`
+- Open workbooks: `excel.workbook.list_open_workbooks`
+- Sheets: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.get_used_range`
+
+If capabilities are unknown because the add-in is disconnected, stop and ask for runtime setup instead of guessing.
+
+## Reading Data
+
+- Values only: `excel.range.read_values`
+- Formulas only: `excel.range.read_formulas`
+- Display text for user-visible output: `excel.range.read_display_text`
+- Formatting: `excel.range.read_number_formats`, `excel.range.read_styles`
+- Full cell payload: `excel.range.read_full`
+- Search and diagnostics: `excel.range.search`, `excel.range.find_blank_cells`, `excel.range.find_errors`
+- Table-shaped data: `excel.table.read`
+
+Use explicit sheet/address ranges whenever possible. Use used-range or workbook-wide scans only for audits, validation, search, or discovery.
+
+## Writing Data
+
+- Simple range values: `excel.range.write_values`
+- Simple formulas: `excel.range.write_formulas`
+- Number formats: `excel.range.write_number_formats`
+- Styles: `excel.range.write_styles`
+- Multiple related range edits: `excel.batch.validate`, `excel.batch.dry_run`, `excel.batch.apply`
+- Previewable or user-reviewable edits: `excel.plan.create`, `excel.plan.preview`, `excel.plan.apply`
+- Stale plan handling: `excel.plan.refresh_preview`, `excel.plan.rebase`
+
+Prefer `excel.plan.*` when a user should review a diff, when formulas/templates are at risk, or when rollback clarity matters. Prefer `excel.batch.*` for compact, well-scoped range mutations.
+
+## Tables, Filters, And Sorts
+
+- Inspect tables: `excel.table.list`, `excel.table.get_info`, `excel.table.read`
+- Append or update rows: `excel.table.append_rows`, `excel.table.update_rows`
+- Resize or structure changes: `excel.table.resize`, `excel.table.copy_structure`
+- Filters: `excel.filter.get_filters`, `excel.filter.apply`, `excel.filter.clear`, `excel.filter.validate`
+- Sorts: `excel.sort.apply`, `excel.sort.clear`
+
+Use table tools instead of range tools when the target is an Excel table. This preserves headers, totals rows, filters, structured references, and table styles.
+
+## Templates, Styles, And Formulas
+
+- Template discovery and registration: `excel.template.detect_templates`, `excel.template.register`, `excel.template.list`
+- New period/report sheet: `excel.template.create_sheet_from_template`
+- Template data fills: `excel.template.clear_data_regions`, `excel.template.fill_regions`
+- Template validation/repair: `excel.template.validate_sheet_against_template`, `excel.template.repair_sheet_from_template`
+- Style fingerprints and copy: `excel.style.get_fingerprint`, `excel.style.compare_fingerprint`, `excel.style.copy_from_template`
+- Formula patterns and repair: `excel.formula.read_patterns`, `excel.formula.copy_patterns`, `excel.formula.validate`, `excel.formula.repair_patterns`
+- Formula dependency safety: `excel.formula.get_dependency_graph`, `excel.formula.trace_precedents`, `excel.formula.trace_dependents`
+
+Use these tools when the workbook has established formatting, formula patterns, reports, print layout, or period templates.
+
+## Pivots And Charts
+
+- Pivot inspect/refresh: `excel.pivot.list`, `excel.pivot.get_info`, `excel.pivot.refresh`, `excel.pivot.refresh_all`
+- Pivot create/rebuild: `excel.pivot.create`, `excel.pivot.rebuild_with_source`
+- Pivot template work: `excel.pivot.get_fingerprint`, `excel.pivot.compare_fingerprint`, `excel.pivot.copy_from_template`, `excel.pivot.repair_from_template`
+- Chart inspect/create/update: `excel.chart.list`, `excel.chart.get_info`, `excel.chart.create`, `excel.chart.update_data_source`, `excel.chart.copy_from_template`
+
+For host-limited pivot/chart dimensions, report capability warnings and avoid claiming deterministic replay.
+
+## Validation And Recovery
+
+- Workbook/sheet health: `excel.validate.workbook`, `excel.validate.sheet`
+- Formula errors: `excel.validate.no_formula_errors`, `excel.formula.find_errors`
+- Broken references: `excel.validate.no_broken_references`
+- Template/style/table/filter checks: `excel.validate.template_consistency`, `excel.validate.styles`, `excel.validate.tables`, `excel.validate.filters`
+- Unintended changes: `excel.validate.no_unintended_changes`
+- Snapshots and diffs: `excel.snapshot.create`, `excel.snapshot.compare`, `excel.diff.summarize`
+- Rollback: `excel.plan.rollback`, `excel.transaction.preview_rollback`, `excel.transaction.rollback`, `excel.transaction.preview_rollback_chain`, `excel.transaction.rollback_chain`
+- File backups: `excel.backup.create_file`, `excel.backup.verify`, `excel.backup.restore_file`
+
+Always present validation issues with severity and target, not vague success/failure language.
+
+---
+
+Source: skills/open-workbook-excel/references/workflows.md
+
+## Workflows
+
+These are default Open Workbook MCP workflows. Adjust scope and validation to the workbook risk.
+
+## Inspect A Workbook
+
+1. Call `excel.runtime.get_status`.
+2. Call `excel.runtime.get_active_context`.
+3. Call `excel.runtime.get_capabilities`.
+4. Call `excel.workbook.get_workbook_map`.
+5. For a specific sheet, call `excel.sheet.get_used_range` and scoped `excel.range.read_*` tools.
+
+Use display text when reporting what a user sees. Use values/formulas/number formats when making calculations or edits.
+
+## Read And Analyze Data
+
+1. Identify the smallest sheet, table, region, or range that answers the question.
+2. Use `excel.table.read` for Excel tables; otherwise use `excel.range.read_values` or `excel.range.read_full`.
+3. For formula-sensitive analysis, also call `excel.range.read_formulas` or `excel.formula.read_patterns`.
+4. For data-quality work, use `excel.clean.detect_header_row`, `excel.range.find_blank_cells`, `excel.range.find_errors`, and relevant validators.
+
+Do not read the whole workbook when a named table, used range, or explicit range is enough.
+
+## Write Values Safely
+
+1. Resolve workbook, sheet, and target address.
+2. Use `excel.batch.validate` or `excel.plan.preview` for non-trivial changes.
+3. Apply through `excel.batch.apply` or `excel.plan.apply`.
+4. Validate the target with `excel.validate.no_unintended_changes`, `excel.validate.no_formula_errors`, or a scoped validator.
+5. Return transaction IDs, backup IDs, warnings, and rollback options.
+
+For a one-range value update, direct `excel.range.write_values` is acceptable because it routes through the backend safety lifecycle.
+
+## Create A New Period Sheet From Template
+
+1. Call `excel.template.list` or `excel.template.detect_templates`.
+2. Register the template if needed with `excel.template.register`.
+3. Create the sheet with `excel.template.create_sheet_from_template`.
+4. Clear declared input/data regions with `excel.template.clear_data_regions`.
+5. Fill declared regions with `excel.template.fill_regions`.
+6. Validate with `excel.template.validate_sheet_against_template`.
+
+If no registered template exists, warn before mutation. Preserve the template's formatting, formulas, filters, print layout, tables, freeze panes, and named ranges.
+
+## Repair Formulas Or Styles
+
+1. Identify the template and target sheet/range.
+2. Capture current state with `excel.snapshot.create` when the repair may affect user work.
+3. Compare fingerprints with `excel.style.compare_fingerprint` or formula patterns with `excel.formula.validate_against_template`.
+4. Repair with `excel.repair.style_from_template`, `excel.repair.formulas_from_template`, `excel.style.copy_from_template`, or `excel.formula.repair_patterns`.
+5. Validate again and report any Office.js capability-status warnings.
+
+Do not convert formulas to values unless the user explicitly asks or the workflow requires a static export.
+
+## Clean A Sheet Or Range
+
+1. Detect headers with `excel.clean.detect_header_row`.
+2. Prefer read-only detectors first: outliers, fuzzy matches, blanks, errors.
+3. For mutations, apply a scoped cleaning tool such as `excel.clean.trim_whitespace`, `excel.clean.normalize_headers`, `excel.clean.parse_dates`, `excel.clean.parse_numbers`, `excel.clean.remove_duplicates`, or `excel.clean.fill_missing_values`.
+4. Validate formulas, tables, and unintended changes after cleaning.
+
+Cleaning writes must stay within the requested sheet, range, table, or registered region.
+
+## Update Tables, Filters, Or Sorts
+
+1. Inspect with `excel.table.get_info` and `excel.filter.get_filters`.
+2. Use `excel.table.append_rows` or `excel.table.update_rows` for data.
+3. Use `excel.table.resize` only when structure must change.
+4. Preserve or reapply filters with `excel.filter.apply`, `excel.filter.preserve_from_template`, or `excel.table.preserve_filters`.
+5. Validate with `excel.validate.tables` and `excel.validate.filters`.
+
+Avoid raw range writes inside table bodies when table tools can express the intent.
+
+## Create Or Update Pivots And Charts
+
+1. Confirm active host support with `excel.runtime.get_capabilities`.
+2. Inspect source tables/ranges and existing objects.
+3. For pivots, use `excel.pivot.validate_source`, `excel.pivot.create`, or `excel.pivot.rebuild_with_source`.
+4. For charts, use `excel.chart.create` or `excel.chart.update_data_source`.
+5. For template parity, use pivot/chart fingerprint or copy-from-template tools.
+6. Refresh and validate before reporting success.
+
+When Office.js cannot expose deterministic pivot/chart dimensions, return the capability warning instead of inventing proof.
+
+## Save, Export, And Back Up
+
+1. Use `excel.workbook.save` for normal save.
+2. Use `excel.workbook.export_copy` for a true `.xlsx` copy when supported.
+3. Use `excel.backup.create_file` for durable file backup records.
+4. Use `excel.backup.verify` before trusting a backup path.
+5. Use `excel.workbook.save_as` only when the native file bridge is configured.
+
+Full file replacement of an open workbook is host-limited. Prefer safe open-as-new restore unless the user confirms replacement.
+
+---
+
+Source: skills/open-workbook-excel/references/reliability.md
+
+## Reliability
+
+Open Workbook treats Excel as a transaction target. Preserve that contract.
+
+## Mutation Contract
+
+Every mutation should go through:
+
+1. Target resolution.
+2. Permission and locked-region checks.
+3. Snapshot or backup capture.
+4. Fingerprint checks.
+5. Office.js execution through the backend.
+6. Validation where relevant.
+7. Transaction/audit output.
+8. Rollback guidance.
+
+If a tool returns backup IDs, transaction IDs, warnings, diffs, or rollback IDs, include the important ones in the final user-facing result.
+
+## Validation Defaults
+
+- Before risky changes: `excel.validate.workbook`, `excel.validate.sheet`, or a scoped validator.
+- After formula edits: `excel.validate.no_formula_errors` and `excel.validate.no_broken_references`.
+- After template work: `excel.template.validate_sheet_against_template`.
+- After table/filter work: `excel.validate.tables` and `excel.validate.filters`.
+- After broad changes: compare snapshots or use `excel.validate.no_unintended_changes`.
+
+Validation reports have `ok`, issue counts, issue severities, stable codes, and targets. Surface the actual codes and affected ranges when they matter.
+
+## Stale Plans
+
+If a plan was previewed earlier, call `excel.plan.refresh_preview` or `excel.plan.rebase` before applying. If the tool returns `TARGET_REGION_CHANGED`, stop and create a new plan. Do not merge stale Excel edits by guessing.
+
+## Conflicts And Locks
+
+For blocked transactions or lock waits:
+
+1. Call `excel.conflict.get_guidance`.
+2. If a task is involved, update progress with `excel.task.set_progress`.
+3. Add a blocker with `excel.task.add_blocker` when waiting for user input, another task, or a lock.
+4. Retry only after the suggested wait or after splitting the scope.
+
+Structure conflicts and broad workbook conflicts usually require manual review.
+
+## Rollback
+
+- Preview rollback with `excel.transaction.preview_rollback`.
+- If later related transactions overlap, use `excel.transaction.preview_rollback_chain`.
+- Apply rollback chains newest-first only with the returned confirmation token.
+- If rollback metadata is unavailable, switch to backup/template repair and explain the limitation.
+
+Never roll back a transaction without checking for later overlapping workbook work.
+
+## Capability Limits
+
+Treat these as real outcomes:
+
+- `CAPABILITY_UNAVAILABLE`
+- `unsupported`
+- `partial`
+- host-limited Office.js warnings
+- disconnected add-in responses
+- native file bridge unavailable responses
+
+Choose a supported tool path or ask for user/host setup. Do not claim that unsupported pivot, chart, comment, note, save-as, or print-layout dimensions were changed.
+
+## Disconnected Add-In
+
+If Excel is not connected:
+
+1. Ask the user to run `owb daemon start`.
+2. Ask the user to run `owb addin serve`.
+3. Ask the user to open Excel and load the Open Workbook add-in.
+4. Retry `excel.runtime.get_status`.
+
+Do not use stale snapshots as the source of truth for current workbook state.
+
+---
+
+Source: skills/open-workbook-excel/references/performance.md
+
+## Performance
+
+Fast Excel automation is part of correctness. Slow workflows push agents toward unsafe shortcuts.
+
+## Defaults
+
+- Prefer bulk Office.js operations over per-cell actions.
+- Use 2D matrices for values, formulas, and number formats.
+- Use table APIs for table-shaped work.
+- Group writes by workbook, sheet, and contiguous range.
+- Read only requested properties.
+- Use `excel.runtime.get_capabilities` before trying expensive or host-limited features.
+
+## Reads
+
+- For user-visible reporting, read display text.
+- For computation, read raw values.
+- For formula review, read formulas or formula patterns.
+- For formatting review, read number formats or styles only for the relevant range.
+- For table analysis, read the table instead of a sheet-sized range.
+
+Avoid workbook-wide reads unless the task is search, validation, audit, or discovery.
+
+## Writes
+
+- Use one batch or plan for related edits.
+- Keep matrix shapes exact: rows and columns must match the target range.
+- Let Open Workbook chunk large values/formulas/number formats through its batch compiler.
+- Avoid alternating read/write/read/write loops. Read once, compute, apply once, validate once.
+
+For very large writes, consider a plan preview first so the agent can expose scope, chunk count, and rollback coverage before applying.
+
+## Formulas
+
+- Prefer formula pattern tools for repeated formula layouts.
+- Trace precedents/dependents before editing source ranges used by reports, charts, pivots, or formulas.
+- Recalculate with `excel.formula.recalculate` or `excel.workbook.calculate` when the workflow requires fresh computed values.
+
+## Telemetry
+
+Read tool results for duration, sync count, payload bytes, cells read/written, range count, chunk count, engine, and warnings. Use that telemetry to explain unusually slow or partial work.
+
+---
+
+Source: skills/open-workbook-excel/references/multi-agent.md
+
+## Multi-Agent Work
+
+Open Workbook coordinates multiple agents through the shared `owb daemon`. Multiple agents may read and plan in parallel, but workbook mutations commit through a serialized transaction path.
+
+## Start
+
+1. Call `excel.collab.get_status`.
+2. Create or claim a task with `excel.task.create` or `excel.task.claim` for substantial work.
+3. Call `excel.task.evaluate_schedule` before starting scoped workbook changes.
+4. Acquire a scoped lock with `excel.lock.acquire` for long planning work or guarded user workflows.
+
+Use specific scopes: workbook, sheet, range, table, named range, chart, pivot, or template.
+
+## Progress
+
+- Use `excel.task.set_progress` for percentage and current step.
+- Use `excel.task.add_blocker` when waiting on locks, dependencies, user decisions, or manual review.
+- Use `excel.task.resolve_blocker` when a wait clears.
+- Use `excel.task.complete`, `excel.task.fail`, or `excel.task.cancel` for terminal task state.
+
+Do not hide waits as generic failures.
+
+## Locks
+
+- Use read locks for long analyses over shared ranges.
+- Use `write_values`, `write_formulas`, `write_styles`, `format_layout`, `table`, `chart`, `pivot`, `structure`, or `workbook` modes to match mutation risk.
+- Renew long-lived locks with `excel.lock.renew`.
+- Release manual locks with `excel.lock.release` when the plan is applied or abandoned.
+
+If locks conflict, call `excel.conflict.get_guidance` and wait, split scope, or hand off.
+
+## Transactions
+
+- `excel.batch.apply` and `excel.plan.apply` are serialized by the daemon.
+- Inspect work with `excel.transaction.list` and `excel.transaction.get`.
+- Use `excel.transaction.preview_rollback` before reverting.
+- Use rollback-chain preview/apply when later dependent transactions overlap.
+
+Report transaction IDs for auditability.
+
+## Conflict Telemetry
+
+Use `excel.conflict.get_telemetry` during long sessions to identify repeated contention by range, table, task, or agent. Use the result to split work or sequence tasks.
 
 ---
 

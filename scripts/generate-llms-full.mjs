@@ -35,6 +35,12 @@ node packages/cli/dist/index.js addin serve
 
 const SOURCE_FILES = [
   "README.md",
+  "skills/open-workbook-excel/SKILL.md",
+  "skills/open-workbook-excel/references/tool-selection.md",
+  "skills/open-workbook-excel/references/workflows.md",
+  "skills/open-workbook-excel/references/reliability.md",
+  "skills/open-workbook-excel/references/performance.md",
+  "skills/open-workbook-excel/references/multi-agent.md",
   "docs/installation.md",
   "docs/architecture.md",
   "docs/tool-surface.md",
