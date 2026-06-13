@@ -63,7 +63,10 @@ Agent instruction source:
 - [Performance Contract](https://github.com/open-workbook/open-workbook/blob/main/docs/performance.md): Batch sizing and latency expectations
 - [Production Readiness](https://github.com/open-workbook/open-workbook/blob/main/docs/production-readiness.md): Release gates and known host limitations
 - [OpenCode Configuration](https://github.com/open-workbook/open-workbook/blob/main/docs/opencode.md): OpenCode MCP setup
+- [Packaging and Publishing](https://github.com/open-workbook/open-workbook/blob/main/docs/packaging.md): Package layout, package dry run, and publish checklist
+- [Release Process](https://github.com/open-workbook/open-workbook/blob/main/docs/release.md): Version policy, release checklist, tag flow, and deferred npm publishing steps
 - [Sideloading](https://github.com/open-workbook/open-workbook/blob/main/docs/sideloading.md): Excel add-in sideloading on macOS and Windows
+- [Changelog](https://github.com/open-workbook/open-workbook/blob/main/CHANGELOG.md): Versioned release notes
 
 ## Packages
 

@@ -52,6 +52,7 @@ for (const packageDir of publishablePackages) {
   expect(manifest.publishConfig?.access === "public", `${packageJsonPath} publishConfig.access must be public`);
   expect(manifest.private !== true, `${packageJsonPath} must not be private`);
   expect(Array.isArray(manifest.files) && manifest.files.includes("dist"), `${packageJsonPath} files must include dist`);
+  expect(Array.isArray(manifest.files) && manifest.files.includes("README.md"), `${packageJsonPath} files must include README.md`);
   expect(existsSync(join(packageDir, "README.md")), `${packageDir}/README.md must exist`);
 
   if (manifest.bin !== undefined) {

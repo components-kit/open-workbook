@@ -32,6 +32,7 @@ Then install the skill with \`npx skills add components-kit/open-workbook --skil
 
 const SOURCE_FILES = [
   "README.md",
+  "CHANGELOG.md",
   "skills/open-workbook-excel/SKILL.md",
   "skills/open-workbook-excel/references/tool-selection.md",
   "skills/open-workbook-excel/references/workflows.md",
@@ -61,6 +62,7 @@ const SOURCE_FILES = [
   "docs/service-wrapper.md",
   "docs/opencode.md",
   "docs/packaging.md",
+  "docs/release.md",
   "docs/sideloading.md",
   "docs/roadmap.md",
   "packages/protocol/README.md",

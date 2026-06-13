@@ -234,8 +234,13 @@ Mutating operations should follow the same lifecycle:
 - [Service Wrapper](docs/service-wrapper.md)
 - [OpenCode Configuration](docs/opencode.md)
 - [Packaging and Publishing](docs/packaging.md)
+- [Release Process](docs/release.md)
 - [Sideloading](docs/sideloading.md)
 - [Roadmap](docs/roadmap.md)
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Contributing
 
@@ -248,6 +253,35 @@ Open Workbook handles sensitive spreadsheet data. See [SECURITY.md](SECURITY.md)
 ## License
 
 MIT
+
+---
+
+Source: CHANGELOG.md
+
+## Changelog
+
+All notable changes to Open Workbook will be documented in this file.
+
+The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
+
+## [0.1.0] - 2026-06-13
+
+### Added
+
+- Initial public release candidate for Open Workbook.
+- Local-first MCP runtime for connecting MCP-capable agents to desktop Excel through a sideloaded Office.js add-in.
+- User-facing `@component-kit/open-workbook` CLI with `setup`, `mcp`, `doctor`, `paths`, `instructions`, `addin`, `daemon`, `file-bridge`, and `sideload` commands.
+- Publishable protocol, core workbook utilities, Office.js engine contracts, backend runtime, MCP server, and CLI packages.
+- Excel tool surface covering workbook, worksheet, range, formula, table, filter, sort, chart, PivotTable, template, snapshot, backup, validation, repair, cleanup, permissions, and file lifecycle workflows.
+- Reversible workbook mutation flow with planning, permission checks, snapshots, backups, fingerprints, validation, diff summaries, and rollback support.
+- Packaged agent instruction skill under `skills/open-workbook-excel` and bundled CLI fallback instructions.
+- Documentation for installation, MCP clients, architecture, runtime, sideloading, packaging, safety contracts, workbook lifecycle, performance, and production readiness.
+- Release validation scripts for builds, package metadata, MCP catalog consistency, documentation surface, skill assets, CLI smoke checks, package dry runs, tests, and synthetic benchmarks.
+
+### Notes
+
+- This release prepares the repository and packages for open-source distribution. npm publishing is intentionally deferred.
+- Open Workbook is not a Microsoft AppSource add-in; Excel manifest trust is handled through user or administrator sideloading.
 
 ---
 
@@ -2362,6 +2396,91 @@ Native installers or administrator scripts can wrap the same commands:
 - guide or automate the Excel manifest trust step where the platform allows it
 
 Excel still requires user or admin trust approval for the add-in manifest outside AppSource.
+
+---
+
+Source: docs/release.md
+
+## Release Process
+
+This document describes how to prepare Open Workbook releases. npm publishing is a separate step and can be done after a tagged release has been reviewed.
+
+## Version Policy
+
+Open Workbook publishes all public packages at the same version:
+
+- `@component-kit/open-workbook`
+- `@component-kit/open-workbook-mcp-server`
+- `@component-kit/open-workbook-backend`
+- `@component-kit/open-workbook-protocol`
+- `@component-kit/open-workbook-excel-core`
+- `@component-kit/open-workbook-office-js-engine`
+
+The Excel add-in workspace package remains private and is bundled into the CLI package assets.
+
+## Pre-Release Checklist
+
+1. Confirm `package.json` and all workspace package versions match the intended release.
+2. Update `CHANGELOG.md` with the release date and material user-facing changes.
+3. Run the full verification suite:
+
+```bash
+corepack pnpm verify
+```
+
+4. Run package dry runs:
+
+```bash
+corepack pnpm pack:dry-run
+```
+
+5. Confirm the CLI reports healthy packaged assets:
+
+```bash
+node packages/cli/dist/index.js doctor
+node packages/cli/dist/index.js setup --dry-run
+node packages/cli/dist/index.js sideload manifest --out /tmp/open-workbook.xml
+```
+
+6. Confirm `setup --dry-run` prints the intended npm install shape:
+
+```text
+npx -y @component-kit/open-workbook@latest mcp
+npx skills add components-kit/open-workbook --skill open-workbook-excel
+```
+
+7. Confirm generated manifests include the expected taskpane URL and backend URL.
+8. Review `git diff` and commit the release prep changes.
+9. Create an annotated tag:
+
+```bash
+git tag -a v0.1.0 -m "Release v0.1.0"
+```
+
+10. Push the release commit and tag when ready:
+
+```bash
+git push origin main
+git push origin v0.1.0
+```
+
+## npm Publishing Later
+
+Publish from a clean checkout after the tag has been pushed and reviewed. Use pnpm so workspace dependencies are rewritten to package versions in packed artifacts.
+
+```bash
+corepack pnpm install --frozen-lockfile
+corepack pnpm verify
+corepack pnpm pack:dry-run
+pnpm --filter @component-kit/open-workbook-protocol publish --access public
+pnpm --filter @component-kit/open-workbook-excel-core publish --access public
+pnpm --filter @component-kit/open-workbook-office-js-engine publish --access public
+pnpm --filter @component-kit/open-workbook-backend publish --access public
+pnpm --filter @component-kit/open-workbook-mcp-server publish --access public
+pnpm --filter @component-kit/open-workbook publish --access public
+```
+
+Do not publish `@component-kit/open-workbook-excel-addin`; it is private by design.
 
 ---
 

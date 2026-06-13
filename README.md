@@ -206,8 +206,13 @@ Mutating operations should follow the same lifecycle:
 - [Service Wrapper](docs/service-wrapper.md)
 - [OpenCode Configuration](docs/opencode.md)
 - [Packaging and Publishing](docs/packaging.md)
+- [Release Process](docs/release.md)
 - [Sideloading](docs/sideloading.md)
 - [Roadmap](docs/roadmap.md)
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Contributing
 
