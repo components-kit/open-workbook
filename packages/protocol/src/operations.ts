@@ -816,31 +816,53 @@ export interface PivotTableInfo {
   hierarchies?: Array<{ id?: string; name: string }>;
 }
 
+export type CapabilityStatus = "supported" | "partial" | "unsupported" | "unknown";
+
+export interface CapabilityStatusMetadata {
+  capability: string;
+  status: CapabilityStatus;
+  reason?: string;
+}
+
+export type PivotCapabilityName =
+  | "create"
+  | "read_source_metadata"
+  | "read_axis_fields"
+  | "write_axis_fields"
+  | "write_data_fields"
+  | "aggregation"
+  | "number_format"
+  | "layout_flags"
+  | "refresh"
+  | "delete"
+  | "template_copy"
+  | "fingerprint"
+  | "diff"
+  | "rebuild_with_source"
+  | "source_reassignment"
+  | "pivot_chart";
+
 export interface PivotCapabilityMatrix {
   workbookId?: WorkbookId;
   hostPlatform?: string;
   apiSets?: string[];
-  capabilities: Array<{
-    capability:
-      | "create"
-      | "read_source_metadata"
-      | "read_axis_fields"
-      | "write_axis_fields"
-      | "write_data_fields"
-      | "aggregation"
-      | "number_format"
-      | "layout_flags"
-      | "refresh"
-      | "delete"
-      | "template_copy"
-      | "fingerprint"
-      | "diff"
-      | "rebuild_with_source"
-      | "source_reassignment"
-      | "pivot_chart";
-    status: "supported" | "partial" | "unsupported" | "unknown";
-    reason?: string;
-  }>;
+  capabilities: Array<CapabilityStatusMetadata & { capability: PivotCapabilityName }>;
+}
+
+export interface PivotOperationCapabilityStatus {
+  operation: "pivot.update_source" | "pivot.copy_from_template" | "pivot.repair_from_template" | "pivot.rebuild_with_source";
+  capabilities: CapabilityStatusMetadata[];
+  warnings: OperationWarning[];
+  fallback?: string;
+}
+
+export interface PivotCopyFromTemplateResponse {
+  ok: boolean;
+  copied?: string[];
+  source?: PivotTableInfo;
+  target?: PivotTableInfo;
+  warnings?: OperationWarning[];
+  capabilityStatus?: PivotOperationCapabilityStatus;
 }
 
 export interface PivotFingerprint {

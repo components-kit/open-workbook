@@ -21,6 +21,7 @@ import type {
   OperationResult,
   OperationTelemetry,
   OperationWarning,
+  PivotCopyFromTemplateResponse,
   PivotCopyFromTemplateRequest,
   PivotCreateRequest,
   PivotSelector,
@@ -610,12 +611,7 @@ export async function refreshAllPivotTables(workbookId: string): Promise<{ ok: b
   });
 }
 
-export async function copyPivotTableFromTemplate(request: PivotCopyFromTemplateRequest): Promise<{
-  ok: boolean;
-  copied?: string[];
-  source?: PivotTableInfo;
-  target?: PivotTableInfo;
-}> {
+export async function copyPivotTableFromTemplate(request: PivotCopyFromTemplateRequest): Promise<PivotCopyFromTemplateResponse> {
   return Excel.run(async (context) => {
     const sourcePivot = context.workbook.pivotTables.getItemOrNullObject(request.templatePivotTableName);
     const targetPivot = context.workbook.pivotTables.getItemOrNullObject(request.pivotTableName);

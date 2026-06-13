@@ -608,7 +608,21 @@ describe("RuntimeService PivotTable template copy", () => {
 
     expect((result as { ok?: boolean }).ok).toBe(true);
     expect((result as { transactionId?: string }).transactionId).toBeDefined();
+    expect((result as { capabilityStatus?: { capabilities?: Array<{ capability: string; status: string }> } }).capabilityStatus?.capabilities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ capability: "template_copy", status: "partial" }),
+        expect.objectContaining({ capability: "source_reassignment", status: "unsupported" })
+      ])
+    );
+    expect((result as { warnings?: Array<{ code: string }> }).warnings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "PIVOT_TEMPLATE_COPY_PARTIAL" })])
+    );
+    expect((result as { result?: { capabilityStatus?: unknown; warnings?: Array<{ code: string }> } }).result?.capabilityStatus).toBeDefined();
+    expect((result as { result?: { warnings?: Array<{ code: string }> } }).result?.warnings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "PIVOT_TEMPLATE_COPY_PARTIAL" })])
+    );
     expect(runtime.transactions.list(workbookId).some((transaction) => transaction.status === "applied" && transaction.backups.length === 1)).toBe(true);
+    expect(runtime.transactions.list(workbookId).some((transaction) => transaction.warnings.some((warning) => warning.code === "PIVOT_TEMPLATE_COPY_PARTIAL"))).toBe(true);
   });
 
   it("blocks PivotTable template copy when target source fields are incompatible", async () => {
@@ -956,6 +970,28 @@ describe("RuntimeService PivotTable validation", () => {
     expect((fingerprint as { fingerprint?: { hash?: string } }).fingerprint?.hash).toMatch(/^[a-f0-9]{16}$/);
     expect(diff.ok).toBe(false);
     expect(diff.changes.some((change) => change.path === "layout.columnFields")).toBe(true);
+  });
+
+  it("reports PivotTable source reassignment as an explicit capability limit", () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_pivot_update_source" as WorkbookId;
+
+    const result = runtime.updatePivotSource({
+      workbookId,
+      pivotTableName: "SalesPivot",
+      sourceSheetName: "Data",
+      sourceAddress: "A1:D100",
+      destinationSheetName: "Report",
+      destinationAddress: "B4"
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error.code).toBe("CAPABILITY_UNAVAILABLE");
+    expect(result.capabilityStatus.fallback).toBe("excel.pivot.rebuild_with_source");
+    expect(result.capabilityStatus.capabilities).toEqual(
+      expect.arrayContaining([expect.objectContaining({ capability: "source_reassignment", status: "unsupported" })])
+    );
+    expect(result.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: "PIVOT_SOURCE_REASSIGNMENT_UNSUPPORTED" })]));
   });
 
   it("rebuilds an existing PivotTable through explicit delete and create steps", async () => {

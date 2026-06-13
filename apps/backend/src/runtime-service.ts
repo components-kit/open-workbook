@@ -66,12 +66,14 @@ import type {
   OperationId,
   OperationWarning,
   PermissionState,
+  PivotCopyFromTemplateResponse,
   PivotCopyFromTemplateRequest,
   PivotCompareFingerprintRequest,
   PivotCreateRequest,
   PivotDiff,
   PivotFingerprint,
   PivotLayoutInfo,
+  PivotOperationCapabilityStatus,
   PivotRebuildWithSourceRequest,
   PivotRepairFromTemplateRequest,
   PivotSelector,
@@ -2362,9 +2364,12 @@ export class RuntimeService {
   }
 
   updatePivotSource(request: PivotCreateRequest) {
+    const capabilityStatus = pivotOperationCapabilityStatus("pivot.update_source");
     return {
       ok: false,
       request,
+      warnings: capabilityStatus.warnings,
+      capabilityStatus,
       error: runtimeError("CAPABILITY_UNAVAILABLE", "Office.js does not expose safe in-place PivotTable source reassignment in this runtime. Create a new PivotTable from the desired source.", {
         retryable: false
       })
@@ -2424,6 +2429,7 @@ export class RuntimeService {
     if (permissionWarnings.length > 0) {
       return permissionDenied("PivotTable template copy is blocked by the current Open Workbook permission policy.", permissionWarnings);
     }
+    const capabilityStatus = pivotOperationCapabilityStatus("pivot.copy_from_template", request.dimensions);
     return this.applyDirectTransaction(
       {
         workbookId: request.workbookId,
@@ -2440,8 +2446,15 @@ export class RuntimeService {
         if (!("backup" in backupResult)) {
           return backupResult;
         }
-        const result = await client.request("pivot.copy_from_template", request);
-        return { ok: true, backup: backupResult.backup, result };
+        const result = await client.request<PivotCopyFromTemplateResponse>("pivot.copy_from_template", request);
+        const warnings = mergeOperationWarnings(capabilityStatus.warnings, result.warnings ?? []);
+        return {
+          ok: true,
+          backup: backupResult.backup,
+          result: { ...result, warnings, capabilityStatus },
+          warnings,
+          capabilityStatus
+        };
       }
     );
   }
@@ -2681,6 +2694,7 @@ export class RuntimeService {
   }
 
   async repairPivotFromTemplate(request: PivotRepairFromTemplateRequest) {
+    const capabilityStatus = pivotOperationCapabilityStatus("pivot.repair_from_template", request.dimensions);
     const before = await this.comparePivotFingerprint({
       workbookId: request.workbookId,
       pivotTableName: request.templatePivotTableName,
@@ -2690,6 +2704,8 @@ export class RuntimeService {
       return {
         ok: false,
         before,
+        warnings: capabilityStatus.warnings,
+        capabilityStatus,
         error: runtimeError("CAPABILITY_UNAVAILABLE", "Strict PivotTable repair cannot proceed because one or more fingerprint dimensions are unavailable.", {
           retryable: false
         })
@@ -2704,10 +2720,12 @@ export class RuntimeService {
       pivotTableName: request.templatePivotTableName,
       targetPivotTableName: request.pivotTableName
     });
-    return { ok: true, before, copy, after };
+    const warnings = mergeOperationWarnings(capabilityStatus.warnings, (copy as { warnings?: OperationWarning[] }).warnings ?? []);
+    return { ok: true, before, copy, after, warnings, capabilityStatus };
   }
 
   async rebuildPivotWithSource(request: PivotRebuildWithSourceRequest) {
+    const capabilityStatus = pivotOperationCapabilityStatus("pivot.rebuild_with_source");
     if (request.replaceExisting) {
       if (request.templatePivotTableName === request.pivotTableName) {
         return {
@@ -2727,7 +2745,13 @@ export class RuntimeService {
       }
       const created = await this.createPivotTable(request);
       if (!(created as { ok?: boolean }).ok || !request.templatePivotTableName) {
-        return { ok: (created as { ok?: boolean }).ok, deleted, created };
+        return {
+          ok: (created as { ok?: boolean }).ok,
+          deleted,
+          created,
+          warnings: capabilityStatus.warnings,
+          capabilityStatus
+        };
       }
       const repairRequest: PivotRepairFromTemplateRequest = {
         workbookId: request.workbookId,
@@ -2738,11 +2762,16 @@ export class RuntimeService {
         repairRequest.strict = request.strict;
       }
       const repaired = await this.repairPivotFromTemplate(repairRequest);
-      return { ok: (repaired as { ok?: boolean }).ok, deleted, created, repaired };
+      const warnings = mergeOperationWarnings(capabilityStatus.warnings, (repaired as { warnings?: OperationWarning[] }).warnings ?? []);
+      return { ok: (repaired as { ok?: boolean }).ok, deleted, created, repaired, warnings, capabilityStatus };
     }
     const created = await this.createPivotTable(request);
     if (!(created as { ok?: boolean }).ok || !request.templatePivotTableName) {
-      return created;
+      return {
+        ...(created as object),
+        warnings: mergeOperationWarnings(capabilityStatus.warnings, (created as { warnings?: OperationWarning[] }).warnings ?? []),
+        capabilityStatus
+      };
     }
     const repairRequest: PivotRepairFromTemplateRequest = {
       workbookId: request.workbookId,
@@ -2753,7 +2782,8 @@ export class RuntimeService {
       repairRequest.strict = request.strict;
     }
     const repaired = await this.repairPivotFromTemplate(repairRequest);
-    return { ok: (repaired as { ok?: boolean }).ok, created, repaired };
+    const warnings = mergeOperationWarnings(capabilityStatus.warnings, (repaired as { warnings?: OperationWarning[] }).warnings ?? []);
+    return { ok: (repaired as { ok?: boolean }).ok, created, repaired, warnings, capabilityStatus };
   }
 
   async listCharts(workbookId: WorkbookId) {
@@ -5366,6 +5396,132 @@ export class RuntimeService {
 
 function sanitizeFileName(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "workbook";
+}
+
+function pivotOperationCapabilityStatus(
+  operation: PivotOperationCapabilityStatus["operation"],
+  dimensions?: PivotCopyFromTemplateRequest["dimensions"]
+): PivotOperationCapabilityStatus {
+  if (operation === "pivot.update_source") {
+    const warnings: OperationWarning[] = [
+      {
+        code: "PIVOT_SOURCE_REASSIGNMENT_UNSUPPORTED",
+        message: "Office.js does not expose safe in-place PivotTable source reassignment in this runtime.",
+        details: {
+          safeAlternative: "Use excel.pivot.rebuild_with_source to create a PivotTable from the desired source and optionally replay template settings."
+        }
+      }
+    ];
+    return {
+      operation,
+      capabilities: [
+        {
+          capability: "source_reassignment",
+          status: "unsupported",
+          reason: "No deterministic cross-platform Office.js API is available for in-place PivotTable source reassignment."
+        },
+        {
+          capability: "rebuild_with_source",
+          status: "partial",
+          reason: "Safe source changes are implemented as explicit create or delete/create transactions instead of mutating the existing source pointer."
+        }
+      ],
+      warnings,
+      fallback: "excel.pivot.rebuild_with_source"
+    };
+  }
+
+  if (operation === "pivot.rebuild_with_source") {
+    return {
+      operation,
+      capabilities: [
+        {
+          capability: "rebuild_with_source",
+          status: "partial",
+          reason: "Rebuild changes the source by creating a new PivotTable, with optional delete/create replacement and template replay."
+        },
+        {
+          capability: "source_reassignment",
+          status: "unsupported",
+          reason: "The original PivotTable source is not reassigned in place."
+        }
+      ],
+      warnings: [
+        {
+          code: "PIVOT_REBUILD_NOT_IN_PLACE",
+          message: "PivotTable source changes are applied through rebuild/create semantics, not in-place source reassignment.",
+          details: { safeAlternativeForInPlaceReassignment: "excel.pivot.rebuild_with_source" }
+        }
+      ]
+    };
+  }
+
+  const requestedDimensions = dimensions?.length ? dimensions : ["metadata", "layout", "fields", "dataFields", "numberFormats", "filters", "refresh"];
+  const warnings: OperationWarning[] = [
+    {
+      code: "PIVOT_TEMPLATE_COPY_PARTIAL",
+      message: "PivotTable template copy replays deterministic Office.js dimensions only.",
+      details: {
+        requestedDimensions,
+        replayedWhenRequested: [
+          "metadata",
+          "layout flags",
+          "row hierarchy membership and order",
+          "column hierarchy membership and order",
+          "filter hierarchy membership and order",
+          "data hierarchy membership and order",
+          "data aggregation",
+          "data number formats",
+          "basic field settings",
+          "refresh"
+        ],
+        notReplayed: [
+          "source reassignment",
+          "PivotChart-specific settings",
+          "slicers and timelines",
+          "item-level manual filters and sorts not exposed by Office.js",
+          "grouping details not exposed by Office.js",
+          "calculated fields/items when not exposed by Office.js",
+          "host-specific PivotTable settings without deterministic Office.js setters"
+        ]
+      }
+    }
+  ];
+  return {
+    operation,
+    capabilities: [
+      {
+        capability: "template_copy",
+        status: "partial",
+        reason: "Only deterministic PivotTable metadata and layout dimensions exposed by Office.js are replayed."
+      },
+      {
+        capability: "source_reassignment",
+        status: "unsupported",
+        reason: "Template copy does not change the target PivotTable source."
+      },
+      {
+        capability: "pivot_chart",
+        status: "partial",
+        reason: "PivotChart-specific settings are not part of PivotTable template replay."
+      }
+    ],
+    warnings,
+    fallback: "Use excel.pivot.rebuild_with_source when the target source must change."
+  };
+}
+
+function mergeOperationWarnings(...groups: OperationWarning[][]): OperationWarning[] {
+  const warnings = groups.flat();
+  const seen = new Set<string>();
+  return warnings.filter((warning) => {
+    const key = `${warning.code}:${warning.message}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function makePivotFingerprint(info: PivotTableInfo): PivotFingerprint {
