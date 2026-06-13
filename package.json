@@ -37,6 +37,7 @@
     "smoke:cli": "node scripts/smoke-cli.mjs",
     "benchmark:synthetic": "corepack pnpm build && node scripts/benchmark-synthetic.mjs",
     "pack:dry-run": "node scripts/package-dry-run.mjs",
+    "publish:npm": "node scripts/publish-npm.mjs",
     "verify": "corepack pnpm build && corepack pnpm catalog:check && corepack pnpm llms:generate && corepack pnpm skills:check && corepack pnpm docs:check && corepack pnpm package:check && corepack pnpm smoke:cli && corepack pnpm test && node scripts/benchmark-synthetic.mjs",
     "dev:backend": "corepack pnpm --filter @component-kit/open-workbook-backend dev",
     "dev:mcp": "corepack pnpm --filter @component-kit/open-workbook-mcp-server dev",

@@ -69,12 +69,13 @@ Publish from a clean checkout after the tag has been pushed and reviewed. Use pn
 corepack pnpm install --frozen-lockfile
 corepack pnpm verify
 corepack pnpm pack:dry-run
-pnpm --filter @component-kit/open-workbook-protocol publish --access public
-pnpm --filter @component-kit/open-workbook-excel-core publish --access public
-pnpm --filter @component-kit/open-workbook-office-js-engine publish --access public
-pnpm --filter @component-kit/open-workbook-backend publish --access public
-pnpm --filter @component-kit/open-workbook-mcp-server publish --access public
-pnpm --filter @component-kit/open-workbook publish --access public
+corepack pnpm publish:npm
 ```
 
 Do not publish `@component-kit/open-workbook-excel-addin`; it is private by design.
+
+If npm requires a one-time password, forward it to every publish command:
+
+```bash
+corepack pnpm publish:npm -- --otp 123456
+```
