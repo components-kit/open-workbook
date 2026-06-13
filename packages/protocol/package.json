@@ -4,14 +4,14 @@
   "description": "Shared Open Workbook protocol types, tool catalog, resources, prompts, and JSON-RPC contracts.",
   "license": "MIT",
   "type": "module",
-  "homepage": "https://github.com/open-workbook/open-workbook#readme",
+  "homepage": "https://github.com/components-kit/open-workbook#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/open-workbook/open-workbook.git",
+    "url": "https://github.com/components-kit/open-workbook.git",
     "directory": "packages/protocol"
   },
   "bugs": {
-    "url": "https://github.com/open-workbook/open-workbook/issues"
+    "url": "https://github.com/components-kit/open-workbook/issues"
   },
   "keywords": [
     "mcp",

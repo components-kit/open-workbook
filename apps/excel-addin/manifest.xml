@@ -12,7 +12,7 @@
   <Description DefaultValue="Local-first MCP bridge for safe, fast Excel automation." />
   <IconUrl DefaultValue="http://localhost:37846/assets/icon-32.png" />
   <HighResolutionIconUrl DefaultValue="http://localhost:37846/assets/icon-64.png" />
-  <SupportUrl DefaultValue="https://github.com/open-workbook/open-workbook" />
+  <SupportUrl DefaultValue="https://github.com/components-kit/open-workbook" />
   <AppDomains>
     <AppDomain>http://localhost:37846</AppDomain>
   </AppDomains>
@@ -77,7 +77,7 @@
       </bt:Images>
       <bt:Urls>
         <bt:Url id="Taskpane.Url" DefaultValue="http://localhost:37846/taskpane.html" />
-        <bt:Url id="GetStarted.LearnMoreUrl" DefaultValue="https://github.com/open-workbook/open-workbook" />
+        <bt:Url id="GetStarted.LearnMoreUrl" DefaultValue="https://github.com/components-kit/open-workbook" />
       </bt:Urls>
       <bt:ShortStrings>
         <bt:String id="GetStarted.Title" DefaultValue="Open Workbook loaded" />

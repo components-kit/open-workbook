@@ -4,14 +4,14 @@
   "description": "Local backend broker for Open Workbook add-in sessions, backups, snapshots, plans, and permissions.",
   "license": "MIT",
   "type": "module",
-  "homepage": "https://github.com/open-workbook/open-workbook#readme",
+  "homepage": "https://github.com/components-kit/open-workbook#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/open-workbook/open-workbook.git",
+    "url": "https://github.com/components-kit/open-workbook.git",
     "directory": "apps/backend"
   },
   "bugs": {
-    "url": "https://github.com/open-workbook/open-workbook/issues"
+    "url": "https://github.com/components-kit/open-workbook/issues"
   },
   "keywords": [
     "excel",

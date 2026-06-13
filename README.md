@@ -86,7 +86,7 @@ Start the agent UI before opening the Open Workbook add-in in Excel; the MCP com
 ## Source Development
 
 ```bash
-git clone https://github.com/open-workbook/open-workbook.git
+git clone https://github.com/components-kit/open-workbook.git
 cd open-workbook
 corepack pnpm install
 corepack pnpm build

@@ -44,36 +44,36 @@ Agent instruction source:
 
 ## Docs
 
-- [Full LLM Reference](https://raw.githubusercontent.com/open-workbook/open-workbook/main/llms-full.txt): Complete generated project reference in one file
-- [Agent Skill: Open Workbook Excel](https://github.com/open-workbook/open-workbook/tree/main/skills/open-workbook-excel): Skill source for fast, reliable live Excel automation through Open Workbook MCP
-- [README](https://github.com/open-workbook/open-workbook/blob/main/README.md): Project overview, architecture, setup, and safety contract
-- [Installation](https://github.com/open-workbook/open-workbook/blob/main/docs/installation.md): npx setup, generic MCP config, and Excel add-in startup flow
-- [MCP Clients](https://github.com/open-workbook/open-workbook/blob/main/docs/mcp-clients.md): Generic MCP client configuration
-- [Generic Instructions](https://github.com/open-workbook/open-workbook/blob/main/docs/instructions.md): skills.sh install and fallback agent instructions
-- [Tool Surface](https://github.com/open-workbook/open-workbook/blob/main/docs/tool-surface.md): Stable, preview, and capability-limited MCP tools
-- [Architecture](https://github.com/open-workbook/open-workbook/blob/main/docs/architecture.md): Runtime components and catalog policy
-- [Backup Lifecycle](https://github.com/open-workbook/open-workbook/blob/main/docs/backup-lifecycle.md): Snapshot, file backup, restore, retention, and rollback model
-- [Template System](https://github.com/open-workbook/open-workbook/blob/main/docs/template-system.md): Template detection, registration, creation, validation, and repair
-- [Style Fidelity](https://github.com/open-workbook/open-workbook/blob/main/docs/style-fidelity.md): Style fingerprints and native Office.js format copy behavior
-- [Formula Intelligence](https://github.com/open-workbook/open-workbook/blob/main/docs/formula-intelligence.md): Formula patterns, dependencies, validation, repair, and explanations
-- [Tables, Filters, and Sorts](https://github.com/open-workbook/open-workbook/blob/main/docs/table-filter-sort.md): Table, filter, and sort operations
-- [PivotTables and Charts](https://github.com/open-workbook/open-workbook/blob/main/docs/pivot-chart.md): Pivot/chart creation, validation, fingerprints, repair, and capability limits
-- [Multi-Agent Runtime](https://github.com/open-workbook/open-workbook/blob/main/docs/multi-agent-runtime.md): Tasks, locks, serialized commits, conflicts, and rollback chains
-- [Workbook File Lifecycle](https://github.com/open-workbook/open-workbook/blob/main/docs/workbook-file-lifecycle.md): Save-as, export copy, native file bridge, and full-file backup restore
-- [Performance Contract](https://github.com/open-workbook/open-workbook/blob/main/docs/performance.md): Batch sizing and latency expectations
-- [Production Readiness](https://github.com/open-workbook/open-workbook/blob/main/docs/production-readiness.md): Release gates and known host limitations
-- [OpenCode Configuration](https://github.com/open-workbook/open-workbook/blob/main/docs/opencode.md): OpenCode MCP setup
-- [Packaging and Publishing](https://github.com/open-workbook/open-workbook/blob/main/docs/packaging.md): Package layout, package dry run, and publish checklist
-- [Release Process](https://github.com/open-workbook/open-workbook/blob/main/docs/release.md): Version policy, release checklist, tag flow, and deferred npm publishing steps
-- [Sideloading](https://github.com/open-workbook/open-workbook/blob/main/docs/sideloading.md): Excel add-in sideloading on macOS and Windows
-- [Changelog](https://github.com/open-workbook/open-workbook/blob/main/CHANGELOG.md): Versioned release notes
+- [Full LLM Reference](https://raw.githubusercontent.com/components-kit/open-workbook/main/llms-full.txt): Complete generated project reference in one file
+- [Agent Skill: Open Workbook Excel](https://github.com/components-kit/open-workbook/tree/main/skills/open-workbook-excel): Skill source for fast, reliable live Excel automation through Open Workbook MCP
+- [README](https://github.com/components-kit/open-workbook/blob/main/README.md): Project overview, architecture, setup, and safety contract
+- [Installation](https://github.com/components-kit/open-workbook/blob/main/docs/installation.md): npx setup, generic MCP config, and Excel add-in startup flow
+- [MCP Clients](https://github.com/components-kit/open-workbook/blob/main/docs/mcp-clients.md): Generic MCP client configuration
+- [Generic Instructions](https://github.com/components-kit/open-workbook/blob/main/docs/instructions.md): skills.sh install and fallback agent instructions
+- [Tool Surface](https://github.com/components-kit/open-workbook/blob/main/docs/tool-surface.md): Stable, preview, and capability-limited MCP tools
+- [Architecture](https://github.com/components-kit/open-workbook/blob/main/docs/architecture.md): Runtime components and catalog policy
+- [Backup Lifecycle](https://github.com/components-kit/open-workbook/blob/main/docs/backup-lifecycle.md): Snapshot, file backup, restore, retention, and rollback model
+- [Template System](https://github.com/components-kit/open-workbook/blob/main/docs/template-system.md): Template detection, registration, creation, validation, and repair
+- [Style Fidelity](https://github.com/components-kit/open-workbook/blob/main/docs/style-fidelity.md): Style fingerprints and native Office.js format copy behavior
+- [Formula Intelligence](https://github.com/components-kit/open-workbook/blob/main/docs/formula-intelligence.md): Formula patterns, dependencies, validation, repair, and explanations
+- [Tables, Filters, and Sorts](https://github.com/components-kit/open-workbook/blob/main/docs/table-filter-sort.md): Table, filter, and sort operations
+- [PivotTables and Charts](https://github.com/components-kit/open-workbook/blob/main/docs/pivot-chart.md): Pivot/chart creation, validation, fingerprints, repair, and capability limits
+- [Multi-Agent Runtime](https://github.com/components-kit/open-workbook/blob/main/docs/multi-agent-runtime.md): Tasks, locks, serialized commits, conflicts, and rollback chains
+- [Workbook File Lifecycle](https://github.com/components-kit/open-workbook/blob/main/docs/workbook-file-lifecycle.md): Save-as, export copy, native file bridge, and full-file backup restore
+- [Performance Contract](https://github.com/components-kit/open-workbook/blob/main/docs/performance.md): Batch sizing and latency expectations
+- [Production Readiness](https://github.com/components-kit/open-workbook/blob/main/docs/production-readiness.md): Release gates and known host limitations
+- [OpenCode Configuration](https://github.com/components-kit/open-workbook/blob/main/docs/opencode.md): OpenCode MCP setup
+- [Packaging and Publishing](https://github.com/components-kit/open-workbook/blob/main/docs/packaging.md): Package layout, package dry run, and publish checklist
+- [Release Process](https://github.com/components-kit/open-workbook/blob/main/docs/release.md): Version policy, release checklist, tag flow, and deferred npm publishing steps
+- [Sideloading](https://github.com/components-kit/open-workbook/blob/main/docs/sideloading.md): Excel add-in sideloading on macOS and Windows
+- [Changelog](https://github.com/components-kit/open-workbook/blob/main/CHANGELOG.md): Versioned release notes
 
 ## Packages
 
-- [@component-kit/open-workbook-protocol](https://github.com/open-workbook/open-workbook/tree/main/packages/protocol): Tool catalog, JSON-RPC contracts, resources, prompts, errors, and workbook types
-- [@component-kit/open-workbook-excel-core](https://github.com/open-workbook/open-workbook/tree/main/packages/excel-core): Planning, backups, snapshots, templates, fingerprints, permissions, locks, and transactions
-- [@component-kit/open-workbook-office-js-engine](https://github.com/open-workbook/open-workbook/tree/main/packages/office-js-engine): Office.js engine adapter contracts
-- [@component-kit/open-workbook](https://github.com/open-workbook/open-workbook/tree/main/packages/cli): `owb` CLI for generic setup, MCP, add-in serving, sideloading, diagnostics, and fallback instructions
-- [@component-kit/open-workbook-backend](https://github.com/open-workbook/open-workbook/tree/main/apps/backend): Local broker and runtime service
-- [@component-kit/open-workbook-mcp-server](https://github.com/open-workbook/open-workbook/tree/main/apps/mcp-server): MCP stdio server
-- [@component-kit/open-workbook-excel-addin](https://github.com/open-workbook/open-workbook/tree/main/apps/excel-addin): Office.js add-in runtime
+- [@component-kit/open-workbook-protocol](https://github.com/components-kit/open-workbook/tree/main/packages/protocol): Tool catalog, JSON-RPC contracts, resources, prompts, errors, and workbook types
+- [@component-kit/open-workbook-excel-core](https://github.com/components-kit/open-workbook/tree/main/packages/excel-core): Planning, backups, snapshots, templates, fingerprints, permissions, locks, and transactions
+- [@component-kit/open-workbook-office-js-engine](https://github.com/components-kit/open-workbook/tree/main/packages/office-js-engine): Office.js engine adapter contracts
+- [@component-kit/open-workbook](https://github.com/components-kit/open-workbook/tree/main/packages/cli): `owb` CLI for generic setup, MCP, add-in serving, sideloading, diagnostics, and fallback instructions
+- [@component-kit/open-workbook-backend](https://github.com/components-kit/open-workbook/tree/main/apps/backend): Local broker and runtime service
+- [@component-kit/open-workbook-mcp-server](https://github.com/components-kit/open-workbook/tree/main/apps/mcp-server): MCP stdio server
+- [@component-kit/open-workbook-excel-addin](https://github.com/components-kit/open-workbook/tree/main/apps/excel-addin): Office.js add-in runtime
