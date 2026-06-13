@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { ConnectionId, JsonRpcMessage, JsonRpcNotification } from "@component-kit/open-workbook-protocol";
+import type { ConnectionId, JsonRpcMessage, JsonRpcNotification } from "@components-kit/open-workbook-protocol";
 import { RuntimeService } from "./runtime-service.js";
 import type { AddinSession } from "./session-registry.js";
 import { AddinRpcClient } from "./addin-rpc-client.js";

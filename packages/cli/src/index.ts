@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../../..");
 const packageRoot = resolve(__dirname, "..");
-const publicPackageName = "@component-kit/open-workbook";
+const publicPackageName = "@components-kit/open-workbook";
 const instructionFileName = "open-workbook-excel.md";
 const sourcePaths = {
   mcpServer: resolve(repoRoot, "apps/mcp-server/dist/index.js"),
@@ -28,9 +28,9 @@ const bundledPaths = {
   instructions: resolve(packageRoot, "assets/instructions/open-workbook-excel")
 };
 const dependencyPaths = {
-  mcpServer: resolve(packageRoot, "node_modules/@component-kit/open-workbook-mcp-server/dist/index.js"),
-  backend: resolve(packageRoot, "node_modules/@component-kit/open-workbook-backend/dist/index.js"),
-  fileBridge: resolve(packageRoot, "node_modules/@component-kit/open-workbook-backend/dist/file-bridge.js"),
+  mcpServer: resolve(packageRoot, "node_modules/@components-kit/open-workbook-mcp-server/dist/index.js"),
+  backend: resolve(packageRoot, "node_modules/@components-kit/open-workbook-backend/dist/index.js"),
+  fileBridge: resolve(packageRoot, "node_modules/@components-kit/open-workbook-backend/dist/file-bridge.js"),
   addinServer: bundledPaths.addinServer,
   manifest: bundledPaths.manifest,
   instructions: bundledPaths.instructions

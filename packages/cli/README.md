@@ -1,11 +1,11 @@
-# @component-kit/open-workbook
+# @components-kit/open-workbook
 
 User-facing package for installing, configuring, and running Open Workbook locally.
 
 ## Quickstart
 
 ```bash
-npx -y @component-kit/open-workbook setup
+npx -y @components-kit/open-workbook setup
 ```
 
 Setup prepares the Excel add-in manifest and prints generic MCP config.
@@ -23,7 +23,7 @@ Paste the printed MCP config into any MCP-capable agent UI:
   "mcpServers": {
     "open-workbook": {
       "command": "npx",
-      "args": ["-y", "@component-kit/open-workbook@latest", "mcp"]
+      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
     }
   }
 }

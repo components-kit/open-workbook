@@ -1,5 +1,5 @@
 {
-  "name": "@component-kit/open-workbook-office-js-engine",
+  "name": "@components-kit/open-workbook-office-js-engine",
   "version": "0.1.0",
   "description": "Office.js engine interfaces and defaults for Open Workbook Excel execution.",
   "license": "MIT",
@@ -40,7 +40,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@component-kit/open-workbook-protocol": "workspace:*"
+    "@components-kit/open-workbook-protocol": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.3",

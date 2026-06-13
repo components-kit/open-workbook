@@ -87,7 +87,7 @@ The CLI does not install or trust certificates automatically. Use a local tool s
 
 For non-store open-source distribution, the expected install flow is:
 
-1. Run `npx -y @component-kit/open-workbook setup`.
+1. Run `npx -y @components-kit/open-workbook setup`.
 2. Add the printed MCP config to the agent UI.
 3. Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
 4. Open the agent UI, then Excel, then the Open Workbook add-in.

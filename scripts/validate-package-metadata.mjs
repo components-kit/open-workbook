@@ -17,16 +17,16 @@ const publishablePackages = [
   "packages/cli"
 ];
 const expectedPackageNames = new Map([
-  ["packages/protocol", "@component-kit/open-workbook-protocol"],
-  ["packages/excel-core", "@component-kit/open-workbook-excel-core"],
-  ["packages/office-js-engine", "@component-kit/open-workbook-office-js-engine"],
-  ["apps/backend", "@component-kit/open-workbook-backend"],
-  ["apps/mcp-server", "@component-kit/open-workbook-mcp-server"],
-  ["packages/cli", "@component-kit/open-workbook"]
+  ["packages/protocol", "@components-kit/open-workbook-protocol"],
+  ["packages/excel-core", "@components-kit/open-workbook-excel-core"],
+  ["packages/office-js-engine", "@components-kit/open-workbook-office-js-engine"],
+  ["apps/backend", "@components-kit/open-workbook-backend"],
+  ["apps/mcp-server", "@components-kit/open-workbook-mcp-server"],
+  ["packages/cli", "@components-kit/open-workbook"]
 ]);
 const privatePackages = ["apps/excel-addin"];
 const expectedPrivatePackageNames = new Map([
-  ["apps/excel-addin", "@component-kit/open-workbook-excel-addin"]
+  ["apps/excel-addin", "@components-kit/open-workbook-excel-addin"]
 ]);
 
 const errors = [];

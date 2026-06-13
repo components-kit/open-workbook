@@ -1,21 +1,21 @@
 # Packaging And Publishing
 
-Open Workbook is designed for local-first, non-AppSource distribution. The public entry point is `@component-kit/open-workbook`, which can be run through `npx` and carries the built MCP server, Excel add-in assets, and fallback agent instructions. The primary skill install path is skills.sh against `skills/open-workbook-excel`.
+Open Workbook is designed for local-first, non-AppSource distribution. The public entry point is `@components-kit/open-workbook`, which can be run through `npx` and carries the built MCP server, Excel add-in assets, and fallback agent instructions. The primary skill install path is skills.sh against `skills/open-workbook-excel`.
 
 ## Packages
 
 Publishable packages:
 
-- `@component-kit/open-workbook`: user-facing CLI and bundled runtime assets
-- `@component-kit/open-workbook-mcp-server`: MCP stdio server
-- `@component-kit/open-workbook-backend`: local backend broker and runtime service
-- `@component-kit/open-workbook-protocol`: shared contracts, tool catalog, resources, and prompts
-- `@component-kit/open-workbook-excel-core`: planning, backups, snapshots, templates, permissions, and range utilities
-- `@component-kit/open-workbook-office-js-engine`: Office.js engine interface and defaults
+- `@components-kit/open-workbook`: user-facing CLI and bundled runtime assets
+- `@components-kit/open-workbook-mcp-server`: MCP stdio server
+- `@components-kit/open-workbook-backend`: local backend broker and runtime service
+- `@components-kit/open-workbook-protocol`: shared contracts, tool catalog, resources, and prompts
+- `@components-kit/open-workbook-excel-core`: planning, backups, snapshots, templates, permissions, and range utilities
+- `@components-kit/open-workbook-office-js-engine`: Office.js engine interface and defaults
 
 Private workspace package:
 
-- `@component-kit/open-workbook-excel-addin`: source for the sideloaded add-in; bundled into `@component-kit/open-workbook` assets rather than published as a standalone install target
+- `@components-kit/open-workbook-excel-addin`: source for the sideloaded add-in; bundled into `@components-kit/open-workbook` assets rather than published as a standalone install target
 
 ## Build
 
@@ -33,7 +33,7 @@ The root build:
 
 ## CLI Asset Bundle
 
-`@component-kit/open-workbook` resolves runtime assets in this order:
+`@components-kit/open-workbook` resolves runtime assets in this order:
 
 1. Source checkout paths, for contributors.
 2. Packaged `packages/cli/assets`, for installed users.
@@ -89,9 +89,9 @@ Before publishing:
 2. Run `corepack pnpm verify`.
 3. Run `node packages/cli/dist/index.js doctor`.
 4. Run `corepack pnpm pack:dry-run`.
-5. Confirm `node packages/cli/dist/index.js setup --dry-run` prints the generic `npx @component-kit/open-workbook@latest mcp` config and `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
+5. Confirm `node packages/cli/dist/index.js setup --dry-run` prints the generic `npx @components-kit/open-workbook@latest mcp` config and `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
 6. Confirm generated manifests include the expected taskpane URL and `backendUrl`.
-7. Confirm `@component-kit/open-workbook-excel-addin` remains private.
+7. Confirm `@components-kit/open-workbook-excel-addin` remains private.
 8. Confirm npm publish access is public for publishable scoped packages.
 
 `corepack pnpm verify` runs `scripts/validate-package-metadata.mjs`, which enforces the package version, repository, public/private publish intent, `dist` entrypoints, README presence, and publish access rules above. Use pnpm for packing/publishing so workspace dependencies are rewritten to publishable semver ranges.
@@ -101,7 +101,7 @@ Before publishing:
 The intended user flow after package publishing:
 
 ```bash
-npx -y @component-kit/open-workbook setup
+npx -y @components-kit/open-workbook setup
 ```
 
 Users paste the printed MCP config into their agent UI:
@@ -111,7 +111,7 @@ Users paste the printed MCP config into their agent UI:
   "mcpServers": {
     "open-workbook": {
       "command": "npx",
-      "args": ["-y", "@component-kit/open-workbook@latest", "mcp"]
+      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
     }
   }
 }

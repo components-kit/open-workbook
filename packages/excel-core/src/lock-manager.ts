@@ -9,7 +9,7 @@ import {
   type TransactionId,
   type WorkbookId,
   type WorkbookScope
-} from "@component-kit/open-workbook-protocol";
+} from "@components-kit/open-workbook-protocol";
 import { parseA1Address } from "./range-address.js";
 import { makeLockConflict } from "./conflicts.js";
 

@@ -3,13 +3,13 @@
 The default technical-user flow is:
 
 ```bash
-npx -y @component-kit/open-workbook setup
+npx -y @components-kit/open-workbook setup
 ```
 
 and an MCP client command:
 
 ```bash
-npx -y @component-kit/open-workbook@latest mcp
+npx -y @components-kit/open-workbook@latest mcp
 ```
 
 That command starts the MCP adapter, starts the local Excel add-in taskpane server when needed, and uses an embedded backend when no shared daemon is running.

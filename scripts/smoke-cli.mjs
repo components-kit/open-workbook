@@ -30,7 +30,7 @@ const checks = [
     args: ["setup", "--dry-run", "--manifest-out", join(tempDir, "setup-manifest.xml"), "--instructions-out", join(tempDir, "instructions.md")],
     assert: (result) =>
       result.status === 0 &&
-      result.stdout.includes("@component-kit/open-workbook@latest") &&
+      result.stdout.includes("@components-kit/open-workbook@latest") &&
       result.stdout.includes("npx skills add components-kit/open-workbook --skill open-workbook-excel") &&
       result.stdout.includes("\"mcp\"") &&
       result.stdout.includes("instructions.md") &&

@@ -35,6 +35,6 @@ The skill tells agents to inspect runtime status first, choose narrow Excel MCP 
 For clients that do not support skills.sh, print or write a portable instruction bundle:
 
 ```bash
-npx -y @component-kit/open-workbook instructions
-npx -y @component-kit/open-workbook instructions --out open-workbook-excel.md
+npx -y @components-kit/open-workbook instructions
+npx -y @components-kit/open-workbook instructions --out open-workbook-excel.md
 ```

@@ -2,8 +2,8 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import * as z from "zod/v4";
-import { RuntimeService } from "@component-kit/open-workbook-backend/runtime";
-import { startBackendServer } from "@component-kit/open-workbook-backend/server";
+import { RuntimeService } from "@components-kit/open-workbook-backend/runtime";
+import { startBackendServer } from "@components-kit/open-workbook-backend/server";
 import type {
   A1Range,
   AgentId,
@@ -55,8 +55,8 @@ import type {
   WorkbookCreateFileBackupRequest,
   WorkbookRestoreFileBackupRequest,
   WorkbookLocalConfig
-} from "@component-kit/open-workbook-protocol";
-import { isToolExposed, makeId } from "@component-kit/open-workbook-protocol";
+} from "@components-kit/open-workbook-protocol";
+import { isToolExposed, makeId } from "@components-kit/open-workbook-protocol";
 
 type RuntimeFacade = RuntimeService & {
   compileBatch(request: BatchRequest): unknown;

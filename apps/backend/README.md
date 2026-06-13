@@ -1,14 +1,14 @@
-# @component-kit/open-workbook-backend
+# @components-kit/open-workbook-backend
 
 Local backend runtime for Open Workbook.
 
-The backend coordinates Excel add-in sessions, workbook snapshots, backups, plans, permissions, events, diffs, validation, repair, and rollback. It exposes a WebSocket endpoint for the Office.js add-in and is normally started by `@component-kit/open-workbook-mcp-server`.
+The backend coordinates Excel add-in sessions, workbook snapshots, backups, plans, permissions, events, diffs, validation, repair, and rollback. It exposes a WebSocket endpoint for the Office.js add-in and is normally started by `@components-kit/open-workbook-mcp-server`.
 
 ## Exports
 
 ```ts
-import { RuntimeService } from "@component-kit/open-workbook-backend/runtime";
-import { startBackendServer } from "@component-kit/open-workbook-backend/server";
+import { RuntimeService } from "@components-kit/open-workbook-backend/runtime";
+import { startBackendServer } from "@components-kit/open-workbook-backend/server";
 ```
 
 ## Environment
@@ -20,4 +20,4 @@ import { startBackendServer } from "@component-kit/open-workbook-backend/server"
 
 ## Notes
 
-Most users should install `@component-kit/open-workbook`. This package is published for embedding, testing, and advanced integrations.
+Most users should install `@components-kit/open-workbook`. This package is published for embedding, testing, and advanced integrations.

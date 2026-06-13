@@ -4,7 +4,7 @@ import type {
   OperationResult,
   RuntimeCapabilities,
   WorkbookRef
-} from "@component-kit/open-workbook-protocol";
+} from "@components-kit/open-workbook-protocol";
 
 export interface ExcelEngine {
   readonly name: string;

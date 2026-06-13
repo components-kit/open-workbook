@@ -15,7 +15,7 @@ Key patterns:
 Install:
 
 ```bash
-npx -y @component-kit/open-workbook setup
+npx -y @components-kit/open-workbook setup
 ```
 
 Generic MCP config:
@@ -25,7 +25,7 @@ Generic MCP config:
   "mcpServers": {
     "open-workbook": {
       "command": "npx",
-      "args": ["-y", "@component-kit/open-workbook@latest", "mcp"]
+      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
     }
   }
 }
@@ -70,10 +70,10 @@ Agent instruction source:
 
 ## Packages
 
-- [@component-kit/open-workbook-protocol](https://github.com/components-kit/open-workbook/tree/main/packages/protocol): Tool catalog, JSON-RPC contracts, resources, prompts, errors, and workbook types
-- [@component-kit/open-workbook-excel-core](https://github.com/components-kit/open-workbook/tree/main/packages/excel-core): Planning, backups, snapshots, templates, fingerprints, permissions, locks, and transactions
-- [@component-kit/open-workbook-office-js-engine](https://github.com/components-kit/open-workbook/tree/main/packages/office-js-engine): Office.js engine adapter contracts
-- [@component-kit/open-workbook](https://github.com/components-kit/open-workbook/tree/main/packages/cli): `owb` CLI for generic setup, MCP, add-in serving, sideloading, diagnostics, and fallback instructions
-- [@component-kit/open-workbook-backend](https://github.com/components-kit/open-workbook/tree/main/apps/backend): Local broker and runtime service
-- [@component-kit/open-workbook-mcp-server](https://github.com/components-kit/open-workbook/tree/main/apps/mcp-server): MCP stdio server
-- [@component-kit/open-workbook-excel-addin](https://github.com/components-kit/open-workbook/tree/main/apps/excel-addin): Office.js add-in runtime
+- [@components-kit/open-workbook-protocol](https://github.com/components-kit/open-workbook/tree/main/packages/protocol): Tool catalog, JSON-RPC contracts, resources, prompts, errors, and workbook types
+- [@components-kit/open-workbook-excel-core](https://github.com/components-kit/open-workbook/tree/main/packages/excel-core): Planning, backups, snapshots, templates, fingerprints, permissions, locks, and transactions
+- [@components-kit/open-workbook-office-js-engine](https://github.com/components-kit/open-workbook/tree/main/packages/office-js-engine): Office.js engine adapter contracts
+- [@components-kit/open-workbook](https://github.com/components-kit/open-workbook/tree/main/packages/cli): `owb` CLI for generic setup, MCP, add-in serving, sideloading, diagnostics, and fallback instructions
+- [@components-kit/open-workbook-backend](https://github.com/components-kit/open-workbook/tree/main/apps/backend): Local broker and runtime service
+- [@components-kit/open-workbook-mcp-server](https://github.com/components-kit/open-workbook/tree/main/apps/mcp-server): MCP stdio server
+- [@components-kit/open-workbook-excel-addin](https://github.com/components-kit/open-workbook/tree/main/apps/excel-addin): Office.js add-in runtime

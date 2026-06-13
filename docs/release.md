@@ -6,12 +6,12 @@ This document describes how to prepare Open Workbook releases. npm publishing is
 
 Open Workbook publishes all public packages at the same version:
 
-- `@component-kit/open-workbook`
-- `@component-kit/open-workbook-mcp-server`
-- `@component-kit/open-workbook-backend`
-- `@component-kit/open-workbook-protocol`
-- `@component-kit/open-workbook-excel-core`
-- `@component-kit/open-workbook-office-js-engine`
+- `@components-kit/open-workbook`
+- `@components-kit/open-workbook-mcp-server`
+- `@components-kit/open-workbook-backend`
+- `@components-kit/open-workbook-protocol`
+- `@components-kit/open-workbook-excel-core`
+- `@components-kit/open-workbook-office-js-engine`
 
 The Excel add-in workspace package remains private and is bundled into the CLI package assets.
 
@@ -42,7 +42,7 @@ node packages/cli/dist/index.js sideload manifest --out /tmp/open-workbook.xml
 6. Confirm `setup --dry-run` prints the intended npm install shape:
 
 ```text
-npx -y @component-kit/open-workbook@latest mcp
+npx -y @components-kit/open-workbook@latest mcp
 npx skills add components-kit/open-workbook --skill open-workbook-excel
 ```
 
@@ -72,7 +72,7 @@ corepack pnpm pack:dry-run
 corepack pnpm publish:npm
 ```
 
-Do not publish `@component-kit/open-workbook-excel-addin`; it is private by design.
+Do not publish `@components-kit/open-workbook-excel-addin`; it is private by design.
 
 If npm requires a one-time password, forward it to every publish command:
 

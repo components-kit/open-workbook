@@ -10,7 +10,7 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 - Initial public release candidate for Open Workbook.
 - Local-first MCP runtime for connecting MCP-capable agents to desktop Excel through a sideloaded Office.js add-in.
-- User-facing `@component-kit/open-workbook` CLI with `setup`, `mcp`, `doctor`, `paths`, `instructions`, `addin`, `daemon`, `file-bridge`, and `sideload` commands.
+- User-facing `@components-kit/open-workbook` CLI with `setup`, `mcp`, `doctor`, `paths`, `instructions`, `addin`, `daemon`, `file-bridge`, and `sideload` commands.
 - Publishable protocol, core workbook utilities, Office.js engine contracts, backend runtime, MCP server, and CLI packages.
 - Excel tool surface covering workbook, worksheet, range, formula, table, filter, sort, chart, PivotTable, template, snapshot, backup, validation, repair, cleanup, permissions, and file lifecycle workflows.
 - Reversible workbook mutation flow with planning, permission checks, snapshots, backups, fingerprints, validation, diff summaries, and rollback support.

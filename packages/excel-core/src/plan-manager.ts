@@ -12,7 +12,7 @@ import {
   type WorkbookId,
   makeId,
   runtimeError
-} from "@component-kit/open-workbook-protocol";
+} from "@components-kit/open-workbook-protocol";
 import { BackupManager } from "./backup-manager.js";
 import { BatchCompiler } from "./batch-compiler.js";
 import { createWorkbookFingerprint } from "./fingerprint.js";

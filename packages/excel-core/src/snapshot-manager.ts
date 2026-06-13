@@ -6,7 +6,7 @@ import {
   type WorkbookId,
   type WorkbookSnapshotResponse,
   makeId
-} from "@component-kit/open-workbook-protocol";
+} from "@components-kit/open-workbook-protocol";
 
 export interface WorkbookSnapshotRecord extends SnapshotRef {
   payload: WorkbookSnapshotResponse;

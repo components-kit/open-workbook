@@ -1,4 +1,4 @@
-import { chunkMatrixRows, createRangeFingerprint, createWorkbookFingerprint, formatA1Cell, hashStable, parseA1Address } from "@component-kit/open-workbook-excel-core";
+import { chunkMatrixRows, createRangeFingerprint, createWorkbookFingerprint, formatA1Cell, hashStable, parseA1Address } from "@components-kit/open-workbook-excel-core";
 import type {
   AddinExecuteBatchRequest,
   AddinTemplateRepairRequest,
@@ -60,8 +60,8 @@ import type {
   WorkbookRef,
   WorkbookLocalConfig,
   WorkbookSnapshotResponse
-} from "@component-kit/open-workbook-protocol";
-import { runtimeError } from "@component-kit/open-workbook-protocol";
+} from "@components-kit/open-workbook-protocol";
+import { runtimeError } from "@components-kit/open-workbook-protocol";
 
 interface LoadedRangeSnapshot {
   target: A1Range;

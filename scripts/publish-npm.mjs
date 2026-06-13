@@ -2,12 +2,12 @@
 import { spawnSync } from "node:child_process";
 
 const packages = [
-  "@component-kit/open-workbook-protocol",
-  "@component-kit/open-workbook-excel-core",
-  "@component-kit/open-workbook-office-js-engine",
-  "@component-kit/open-workbook-backend",
-  "@component-kit/open-workbook-mcp-server",
-  "@component-kit/open-workbook"
+  "@components-kit/open-workbook-protocol",
+  "@components-kit/open-workbook-excel-core",
+  "@components-kit/open-workbook-office-js-engine",
+  "@components-kit/open-workbook-backend",
+  "@components-kit/open-workbook-mcp-server",
+  "@components-kit/open-workbook"
 ];
 
 const extraArgs = process.argv.slice(2);

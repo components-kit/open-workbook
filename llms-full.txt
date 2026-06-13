@@ -7,7 +7,7 @@ This file is generated for LLM and agent context. It combines the project README
 ## Quick Start
 
 ```bash
-npx -y @component-kit/open-workbook setup
+npx -y @components-kit/open-workbook setup
 ```
 
 Then install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel` and paste the printed MCP config into an agent UI.
@@ -42,7 +42,7 @@ Daily spreadsheet work usually does not need the largest model available, but it
 
 ## Current Status
 
-The project is being prepared for npm distribution as `@component-kit/open-workbook`. It is not a Microsoft AppSource add-in and does not attempt to install itself into Excel without user or admin trust approval.
+The project is being prepared for npm distribution as `@components-kit/open-workbook`. It is not a Microsoft AppSource add-in and does not attempt to install itself into Excel without user or admin trust approval.
 
 Stable areas include runtime connection, workbook/sheet/range operations, reversible batches, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
 
@@ -85,7 +85,7 @@ Shared packages:
 Run setup:
 
 ```bash
-npx -y @component-kit/open-workbook setup
+npx -y @components-kit/open-workbook setup
 ```
 
 Setup prepares the Excel add-in manifest and prints the MCP config to add to your agent UI.
@@ -103,7 +103,7 @@ Paste the printed MCP config into any MCP-capable agent UI:
   "mcpServers": {
     "open-workbook": {
       "command": "npx",
-      "args": ["-y", "@component-kit/open-workbook@latest", "mcp"]
+      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
     }
   }
 }
@@ -270,7 +270,7 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 - Initial public release candidate for Open Workbook.
 - Local-first MCP runtime for connecting MCP-capable agents to desktop Excel through a sideloaded Office.js add-in.
-- User-facing `@component-kit/open-workbook` CLI with `setup`, `mcp`, `doctor`, `paths`, `instructions`, `addin`, `daemon`, `file-bridge`, and `sideload` commands.
+- User-facing `@components-kit/open-workbook` CLI with `setup`, `mcp`, `doctor`, `paths`, `instructions`, `addin`, `daemon`, `file-bridge`, and `sideload` commands.
 - Publishable protocol, core workbook utilities, Office.js engine contracts, backend runtime, MCP server, and CLI packages.
 - Excel tool surface covering workbook, worksheet, range, formula, table, filter, sort, chart, PivotTable, template, snapshot, backup, validation, repair, cleanup, permissions, and file lifecycle workflows.
 - Reversible workbook mutation flow with planning, permission checks, snapshots, backups, fingerprints, validation, diff summaries, and rollback support.
@@ -308,7 +308,7 @@ excel.workbook.get_workbook_map
 excel.collab.get_status
 ```
 
-If the add-in is disconnected, ask the user to start their agent UI so it launches the configured Open Workbook MCP command, then open Excel and load the Open Workbook add-in. For manual troubleshooting, run `npx -y @component-kit/open-workbook@latest mcp` and retry. Do not fake workbook state from stale assumptions.
+If the add-in is disconnected, ask the user to start their agent UI so it launches the configured Open Workbook MCP command, then open Excel and load the Open Workbook add-in. For manual troubleshooting, run `npx -y @components-kit/open-workbook@latest mcp` and retry. Do not fake workbook state from stale assumptions.
 
 ## Tool Selection
 
@@ -600,7 +600,7 @@ Choose a supported tool path or ask for user/host setup. Do not claim that unsup
 If Excel is not connected:
 
 1. Ask the user to start the agent UI that has the Open Workbook MCP config.
-2. If troubleshooting manually, ask the user to run `npx -y @component-kit/open-workbook@latest mcp`.
+2. If troubleshooting manually, ask the user to run `npx -y @components-kit/open-workbook@latest mcp`.
 3. Ask the user to open Excel and load the Open Workbook add-in.
 4. Retry `excel.runtime.get_status`.
 
@@ -709,7 +709,7 @@ Source: docs/installation.md
 Open Workbook is distributed as one npm package for technical users:
 
 ```bash
-npx -y @component-kit/open-workbook setup
+npx -y @components-kit/open-workbook setup
 ```
 
 The setup command prepares the local machine, but it does not edit every agent UI automatically. After setup, install the Open Workbook Excel skill with skills.sh and copy the printed MCP config into whichever MCP-capable agent you use.
@@ -726,7 +726,7 @@ The setup command prepares the local machine, but it does not edit every agent U
 Run setup:
 
 ```bash
-npx -y @component-kit/open-workbook setup
+npx -y @components-kit/open-workbook setup
 ```
 
 Install the Open Workbook Excel skill:
@@ -744,7 +744,7 @@ Paste the printed MCP config into your agent UI:
   "mcpServers": {
     "open-workbook": {
       "command": "npx",
-      "args": ["-y", "@component-kit/open-workbook@latest", "mcp"]
+      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
     }
   }
 }
@@ -762,9 +762,9 @@ The `mcp` command starts the MCP adapter and, in the default flow, starts the lo
 ## Useful Commands
 
 ```bash
-npx -y @component-kit/open-workbook doctor
-npx -y @component-kit/open-workbook instructions
-npx -y @component-kit/open-workbook sideload manifest --out open-workbook.xml
+npx -y @components-kit/open-workbook doctor
+npx -y @components-kit/open-workbook instructions
+npx -y @components-kit/open-workbook sideload manifest --out open-workbook.xml
 ```
 
 `instructions` prints a fallback instruction bundle for clients that do not support skills.sh.
@@ -773,7 +773,7 @@ Advanced shared-daemon, service-wrapper, custom-port, HTTPS, and file-bridge set
 
 ## Troubleshooting
 
-- Run `npx -y @component-kit/open-workbook doctor` to confirm packaged assets are available.
+- Run `npx -y @components-kit/open-workbook doctor` to confirm packaged assets are available.
 - If the Excel add-in cannot load, start your agent UI first so `npx ... mcp` can start the local taskpane server.
 - If Windows Excel does not show the add-in, confirm the manifest is in a trusted shared-folder catalog and `Show in Menu` is enabled.
 - If the add-in loads but does not connect, confirm the manifest backend URL points at `ws://127.0.0.1:37845/addin`.
@@ -791,7 +791,7 @@ Open Workbook is client-neutral. Any MCP-capable agent UI can launch the same co
   "mcpServers": {
     "open-workbook": {
       "command": "npx",
-      "args": ["-y", "@component-kit/open-workbook@latest", "mcp"]
+      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
     }
   }
 }
@@ -887,8 +887,8 @@ The skill tells agents to inspect runtime status first, choose narrow Excel MCP 
 For clients that do not support skills.sh, print or write a portable instruction bundle:
 
 ```bash
-npx -y @component-kit/open-workbook instructions
-npx -y @component-kit/open-workbook instructions --out open-workbook-excel.md
+npx -y @components-kit/open-workbook instructions
+npx -y @components-kit/open-workbook instructions --out open-workbook-excel.md
 ```
 
 ---
@@ -900,13 +900,13 @@ Source: docs/advanced-runtime.md
 The default technical-user flow is:
 
 ```bash
-npx -y @component-kit/open-workbook setup
+npx -y @components-kit/open-workbook setup
 ```
 
 and an MCP client command:
 
 ```bash
-npx -y @component-kit/open-workbook@latest mcp
+npx -y @components-kit/open-workbook@latest mcp
 ```
 
 That command starts the MCP adapter, starts the local Excel add-in taskpane server when needed, and uses an embedded backend when no shared daemon is running.
@@ -2102,7 +2102,7 @@ Capability-unavailable responses are preferred over simulated success when Offic
 - `git diff --check` passes.
 - GitHub Actions CI passes the same non-E2E verification plus `corepack pnpm pack:dry-run` for every publishable package.
 - Tool catalog, README, installation docs, MCP client docs, and instruction docs match the exposed MCP surface.
-- Fresh local install can run `npx -y @component-kit/open-workbook setup`, install `open-workbook-excel` with `npx skills add components-kit/open-workbook --skill open-workbook-excel`, generate/install a manifest, launch `npx -y @component-kit/open-workbook@latest mcp`, and report runtime status. If the runtime cannot bind or cannot be reached, CLI commands must fail with concise user-facing errors.
+- Fresh local install can run `npx -y @components-kit/open-workbook setup`, install `open-workbook-excel` with `npx skills add components-kit/open-workbook --skill open-workbook-excel`, generate/install a manifest, launch `npx -y @components-kit/open-workbook@latest mcp`, and report runtime status. If the runtime cannot bind or cannot be reached, CLI commands must fail with concise user-facing errors.
 - Excel add-in can be sideloaded on macOS and Windows using the generated manifest.
 - Native file bridge host smoke passes on macOS and Windows with `owb file-bridge smoke --workbook <open-workbook-name> --target <copy.xlsx>`.
 - Real Excel smoke test covers read, write, batch apply, template repair, rollback preview/apply, and conflict detection.
@@ -2121,7 +2121,7 @@ Open Workbook should keep structure-level merge conflicts blocked by default. Sh
 
 ## Publish Notes
 
-Before publishing, bump versions consistently, regenerate CLI assets, confirm the public package is `@component-kit/open-workbook`, and run the release gates above from a clean checkout. Do not claim production host readiness until the real Excel smoke tests pass on both macOS and Windows.
+Before publishing, bump versions consistently, regenerate CLI assets, confirm the public package is `@components-kit/open-workbook`, and run the release gates above from a clean checkout. Do not claim production host readiness until the real Excel smoke tests pass on both macOS and Windows.
 
 ---
 
@@ -2199,7 +2199,7 @@ Source: docs/opencode.md
 OpenCode is one possible MCP client. The generic Open Workbook install flow is still:
 
 ```bash
-npx -y @component-kit/open-workbook setup
+npx -y @components-kit/open-workbook setup
 ```
 
 Paste the generic MCP config printed by setup into OpenCode using the config shape OpenCode expects. If you prefer an OpenCode-shaped snippet from the local CLI, use:
@@ -2229,7 +2229,7 @@ For `npx`-based config, keep the command equivalent to:
   "mcpServers": {
     "open-workbook": {
       "command": "npx",
-      "args": ["-y", "@component-kit/open-workbook@latest", "mcp"]
+      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
     }
   }
 }
@@ -2257,22 +2257,22 @@ Source: docs/packaging.md
 
 ## Packaging And Publishing
 
-Open Workbook is designed for local-first, non-AppSource distribution. The public entry point is `@component-kit/open-workbook`, which can be run through `npx` and carries the built MCP server, Excel add-in assets, and fallback agent instructions. The primary skill install path is skills.sh against `skills/open-workbook-excel`.
+Open Workbook is designed for local-first, non-AppSource distribution. The public entry point is `@components-kit/open-workbook`, which can be run through `npx` and carries the built MCP server, Excel add-in assets, and fallback agent instructions. The primary skill install path is skills.sh against `skills/open-workbook-excel`.
 
 ## Packages
 
 Publishable packages:
 
-- `@component-kit/open-workbook`: user-facing CLI and bundled runtime assets
-- `@component-kit/open-workbook-mcp-server`: MCP stdio server
-- `@component-kit/open-workbook-backend`: local backend broker and runtime service
-- `@component-kit/open-workbook-protocol`: shared contracts, tool catalog, resources, and prompts
-- `@component-kit/open-workbook-excel-core`: planning, backups, snapshots, templates, permissions, and range utilities
-- `@component-kit/open-workbook-office-js-engine`: Office.js engine interface and defaults
+- `@components-kit/open-workbook`: user-facing CLI and bundled runtime assets
+- `@components-kit/open-workbook-mcp-server`: MCP stdio server
+- `@components-kit/open-workbook-backend`: local backend broker and runtime service
+- `@components-kit/open-workbook-protocol`: shared contracts, tool catalog, resources, and prompts
+- `@components-kit/open-workbook-excel-core`: planning, backups, snapshots, templates, permissions, and range utilities
+- `@components-kit/open-workbook-office-js-engine`: Office.js engine interface and defaults
 
 Private workspace package:
 
-- `@component-kit/open-workbook-excel-addin`: source for the sideloaded add-in; bundled into `@component-kit/open-workbook` assets rather than published as a standalone install target
+- `@components-kit/open-workbook-excel-addin`: source for the sideloaded add-in; bundled into `@components-kit/open-workbook` assets rather than published as a standalone install target
 
 ## Build
 
@@ -2290,7 +2290,7 @@ The root build:
 
 ## CLI Asset Bundle
 
-`@component-kit/open-workbook` resolves runtime assets in this order:
+`@components-kit/open-workbook` resolves runtime assets in this order:
 
 1. Source checkout paths, for contributors.
 2. Packaged `packages/cli/assets`, for installed users.
@@ -2346,9 +2346,9 @@ Before publishing:
 2. Run `corepack pnpm verify`.
 3. Run `node packages/cli/dist/index.js doctor`.
 4. Run `corepack pnpm pack:dry-run`.
-5. Confirm `node packages/cli/dist/index.js setup --dry-run` prints the generic `npx @component-kit/open-workbook@latest mcp` config and `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
+5. Confirm `node packages/cli/dist/index.js setup --dry-run` prints the generic `npx @components-kit/open-workbook@latest mcp` config and `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
 6. Confirm generated manifests include the expected taskpane URL and `backendUrl`.
-7. Confirm `@component-kit/open-workbook-excel-addin` remains private.
+7. Confirm `@components-kit/open-workbook-excel-addin` remains private.
 8. Confirm npm publish access is public for publishable scoped packages.
 
 `corepack pnpm verify` runs `scripts/validate-package-metadata.mjs`, which enforces the package version, repository, public/private publish intent, `dist` entrypoints, README presence, and publish access rules above. Use pnpm for packing/publishing so workspace dependencies are rewritten to publishable semver ranges.
@@ -2358,7 +2358,7 @@ Before publishing:
 The intended user flow after package publishing:
 
 ```bash
-npx -y @component-kit/open-workbook setup
+npx -y @components-kit/open-workbook setup
 ```
 
 Users paste the printed MCP config into their agent UI:
@@ -2368,7 +2368,7 @@ Users paste the printed MCP config into their agent UI:
   "mcpServers": {
     "open-workbook": {
       "command": "npx",
-      "args": ["-y", "@component-kit/open-workbook@latest", "mcp"]
+      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
     }
   }
 }
@@ -2409,12 +2409,12 @@ This document describes how to prepare Open Workbook releases. npm publishing is
 
 Open Workbook publishes all public packages at the same version:
 
-- `@component-kit/open-workbook`
-- `@component-kit/open-workbook-mcp-server`
-- `@component-kit/open-workbook-backend`
-- `@component-kit/open-workbook-protocol`
-- `@component-kit/open-workbook-excel-core`
-- `@component-kit/open-workbook-office-js-engine`
+- `@components-kit/open-workbook`
+- `@components-kit/open-workbook-mcp-server`
+- `@components-kit/open-workbook-backend`
+- `@components-kit/open-workbook-protocol`
+- `@components-kit/open-workbook-excel-core`
+- `@components-kit/open-workbook-office-js-engine`
 
 The Excel add-in workspace package remains private and is bundled into the CLI package assets.
 
@@ -2445,7 +2445,7 @@ node packages/cli/dist/index.js sideload manifest --out /tmp/open-workbook.xml
 6. Confirm `setup --dry-run` prints the intended npm install shape:
 
 ```text
-npx -y @component-kit/open-workbook@latest mcp
+npx -y @components-kit/open-workbook@latest mcp
 npx skills add components-kit/open-workbook --skill open-workbook-excel
 ```
 
@@ -2475,7 +2475,7 @@ corepack pnpm pack:dry-run
 corepack pnpm publish:npm
 ```
 
-Do not publish `@component-kit/open-workbook-excel-addin`; it is private by design.
+Do not publish `@components-kit/open-workbook-excel-addin`; it is private by design.
 
 If npm requires a one-time password, forward it to every publish command:
 
@@ -2576,7 +2576,7 @@ The CLI does not install or trust certificates automatically. Use a local tool s
 
 For non-store open-source distribution, the expected install flow is:
 
-1. Run `npx -y @component-kit/open-workbook setup`.
+1. Run `npx -y @components-kit/open-workbook setup`.
 2. Add the printed MCP config to the agent UI.
 3. Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
 4. Open the agent UI, then Excel, then the Open Workbook add-in.
@@ -2637,7 +2637,7 @@ Open Workbook is ready for local source installs, packaged CLI testing, MCP inte
 
 Source: packages/protocol/README.md
 
-## @component-kit/open-workbook-protocol
+## @components-kit/open-workbook-protocol
 
 Shared protocol package for Open Workbook.
 
@@ -2653,16 +2653,16 @@ It contains:
 ## Usage
 
 ```ts
-import { ToolCatalog, getToolCatalogSummary, runtimeError } from "@component-kit/open-workbook-protocol";
+import { ToolCatalog, getToolCatalogSummary, runtimeError } from "@components-kit/open-workbook-protocol";
 ```
 
-Most users should install `@component-kit/open-workbook`; this package is published for integrators building clients, tests, or alternate engines.
+Most users should install `@components-kit/open-workbook`; this package is published for integrators building clients, tests, or alternate engines.
 
 ---
 
 Source: packages/excel-core/README.md
 
-## @component-kit/open-workbook-excel-core
+## @components-kit/open-workbook-excel-core
 
 Core workbook utilities for Open Workbook.
 
@@ -2680,7 +2680,7 @@ It contains:
 ## Usage
 
 ```ts
-import { BatchCompiler, BackupManager, SnapshotManager, TemplateRegistry } from "@component-kit/open-workbook-excel-core";
+import { BatchCompiler, BackupManager, SnapshotManager, TemplateRegistry } from "@components-kit/open-workbook-excel-core";
 ```
 
 This package is runtime-agnostic. It does not depend on Office.js and can be reused by future Excel engines.
@@ -2689,7 +2689,7 @@ This package is runtime-agnostic. It does not depend on Office.js and can be reu
 
 Source: packages/office-js-engine/README.md
 
-## @component-kit/open-workbook-office-js-engine
+## @components-kit/open-workbook-office-js-engine
 
 Office.js engine interface and defaults for Open Workbook.
 
@@ -2698,23 +2698,23 @@ The live Office.js execution currently lives in the Excel add-in runtime. This p
 ## Usage
 
 ```ts
-import { DefaultOfficeJsEngineOptions, OfficeJsEngine } from "@component-kit/open-workbook-office-js-engine";
+import { DefaultOfficeJsEngineOptions, OfficeJsEngine } from "@components-kit/open-workbook-office-js-engine";
 ```
 
-Most users should install `@component-kit/open-workbook`. This package is published for engine integration work and tests.
+Most users should install `@components-kit/open-workbook`. This package is published for engine integration work and tests.
 
 ---
 
 Source: packages/cli/README.md
 
-## @component-kit/open-workbook
+## @components-kit/open-workbook
 
 User-facing package for installing, configuring, and running Open Workbook locally.
 
 ## Quickstart
 
 ```bash
-npx -y @component-kit/open-workbook setup
+npx -y @components-kit/open-workbook setup
 ```
 
 Setup prepares the Excel add-in manifest and prints generic MCP config.
@@ -2732,7 +2732,7 @@ Paste the printed MCP config into any MCP-capable agent UI:
   "mcpServers": {
     "open-workbook": {
       "command": "npx",
-      "args": ["-y", "@component-kit/open-workbook@latest", "mcp"]
+      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
     }
   }
 }
@@ -2792,17 +2792,17 @@ owb service manifest --target macos --service addin
 
 Source: apps/backend/README.md
 
-## @component-kit/open-workbook-backend
+## @components-kit/open-workbook-backend
 
 Local backend runtime for Open Workbook.
 
-The backend coordinates Excel add-in sessions, workbook snapshots, backups, plans, permissions, events, diffs, validation, repair, and rollback. It exposes a WebSocket endpoint for the Office.js add-in and is normally started by `@component-kit/open-workbook-mcp-server`.
+The backend coordinates Excel add-in sessions, workbook snapshots, backups, plans, permissions, events, diffs, validation, repair, and rollback. It exposes a WebSocket endpoint for the Office.js add-in and is normally started by `@components-kit/open-workbook-mcp-server`.
 
 ## Exports
 
 ```ts
-import { RuntimeService } from "@component-kit/open-workbook-backend/runtime";
-import { startBackendServer } from "@component-kit/open-workbook-backend/server";
+import { RuntimeService } from "@components-kit/open-workbook-backend/runtime";
+import { startBackendServer } from "@components-kit/open-workbook-backend/server";
 ```
 
 ## Environment
@@ -2814,13 +2814,13 @@ import { startBackendServer } from "@component-kit/open-workbook-backend/server"
 
 ## Notes
 
-Most users should install `@component-kit/open-workbook`. This package is published for embedding, testing, and advanced integrations.
+Most users should install `@components-kit/open-workbook`. This package is published for embedding, testing, and advanced integrations.
 
 ---
 
 Source: apps/mcp-server/README.md
 
-## @component-kit/open-workbook-mcp-server
+## @components-kit/open-workbook-mcp-server
 
 MCP stdio server for Open Workbook.
 
@@ -2849,23 +2849,23 @@ open-workbook-mcp
 
 ## Notes
 
-Use `@component-kit/open-workbook` for end-user installs. This package is published separately so advanced integrators can embed or run the MCP server directly.
+Use `@components-kit/open-workbook` for end-user installs. This package is published separately so advanced integrators can embed or run the MCP server directly.
 
 ---
 
 Source: apps/excel-addin/README.md
 
-## @component-kit/open-workbook-excel-addin
+## @components-kit/open-workbook-excel-addin
 
 Office.js Excel add-in runtime for Open Workbook.
 
-This workspace package contains the taskpane HTML, manifest template, static asset server, and Office.js executor. It is private because the built add-in assets are bundled into `@component-kit/open-workbook`.
+This workspace package contains the taskpane HTML, manifest template, static asset server, and Office.js executor. It is private because the built add-in assets are bundled into `@components-kit/open-workbook`.
 
 ## Development
 
 ```bash
-corepack pnpm --filter @component-kit/open-workbook-excel-addin build
-corepack pnpm --filter @component-kit/open-workbook-excel-addin dev
+corepack pnpm --filter @components-kit/open-workbook-excel-addin build
+corepack pnpm --filter @components-kit/open-workbook-excel-addin dev
 ```
 
 The development server serves:

@@ -1,4 +1,4 @@
-# @component-kit/open-workbook-excel-core
+# @components-kit/open-workbook-excel-core
 
 Core workbook utilities for Open Workbook.
 
@@ -16,7 +16,7 @@ It contains:
 ## Usage
 
 ```ts
-import { BatchCompiler, BackupManager, SnapshotManager, TemplateRegistry } from "@component-kit/open-workbook-excel-core";
+import { BatchCompiler, BackupManager, SnapshotManager, TemplateRegistry } from "@components-kit/open-workbook-excel-core";
 ```
 
 This package is runtime-agnostic. It does not depend on Office.js and can be reused by future Excel engines.

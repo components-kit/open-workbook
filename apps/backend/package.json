@@ -1,5 +1,5 @@
 {
-  "name": "@component-kit/open-workbook-backend",
+  "name": "@components-kit/open-workbook-backend",
   "version": "0.1.0",
   "description": "Local backend broker for Open Workbook add-in sessions, backups, snapshots, plans, and permissions.",
   "license": "MIT",
@@ -48,9 +48,9 @@
     "dev": "node --enable-source-maps dist/index.js"
   },
   "dependencies": {
-    "@component-kit/open-workbook-excel-core": "workspace:*",
-    "@component-kit/open-workbook-office-js-engine": "workspace:*",
-    "@component-kit/open-workbook-protocol": "workspace:*",
+    "@components-kit/open-workbook-excel-core": "workspace:*",
+    "@components-kit/open-workbook-office-js-engine": "workspace:*",
+    "@components-kit/open-workbook-protocol": "workspace:*",
     "ws": "^8.18.0"
   },
   "devDependencies": {

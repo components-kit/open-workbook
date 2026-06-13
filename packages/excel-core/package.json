@@ -1,5 +1,5 @@
 {
-  "name": "@component-kit/open-workbook-excel-core",
+  "name": "@components-kit/open-workbook-excel-core",
   "version": "0.1.0",
   "description": "Core planning, backup, snapshot, template, permission, and range utilities for Open Workbook.",
   "license": "MIT",
@@ -42,7 +42,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@component-kit/open-workbook-protocol": "workspace:*"
+    "@components-kit/open-workbook-protocol": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.3",

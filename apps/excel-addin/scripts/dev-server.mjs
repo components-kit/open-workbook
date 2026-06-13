@@ -88,10 +88,10 @@ function resolveWorkspaceModule(pathname) {
 
 function rewriteBrowserImports(source) {
   return source
-    .replaceAll("\"@component-kit/open-workbook-excel-core\"", "\"/workspace/excel-core/index.js\"")
-    .replaceAll("'@component-kit/open-workbook-excel-core'", "'/workspace/excel-core/index.js'")
-    .replaceAll("\"@component-kit/open-workbook-protocol\"", "\"/workspace/protocol/index.js\"")
-    .replaceAll("'@component-kit/open-workbook-protocol'", "'/workspace/protocol/index.js'");
+    .replaceAll("\"@components-kit/open-workbook-excel-core\"", "\"/workspace/excel-core/index.js\"")
+    .replaceAll("'@components-kit/open-workbook-excel-core'", "'/workspace/excel-core/index.js'")
+    .replaceAll("\"@components-kit/open-workbook-protocol\"", "\"/workspace/protocol/index.js\"")
+    .replaceAll("'@components-kit/open-workbook-protocol'", "'/workspace/protocol/index.js'");
 }
 
 function generateManifest() {

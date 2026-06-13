@@ -1,4 +1,4 @@
-import type { A1Range, WorkbookId } from "@component-kit/open-workbook-protocol";
+import type { A1Range, WorkbookId } from "@components-kit/open-workbook-protocol";
 
 export interface ParsedA1Address {
   sheetName?: string;

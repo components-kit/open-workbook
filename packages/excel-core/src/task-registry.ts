@@ -1,5 +1,5 @@
-import type { AgentId, TaskBlocker, TaskId, WorkbookId, WorkbookScope } from "@component-kit/open-workbook-protocol";
-import { makeId, type TaskRecord, type TransactionId, type PlanId, type BackupId } from "@component-kit/open-workbook-protocol";
+import type { AgentId, TaskBlocker, TaskId, WorkbookId, WorkbookScope } from "@components-kit/open-workbook-protocol";
+import { makeId, type TaskRecord, type TransactionId, type PlanId, type BackupId } from "@components-kit/open-workbook-protocol";
 
 export interface CreateTaskInput {
   workbookId: WorkbookId;

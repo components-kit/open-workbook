@@ -42,7 +42,7 @@ Capability-unavailable responses are preferred over simulated success when Offic
 - `git diff --check` passes.
 - GitHub Actions CI passes the same non-E2E verification plus `corepack pnpm pack:dry-run` for every publishable package.
 - Tool catalog, README, installation docs, MCP client docs, and instruction docs match the exposed MCP surface.
-- Fresh local install can run `npx -y @component-kit/open-workbook setup`, install `open-workbook-excel` with `npx skills add components-kit/open-workbook --skill open-workbook-excel`, generate/install a manifest, launch `npx -y @component-kit/open-workbook@latest mcp`, and report runtime status. If the runtime cannot bind or cannot be reached, CLI commands must fail with concise user-facing errors.
+- Fresh local install can run `npx -y @components-kit/open-workbook setup`, install `open-workbook-excel` with `npx skills add components-kit/open-workbook --skill open-workbook-excel`, generate/install a manifest, launch `npx -y @components-kit/open-workbook@latest mcp`, and report runtime status. If the runtime cannot bind or cannot be reached, CLI commands must fail with concise user-facing errors.
 - Excel add-in can be sideloaded on macOS and Windows using the generated manifest.
 - Native file bridge host smoke passes on macOS and Windows with `owb file-bridge smoke --workbook <open-workbook-name> --target <copy.xlsx>`.
 - Real Excel smoke test covers read, write, batch apply, template repair, rollback preview/apply, and conflict detection.
@@ -61,4 +61,4 @@ Open Workbook should keep structure-level merge conflicts blocked by default. Sh
 
 ## Publish Notes
 
-Before publishing, bump versions consistently, regenerate CLI assets, confirm the public package is `@component-kit/open-workbook`, and run the release gates above from a clean checkout. Do not claim production host readiness until the real Excel smoke tests pass on both macOS and Windows.
+Before publishing, bump versions consistently, regenerate CLI assets, confirm the public package is `@components-kit/open-workbook`, and run the release gates above from a clean checkout. Do not claim production host readiness until the real Excel smoke tests pass on both macOS and Windows.

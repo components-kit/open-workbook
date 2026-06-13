@@ -3,7 +3,7 @@
 Open Workbook is distributed as one npm package for technical users:
 
 ```bash
-npx -y @component-kit/open-workbook setup
+npx -y @components-kit/open-workbook setup
 ```
 
 The setup command prepares the local machine, but it does not edit every agent UI automatically. After setup, install the Open Workbook Excel skill with skills.sh and copy the printed MCP config into whichever MCP-capable agent you use.
@@ -20,7 +20,7 @@ The setup command prepares the local machine, but it does not edit every agent U
 Run setup:
 
 ```bash
-npx -y @component-kit/open-workbook setup
+npx -y @components-kit/open-workbook setup
 ```
 
 Install the Open Workbook Excel skill:
@@ -38,7 +38,7 @@ Paste the printed MCP config into your agent UI:
   "mcpServers": {
     "open-workbook": {
       "command": "npx",
-      "args": ["-y", "@component-kit/open-workbook@latest", "mcp"]
+      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
     }
   }
 }
@@ -56,9 +56,9 @@ The `mcp` command starts the MCP adapter and, in the default flow, starts the lo
 ## Useful Commands
 
 ```bash
-npx -y @component-kit/open-workbook doctor
-npx -y @component-kit/open-workbook instructions
-npx -y @component-kit/open-workbook sideload manifest --out open-workbook.xml
+npx -y @components-kit/open-workbook doctor
+npx -y @components-kit/open-workbook instructions
+npx -y @components-kit/open-workbook sideload manifest --out open-workbook.xml
 ```
 
 `instructions` prints a fallback instruction bundle for clients that do not support skills.sh.
@@ -67,7 +67,7 @@ Advanced shared-daemon, service-wrapper, custom-port, HTTPS, and file-bridge set
 
 ## Troubleshooting
 
-- Run `npx -y @component-kit/open-workbook doctor` to confirm packaged assets are available.
+- Run `npx -y @components-kit/open-workbook doctor` to confirm packaged assets are available.
 - If the Excel add-in cannot load, start your agent UI first so `npx ... mcp` can start the local taskpane server.
 - If Windows Excel does not show the add-in, confirm the manifest is in a trusted shared-folder catalog and `Show in Menu` is enabled.
 - If the add-in loads but does not connect, confirm the manifest backend URL points at `ws://127.0.0.1:37845/addin`.

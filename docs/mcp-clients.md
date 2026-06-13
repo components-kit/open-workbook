@@ -7,7 +7,7 @@ Open Workbook is client-neutral. Any MCP-capable agent UI can launch the same co
   "mcpServers": {
     "open-workbook": {
       "command": "npx",
-      "args": ["-y", "@component-kit/open-workbook@latest", "mcp"]
+      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
     }
   }
 }

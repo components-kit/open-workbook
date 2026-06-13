@@ -1,5 +1,5 @@
-import type { TemplateId, TemplateRef, WorkbookId } from "@component-kit/open-workbook-protocol";
-import { makeId } from "@component-kit/open-workbook-protocol";
+import type { TemplateId, TemplateRef, WorkbookId } from "@components-kit/open-workbook-protocol";
+import { makeId } from "@components-kit/open-workbook-protocol";
 import { hashStable } from "./fingerprint.js";
 
 export interface TemplateFingerprint {

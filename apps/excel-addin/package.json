@@ -1,5 +1,5 @@
 {
-  "name": "@component-kit/open-workbook-excel-addin",
+  "name": "@components-kit/open-workbook-excel-addin",
   "version": "0.1.0",
   "description": "Office.js Excel add-in runtime for Open Workbook local automation.",
   "license": "MIT",
@@ -30,8 +30,8 @@
     "serve": "node scripts/dev-server.mjs"
   },
   "dependencies": {
-    "@component-kit/open-workbook-excel-core": "workspace:*",
-    "@component-kit/open-workbook-protocol": "workspace:*"
+    "@components-kit/open-workbook-excel-core": "workspace:*",
+    "@components-kit/open-workbook-protocol": "workspace:*"
   },
   "devDependencies": {
     "@types/office-js": "^1.0.492",

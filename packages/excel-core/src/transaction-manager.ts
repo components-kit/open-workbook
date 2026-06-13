@@ -15,7 +15,7 @@ import {
   type WorkbookId,
   type WorkbookScope,
   type DestructiveLevel
-} from "@component-kit/open-workbook-protocol";
+} from "@components-kit/open-workbook-protocol";
 
 export interface CreateTransactionInput {
   workbookId: WorkbookId;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FormulaPatternResponse, TableInfo, WorkbookId } from "@component-kit/open-workbook-protocol";
+import type { FormulaPatternResponse, TableInfo, WorkbookId } from "@components-kit/open-workbook-protocol";
 import { buildFormulaDependencyGraph, traceDependents, tracePrecedents } from "./formula-dependencies.js";
 
 describe("formula dependency graph", () => {

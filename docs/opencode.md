@@ -3,7 +3,7 @@
 OpenCode is one possible MCP client. The generic Open Workbook install flow is still:
 
 ```bash
-npx -y @component-kit/open-workbook setup
+npx -y @components-kit/open-workbook setup
 ```
 
 Paste the generic MCP config printed by setup into OpenCode using the config shape OpenCode expects. If you prefer an OpenCode-shaped snippet from the local CLI, use:
@@ -33,7 +33,7 @@ For `npx`-based config, keep the command equivalent to:
   "mcpServers": {
     "open-workbook": {
       "command": "npx",
-      "args": ["-y", "@component-kit/open-workbook@latest", "mcp"]
+      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
     }
   }
 }

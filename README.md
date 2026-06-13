@@ -14,7 +14,7 @@ Daily spreadsheet work usually does not need the largest model available, but it
 
 ## Current Status
 
-The project is being prepared for npm distribution as `@component-kit/open-workbook`. It is not a Microsoft AppSource add-in and does not attempt to install itself into Excel without user or admin trust approval.
+The project is being prepared for npm distribution as `@components-kit/open-workbook`. It is not a Microsoft AppSource add-in and does not attempt to install itself into Excel without user or admin trust approval.
 
 Stable areas include runtime connection, workbook/sheet/range operations, reversible batches, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
 
@@ -57,7 +57,7 @@ Shared packages:
 Run setup:
 
 ```bash
-npx -y @component-kit/open-workbook setup
+npx -y @components-kit/open-workbook setup
 ```
 
 Setup prepares the Excel add-in manifest and prints the MCP config to add to your agent UI.
@@ -75,7 +75,7 @@ Paste the printed MCP config into any MCP-capable agent UI:
   "mcpServers": {
     "open-workbook": {
       "command": "npx",
-      "args": ["-y", "@component-kit/open-workbook@latest", "mcp"]
+      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
     }
   }
 }

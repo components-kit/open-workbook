@@ -2,7 +2,7 @@ import type {
   WorkbookFileBridgeRequest,
   WorkbookFileBridgeResponse,
   WorkbookFileBridgeStatus
-} from "@component-kit/open-workbook-protocol";
+} from "@components-kit/open-workbook-protocol";
 
 export interface NativeFileBridgeOptions {
   url?: string;

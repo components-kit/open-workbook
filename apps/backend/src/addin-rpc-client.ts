@@ -1,5 +1,5 @@
 import type { WebSocket } from "ws";
-import type { JsonRpcFailure, JsonRpcMessage, JsonRpcRequest, JsonRpcSuccess } from "@component-kit/open-workbook-protocol";
+import type { JsonRpcFailure, JsonRpcMessage, JsonRpcRequest, JsonRpcSuccess } from "@components-kit/open-workbook-protocol";
 
 export interface AddinRpcClientOptions {
   timeoutMs: number;
