@@ -45,14 +45,16 @@ describe("tool catalog", () => {
     expect(exposed.some((tool) => tool.name === "excel.pivot.create")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.pivot.delete")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.chart.create")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.runtime.get_capabilities")).toBe(false);
+    expect(exposed.some((tool) => tool.name === "excel.runtime.get_capabilities")).toBe(true);
   });
 
   it("can expose preview tools without exposing planned or unsupported tools", () => {
     const exposed = getExposedToolCatalog({ includePreview: true });
     expect(exposed.some((tool) => tool.name === "excel.runtime.get_capabilities")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.runtime.get_selection" && tool.status === "preview")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.workbook.get_workbook_map" && tool.status === "stable")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.pivot.create" && tool.status === "stable")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.status === "planned")).toBe(false);
   });
 
   it("tracks resources and prompts as catalog entries", () => {

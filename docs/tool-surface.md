@@ -6,14 +6,14 @@ The full namespace is represented in the protocol catalog, but MCP only exposes 
 
 - `stable`: exposed by default.
 - `preview`: exposed only with `OPEN_WORKBOOK_PREVIEW_TOOLS=1`.
-- `planned`: listed by `excel.runtime.get_capabilities`, not callable yet.
-- `unsupported`: listed by capabilities as intentionally unavailable.
+- `planned`: intentionally omitted from the production MCP surface until the contract and implementation are ready.
+- `unsupported`: listed by capabilities only when a host or adapter cannot provide a deterministic implementation.
 
 `excel.runtime.get_capabilities` is the source of truth for the complete catalog, resources, prompts, runtime connection status, and active Excel host capability status. When an add-in is connected, it includes the host platform, Office version when available, Office API-set support such as `ExcelApi` versions, and derived feature statuses for ranges, tables, pivots, charts, and known host-limited paths. Without a connected add-in, it returns a daemon fallback that marks Excel host capabilities as `unknown`.
 
 ## Stable Tool Groups
 
-- Runtime: `excel.runtime.get_status`, `excel.runtime.get_active_context`
+- Runtime: `excel.runtime.get_status`, `excel.runtime.get_capabilities`, `excel.runtime.get_active_context`
 - Workbook: `excel.workbook.list_open_workbooks`, `excel.workbook.get_workbook_info`, `excel.workbook.get_workbook_map`, `excel.workbook.snapshot`, `excel.workbook.refresh_snapshot`, `excel.workbook.get_snapshot`, `excel.workbook.detect_external_changes`, `excel.workbook.calculate`, `excel.workbook.save`, `excel.workbook.save_as`, `excel.workbook.create_backup`, `excel.workbook.restore_backup`, `excel.workbook.export_copy`, `excel.workbook.export_local_config`, `excel.workbook.import_local_config`, `excel.workbook.embed_local_config`, `excel.workbook.read_embedded_local_config`, `excel.workbook.import_embedded_local_config`, `excel.workbook.close`
 - File backups: `excel.backup.create_file`, `excel.backup.list`, `excel.backup.get`, `excel.backup.verify`, `excel.backup.restore_file`, `excel.backup.delete`, `excel.backup.prune`, `excel.backup.pin`, `excel.backup.unpin`
 - Sheet: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.create`, `excel.sheet.copy`, `excel.sheet.rename`, `excel.sheet.delete`, `excel.sheet.hide`, `excel.sheet.unhide`, `excel.sheet.protect`, `excel.sheet.unprotect`, `excel.sheet.clear`, `excel.sheet.get_used_range`, `excel.sheet.set_tab_color`
@@ -121,7 +121,6 @@ Set `OPEN_WORKBOOK_PREVIEW_TOOLS=1` before starting `owb mcp` to expose:
 - `excel.runtime.connect_addin`
 - `excel.runtime.disconnect_addin`
 - `excel.runtime.ping_addin`
-- `excel.runtime.get_capabilities`
 - `excel.runtime.get_selection`
 - `excel.runtime.set_active_workbook`
 - `excel.runtime.set_active_sheet`

@@ -401,7 +401,7 @@ function registerPrompts(mcp: McpServer): void {
       "1. Read `excel.runtime.get_active_context`, then inspect `excel.workbook.get_workbook_map` and `excel.template.list`.",
       "2. Prefer a registered template. If no template is registered, call `excel.template.detect_templates` and ask the user to confirm the source sheet.",
       "3. Use `excel.plan.create` and `excel.plan.preview` before mutation.",
-      "4. Use `excel.template.create_sheet_from_template` or `excel.template.create_sheet_from_previous_period`.",
+      "4. Use `excel.template.create_sheet_from_template` with the confirmed template or previous-period sheet as the source.",
       "5. Clear only declared data regions with `excel.template.clear_data_regions` or `excel.range.clear_values_keep_format`.",
       "6. Validate with `excel.template.validate_sheet_against_template`, `excel.formula.validate_against_template`, `excel.style.validate_consistency`, and `excel.validate.no_formula_errors`.",
       "7. Commit only after validation is clean or after discussing warnings with the user."
