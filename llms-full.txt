@@ -10,7 +10,7 @@ This file is generated for LLM and agent context. It combines the project README
 npx -y @components-kit/open-workbook setup
 ```
 
-Then install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel` and paste the printed MCP config into an agent UI.
+Then install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel` and paste the printed MCP launch command into an agent UI's local stdio MCP configuration.
 
 ## Production Rules
 
@@ -44,7 +44,7 @@ Daily spreadsheet work usually does not need the largest model available, but it
 
 The project is being prepared for npm distribution as `@components-kit/open-workbook`. It is not a Microsoft AppSource add-in and does not attempt to install itself into Excel without user or admin trust approval.
 
-Stable areas include runtime connection, workbook/sheet/range operations, reversible batches, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
+Stable areas include runtime connection, workbook/sheet/range operations, reversible batches, combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
 
 The simple flow is MCP-owned: `npx ... mcp` starts the MCP adapter, the local add-in taskpane server, and an embedded backend when no shared daemon is running. The shared `owb daemon` remains available for advanced multi-client coordination.
 
@@ -88,7 +88,12 @@ Run setup:
 npx -y @components-kit/open-workbook setup
 ```
 
-Setup prepares the Excel add-in manifest and prints the MCP config to add to your agent UI.
+Setup prepares the Excel add-in manifest and prints the MCP launch command to add to your agent UI's local stdio MCP configuration.
+For an existing install, refresh local setup assets after a package update with:
+
+```bash
+npx -y @components-kit/open-workbook@latest upgrade
+```
 
 Install the agent skill with skills.sh:
 
@@ -96,17 +101,10 @@ Install the agent skill with skills.sh:
 npx skills add components-kit/open-workbook --skill open-workbook-excel
 ```
 
-Paste the printed MCP config into any MCP-capable agent UI:
+Use the printed MCP launch command in your agent UI:
 
-```json
-{
-  "mcpServers": {
-    "open-workbook": {
-      "command": "npx",
-      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
-    }
-  }
-}
+```bash
+npx -y @components-kit/open-workbook@latest mcp
 ```
 
 Start the agent UI before opening the Open Workbook add-in in Excel; the MCP command starts the local add-in asset server and backend for the simple flow.
@@ -168,13 +166,15 @@ Environment overrides:
 - `OPEN_WORKBOOK_STATE_DIR`
 - `OPEN_WORKBOOK_FILE_BRIDGE_URL`
 - `OPEN_WORKBOOK_FILE_BRIDGE_PORT`
-- `OPEN_WORKBOOK_PREVIEW_TOOLS=1`
 
 ## Common Commands
 
 ```bash
 corepack pnpm check
 corepack pnpm test
+corepack pnpm test:e2e:fast
+corepack pnpm test:e2e:agent:quality:compare
+corepack pnpm test:e2e:agent:quality:gate
 corepack pnpm build
 corepack pnpm verify
 corepack pnpm pack:dry-run
@@ -192,7 +192,7 @@ Open Workbook includes generic agent instruction source for fast, reliable live 
 - `skills/open-workbook-excel/SKILL.md`
 - `skills/open-workbook-excel/references/`
 
-Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`. The skill teaches agents to inspect runtime capabilities, choose the narrowest efficient MCP tool, batch workbook writes, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews. `owb instructions` remains available as a fallback for clients that do not support skills.sh.
+Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`. The skill teaches agents to inspect runtime capabilities, choose the narrowest efficient MCP tool, use combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows when they match the task, avoid sparse null-padded overwrites, batch workbook writes, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews. `owb instructions` remains available as a fallback for clients that do not support skills.sh.
 
 ## Safety Contract
 
@@ -264,6 +264,53 @@ All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
 
+## [0.1.5] - 2026-06-14
+
+### Added
+
+- Added `excel.workflow.preview_risky_edit`, a combined scoped risky-edit workflow that returns before/after snapshots, diff, transaction metadata, and rollback preview.
+- Added `excel.workflow.prepare_session`, a read-only combined discovery workflow for runtime status, active context, capabilities, workbook map, and collaboration state.
+- Added `excel.workflow.create_formula_sheet`, a combined formula-sheet workflow with value writes, formula writes, number formats, and formula validation.
+- Added `excel.workflow.create_template_report`, a combined template report workflow with declared region fill, style comparison/repair, and template validation.
+- Added `excel.workflow.create_pivot_chart_summary`, a combined PivotTable/chart workflow with refresh and source validation.
+- Added `excel.workflow.repair_formula_errors`, a combined formula repair workflow with validation, pattern read, dependency graph inspection, scoped repair, and after-validation.
+- Combined mutating workflows now return an internal preflight payload so compact or low-cost agents can still establish workbook identity and capability context when they select a matched workflow directly.
+- Added release-gate E2E script entries for deterministic fake-host coverage, Codex agent decision coverage, live Excel host gates, and generated E2E reports.
+
+### Changed
+
+- Split Codex agent E2E into a blocking core safety lane and report-only workflow quality lane, with bundled `open-workbook-excel` skill guidance loaded into agent prompts.
+- Added report-only cheap/frontier Codex agent quality comparison and failure-category reporting for workflow diagnostics.
+- Replaced the live Excel E2E placeholder with an opt-in backend/add-in connectivity smoke contract that writes JSON and Markdown artifacts.
+- Strengthened skill and MCP tool guidance for formula writes, large table operations, formula repair, snapshots, diffs, and multi-agent locking.
+- Blocked sparse/null-padded risky workflow value writes by default and added strict quality gate scripts for cheap/frontier agent comparison.
+- Changed setup and upgrade output to print the MCP local stdio launch command instead of a client-specific config wrapper.
+
+## [0.1.4] - 2026-06-13
+
+### Added
+
+- Added a Vite-built React Excel taskpane with updated styling and bundled add-in assets.
+- Added packaged add-in icon assets and hosted manifest icon URLs for Excel ribbon and Developer Add-ins branding.
+
+### Changed
+
+- Kept the local taskpane server on loopback HTTP while using hosted HTTPS assets only for static branding icons.
+- Updated sideloading and advanced runtime documentation to match the local taskpane serving model.
+
+## [0.1.3] - 2026-06-13
+
+### Added
+
+- Added `owb upgrade` for refreshing local manifests and fallback instruction assets after package updates.
+- Added `excel.table.reorder_columns` for preserving Excel table identity while changing column order.
+- Added projected `excel.table.read` options for column selection, row windows, and payload facets on large tables.
+
+### Changed
+
+- Improved large-table guidance so agents avoid full-table rewrites and use table-native operations.
+- Limited `excel.clean.normalize_headers` writes to the normalized header row instead of rewriting the full source range.
+
 ## [0.1.2] - 2026-06-13
 
 ### Added
@@ -321,12 +368,10 @@ Use Open Workbook MCP for live desktop Excel work. Prefer it over manual UI auto
 Start every workbook session with:
 
 ```text
-excel.runtime.get_status
-excel.runtime.get_active_context
-excel.runtime.get_capabilities
-excel.workbook.get_workbook_map
-excel.collab.get_status
+excel.workflow.prepare_session
 ```
+
+If `excel.workflow.prepare_session` is unavailable, call `excel.runtime.get_status`, `excel.runtime.get_active_context`, `excel.runtime.get_capabilities`, `excel.workbook.get_workbook_map`, and `excel.collab.get_status`.
 
 If the add-in is disconnected, ask the user to start their agent UI so it launches the configured Open Workbook MCP command, then open Excel and load the Open Workbook add-in. For manual troubleshooting, run `npx -y @components-kit/open-workbook@latest mcp` and retry. Do not fake workbook state from stale assumptions.
 
@@ -337,6 +382,12 @@ If the add-in is disconnected, ask the user to start their agent UI so it launch
 - Use `excel.template.*`, `excel.style.*`, and `excel.formula.*` when preserving or repairing templates matters.
 - Use `excel.plan.*` for previewable multi-step changes that need rollback and stale-target checks.
 - Use `excel.batch.*` for compact, direct range mutations that still need backups, fingerprints, permissions, and transaction logging.
+- Use `excel.workflow.create_formula_sheet` for standard sheet creation with values, formulas, number formats, and formula validation in one response.
+- Use `excel.workflow.repair_formula_errors` for formula error repair when you have an error range plus a source formula range or exact formulas to write.
+- Use `excel.workflow.preview_risky_edit` for scoped risky edits that need before/after snapshots, a diff, and rollback preview in one response. Provide at least one minimal scoped operation and leave `apply` enabled unless the user asked for preview only.
+- Use `excel.workflow.create_template_report` for standard template report creation that needs region clear/fill, style comparison/repair, and validation in one response.
+- Use `excel.workflow.create_pivot_chart_summary` for standard PivotTable plus chart summary tasks that need create, refresh, and validation in one response.
+Combined mutating workflows include a read-only preflight payload before mutation; still prefer `excel.workflow.prepare_session` first when possible.
 - Use `excel.validate.*` before and after risky changes.
 - Use `excel.backup.*`, `excel.snapshot.*`, and `excel.transaction.*` for recovery, audit, rollback previews, and rollback chains.
 - Use `excel.task.*`, `excel.lock.*`, `excel.collab.*`, and `excel.conflict.*` for multi-agent workbook work.
@@ -347,10 +398,21 @@ For detailed routing, read `references/tool-selection.md`.
 
 - Never bypass Open Workbook's safety lifecycle for mutations: permissions, scoped locks, snapshots, backups, fingerprints, Office.js execution, validation, transaction records, and rollback metadata.
 - Never write cell-by-cell loops. Batch values, formulas, number formats, and styles as 2D matrices over contiguous ranges.
+- Never pad a broad range write with `null` or blanks when only a smaller range is intended. Write the smallest changed rectangle or use explicit clear tools.
 - Read only the workbook properties needed for the task. Avoid broad workbook scans unless the task is audit, validation, search, or repair.
 - Treat `CAPABILITY_UNAVAILABLE`, partial capability warnings, and Office.js host limits as real results. Explain them and choose a supported path.
 - Preserve existing template conventions over generic formatting rules.
 - After mutation, validate the affected area and surface backups, transaction IDs, warnings, diffs, and rollback options.
+
+## Critical Recipes
+
+- Sheet with formulas: prefer `excel.workflow.create_formula_sheet`; if using separate tools, create the sheet, write labels/constants with `excel.range.write_values`, write formulas with `excel.range.write_formulas`, write number formats with `excel.range.write_number_formats`, then validate with `excel.formula.validate` or `excel.validate.no_formula_errors`. Do not put formula strings into `write_values`.
+- Large table reorder/filter/sort/append/update: inspect with `excel.table.get_info` and bounded `excel.table.read` only when row data is needed, then use `excel.table.reorder_columns`, `excel.table.apply_filters`, `excel.table.sort`, `excel.table.append_rows`, or `excel.table.update_rows`. Never clear, recreate, or rewrite the whole table for these tasks.
+- Formula repair: prefer `excel.workflow.repair_formula_errors` when the error range and source formula range are known. Otherwise find errors, read nearby formula patterns, inspect dependencies, repair with `excel.formula.repair_patterns`, `excel.formula.fill_down`, `excel.formula.fill_right`, or scoped `excel.range.write_formulas`, recalculate if needed, then validate. Never convert formulas to values unless explicitly requested.
+- Template report: prefer `excel.workflow.create_template_report`; if using separate tools, create the sheet from template, clear/fill declared regions, compare styles, repair style drift, and validate against the template.
+- Snapshot/diff/rollback preview: after discovery, prefer `excel.workflow.preview_risky_edit` for a scoped risky edit with a non-empty minimal operation list. If using separate tools, create a before snapshot, make the scoped change, create an after snapshot, call `excel.diff.summarize` or `excel.snapshot.compare` with both snapshot IDs, then use rollback preview tools without actually rolling back unless asked.
+- Pivot/chart summary: prefer `excel.workflow.create_pivot_chart_summary`; if using separate tools, check capability, create the PivotTable, refresh it, create/update the chart, refresh/update the chart source, and validate the PivotTable source before reporting success.
+- Multi-agent work: read collaboration status, create or inspect the task, acquire the narrowest lock, follow conflict guidance, perform or plan the scoped operation, then release locks.
 
 ## Workflow References
 
@@ -371,13 +433,14 @@ Choose the narrowest Open Workbook MCP interface that preserves workbook intent.
 ## Session And Discovery
 
 - Runtime health: `excel.runtime.get_status`
+- Full workflow setup: `excel.workflow.prepare_session`
 - Active workbook and selection context: `excel.runtime.get_active_context`
 - Host/tool capability matrix: `excel.runtime.get_capabilities`
 - Workbook structure: `excel.workbook.get_workbook_map`
 - Open workbooks: `excel.workbook.list_open_workbooks`
 - Sheets: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.get_used_range`
 
-If capabilities are unknown because the add-in is disconnected, stop and ask for runtime setup instead of guessing.
+Prefer `excel.workflow.prepare_session` as the first call. If capabilities are unknown because the add-in is disconnected, stop and ask for runtime setup instead of guessing.
 
 ## Reading Data
 
@@ -387,9 +450,9 @@ If capabilities are unknown because the add-in is disconnected, stop and ask for
 - Formatting: `excel.range.read_number_formats`, `excel.range.read_styles`
 - Full cell payload: `excel.range.read_full`
 - Search and diagnostics: `excel.range.search`, `excel.range.find_blank_cells`, `excel.range.find_errors`
-- Table-shaped data: `excel.table.read`
+- Table-shaped data: `excel.table.read`; pass `columns`, `rowOffset`, `rowLimit`, and include flags for large tables
 
-Use explicit sheet/address ranges whenever possible. Use used-range or workbook-wide scans only for audits, validation, search, or discovery.
+Use explicit sheet/address ranges whenever possible. Use used-range or workbook-wide scans only for audits, validation, search, or discovery. For simple reads, use the facet-specific range tools instead of `excel.range.read_full`.
 
 ## Writing Data
 
@@ -397,42 +460,56 @@ Use explicit sheet/address ranges whenever possible. Use used-range or workbook-
 - Simple formulas: `excel.range.write_formulas`
 - Number formats: `excel.range.write_number_formats`
 - Styles: `excel.range.write_styles`
+- Combined formula sheet creation: `excel.workflow.create_formula_sheet`
+- Combined formula error repair: `excel.workflow.repair_formula_errors`
 - Multiple related range edits: `excel.batch.validate`, `excel.batch.dry_run`, `excel.batch.apply`
+- Scoped risky edit with diff and rollback preview: `excel.workflow.preview_risky_edit`
 - Previewable or user-reviewable edits: `excel.plan.create`, `excel.plan.preview`, `excel.plan.apply`
 - Stale plan handling: `excel.plan.refresh_preview`, `excel.plan.rebase`
 
-Prefer `excel.plan.*` when a user should review a diff, when formulas/templates are at risk, or when rollback clarity matters. Prefer `excel.batch.*` for compact, well-scoped range mutations.
+Prefer `excel.workflow.create_formula_sheet` for standard new sheets that need values, formulas, number formats, and validation. Prefer `excel.workflow.repair_formula_errors` for formula error repair when an error range and source formula range are known. Prefer `excel.workflow.preview_risky_edit` when a risky scoped edit should apply and return before/after snapshots, a diff, transaction id, and rollback preview in one response. Provide at least one minimal scoped operation and leave `apply` enabled unless the user asked for preview only. Prefer `excel.plan.*` when a user should review a diff before applying, when formulas/templates are at risk, or when rollback clarity matters. Prefer `excel.batch.*` for compact, well-scoped range mutations.
+Combined mutating workflows include an internal read-only preflight payload before mutation; still prefer `excel.workflow.prepare_session` first when possible.
+Values, formulas, formats, and styles are separate workbook facets. Use `excel.range.write_values` for constants only, `excel.range.write_formulas` for formulas beginning with `=`, and `excel.range.write_number_formats` for display formats. Do not merge formulas into a values write just because the matrix is convenient.
+Do not pad a large range write with `null`, blank strings, or unchanged cells when only one cell or a smaller rectangle should change. Use the smallest changed target range, or use `excel.range.clear_values_keep_format` for intentional clearing.
+
+When a noninteractive agent run cannot apply a mutation, create an `excel.plan.create` draft with operations that use actual MCP tool names and nested `args`. Example operations should look like `{ "tool": "excel.range.write_formulas", "args": { ... } }`, not vague prose or broad workbook rewrites.
 
 ## Tables, Filters, And Sorts
 
 - Inspect tables: `excel.table.list`, `excel.table.get_info`, `excel.table.read`
 - Append or update rows: `excel.table.append_rows`, `excel.table.update_rows`
+- Reorder columns: `excel.table.reorder_columns`
 - Resize or structure changes: `excel.table.resize`, `excel.table.copy_structure`
 - Filters: `excel.filter.get_filters`, `excel.filter.apply`, `excel.filter.clear`, `excel.filter.validate`
 - Sorts: `excel.sort.apply`, `excel.sort.clear`
 
 Use table tools instead of range tools when the target is an Excel table. This preserves headers, totals rows, filters, structured references, and table styles.
+Do not clear and recreate a table to reorder columns; use `excel.table.reorder_columns`, or stop for confirmation before any destructive rebuild.
+For large tables, avoid full `excel.table.read` unless the user asks for all rows. Pass `rowLimit`, `rowOffset`, and `columns` for targeted discovery, then mutate with table-native tools.
 
 ## Templates, Styles, And Formulas
 
 - Template discovery and registration: `excel.template.detect_templates`, `excel.template.register`, `excel.template.list`
+- Combined template report creation: `excel.workflow.create_template_report`
 - New period/report sheet: `excel.template.create_sheet_from_template`
 - Template data fills: `excel.template.clear_data_regions`, `excel.template.fill_regions`
 - Template validation/repair: `excel.template.validate_sheet_against_template`, `excel.template.repair_sheet_from_template`
 - Style fingerprints and copy: `excel.style.get_fingerprint`, `excel.style.compare_fingerprint`, `excel.style.copy_from_template`
-- Formula patterns and repair: `excel.formula.read_patterns`, `excel.formula.copy_patterns`, `excel.formula.validate`, `excel.formula.repair_patterns`
+- Formula patterns and repair: `excel.workflow.repair_formula_errors`, `excel.formula.read_patterns`, `excel.formula.copy_patterns`, `excel.formula.validate`, `excel.formula.repair_patterns`
 - Formula dependency safety: `excel.formula.get_dependency_graph`, `excel.formula.trace_precedents`, `excel.formula.trace_dependents`
 
-Use these tools when the workbook has established formatting, formula patterns, reports, print layout, or period templates.
+Use `excel.workflow.create_template_report` for standard period/report creation from a registered template. Use these tools when the workbook has established formatting, formula patterns, reports, print layout, or period templates.
+Formula repair requires both diagnosis and a repair action: use `excel.workflow.repair_formula_errors` when possible, or find formula errors, read formula patterns, inspect dependencies when references may shift, repair with formula-aware tools, then validate. Do not use `excel.formula.convert_to_values` as a repair.
 
 ## Pivots And Charts
 
 - Pivot inspect/refresh: `excel.pivot.list`, `excel.pivot.get_info`, `excel.pivot.refresh`, `excel.pivot.refresh_all`
+- Combined pivot/chart summary: `excel.workflow.create_pivot_chart_summary`
 - Pivot create/rebuild: `excel.pivot.create`, `excel.pivot.rebuild_with_source`
 - Pivot template work: `excel.pivot.get_fingerprint`, `excel.pivot.compare_fingerprint`, `excel.pivot.copy_from_template`, `excel.pivot.repair_from_template`
 - Chart inspect/create/update: `excel.chart.list`, `excel.chart.get_info`, `excel.chart.create`, `excel.chart.update_data_source`, `excel.chart.copy_from_template`
 
-For host-limited pivot/chart dimensions, report capability warnings and avoid claiming deterministic replay.
+Use `excel.workflow.create_pivot_chart_summary` for standard summary requests that need a PivotTable plus chart and post-create validation. For host-limited pivot/chart dimensions, report capability warnings and avoid claiming deterministic replay.
 
 ## Validation And Recovery
 
@@ -441,11 +518,13 @@ For host-limited pivot/chart dimensions, report capability warnings and avoid cl
 - Broken references: `excel.validate.no_broken_references`
 - Template/style/table/filter checks: `excel.validate.template_consistency`, `excel.validate.styles`, `excel.validate.tables`, `excel.validate.filters`
 - Unintended changes: `excel.validate.no_unintended_changes`
+- Combined risky edit workflow: `excel.workflow.preview_risky_edit`
 - Snapshots and diffs: `excel.snapshot.create`, `excel.snapshot.compare`, `excel.diff.summarize`
 - Rollback: `excel.plan.rollback`, `excel.transaction.preview_rollback`, `excel.transaction.rollback`, `excel.transaction.preview_rollback_chain`, `excel.transaction.rollback_chain`
 - File backups: `excel.backup.create_file`, `excel.backup.verify`, `excel.backup.restore_file`
 
 Always present validation issues with severity and target, not vague success/failure language.
+Diff tools require two snapshots. For risky scoped edits, use `excel.workflow.preview_risky_edit` after discovery when available, with a non-empty minimal operation list. If using separate tools, create a before snapshot, make the scoped edit, create an after snapshot, call `excel.diff.summarize` or `excel.snapshot.compare`, then preview rollback with `excel.transaction.preview_rollback` or `excel.transaction.preview_rollback_chain`.
 
 ---
 
@@ -462,6 +541,8 @@ These are default Open Workbook MCP workflows. Adjust scope and validation to th
 3. Call `excel.runtime.get_capabilities`.
 4. Call `excel.workbook.get_workbook_map`.
 5. For a specific sheet, call `excel.sheet.get_used_range` and scoped `excel.range.read_*` tools.
+
+Use `excel.workflow.prepare_session` when available to combine the first four calls plus collaboration state.
 
 Use display text when reporting what a user sees. Use values/formulas/number formats when making calculations or edits.
 
@@ -484,7 +565,13 @@ Do not read the whole workbook when a named table, used range, or explicit range
 
 For a one-range value update, direct `excel.range.write_values` is acceptable because it routes through the backend safety lifecycle.
 
+For new sheets with formulas and number formats, prefer `excel.workflow.create_formula_sheet`.
+
+Combined mutating workflows return an internal `preflight` payload with runtime status, active context, capabilities, workbook map, and collaboration state before they mutate. Still prefer `excel.workflow.prepare_session` first when possible; use the matched combined workflow directly when the task is standard and speed/model reliability matters.
+
 ## Create A New Period Sheet From Template
+
+Prefer `excel.workflow.create_template_report` for standard template report creation.
 
 1. Call `excel.template.list` or `excel.template.detect_templates`.
 2. Register the template if needed with `excel.template.register`.
@@ -494,14 +581,17 @@ For a one-range value update, direct `excel.range.write_values` is acceptable be
 6. Validate with `excel.template.validate_sheet_against_template`.
 
 If no registered template exists, warn before mutation. Preserve the template's formatting, formulas, filters, print layout, tables, freeze panes, and named ranges.
+Do not replace this workflow with `excel.sheet.copy` unless the user asks for a raw sheet duplicate or the template tool is unavailable.
 
 ## Repair Formulas Or Styles
 
-1. Identify the template and target sheet/range.
-2. Capture current state with `excel.snapshot.create` when the repair may affect user work.
-3. Compare fingerprints with `excel.style.compare_fingerprint` or formula patterns with `excel.formula.validate_against_template`.
-4. Repair with `excel.repair.style_from_template`, `excel.repair.formulas_from_template`, `excel.style.copy_from_template`, or `excel.formula.repair_patterns`.
-5. Validate again and report any Office.js capability-status warnings.
+Prefer `excel.workflow.repair_formula_errors` for ordinary formula error repairs when you can identify the error range plus a source formula or explicit formula matrix.
+
+1. Find formula errors with `excel.formula.find_errors`, `excel.range.find_errors`, or `excel.validate.no_formula_errors`.
+2. Read neighboring patterns with `excel.formula.read_patterns` and dependencies with `excel.formula.get_dependency_graph` or trace tools.
+3. Capture current state with `excel.snapshot.create` when the repair may affect user work.
+4. Repair with `excel.formula.repair_patterns`, `excel.formula.fill_down`, `excel.formula.fill_right`, or scoped `excel.range.write_formulas`; for styles use `excel.style.copy_from_template` or `excel.style.repair_consistency`.
+5. Recalculate when formulas changed, validate with `excel.formula.validate` or `excel.validate.no_formula_errors`, and report warnings.
 
 Do not convert formulas to values unless the user explicitly asks or the workflow requires a static export.
 
@@ -517,23 +607,43 @@ Cleaning writes must stay within the requested sheet, range, table, or registere
 ## Update Tables, Filters, Or Sorts
 
 1. Inspect with `excel.table.get_info` and `excel.filter.get_filters`.
-2. Use `excel.table.append_rows` or `excel.table.update_rows` for data.
-3. Use `excel.table.resize` only when structure must change.
-4. Preserve or reapply filters with `excel.filter.apply`, `excel.filter.preserve_from_template`, or `excel.table.preserve_filters`.
-5. Validate with `excel.validate.tables` and `excel.validate.filters`.
+2. Use projected `excel.table.read` options when only some columns or rows are needed.
+3. Use `excel.table.reorder_columns` for column order changes.
+4. Use `excel.table.append_rows` or `excel.table.update_rows` for data.
+5. Use `excel.table.resize` only when structure must change.
+6. Preserve or reapply filters with `excel.filter.apply`, `excel.filter.preserve_from_template`, or `excel.table.preserve_filters`.
+7. Validate with `excel.validate.tables` and `excel.validate.filters`.
 
 Avoid raw range writes inside table bodies when table tools can express the intent.
+Avoid full-table rewrites for layout changes such as column reorder; they are slow on large tables and can break table identity or dependent objects.
 
 ## Create Or Update Pivots And Charts
 
+For a standard summary PivotTable plus chart, prefer `excel.workflow.create_pivot_chart_summary`.
+
 1. Confirm active host support with `excel.runtime.get_capabilities`.
 2. Inspect source tables/ranges and existing objects.
-3. For pivots, use `excel.pivot.validate_source`, `excel.pivot.create`, or `excel.pivot.rebuild_with_source`.
+3. For pivots, validate first with `excel.pivot.validate_source`, then use `excel.pivot.create` or `excel.pivot.rebuild_with_source`.
 4. For charts, use `excel.chart.create` or `excel.chart.update_data_source`.
 5. For template parity, use pivot/chart fingerprint or copy-from-template tools.
-6. Refresh and validate before reporting success.
+6. Refresh pivots and charts with `excel.pivot.refresh`/`excel.pivot.refresh_all` and `excel.chart.refresh`/`excel.chart.update_data_source`, then validate before reporting success.
 
 When Office.js cannot expose deterministic pivot/chart dimensions, return the capability warning instead of inventing proof.
+
+## Snapshot, Diff, And Rollback Preview
+
+Use `excel.workflow.preview_risky_edit` after discovery when the requested edit is scoped and the user expects proof, diff, and rollback preview. Pass a non-empty minimal operation list and leave `apply` enabled unless the user asked for preview only. It creates the before snapshot, plan preview, scoped apply, after snapshot, diff, and rollback preview in one response.
+
+If the combined workflow is unavailable:
+
+1. Create a before snapshot with `excel.snapshot.create` or `excel.workbook.snapshot`.
+2. Apply only the scoped edit requested by the user.
+3. Create an after snapshot.
+4. Compare with `excel.diff.summarize`, `excel.diff.create`, or `excel.snapshot.compare`.
+5. Preview rollback with `excel.transaction.preview_rollback` or `excel.transaction.preview_rollback_chain`.
+
+Do not actually roll back unless the user explicitly asks for rollback apply.
+Do not stop after creating a plan or making the edit; a snapshot/diff/rollback-preview workflow is incomplete until the diff and rollback preview tools have both run.
 
 ## Save, Export, And Back Up
 
@@ -732,7 +842,7 @@ Open Workbook is distributed as one npm package for technical users:
 npx -y @components-kit/open-workbook setup
 ```
 
-The setup command prepares the local machine, but it does not edit every agent UI automatically. After setup, install the Open Workbook Excel skill with skills.sh and copy the printed MCP config into whichever MCP-capable agent you use.
+The setup command prepares the local machine, but it does not edit every agent UI automatically. After setup, install the Open Workbook Excel skill with skills.sh and copy the printed MCP launch command into whichever MCP-capable agent you use.
 
 ## Requirements
 
@@ -757,17 +867,10 @@ npx skills add components-kit/open-workbook --skill open-workbook-excel
 
 It also prepares an Excel add-in manifest. On macOS, setup copies the manifest into Excel's local WEF sideload folder. On Windows, setup writes a manifest and prints the Trusted Add-in Catalog steps that Excel requires.
 
-Paste the printed MCP config into your agent UI:
+Use the printed MCP launch command in your agent UI's local stdio MCP configuration:
 
-```json
-{
-  "mcpServers": {
-    "open-workbook": {
-      "command": "npx",
-      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
-    }
-  }
-}
+```bash
+npx -y @components-kit/open-workbook@latest mcp
 ```
 
 ## Daily Use
@@ -783,11 +886,13 @@ The `mcp` command starts the MCP adapter and, in the default flow, starts the lo
 
 ```bash
 npx -y @components-kit/open-workbook doctor
+npx -y @components-kit/open-workbook@latest upgrade
 npx -y @components-kit/open-workbook instructions
 npx -y @components-kit/open-workbook sideload manifest --out open-workbook.xml
 ```
 
 `instructions` prints a fallback instruction bundle for clients that do not support skills.sh.
+Use `upgrade` after installing a newer package version; it refreshes the same local manifest and fallback instruction assets as setup, then reminds you to restart the agent UI or MCP host.
 
 Advanced shared-daemon, service-wrapper, custom-port, HTTPS, and file-bridge setup is documented in [Advanced Runtime](advanced-runtime.md).
 
@@ -947,7 +1052,7 @@ owb mcp
 The Excel manifest points at the local taskpane URL by default:
 
 ```text
-http://127.0.0.1:37846/taskpane.html
+http://localhost:37846/taskpane.html
 ```
 
 `owb mcp` starts that server automatically for the simple flow. You can also run it directly:
@@ -956,19 +1061,7 @@ http://127.0.0.1:37846/taskpane.html
 owb addin serve
 ```
 
-For HTTPS local serving:
-
-```bash
-owb addin serve --https \
-  --tls-cert ./certs/open-workbook.local.pem \
-  --tls-key ./certs/open-workbook.local-key.pem
-```
-
-Then generate a matching manifest:
-
-```bash
-OPEN_WORKBOOK_ADDIN_HTTPS=1 owb sideload manifest --out open-workbook.xml
-```
+The taskpane server stays on local HTTP. The manifest uses hosted ComponentsKit HTTPS URLs only for static branding icons that Excel displays in the ribbon and Developer Add-ins gallery.
 
 ## File Bridge
 
@@ -1045,7 +1138,7 @@ Engine adapters must report capabilities. The Office.js add-in reports host plat
 The protocol package owns the full tool, resource, and prompt catalog. MCP registration is capability-gated:
 
 - stable tools are registered by default
-- preview tools require `OPEN_WORKBOOK_PREVIEW_TOOLS=1`
+- preview tools, when present, require `OPEN_WORKBOOK_PREVIEW_TOOLS=1`
 - planned tools are omitted from production catalogs until their contract and implementation are ready
 - unsupported host-specific capabilities are reported honestly by the relevant stable tools
 
@@ -1070,19 +1163,19 @@ The full namespace is represented in the protocol catalog, but MCP only exposes 
 
 ## Stable Tool Groups
 
-- Runtime: `excel.runtime.get_status`, `excel.runtime.get_capabilities`, `excel.runtime.get_active_context`
+- Runtime: `excel.runtime.get_status`, `excel.runtime.connect_addin`, `excel.runtime.disconnect_addin`, `excel.runtime.ping_addin`, `excel.runtime.get_capabilities`, `excel.runtime.get_active_context`, `excel.runtime.get_selection`, `excel.runtime.set_active_workbook`, `excel.runtime.set_active_sheet`
 - Workbook: `excel.workbook.list_open_workbooks`, `excel.workbook.get_workbook_info`, `excel.workbook.get_workbook_map`, `excel.workbook.snapshot`, `excel.workbook.refresh_snapshot`, `excel.workbook.get_snapshot`, `excel.workbook.detect_external_changes`, `excel.workbook.calculate`, `excel.workbook.save`, `excel.workbook.save_as`, `excel.workbook.create_backup`, `excel.workbook.restore_backup`, `excel.workbook.export_copy`, `excel.workbook.export_local_config`, `excel.workbook.import_local_config`, `excel.workbook.embed_local_config`, `excel.workbook.read_embedded_local_config`, `excel.workbook.import_embedded_local_config`, `excel.workbook.close`
 - File backups: `excel.backup.create_file`, `excel.backup.list`, `excel.backup.get`, `excel.backup.verify`, `excel.backup.restore_file`, `excel.backup.delete`, `excel.backup.prune`, `excel.backup.pin`, `excel.backup.unpin`
 - Sheet: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.create`, `excel.sheet.copy`, `excel.sheet.rename`, `excel.sheet.delete`, `excel.sheet.hide`, `excel.sheet.unhide`, `excel.sheet.protect`, `excel.sheet.unprotect`, `excel.sheet.clear`, `excel.sheet.get_used_range`, `excel.sheet.set_tab_color`
 - Range: `excel.range.read_values`, `excel.range.read_formulas`, `excel.range.read_number_formats`, `excel.range.read_display_text`, `excel.range.read_styles`, `excel.range.read_full`, `excel.range.write_values`, `excel.range.write_formulas`, `excel.range.write_number_formats`, `excel.range.write_styles`, `excel.range.clear`, `excel.range.clear_values`, `excel.range.clear_formats`, `excel.range.clear_values_keep_format`, `excel.range.copy`, `excel.range.move`, `excel.range.insert_rows`, `excel.range.delete_rows`, `excel.range.insert_columns`, `excel.range.delete_columns`, `excel.range.autofit_columns`, `excel.range.autofit_rows`, `excel.range.merge`, `excel.range.unmerge`
 - Advanced range reads: `excel.range.read_hyperlinks`, `excel.range.read_comments`, `excel.range.read_notes`, `excel.range.read_merged_cells`, `excel.range.read_data_validation`, `excel.range.read_conditional_formatting`, `excel.range.search`, `excel.range.find_blank_cells`, `excel.range.find_errors`
-- Batch and plan: `excel.batch.validate`, `excel.batch.dry_run`, `excel.batch.apply`, `excel.plan.create`, `excel.plan.preview`, `excel.plan.refresh_preview`, `excel.plan.rebase`, `excel.plan.apply`, `excel.plan.rollback`
+- Batch, workflow, and plan: `excel.batch.validate`, `excel.batch.dry_run`, `excel.batch.apply`, `excel.workflow.prepare_session`, `excel.workflow.create_formula_sheet`, `excel.workflow.create_template_report`, `excel.workflow.create_pivot_chart_summary`, `excel.workflow.repair_formula_errors`, `excel.workflow.preview_risky_edit`, `excel.plan.create`, `excel.plan.preview`, `excel.plan.refresh_preview`, `excel.plan.rebase`, `excel.plan.apply`, `excel.plan.rollback`
 - Multi-agent coordination: `excel.task.create`, `excel.task.claim`, `excel.task.update`, `excel.task.set_progress`, `excel.task.add_blocker`, `excel.task.resolve_blocker`, `excel.task.evaluate_schedule`, `excel.task.resume_ready`, `excel.task.complete`, `excel.task.fail`, `excel.task.cancel`, `excel.task.list`, `excel.task.get`, `excel.collab.get_status`, `excel.collab.list_agents`, `excel.collab.list_tasks`, `excel.collab.list_locks`, `excel.collab.list_transactions`, `excel.collab.get_conflicts`, `excel.collab.get_recent_events`, `excel.lock.get_policy`, `excel.lock.set_policy`, `excel.lock.acquire`, `excel.lock.renew`, `excel.lock.release`, `excel.conflict.get_guidance`, `excel.conflict.explain`, `excel.conflict.get_telemetry`, `excel.conflict.clear_telemetry`, `excel.transaction.list`, `excel.transaction.get`, `excel.transaction.preview_rollback`, `excel.transaction.rollback`, `excel.transaction.preview_rollback_chain`, `excel.transaction.rollback_chain`
 - Snapshot and diff: `excel.snapshot.create`, `excel.snapshot.refresh`, `excel.snapshot.get`, `excel.snapshot.compare`, `excel.snapshot.invalidate`, `excel.snapshot.list`, `excel.snapshot.delete`, `excel.diff.create`, `excel.diff.summarize`, `excel.diff.get_details`, `excel.diff.export_json`, `excel.diff.export_html`
 - Events: `excel.events.subscribe`, `excel.events.unsubscribe`, `excel.events.get_recent`, `excel.events.clear`, `excel.events.set_debounce`
 - Templates: `excel.template.detect_templates`, `excel.template.register`, `excel.template.unregister`, `excel.template.get`, `excel.template.list`, `excel.template.infer_regions`, `excel.template.create_sheet_from_template`, `excel.template.clear_data_regions`, `excel.template.fill_regions`, `excel.template.validate_sheet_against_template`, `excel.template.repair_sheet_from_template`
 - Style and formula preservation: `excel.style.get_fingerprint`, `excel.style.compare_fingerprint`, `excel.style.copy_from_template`, `excel.style.apply_style`, `excel.style.validate_consistency`, `excel.style.repair_consistency`, `excel.style.get_theme`, `excel.style.apply_theme`, `excel.style.copy_column_widths`, `excel.style.copy_row_heights`, `excel.style.copy_borders`, `excel.style.copy_fills`, `excel.style.copy_fonts`, `excel.style.copy_alignment`, `excel.style.copy_number_formats`, `excel.style.copy_conditional_formatting`, `excel.style.copy_data_validation`, `excel.style.copy_freeze_panes`, `excel.style.copy_print_settings`, `excel.style.copy_page_layout`, `excel.style.copy_hidden_rows_columns`, `excel.formula.read_patterns`, `excel.formula.copy_patterns`, `excel.formula.fill_down`, `excel.formula.fill_right`, `excel.formula.validate`, `excel.formula.validate_against_template`, `excel.formula.repair_patterns`, `excel.formula.find_errors`, `excel.formula.find_circular_references`, `excel.formula.get_dependency_graph`, `excel.formula.trace_precedents`, `excel.formula.trace_dependents`, `excel.formula.convert_to_values`, `excel.formula.recalculate`, `excel.formula.explain`
-- Tables: `excel.table.list`, `excel.table.get_info`, `excel.table.read`, `excel.table.create`, `excel.table.resize`, `excel.table.append_rows`, `excel.table.update_rows`, `excel.table.clear_data_keep_formulas`, `excel.table.clear_filters`, `excel.table.apply_filters`, `excel.table.preserve_filters`, `excel.table.sort`, `excel.table.set_total_row`, `excel.table.set_style`, `excel.table.copy_structure`, `excel.table.validate_against_template`
+- Tables: `excel.table.list`, `excel.table.get_info`, `excel.table.read`, `excel.table.create`, `excel.table.resize`, `excel.table.reorder_columns`, `excel.table.append_rows`, `excel.table.update_rows`, `excel.table.clear_data_keep_formulas`, `excel.table.clear_filters`, `excel.table.apply_filters`, `excel.table.preserve_filters`, `excel.table.sort`, `excel.table.set_total_row`, `excel.table.set_style`, `excel.table.copy_structure`, `excel.table.validate_against_template`
 - Filters and sort: `excel.filter.get_filters`, `excel.filter.apply`, `excel.filter.clear`, `excel.filter.preserve_from_template`, `excel.filter.validate`, `excel.sort.apply`, `excel.sort.clear`, `excel.sort.preserve_from_template`
 - PivotTables and charts: `excel.pivot.list`, `excel.pivot.get_info`, `excel.pivot.create`, `excel.pivot.refresh`, `excel.pivot.refresh_all`, `excel.pivot.update_source`, `excel.pivot.copy_from_template`, `excel.pivot.delete`, `excel.pivot.validate_source`, `excel.pivot.get_capability_matrix`, `excel.pivot.get_fingerprint`, `excel.pivot.compare_fingerprint`, `excel.pivot.diff`, `excel.pivot.repair_from_template`, `excel.pivot.rebuild_with_source`, `excel.chart.list`, `excel.chart.get_info`, `excel.chart.create`, `excel.chart.update_data_source`, `excel.chart.copy_from_template`, `excel.chart.refresh`, `excel.chart.delete`, `excel.chart.validate_against_template`
 - Names and regions: `excel.names.list`, `excel.names.get`, `excel.names.create`, `excel.names.update`, `excel.names.delete`, `excel.region.detect`, `excel.region.register`, `excel.region.list`, `excel.region.get`, `excel.region.clear_values`, `excel.region.write_values`, `excel.region.fill`
@@ -1124,7 +1217,23 @@ No mutating tool should bypass the backend safety lifecycle. It must validate pe
 
 ## Implementation Notes
 
-`excel.batch.apply`, `excel.plan.apply`, and all stable mutating sheet/range tools route through backend snapshots, backup records, target-region conflict checks, and add-in Office.js execution.
+`excel.batch.apply`, `excel.workflow.preview_risky_edit`, `excel.plan.apply`, and all stable mutating sheet/range tools route through backend snapshots, backup records, target-region conflict checks, and add-in Office.js execution.
+
+`excel.workflow.prepare_session` is the preferred first call for agent workflows. It returns runtime status, active context, capabilities, workbook map, and collaboration state in one read-only result so agents can establish workbook identity before mutation.
+
+Combined mutating workflows also include an internal read-only preflight before mutation and return that `preflight` payload. Agents should still call `excel.workflow.prepare_session` first when possible, but a matched combined workflow can safely establish workbook identity and capability context itself when a cheap or compact model selects the workflow directly.
+
+`excel.workflow.create_formula_sheet` is a combined formula-sheet workflow for common input-sheet tasks. It creates the sheet, writes constants and formulas through the batch lifecycle, applies number formats, and validates the formula range before returning.
+
+`excel.workflow.create_template_report` is a combined template-report workflow for period/report sheet tasks. It creates the target sheet from a registered template, clears and fills declared data regions, compares style fingerprints, repairs styles, and validates the result against the template.
+
+`excel.workflow.create_pivot_chart_summary` is a combined report-object workflow for PivotTable plus chart tasks. It checks PivotTable capability status, creates the PivotTable, refreshes it, creates the chart, updates/refreshes the chart source, and validates PivotTable source metadata in one response.
+
+`excel.workflow.repair_formula_errors` is a combined formula repair workflow. It validates/finds formula errors, reads formula patterns, builds the dependency graph, repairs formulas with a scoped pattern fill or explicit formula matrix write, then validates the repaired target range.
+
+`excel.workflow.preview_risky_edit` is a combined safe-edit interface for agents that need one call to perform a scoped risky edit and return proof. It requires at least one scoped operation, captures a before snapshot, creates and previews a plan, applies the scoped operations by default, captures an after snapshot, compares snapshots, and returns rollback preview metadata for the transaction. Set `apply: false` only when the user asked to stop after snapshot and plan preview. The workflow blocks sparse/null-padded value writes by default because those often indicate a tiny intended edit expanded into a broad overwrite; use a smaller target range, an explicit clear operation, or `allowSparseOverwrite` only for intentional broad overwrites.
+
+Facet-specific range reads load only the requested cell payload. `excel.table.read` accepts optional column, row-window, and include flags so agents can inspect large tables without transferring the entire body.
 
 `excel.plan.rollback` and `excel.workbook.restore_backup` restore captured range snapshots. Full file-copy restore is tracked separately because it requires file-level user or OS involvement.
 
@@ -1155,7 +1264,7 @@ Style fidelity tools capture granular style fingerprints for a sheet or address,
 
 Formula intelligence tools capture R1C1 formula patterns, compare pattern matrices, copy formulas from templates, fill formulas down or right, convert formulas to values with backup, recalculate workbooks, parse formula dependency edges, trace precedents/dependents, and return lightweight formula explanations. Dependency graph nodes distinguish local ranges, structured table references, and external workbook references; structured references resolve to precise header/data/totals/all table ranges when table metadata is available, and dynamic spill references expand when spill metadata is available. Formula writes include parsed local range/table dependencies in pre-commit lock checks. Formula error validation scans used ranges through Office.js special-cell APIs. Circular-reference enumeration currently returns explicit capability-status results until it can be normalized across Excel hosts.
 
-Table, filter, and sort mutations use native Office.js table APIs. The backend captures a backup over the affected table range or target structure range before mutating.
+Table, filter, and sort mutations use native Office.js table APIs. Table column reorder preserves the existing table object and uses native range copy through a temporary worksheet rather than clearing/recreating the table or transferring the full table body through MCP. The backend captures a backup over the affected table range or target structure range before mutating.
 
 PivotTable and chart tools use native Office.js APIs. Pivot creation supports source ranges or structured tables, destination cells, row/column/filter/data field layout, aggregation, number formats, and layout flags. Pivot reads include layout and hierarchy metadata where Office.js exposes it. Pivot capability matrix reports supported, partial, unsupported, and unknown dimensions for the active host. Pivot validation can check expected source fields, axis placement, data-field aggregation, number formats, and layout settings before an agent mutates a report. Pivot fingerprints hash deterministic source, layout, data-field, and output-shape metadata with warnings for Office.js-limited dimensions; compare and diff tools use those fingerprints for review. Pivot template copy replays deterministic options, layout, hierarchy order, data aggregation/number formats, and basic field settings through a transaction-backed path when the target pivot has matching source fields; agents can restrict replay with `dimensions`. Pivot copy/repair responses include `capabilityStatus` plus warnings for deep template dimensions that Office.js cannot safely replay, such as in-place source reassignment, PivotChart-specific settings, slicers/timelines, item-level manual filters/sorts, grouping details, calculated fields/items, and host-specific settings. Pivot repair runs template copy and returns before/after fingerprint comparison. Pivot rebuild creates a new PivotTable from a desired source and can replay a template; `replaceExisting` performs an explicit delete/create flow with separate backups and transactions. Chart creation/update supports source range, chart type, series orientation, title, position, and style. Chart template copy replays deterministic chart metadata such as type, style, title, and geometry through a transaction-backed path. Pivot source reassignment still returns capability-status metadata because Office.js does not expose a safe deterministic operation.
 
@@ -1171,18 +1280,7 @@ Validation tools return structured reports with `ok`, issue severity counts, cat
 
 Repair tools return structured repair reports. Style and formula repairs use registered templates and create backups before mutation. Table-structure repair uses the existing table copy path. Repair categories that Office.js cannot safely execute yet return `CAPABILITY_UNAVAILABLE` with a specific reason code.
 
-## Preview Runtime Tools
-
-Set `OPEN_WORKBOOK_PREVIEW_TOOLS=1` before starting `owb mcp` to expose:
-
-- `excel.runtime.connect_addin`
-- `excel.runtime.disconnect_addin`
-- `excel.runtime.ping_addin`
-- `excel.runtime.get_selection`
-- `excel.runtime.set_active_workbook`
-- `excel.runtime.set_active_sheet`
-
-These are marked preview because they establish runtime-control contracts that can affect session routing.
+## Runtime Selection
 
 `excel.runtime.get_selection` returns the active workbook plus the current selected range. The selection includes the range `address`, `rowCount`, `columnCount`, `cellCount`, `isSingleCell`, and `startCell`/`endCell` metadata with A1 addresses, one-based `row`/`column` values, and zero-based `rowIndex`/`columnIndex` values. For multi-cell selections, `startCell` is the top-left cell of the selected range, not necessarily Excel's internal active cell inside that selection.
 
@@ -1408,13 +1506,15 @@ Structured table operations use native Office.js table APIs instead of range-onl
 ## Implemented Flow
 
 - Read table metadata, headers, values, formulas, text, number formats, filters, and sort state.
-- Create, resize, append rows, update rows, clear constants while keeping formulas, set total row, set style, and copy table structure.
+- Project table reads by selected columns, row offset/limit, and requested facets to keep large-table payloads small.
+- Create, resize, reorder columns, append rows, update rows, clear constants while keeping formulas, set total row, set style, and copy table structure.
 - Apply, clear, preserve, and validate table filters through Office.js filter criteria.
 - Apply, clear, and preserve table sort state through Office.js sort fields.
 
 ## Safety
 
 Mutating table/filter/sort tools create a backup before execution. The backend backs up the current table range when mutating an existing table, or the target range when creating/copying a structure.
+Column reorder keeps the existing Excel table object and uses native copy operations through a temporary worksheet, avoiding full-table value transfer through MCP.
 
 ## Template Behavior
 
@@ -1649,6 +1749,7 @@ Default runtime policy allows value/format writes, blocks structure/workbook des
 ## Cleaning
 
 `excel.clean.*` reads values from Excel, transforms them in the backend, then writes through the standard batch path when mutation is needed.
+`excel.clean.normalize_headers` writes only the normalized header row back to Excel, even when the source range includes body rows.
 
 Mutating cleaners:
 
@@ -2115,6 +2216,11 @@ Capability-unavailable responses are preferred over simulated success when Offic
 ## Release Gates
 
 - `corepack pnpm verify` passes. This runs build, tests, and synthetic core benchmarks.
+- `corepack pnpm test:e2e` passes before release-gate E2E claims. This runs the generated E2E report, deterministic fake-host MCP sweep, and `test:e2e:agent:core`.
+- `corepack pnpm test:e2e:agent:core` passes with the default signed-in Codex model (`gpt-5.4-mini`) before large-workbook or multi-agent agent-safety claims. It validates skill-guided decisions for large table reorder/filter/sort/append/update and lock/conflict handling.
+- `corepack pnpm test:e2e:agent:quality` is reviewed before complex workflow quality claims. It is report-only by default and covers sheet/formula creation, formula repair, snapshot/diff/rollback preview, template/style repair, and pivot/chart decisions.
+- `corepack pnpm test:e2e:agent:quality:compare` is reviewed before comparing cheap-model baseline quality with a frontier model. Set `OPEN_WORKBOOK_E2E_CHEAP_MODEL` and `OPEN_WORKBOOK_E2E_FRONTIER_MODEL` to control the profiles.
+- `corepack pnpm test:e2e:agent:quality:gate` runs the cheap/frontier quality matrix in strict mode when a release claims workflow quality is passing rather than diagnostic.
 - MCP callable tool names stay in sync with the shared protocol catalog. `corepack pnpm verify` runs `scripts/validate-mcp-catalog.mjs` after build and fails if a stable or preview callable tool is missing from the MCP server or if the server registers a tool that is not in the callable catalog.
 - Tool surface docs stay in sync with the callable catalog. `corepack pnpm verify` runs `scripts/validate-docs-surface.mjs` and fails if `docs/tool-surface.md` omits an exposed stable or preview tool.
 - Package metadata stays publishable. `corepack pnpm verify` runs `scripts/validate-package-metadata.mjs` and fails if package versions, repository metadata, public/private publish intent, README presence, or `dist` entrypoints drift.
@@ -2125,7 +2231,7 @@ Capability-unavailable responses are preferred over simulated success when Offic
 - Fresh local install can run `npx -y @components-kit/open-workbook setup`, install `open-workbook-excel` with `npx skills add components-kit/open-workbook --skill open-workbook-excel`, generate/install a manifest, launch `npx -y @components-kit/open-workbook@latest mcp`, and report runtime status. If the runtime cannot bind or cannot be reached, CLI commands must fail with concise user-facing errors.
 - Excel add-in can be sideloaded on macOS and Windows using the generated manifest.
 - Native file bridge host smoke passes on macOS and Windows with `owb file-bridge smoke --workbook <open-workbook-name> --target <copy.xlsx>`.
-- Real Excel smoke test covers read, write, batch apply, template repair, rollback preview/apply, and conflict detection.
+- Real Excel smoke starts with `OPEN_WORKBOOK_LIVE_E2E=1 corepack pnpm test:e2e:live:mac` or `OPEN_WORKBOOK_LIVE_E2E=1 corepack pnpm test:e2e:live:windows` and must confirm the backend is reachable and the Excel add-in has an active workbook. For deeper host claims, add `-- --deep` to run a scratch-sheet range write, formula validation, snapshot diff, and rollback preview.
 - Multi-agent smoke test covers two MCP clients planning concurrently, one writer waiting on a lock, and telemetry reporting the contention.
 - Known Office.js host limitations are documented as `CAPABILITY_UNAVAILABLE` or warnings.
 
@@ -2222,7 +2328,7 @@ OpenCode is one possible MCP client. The generic Open Workbook install flow is s
 npx -y @components-kit/open-workbook setup
 ```
 
-Paste the generic MCP config printed by setup into OpenCode using the config shape OpenCode expects. If you prefer an OpenCode-shaped snippet from the local CLI, use:
+OpenCode uses its own MCP config shape. Generate an OpenCode-shaped snippet from the local CLI with:
 
 ```bash
 owb opencode config --id open-workbook --agent-name finance-agent
@@ -2242,14 +2348,15 @@ Example output:
 }
 ```
 
-For `npx`-based config, keep the command equivalent to:
+For `npx`-based OpenCode config, keep the command equivalent to:
 
 ```json
 {
-  "mcpServers": {
+  "mcp": {
     "open-workbook": {
-      "command": "npx",
-      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
+      "type": "local",
+      "command": ["npx", "-y", "@components-kit/open-workbook@latest", "mcp"],
+      "enabled": true
     }
   }
 }
@@ -2322,6 +2429,7 @@ This lets the same command shape work from source and from an installed package:
 owb mcp
 owb addin serve
 owb setup
+owb upgrade
 owb instructions
 owb sideload mac
 owb sideload windows
@@ -2336,6 +2444,7 @@ owb paths
 node packages/cli/dist/index.js doctor
 node packages/cli/dist/index.js paths
 node packages/cli/dist/index.js setup --dry-run
+node packages/cli/dist/index.js upgrade --dry-run
 node packages/cli/dist/index.js instructions
 node packages/cli/dist/index.js sideload manifest --out /tmp/open-workbook.xml
 ```
@@ -2366,10 +2475,11 @@ Before publishing:
 2. Run `corepack pnpm verify`.
 3. Run `node packages/cli/dist/index.js doctor`.
 4. Run `corepack pnpm pack:dry-run`.
-5. Confirm `node packages/cli/dist/index.js setup --dry-run` prints the generic `npx @components-kit/open-workbook@latest mcp` config and `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
-6. Confirm generated manifests include the expected taskpane URL and `backendUrl`.
-7. Confirm `@components-kit/open-workbook-excel-addin` remains private.
-8. Confirm npm publish access is public for publishable scoped packages.
+5. Confirm `node packages/cli/dist/index.js setup --dry-run` prints the `npx -y @components-kit/open-workbook@latest mcp` local stdio launch command and `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
+6. Confirm `node packages/cli/dist/index.js upgrade --dry-run` prints the same launch command with upgrade wording.
+7. Confirm generated manifests include the expected taskpane URL and `backendUrl`.
+8. Confirm `@components-kit/open-workbook-excel-addin` remains private.
+9. Confirm npm publish access is public for publishable scoped packages.
 
 `corepack pnpm verify` runs `scripts/validate-package-metadata.mjs`, which enforces the package version, repository, public/private publish intent, `dist` entrypoints, README presence, and publish access rules above. Use pnpm for packing/publishing so workspace dependencies are rewritten to publishable semver ranges.
 
@@ -2381,17 +2491,16 @@ The intended user flow after package publishing:
 npx -y @components-kit/open-workbook setup
 ```
 
-Users paste the printed MCP config into their agent UI:
+Existing users refresh local setup assets after a package update with:
 
-```json
-{
-  "mcpServers": {
-    "open-workbook": {
-      "command": "npx",
-      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
-    }
-  }
-}
+```bash
+npx -y @components-kit/open-workbook@latest upgrade
+```
+
+Users paste the printed MCP launch command into their agent UI's local stdio MCP configuration:
+
+```bash
+npx -y @components-kit/open-workbook@latest mcp
 ```
 
 They install the skill with:
@@ -2448,36 +2557,54 @@ The Excel add-in workspace package remains private and is bundled into the CLI p
 corepack pnpm verify
 ```
 
-4. Run package dry runs:
+4. Run the release E2E gate and review report-only quality diagnostics when making agent workflow claims:
+
+```bash
+corepack pnpm test:e2e
+corepack pnpm test:e2e:agent:quality
+corepack pnpm test:e2e:agent:quality:compare
+corepack pnpm test:e2e:agent:quality:gate
+```
+
+5. Run package dry runs:
 
 ```bash
 corepack pnpm pack:dry-run
 ```
 
-5. Confirm the CLI reports healthy packaged assets:
+6. Confirm the CLI reports healthy packaged assets:
 
 ```bash
 node packages/cli/dist/index.js doctor
 node packages/cli/dist/index.js setup --dry-run
+node packages/cli/dist/index.js upgrade --dry-run
 node packages/cli/dist/index.js sideload manifest --out /tmp/open-workbook.xml
 ```
 
-6. Confirm `setup --dry-run` prints the intended npm install shape:
+7. Confirm `setup --dry-run` and `upgrade --dry-run` print the intended local stdio MCP launch command:
 
 ```text
 npx -y @components-kit/open-workbook@latest mcp
 npx skills add components-kit/open-workbook --skill open-workbook-excel
 ```
 
-7. Confirm generated manifests include the expected taskpane URL and backend URL.
-8. Review `git diff` and commit the release prep changes.
-9. Create an annotated tag:
+8. For host-readiness claims, open desktop Excel with the sideloaded add-in connected and run the opt-in live smoke:
+
+```bash
+OPEN_WORKBOOK_LIVE_E2E=1 corepack pnpm test:e2e:live:mac
+OPEN_WORKBOOK_LIVE_E2E=1 corepack pnpm test:e2e:live:windows
+OPEN_WORKBOOK_LIVE_E2E=1 corepack pnpm test:e2e:live:mac -- --deep
+```
+
+9. Confirm generated manifests include the expected taskpane URL and backend URL.
+10. Review `git diff` and commit the release prep changes.
+11. Create an annotated tag:
 
 ```bash
 git tag -a v0.1.0 -m "Release v0.1.0"
 ```
 
-10. Push the release commit and tag when ready:
+12. Push the release commit and tag when ready:
 
 ```bash
 git push origin main
@@ -2576,28 +2703,17 @@ owb sideload windows --out open-workbook.xml
 Custom local ports can be passed to every manifest-producing command:
 
 ```bash
-owb sideload manifest --addin-url http://127.0.0.1:37846 --backend-url ws://127.0.0.1:37845/addin
+owb sideload manifest --addin-url http://localhost:37846 --backend-url ws://127.0.0.1:37845/addin
 ```
 
-For local desktop sideloading, the default URLs use loopback HTTP and WebSocket endpoints. HTTPS serving is available when you provide a trusted local certificate:
-
-```bash
-owb addin serve --https \
-  --tls-cert ./certs/open-workbook.local.pem \
-  --tls-key ./certs/open-workbook.local-key.pem
-
-OPEN_WORKBOOK_ADDIN_HTTPS=1 \
-owb sideload manifest --out open-workbook.xml
-```
-
-The CLI does not install or trust certificates automatically. Use a local tool such as `mkcert` or your organization's certificate process, then pass the certificate paths to the add-in server.
+For local desktop sideloading, the taskpane and backend use loopback HTTP and WebSocket endpoints. Ribbon and Developer Add-ins branding images are static PNG assets served from ComponentsKit over HTTPS so Excel can load branded icons without requiring local certificates.
 
 ## User Install Shape
 
 For non-store open-source distribution, the expected install flow is:
 
 1. Run `npx -y @components-kit/open-workbook setup`.
-2. Add the printed MCP config to the agent UI.
+2. Add the printed MCP launch command to the agent UI's local stdio MCP configuration.
 3. Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
 4. Open the agent UI, then Excel, then the Open Workbook add-in.
 
@@ -2737,7 +2853,8 @@ User-facing package for installing, configuring, and running Open Workbook local
 npx -y @components-kit/open-workbook setup
 ```
 
-Setup prepares the Excel add-in manifest and prints generic MCP config.
+Setup prepares the Excel add-in manifest and prints the MCP launch command.
+For an existing install, run `npx -y @components-kit/open-workbook@latest upgrade` to refresh local setup assets after a package update.
 
 Install the Open Workbook Excel skill with skills.sh:
 
@@ -2745,17 +2862,10 @@ Install the Open Workbook Excel skill with skills.sh:
 npx skills add components-kit/open-workbook --skill open-workbook-excel
 ```
 
-Paste the printed MCP config into any MCP-capable agent UI:
+Use the printed MCP launch command in your agent UI's local stdio MCP configuration:
 
-```json
-{
-  "mcpServers": {
-    "open-workbook": {
-      "command": "npx",
-      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
-    }
-  }
-}
+```bash
+npx -y @components-kit/open-workbook@latest mcp
 ```
 
 `owb setup` also writes fallback instructions for clients that do not support skills.sh.
@@ -2764,6 +2874,7 @@ Paste the printed MCP config into any MCP-capable agent UI:
 
 ```bash
 owb setup
+owb upgrade
 owb mcp
 owb instructions
 owb doctor
@@ -2780,6 +2891,7 @@ owb service manifest --target macos --service addin
 ## Runtime
 
 - `owb setup` initializes the generic install flow.
+- `owb upgrade` refreshes the same local manifest and fallback instruction assets for an existing install.
 - `owb mcp` starts the MCP adapter, starts the local Excel add-in asset server when needed, and uses an embedded backend unless a shared daemon is available.
 - `owb instructions` prints fallback generic Excel instructions.
 - `owb doctor` checks packaged runtime assets.
@@ -2795,10 +2907,6 @@ owb service manifest --target macos --service addin
 - `OPEN_WORKBOOK_ADDIN_PATH`
 - `OPEN_WORKBOOK_ADDIN_HOST`
 - `OPEN_WORKBOOK_ADDIN_PORT`
-- `OPEN_WORKBOOK_ADDIN_HTTPS=1`
-- `OPEN_WORKBOOK_ADDIN_PROTOCOL=https`
-- `OPEN_WORKBOOK_ADDIN_TLS_CERT`
-- `OPEN_WORKBOOK_ADDIN_TLS_KEY`
 - `OPEN_WORKBOOK_ADDIN_URL`
 - `OPEN_WORKBOOK_BACKEND_URL`
 - `OPEN_WORKBOOK_DAEMON_URL`
@@ -2806,7 +2914,6 @@ owb service manifest --target macos --service addin
 - `OPEN_WORKBOOK_STATE_DIR`
 - `OPEN_WORKBOOK_BACKUP_DIR`
 - `OPEN_WORKBOOK_EXPORT_DIR`
-- `OPEN_WORKBOOK_PREVIEW_TOOLS=1`
 
 ---
 
@@ -2865,7 +2972,6 @@ open-workbook-mcp
 - `OPEN_WORKBOOK_HOST`: backend host, default `127.0.0.1`
 - `OPEN_WORKBOOK_PORT`: backend port, default `37845`
 - `OPEN_WORKBOOK_ADDIN_PATH`: backend WebSocket path, default `/addin`
-- `OPEN_WORKBOOK_PREVIEW_TOOLS=1`: expose preview tools in addition to stable tools
 
 ## Notes
 

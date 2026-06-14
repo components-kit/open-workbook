@@ -25,13 +25,22 @@ The Excel add-in workspace package remains private and is bundled into the CLI p
 corepack pnpm verify
 ```
 
-4. Run package dry runs:
+4. Run the release E2E gate and review report-only quality diagnostics when making agent workflow claims:
+
+```bash
+corepack pnpm test:e2e
+corepack pnpm test:e2e:agent:quality
+corepack pnpm test:e2e:agent:quality:compare
+corepack pnpm test:e2e:agent:quality:gate
+```
+
+5. Run package dry runs:
 
 ```bash
 corepack pnpm pack:dry-run
 ```
 
-5. Confirm the CLI reports healthy packaged assets:
+6. Confirm the CLI reports healthy packaged assets:
 
 ```bash
 node packages/cli/dist/index.js doctor
@@ -40,22 +49,30 @@ node packages/cli/dist/index.js upgrade --dry-run
 node packages/cli/dist/index.js sideload manifest --out /tmp/open-workbook.xml
 ```
 
-6. Confirm `setup --dry-run` and `upgrade --dry-run` print the intended npm install shape:
+7. Confirm `setup --dry-run` and `upgrade --dry-run` print the intended local stdio MCP launch command:
 
 ```text
 npx -y @components-kit/open-workbook@latest mcp
 npx skills add components-kit/open-workbook --skill open-workbook-excel
 ```
 
-7. Confirm generated manifests include the expected taskpane URL and backend URL.
-8. Review `git diff` and commit the release prep changes.
-9. Create an annotated tag:
+8. For host-readiness claims, open desktop Excel with the sideloaded add-in connected and run the opt-in live smoke:
+
+```bash
+OPEN_WORKBOOK_LIVE_E2E=1 corepack pnpm test:e2e:live:mac
+OPEN_WORKBOOK_LIVE_E2E=1 corepack pnpm test:e2e:live:windows
+OPEN_WORKBOOK_LIVE_E2E=1 corepack pnpm test:e2e:live:mac -- --deep
+```
+
+9. Confirm generated manifests include the expected taskpane URL and backend URL.
+10. Review `git diff` and commit the release prep changes.
+11. Create an annotated tag:
 
 ```bash
 git tag -a v0.1.0 -m "Release v0.1.0"
 ```
 
-10. Push the release commit and tag when ready:
+12. Push the release commit and tag when ready:
 
 ```bash
 git push origin main

@@ -13,13 +13,13 @@ The full namespace is represented in the protocol catalog, but MCP only exposes 
 
 ## Stable Tool Groups
 
-- Runtime: `excel.runtime.get_status`, `excel.runtime.get_capabilities`, `excel.runtime.get_active_context`
+- Runtime: `excel.runtime.get_status`, `excel.runtime.connect_addin`, `excel.runtime.disconnect_addin`, `excel.runtime.ping_addin`, `excel.runtime.get_capabilities`, `excel.runtime.get_active_context`, `excel.runtime.get_selection`, `excel.runtime.set_active_workbook`, `excel.runtime.set_active_sheet`
 - Workbook: `excel.workbook.list_open_workbooks`, `excel.workbook.get_workbook_info`, `excel.workbook.get_workbook_map`, `excel.workbook.snapshot`, `excel.workbook.refresh_snapshot`, `excel.workbook.get_snapshot`, `excel.workbook.detect_external_changes`, `excel.workbook.calculate`, `excel.workbook.save`, `excel.workbook.save_as`, `excel.workbook.create_backup`, `excel.workbook.restore_backup`, `excel.workbook.export_copy`, `excel.workbook.export_local_config`, `excel.workbook.import_local_config`, `excel.workbook.embed_local_config`, `excel.workbook.read_embedded_local_config`, `excel.workbook.import_embedded_local_config`, `excel.workbook.close`
 - File backups: `excel.backup.create_file`, `excel.backup.list`, `excel.backup.get`, `excel.backup.verify`, `excel.backup.restore_file`, `excel.backup.delete`, `excel.backup.prune`, `excel.backup.pin`, `excel.backup.unpin`
 - Sheet: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.create`, `excel.sheet.copy`, `excel.sheet.rename`, `excel.sheet.delete`, `excel.sheet.hide`, `excel.sheet.unhide`, `excel.sheet.protect`, `excel.sheet.unprotect`, `excel.sheet.clear`, `excel.sheet.get_used_range`, `excel.sheet.set_tab_color`
 - Range: `excel.range.read_values`, `excel.range.read_formulas`, `excel.range.read_number_formats`, `excel.range.read_display_text`, `excel.range.read_styles`, `excel.range.read_full`, `excel.range.write_values`, `excel.range.write_formulas`, `excel.range.write_number_formats`, `excel.range.write_styles`, `excel.range.clear`, `excel.range.clear_values`, `excel.range.clear_formats`, `excel.range.clear_values_keep_format`, `excel.range.copy`, `excel.range.move`, `excel.range.insert_rows`, `excel.range.delete_rows`, `excel.range.insert_columns`, `excel.range.delete_columns`, `excel.range.autofit_columns`, `excel.range.autofit_rows`, `excel.range.merge`, `excel.range.unmerge`
 - Advanced range reads: `excel.range.read_hyperlinks`, `excel.range.read_comments`, `excel.range.read_notes`, `excel.range.read_merged_cells`, `excel.range.read_data_validation`, `excel.range.read_conditional_formatting`, `excel.range.search`, `excel.range.find_blank_cells`, `excel.range.find_errors`
-- Batch and plan: `excel.batch.validate`, `excel.batch.dry_run`, `excel.batch.apply`, `excel.plan.create`, `excel.plan.preview`, `excel.plan.refresh_preview`, `excel.plan.rebase`, `excel.plan.apply`, `excel.plan.rollback`
+- Batch, workflow, and plan: `excel.batch.validate`, `excel.batch.dry_run`, `excel.batch.apply`, `excel.workflow.prepare_session`, `excel.workflow.create_formula_sheet`, `excel.workflow.create_template_report`, `excel.workflow.create_pivot_chart_summary`, `excel.workflow.repair_formula_errors`, `excel.workflow.preview_risky_edit`, `excel.plan.create`, `excel.plan.preview`, `excel.plan.refresh_preview`, `excel.plan.rebase`, `excel.plan.apply`, `excel.plan.rollback`
 - Multi-agent coordination: `excel.task.create`, `excel.task.claim`, `excel.task.update`, `excel.task.set_progress`, `excel.task.add_blocker`, `excel.task.resolve_blocker`, `excel.task.evaluate_schedule`, `excel.task.resume_ready`, `excel.task.complete`, `excel.task.fail`, `excel.task.cancel`, `excel.task.list`, `excel.task.get`, `excel.collab.get_status`, `excel.collab.list_agents`, `excel.collab.list_tasks`, `excel.collab.list_locks`, `excel.collab.list_transactions`, `excel.collab.get_conflicts`, `excel.collab.get_recent_events`, `excel.lock.get_policy`, `excel.lock.set_policy`, `excel.lock.acquire`, `excel.lock.renew`, `excel.lock.release`, `excel.conflict.get_guidance`, `excel.conflict.explain`, `excel.conflict.get_telemetry`, `excel.conflict.clear_telemetry`, `excel.transaction.list`, `excel.transaction.get`, `excel.transaction.preview_rollback`, `excel.transaction.rollback`, `excel.transaction.preview_rollback_chain`, `excel.transaction.rollback_chain`
 - Snapshot and diff: `excel.snapshot.create`, `excel.snapshot.refresh`, `excel.snapshot.get`, `excel.snapshot.compare`, `excel.snapshot.invalidate`, `excel.snapshot.list`, `excel.snapshot.delete`, `excel.diff.create`, `excel.diff.summarize`, `excel.diff.get_details`, `excel.diff.export_json`, `excel.diff.export_html`
 - Events: `excel.events.subscribe`, `excel.events.unsubscribe`, `excel.events.get_recent`, `excel.events.clear`, `excel.events.set_debounce`
@@ -67,7 +67,21 @@ No mutating tool should bypass the backend safety lifecycle. It must validate pe
 
 ## Implementation Notes
 
-`excel.batch.apply`, `excel.plan.apply`, and all stable mutating sheet/range tools route through backend snapshots, backup records, target-region conflict checks, and add-in Office.js execution.
+`excel.batch.apply`, `excel.workflow.preview_risky_edit`, `excel.plan.apply`, and all stable mutating sheet/range tools route through backend snapshots, backup records, target-region conflict checks, and add-in Office.js execution.
+
+`excel.workflow.prepare_session` is the preferred first call for agent workflows. It returns runtime status, active context, capabilities, workbook map, and collaboration state in one read-only result so agents can establish workbook identity before mutation.
+
+Combined mutating workflows also include an internal read-only preflight before mutation and return that `preflight` payload. Agents should still call `excel.workflow.prepare_session` first when possible, but a matched combined workflow can safely establish workbook identity and capability context itself when a cheap or compact model selects the workflow directly.
+
+`excel.workflow.create_formula_sheet` is a combined formula-sheet workflow for common input-sheet tasks. It creates the sheet, writes constants and formulas through the batch lifecycle, applies number formats, and validates the formula range before returning.
+
+`excel.workflow.create_template_report` is a combined template-report workflow for period/report sheet tasks. It creates the target sheet from a registered template, clears and fills declared data regions, compares style fingerprints, repairs styles, and validates the result against the template.
+
+`excel.workflow.create_pivot_chart_summary` is a combined report-object workflow for PivotTable plus chart tasks. It checks PivotTable capability status, creates the PivotTable, refreshes it, creates the chart, updates/refreshes the chart source, and validates PivotTable source metadata in one response.
+
+`excel.workflow.repair_formula_errors` is a combined formula repair workflow. It validates/finds formula errors, reads formula patterns, builds the dependency graph, repairs formulas with a scoped pattern fill or explicit formula matrix write, then validates the repaired target range.
+
+`excel.workflow.preview_risky_edit` is a combined safe-edit interface for agents that need one call to perform a scoped risky edit and return proof. It requires at least one scoped operation, captures a before snapshot, creates and previews a plan, applies the scoped operations by default, captures an after snapshot, compares snapshots, and returns rollback preview metadata for the transaction. Set `apply: false` only when the user asked to stop after snapshot and plan preview. The workflow blocks sparse/null-padded value writes by default because those often indicate a tiny intended edit expanded into a broad overwrite; use a smaller target range, an explicit clear operation, or `allowSparseOverwrite` only for intentional broad overwrites.
 
 Facet-specific range reads load only the requested cell payload. `excel.table.read` accepts optional column, row-window, and include flags so agents can inspect large tables without transferring the entire body.
 
@@ -116,17 +130,6 @@ Validation tools return structured reports with `ok`, issue severity counts, cat
 
 Repair tools return structured repair reports. Style and formula repairs use registered templates and create backups before mutation. Table-structure repair uses the existing table copy path. Repair categories that Office.js cannot safely execute yet return `CAPABILITY_UNAVAILABLE` with a specific reason code.
 
-## Preview Runtime Tools
-
-Set `OPEN_WORKBOOK_PREVIEW_TOOLS=1` before starting `owb mcp` to expose:
-
-- `excel.runtime.connect_addin`
-- `excel.runtime.disconnect_addin`
-- `excel.runtime.ping_addin`
-- `excel.runtime.get_selection`
-- `excel.runtime.set_active_workbook`
-- `excel.runtime.set_active_sheet`
-
-These are marked preview because they establish runtime-control contracts that can affect session routing.
+## Runtime Selection
 
 `excel.runtime.get_selection` returns the active workbook plus the current selected range. The selection includes the range `address`, `rowCount`, `columnCount`, `cellCount`, `isSingleCell`, and `startCell`/`endCell` metadata with A1 addresses, one-based `row`/`column` values, and zero-based `rowIndex`/`columnIndex` values. For multi-cell selections, `startCell` is the top-left cell of the selected range, not necessarily Excel's internal active cell inside that selection.

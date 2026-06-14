@@ -107,7 +107,7 @@ const STYLE_COPY_TOOL_DIMENSIONS: Record<string, StyleDimension> = {
 };
 
 const runtime = await createRuntimeFacade();
-const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.4";
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.5";
 
 const server = new McpServer({
   name: "open-workbook",
@@ -120,6 +120,7 @@ registerBackupTools(server);
 registerSheetTools(server);
 registerRangeTools(server);
 registerBatchTools(server);
+registerWorkflowTools(server);
 registerPlanTools(server);
 registerTemplateTools(server);
 registerStyleTools(server);
@@ -446,7 +447,7 @@ function registerPrompts(mcp: McpServer): void {
       "1. Locate errors with `excel.formula.find_errors` and `excel.validate.no_formula_errors`.",
       "2. Read formula patterns and dependency graph with `excel.formula.read_patterns`, `excel.formula.get_dependency_graph`, `trace_precedents`, and `trace_dependents`.",
       "3. If a template exists, compare with `excel.formula.validate_against_template`.",
-      "4. Create a repair plan using `excel.formula.repair_patterns`, `fill_down`, `fill_right`, or explicit `range.write_formulas`.",
+      "4. Create a repair plan using `excel.formula.repair_patterns`, `fill_down`, `fill_right`, or explicit `range.write_formulas`; never repair formulas by writing formula strings through `range.write_values`.",
       "5. Preview, apply, recalculate, and re-run formula validation before reporting success."
     ]
   );
@@ -1615,7 +1616,7 @@ function registerRangeTools(mcp: McpServer): void {
     sheetName: z.string(),
     address: z.string(),
     values: z.array(z.array(z.any()))
-  }, (args) => ({
+  }, "Write constants only through the reversible batch pipeline. Use excel.range.write_formulas for formulas and excel.range.write_number_formats for display formats.", (args) => ({
     kind: "range.write_values",
     workbookId: args.workbookId as WorkbookId,
     target: targetFromArgs(args),
@@ -1630,7 +1631,7 @@ function registerRangeTools(mcp: McpServer): void {
     sheetName: z.string(),
     address: z.string(),
     formulas: z.array(z.array(z.string().nullable()))
-  }, (args) => ({
+  }, "Write formulas through the reversible batch pipeline while preserving formats. Use this for cells beginning with = instead of excel.range.write_values.", (args) => ({
     kind: "range.write_formulas",
     workbookId: args.workbookId as WorkbookId,
     target: targetFromArgs(args),
@@ -1645,7 +1646,7 @@ function registerRangeTools(mcp: McpServer): void {
     sheetName: z.string(),
     address: z.string(),
     numberFormat: z.array(z.array(z.string()))
-  }, (args) => ({
+  }, "Write number formats through the reversible batch pipeline without changing values or formulas.", (args) => ({
     kind: "range.write_number_formats",
     workbookId: args.workbookId as WorkbookId,
     target: targetFromArgs(args),
@@ -1861,6 +1862,547 @@ function registerBatchTools(mcp: McpServer): void {
       return jsonResult(await runtime.applyBatch(request));
     }
   );
+}
+
+function registerWorkflowTools(mcp: McpServer): void {
+  registerMcpTool(
+    mcp,
+    "excel.workflow.prepare_session",
+    {
+      title: "Prepare Excel workflow session",
+      description: "Run the standard read-only discovery sequence before workbook mutations: runtime status, active context, capabilities, workbook map, and collaboration status.",
+      inputSchema: {
+        workbookId: z.string().optional(),
+        includePreview: z.boolean().optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ workbookId, includePreview }: { workbookId?: string; includePreview?: boolean }) => {
+      return jsonResult({
+        ok: true,
+        workflow: "excel.workflow.prepare_session",
+        ...(await workflowPreflight(workbookId as WorkbookId | undefined, includePreview ?? false))
+      });
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.workflow.create_formula_sheet",
+    {
+      title: "Create formula sheet",
+      description: "Create a sheet, write a compact values block, write formulas, apply number formats, and validate formulas in one workflow.",
+      inputSchema: {
+        workbookId: z.string(),
+        sheetName: z.string(),
+        activate: z.boolean().optional(),
+        valuesAddress: z.string(),
+        values: z.array(z.array(z.any())),
+        formulasAddress: z.string(),
+        formulas: z.array(z.array(z.string().nullable())),
+        numberFormatAddress: z.string().optional(),
+        numberFormat: z.array(z.array(z.string())).optional(),
+        validateAddress: z.string().optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false
+      }
+    },
+    async (args: any) => {
+      const workbookId = args.workbookId as WorkbookId;
+      const preflight = await workflowPreflight(workbookId);
+      const createSheet = await applySingleOperation(args.workbookId, {
+        kind: "sheet.create",
+        workbookId,
+        sheetName: args.sheetName,
+        activate: args.activate,
+        destructiveLevel: "structure",
+        reason: "Workflow create formula sheet"
+      });
+      const operations: ExcelOperation[] = [
+        {
+          kind: "range.write_values",
+          operationId: makeId<OperationId>("op"),
+          workbookId,
+          target: { workbookId, sheetName: args.sheetName, address: args.valuesAddress },
+          values: args.values,
+          preserveFormats: true,
+          destructiveLevel: "values",
+          reason: "Workflow write formula sheet values"
+        } as ExcelOperation,
+        {
+          kind: "range.write_formulas",
+          operationId: makeId<OperationId>("op"),
+          workbookId,
+          target: { workbookId, sheetName: args.sheetName, address: args.formulasAddress },
+          formulas: args.formulas,
+          preserveFormats: true,
+          destructiveLevel: "values",
+          reason: "Workflow write formula sheet formulas"
+        } as ExcelOperation
+      ];
+      if (args.numberFormatAddress !== undefined && args.numberFormat !== undefined) {
+        operations.push({
+          kind: "range.write_number_formats",
+          operationId: makeId<OperationId>("op"),
+          workbookId,
+          target: { workbookId, sheetName: args.sheetName, address: args.numberFormatAddress },
+          numberFormat: args.numberFormat,
+          preserveValues: true,
+          destructiveLevel: "format",
+          reason: "Workflow format formula sheet numbers"
+        } as ExcelOperation);
+      }
+      const applyResult = await runtime.applyBatch({ workbookId, mode: "apply", operations });
+      const validation = await runtime.validateFormulas({
+        workbookId,
+        sheetName: args.sheetName,
+        address: args.validateAddress ?? args.formulasAddress
+      });
+      return jsonResult({
+        ok: Boolean((createSheet as { ok?: boolean }).ok && applyResult.ok && validation.ok),
+        workflow: "excel.workflow.create_formula_sheet",
+        preflight,
+        createSheet,
+        applyResult,
+        validation,
+        summary: {
+          sheetName: args.sheetName,
+          operationCount: operations.length + 1,
+          transactionId: applyResult.transactionId,
+          backupIds: applyResult.backups,
+          formulaValidationOk: validation.ok,
+          formulaIssueCount: validation.issueCount
+        }
+      });
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.workflow.create_template_report",
+    {
+      title: "Create template report",
+      description: "Run the standard template report workflow: create sheet from template, clear/fill declared regions, compare style fingerprints, repair styles, and validate against the template.",
+      inputSchema: {
+        workbookId: z.string(),
+        templateId: z.string(),
+        newSheetName: z.string(),
+        clearDataRegions: z.boolean().optional(),
+        fillRegions: z
+          .array(
+            z.object({
+              address: z.string(),
+              values: z.array(z.array(z.any()))
+            })
+          )
+          .optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({ workbookId, templateId, newSheetName, clearDataRegions, fillRegions }: { workbookId: string; templateId: string; newSheetName: string; clearDataRegions?: boolean; fillRegions?: Array<{ address: string; values: unknown[][] }> }) => {
+      const preflight = await workflowPreflight(workbookId as WorkbookId);
+      const templateResult = runtime.getTemplate(templateId as TemplateId);
+      if (!templateResult.ok || !("template" in templateResult)) {
+        return jsonResult({ ...templateResult, preflight });
+      }
+      const template = templateResult.template;
+      const createSheet = await applySingleOperation(workbookId, {
+        kind: "template.create_sheet_from_template",
+        workbookId: workbookId as WorkbookId,
+        templateId: templateId as TemplateId,
+        newSheetName,
+        clearDataRegions: clearDataRegions ?? true,
+        destructiveLevel: "structure",
+        reason: "MCP workflow create template report"
+      });
+
+      const clearOperations: ExcelOperation[] = (clearDataRegions === false ? [] : template.dataRegions).map((address: string) => ({
+        kind: "range.clear_values_keep_format",
+        operationId: makeId<OperationId>("op"),
+        workbookId: workbookId as WorkbookId,
+        destructiveLevel: "values",
+        reason: `Workflow clear data region from template ${templateId}`,
+        target: {
+          workbookId: workbookId as WorkbookId,
+          sheetName: newSheetName,
+          address
+        }
+      }));
+      const clearResult = clearOperations.length > 0
+        ? await runtime.applyBatch({ workbookId: workbookId as WorkbookId, mode: "apply", operations: clearOperations })
+        : { ok: true, skipped: true };
+
+      const fillOperations: ExcelOperation[] = (fillRegions ?? []).map((region) => ({
+        kind: "range.write_values",
+        operationId: makeId<OperationId>("op"),
+        workbookId: workbookId as WorkbookId,
+        destructiveLevel: "values",
+        reason: "Workflow fill template region",
+        target: {
+          workbookId: workbookId as WorkbookId,
+          sheetName: newSheetName,
+          address: region.address
+        },
+        values: region.values as any,
+        preserveFormats: true
+      }));
+      const fillResult = fillOperations.length > 0
+        ? await runtime.applyBatch({ workbookId: workbookId as WorkbookId, mode: "apply", operations: fillOperations })
+        : { ok: true, skipped: true };
+
+      const styleCompare = await runtime.compareStyleFingerprints({
+        workbookId: workbookId as WorkbookId,
+        sourceSheetName: template.sourceSheetName,
+        targetSheetName: newSheetName
+      });
+      const styleRepair = await repairTemplateFromArgs({
+        workbookId,
+        templateId,
+        targetSheetName: newSheetName,
+        repair: ["styles"]
+      });
+      const validation = await runtime.validateSheetAgainstTemplate({
+        workbookId: workbookId as WorkbookId,
+        templateId: templateId as TemplateId,
+        targetSheetName: newSheetName
+      });
+      return jsonResult({
+        ok: Boolean((createSheet as { ok?: boolean }).ok && (clearResult as { ok?: boolean }).ok && (fillResult as { ok?: boolean }).ok && (validation as { ok?: boolean }).ok),
+        workflow: "excel.workflow.create_template_report",
+        preflight,
+        templateId,
+        sourceSheetName: template.sourceSheetName,
+        targetSheetName: newSheetName,
+        createSheet,
+        clearResult,
+        fillResult,
+        styleCompare,
+        styleRepair,
+        validation,
+        summary: {
+          targetSheetName: newSheetName,
+          clearedRegionCount: clearOperations.length,
+          filledRegionCount: fillOperations.length,
+          styleCompared: Boolean((styleCompare as { ok?: boolean }).ok),
+          styleRepairAttempted: true,
+          validated: Boolean((validation as { ok?: boolean }).ok)
+        }
+      });
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.workflow.create_pivot_chart_summary",
+    {
+      title: "Create pivot and chart summary",
+      description: "Run the standard PivotTable and chart creation workflow: capability check, PivotTable create, refresh, chart create, chart source update/refresh, and PivotTable source validation.",
+      inputSchema: {
+        workbookId: z.string(),
+        pivotTableName: z.string(),
+        sourceSheetName: z.string().optional(),
+        sourceAddress: z.string().optional(),
+        sourceTableName: z.string().optional(),
+        pivotDestinationSheetName: z.string(),
+        pivotDestinationAddress: z.string(),
+        rowFields: z.array(z.string()).optional(),
+        columnFields: z.array(z.string()).optional(),
+        filterFields: z.array(z.string()).optional(),
+        dataFields: z
+          .array(
+            z.object({
+              sourceFieldName: z.string(),
+              name: z.string().optional(),
+              summarizeBy: z.string().optional(),
+              numberFormat: z.string().optional()
+            })
+          )
+          .optional(),
+        chartSheetName: z.string(),
+        chartName: z.string(),
+        chartSourceAddress: z.string(),
+        chartType: z.string(),
+        chartTitle: z.string().optional(),
+        chartPosition: z.object({ startCell: z.string(), endCell: z.string().optional() }).optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false
+      }
+    },
+    async (args: any) => {
+      const workbookId = args.workbookId as WorkbookId;
+      const preflight = await workflowPreflight(workbookId);
+      const pivotRequest: PivotCreateRequest = {
+        workbookId,
+        pivotTableName: args.pivotTableName,
+        destinationSheetName: args.pivotDestinationSheetName,
+        destinationAddress: args.pivotDestinationAddress,
+        refresh: true
+      };
+      if (args.sourceSheetName !== undefined) pivotRequest.sourceSheetName = args.sourceSheetName;
+      if (args.sourceAddress !== undefined) pivotRequest.sourceAddress = args.sourceAddress;
+      if (args.sourceTableName !== undefined) pivotRequest.sourceTableName = args.sourceTableName;
+      if (args.rowFields !== undefined) pivotRequest.rowFields = args.rowFields;
+      if (args.columnFields !== undefined) pivotRequest.columnFields = args.columnFields;
+      if (args.filterFields !== undefined) pivotRequest.filterFields = args.filterFields;
+      if (args.dataFields !== undefined) pivotRequest.dataFields = args.dataFields;
+
+      const capability = runtime.getPivotCapabilityMatrix(workbookId);
+      const pivotCreate = await runtime.createPivotTable(pivotRequest);
+      const pivotRefresh = await runtime.refreshPivotTable({ workbookId, pivotTableName: args.pivotTableName });
+      const chartCreateRequest: ChartCreateRequest = {
+        workbookId,
+        sheetName: args.chartSheetName,
+        chartName: args.chartName,
+        sourceAddress: args.chartSourceAddress,
+        chartType: args.chartType
+      };
+      if (args.chartTitle !== undefined) chartCreateRequest.title = args.chartTitle;
+      if (args.chartPosition !== undefined) chartCreateRequest.position = args.chartPosition;
+      const chartCreate = await runtime.createChart(chartCreateRequest);
+      const chartUpdate = await runtime.updateChartDataSource({
+        workbookId,
+        sheetName: args.chartSheetName,
+        chartName: args.chartName,
+        sourceAddress: args.chartSourceAddress
+      });
+      const chartRefresh = await runtime.refreshChart({ workbookId, sheetName: args.chartSheetName, chartName: args.chartName });
+      const validation = await runtime.validatePivotSource({
+        workbookId,
+        pivotTableName: args.pivotTableName,
+        expectedRowFields: args.rowFields,
+        expectedColumnFields: args.columnFields,
+        expectedFilterFields: args.filterFields,
+        expectedDataFields: Array.isArray(args.dataFields) ? args.dataFields.map((field: { sourceFieldName: string }) => field.sourceFieldName) : undefined,
+        expectedDataFieldSettings: args.dataFields
+      });
+      return jsonResult({
+        ok: Boolean((pivotCreate as { ok?: boolean }).ok && (pivotRefresh as { ok?: boolean }).ok && (chartCreate as { ok?: boolean }).ok && (chartUpdate as { ok?: boolean }).ok && (validation as { ok?: boolean }).ok),
+        workflow: "excel.workflow.create_pivot_chart_summary",
+        preflight,
+        capability,
+        pivotCreate,
+        pivotRefresh,
+        chartCreate,
+        chartUpdate,
+        chartRefresh,
+        validation,
+        summary: {
+          pivotTableName: args.pivotTableName,
+          chartName: args.chartName,
+          refreshed: Boolean((pivotRefresh as { ok?: boolean }).ok && (chartRefresh as { ok?: boolean }).ok),
+          validated: Boolean((validation as { ok?: boolean }).ok)
+        }
+      });
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.workflow.repair_formula_errors",
+    {
+      title: "Repair formula errors",
+      description: "Run the standard formula repair workflow: preflight, validate/find errors, read formula patterns, inspect dependency graph, repair by filling or writing scoped formulas, and validate again.",
+      inputSchema: {
+        workbookId: z.string(),
+        sheetName: z.string(),
+        errorAddress: z.string(),
+        patternAddress: z.string().optional(),
+        sourceAddress: z.string().optional(),
+        targetAddress: z.string().optional(),
+        direction: z.enum(["down", "right"]).optional(),
+        formulasAddress: z.string().optional(),
+        formulas: z.array(z.array(z.string().nullable())).optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false
+      }
+    },
+    async (args: any) => {
+      const workbookId = args.workbookId as WorkbookId;
+      const sheetName = args.sheetName as string;
+      const errorAddress = args.errorAddress as string;
+      const sourceAddress = args.sourceAddress as string | undefined;
+      const targetAddress = (args.targetAddress ?? args.formulasAddress ?? errorAddress) as string;
+      const preflight = await workflowPreflight(workbookId);
+      const beforeValidation = await runtime.validateFormulas({ workbookId, sheetName, address: errorAddress });
+      const patterns = await runtime.readFormulaPatterns({
+        workbookId,
+        sheetName,
+        address: (args.patternAddress ?? sourceAddress ?? errorAddress) as string
+      });
+      const dependencyGraph = await runtime.getFormulaDependencyGraph({ workbookId, sheetName, address: errorAddress });
+
+      let repairResult: unknown;
+      if (Array.isArray(args.formulas)) {
+        repairResult = await runtime.applyBatch({
+          workbookId,
+          mode: "apply",
+          operations: [
+            {
+              kind: "range.write_formulas",
+              operationId: makeId<OperationId>("op"),
+              workbookId,
+              target: { workbookId, sheetName, address: targetAddress },
+              formulas: args.formulas,
+              preserveFormats: true,
+              destructiveLevel: "values",
+              reason: "Workflow repair formula errors with scoped formulas"
+            } as ExcelOperation
+          ]
+        });
+      } else if (sourceAddress !== undefined) {
+        repairResult = await runtime.fillFormulaPattern({
+          workbookId,
+          sheetName,
+          sourceAddress,
+          targetAddress,
+          direction: args.direction ?? "down"
+        });
+      } else {
+        repairResult = {
+          ok: false,
+          error: {
+            code: "FORMULA_REPAIR_SOURCE_REQUIRED",
+            message: "Provide sourceAddress for pattern fill or formulas with formulasAddress for scoped formula repair.",
+            retryable: false
+          }
+        };
+      }
+
+      const afterValidation = await runtime.validateFormulas({ workbookId, sheetName, address: targetAddress });
+      return jsonResult({
+        ok: Boolean((repairResult as { ok?: boolean }).ok && (afterValidation as { ok?: boolean }).ok),
+        workflow: "excel.workflow.repair_formula_errors",
+        preflight,
+        beforeValidation,
+        patterns,
+        dependencyGraph,
+        repairResult,
+        afterValidation,
+        summary: {
+          sheetName,
+          errorAddress,
+          sourceAddress,
+          targetAddress,
+          usedDirectFormulaWrite: Array.isArray(args.formulas),
+          formulaValidationOk: (afterValidation as { ok?: boolean }).ok,
+          formulaIssueCount: (afterValidation as { issueCount?: number }).issueCount
+        }
+      });
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.workflow.preview_risky_edit",
+    {
+      title: "Preview risky Excel edit",
+      description: [
+        "Run the full safe-edit workflow for scoped risky changes: before snapshot, plan preview, apply, after snapshot, diff, and rollback preview.",
+        "Use this when an edit must prove what changed and how it can be recovered instead of calling separate snapshot, batch, diff, and transaction tools.",
+        "Provide at least one scoped operation. The workflow applies by default; set apply=false only when the user asks for preview without mutation."
+      ].join(" "),
+      inputSchema: {
+        workbookId: z.string(),
+        operations: z.array(z.any()).min(1),
+        reason: z.string().optional(),
+        goal: z.string().optional(),
+        ranges: z
+          .array(
+            z.object({
+              workbookId: z.string().optional(),
+              sheetName: z.string(),
+              address: z.string()
+            })
+          )
+          .optional(),
+        apply: z.boolean().optional(),
+        allowSparseOverwrite: z.boolean().optional(),
+        confirmationToken: z.string().optional(),
+        agentId: z.string().optional(),
+        agentName: z.string().optional(),
+        taskId: z.string().optional(),
+        role: z.string().optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false
+      }
+    },
+    async (args: any) => {
+      const workbookId = args.workbookId as WorkbookId;
+      const preflight = await workflowPreflight(workbookId);
+      const request: Parameters<typeof runtime.previewRiskyEdit>[0] = {
+        workbookId,
+        operations: workflowOperations(workbookId, args.operations, args.reason ?? args.goal)
+      };
+      const ranges = workflowRanges(workbookId, args.ranges);
+      if (args.reason !== undefined) {
+        request.reason = args.reason;
+      }
+      if (args.goal !== undefined) {
+        request.goal = args.goal;
+      }
+      if (ranges !== undefined) {
+        request.ranges = ranges;
+      }
+      if (args.apply !== undefined) {
+        request.apply = args.apply;
+      }
+      if (args.allowSparseOverwrite !== undefined) {
+        request.allowSparseOverwrite = args.allowSparseOverwrite;
+      }
+      if (args.confirmationToken !== undefined) {
+        request.confirmationToken = args.confirmationToken;
+      }
+      if (args.agentId !== undefined) {
+        request.agentId = args.agentId as AgentId;
+      }
+      if (args.agentName !== undefined) {
+        request.agentName = args.agentName;
+      }
+      if (args.taskId !== undefined) {
+        request.taskId = args.taskId as TaskId;
+      }
+      if (args.role !== undefined) {
+        request.role = args.role;
+      }
+      const result = await runtime.previewRiskyEdit(request);
+      return jsonResult({ ...result, preflight });
+    }
+  );
+}
+
+async function workflowPreflight(workbookId?: WorkbookId, includePreview = true) {
+  const status = runtime.getStatus();
+  const activeContext = await runtime.getActiveContext();
+  const activeWorkbookId = (activeContext as { activeWorkbook?: { workbookId?: WorkbookId } }).activeWorkbook?.workbookId;
+  const resolvedWorkbookId = workbookId ?? activeWorkbookId;
+  return {
+    status,
+    activeContext,
+    capabilities: runtime.getCapabilities({ includePreview }),
+    workbookMap: await runtime.getWorkbookMap(),
+    collaboration: runtime.getCollaborationStatus(resolvedWorkbookId),
+    workbookId: resolvedWorkbookId
+  };
 }
 
 function registerPlanTools(mcp: McpServer): void {
@@ -2543,7 +3085,7 @@ function registerFormulaTools(mcp: McpServer): void {
     "excel.formula.read_patterns",
     {
       title: "Read formula patterns",
-      description: "Capture formulas, R1C1 pattern hashes, and pattern groups for a sheet or range.",
+      description: "Capture formulas, R1C1 pattern hashes, and pattern groups for a sheet or range. Use before formula repair; this is diagnostic and does not repair formulas by itself.",
       inputSchema: formulaPatternSchema(),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
@@ -2622,7 +3164,7 @@ function registerFormulaTools(mcp: McpServer): void {
     "excel.formula.repair_patterns",
     {
       title: "Repair formula patterns",
-      description: "Repair formulas from a registered template.",
+      description: "Repair formulas from a registered template. If no template fits, use formula fill tools or scoped excel.range.write_formulas, then validate.",
       inputSchema: templateRepairSchema(),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
     },
@@ -2634,7 +3176,7 @@ function registerFormulaTools(mcp: McpServer): void {
     "excel.formula.find_errors",
     {
       title: "Find formula errors",
-      description: "Find cells with formula errors in a sheet/range.",
+      description: "Find cells with formula errors in a sheet/range before reading patterns and repairing formulas.",
       inputSchema: validationRangeSchema(),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
@@ -2955,7 +3497,7 @@ function registerTableTools(mcp: McpServer): void {
     "excel.table.reorder_columns",
     {
       title: "Reorder Excel table columns",
-      description: "Reorder columns in an existing structured table without clearing or recreating the table.",
+      description: "Reorder columns in an existing structured table without clearing, recreating, or range-rewriting the table.",
       inputSchema: {
         ...tableSelectorSchema(),
         columnOrder: z.array(z.union([z.string(), z.number().int().min(0)]))
@@ -2976,7 +3518,7 @@ function registerTableTools(mcp: McpServer): void {
     "excel.table.append_rows",
     {
       title: "Append Excel table rows",
-      description: "Append one or more rows to a structured table.",
+      description: "Append one or more rows to a structured table while preserving table style, filters, totals, and structured formulas.",
       inputSchema: {
         ...tableSelectorSchema(),
         values: z.array(z.array(z.any())),
@@ -3001,7 +3543,7 @@ function registerTableTools(mcp: McpServer): void {
     "excel.table.update_rows",
     {
       title: "Update Excel table rows",
-      description: "Update table rows by zero-based table-row index.",
+      description: "Update specific table rows by zero-based table-row index without rewriting the whole table.",
       inputSchema: {
         ...tableSelectorSchema(),
         rows: z.array(z.object({ index: z.number().int().min(0), values: z.array(z.any()) }))
@@ -3040,7 +3582,7 @@ function registerTableTools(mcp: McpServer): void {
     "excel.table.apply_filters",
     {
       title: "Apply table filters",
-      description: "Apply Office.js filter criteria to table columns.",
+      description: "Apply Office.js filter criteria to table columns without reading or rewriting the full table body.",
       inputSchema: tableFilterSchema(),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
     },
@@ -3064,7 +3606,7 @@ function registerTableTools(mcp: McpServer): void {
     "excel.table.sort",
     {
       title: "Sort Excel table",
-      description: "Apply table sort fields.",
+      description: "Apply table sort fields while preserving the structured table, filters, formulas, and styles.",
       inputSchema: tableSortSchema(),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
     },
@@ -4882,7 +5424,7 @@ function registerSnapshotTools(mcp: McpServer): void {
       name,
       {
         title: name.replace(/^excel\./, "").replace(/\./g, " "),
-        description: "Create or refresh a workbook snapshot.",
+        description: "Create or refresh a workbook snapshot. For risky edits, create before and after snapshots so diff tools can compare two snapshot IDs.",
         inputSchema: name.endsWith(".refresh")
           ? { snapshotId: z.string(), reason: z.string().optional() }
           : snapshotInputSchema(),
@@ -4938,7 +5480,7 @@ function registerSnapshotTools(mcp: McpServer): void {
     "excel.snapshot.compare",
     {
       title: "Compare snapshots",
-      description: "Compare two workbook snapshots.",
+      description: "Compare two workbook snapshots after capturing before and after states.",
       inputSchema: {
         leftSnapshotId: z.string(),
         rightSnapshotId: z.string()
@@ -4981,7 +5523,7 @@ function registerDiffTools(mcp: McpServer): void {
       name,
       {
         title: name.replace(/^excel\./, "").replace(/\./g, " "),
-        description: "Create or return a diff between two stored snapshots.",
+        description: "Create or return a diff between two stored snapshots. Call after the second snapshot and before rollback preview.",
         inputSchema: {
           leftSnapshotId: z.string(),
           rightSnapshotId: z.string()
@@ -5628,14 +6170,24 @@ function registerRangeOperation(
   mcp: McpServer,
   name: string,
   inputSchema: Record<string, unknown>,
-  createOperation: (args: any) => Record<string, unknown>
+  descriptionOrCreateOperation: string | ((args: any) => Record<string, unknown>),
+  maybeCreateOperation?: (args: any) => Record<string, unknown>
 ): void {
+  const description = typeof descriptionOrCreateOperation === "string"
+    ? descriptionOrCreateOperation
+    : `Apply ${name} through the reversible batch pipeline.`;
+  const createOperation = typeof descriptionOrCreateOperation === "function"
+    ? descriptionOrCreateOperation
+    : maybeCreateOperation;
+  if (!createOperation) {
+    throw new Error(`Missing operation factory for ${name}`);
+  }
   registerMcpTool(
     mcp,
     name,
     {
       title: name.replace(/^excel\./, "").replace(/\./g, " "),
-      description: `Apply ${name} through the reversible batch pipeline.`,
+      description,
       inputSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
     },
@@ -5663,6 +6215,144 @@ async function applySingleOperation(workbookId: string, operation: Record<string
       } as ExcelOperation
     ]
   });
+}
+
+function workflowOperations(workbookId: WorkbookId, operations: unknown[], reason?: string): ExcelOperation[] {
+  return operations.map((operation, index) => workflowOperation(workbookId, operation, reason, index));
+}
+
+function workflowOperation(workbookId: WorkbookId, operation: unknown, reason: string | undefined, index: number): ExcelOperation {
+  if (!operation || typeof operation !== "object") {
+    throw new Error(`Workflow operation ${index + 1} must be an object.`);
+  }
+  const record = operation as Record<string, any>;
+  if (typeof record.kind === "string" && !record.kind.startsWith("excel.")) {
+    return {
+      ...record,
+      workbookId: (record.workbookId ?? workbookId) as WorkbookId,
+      operationId: (record.operationId ?? makeId<OperationId>("op")) as OperationId,
+      reason: record.reason ?? reason ?? "MCP workflow risky edit",
+      destructiveLevel: record.destructiveLevel ?? workflowDestructiveLevel(record.kind)
+    } as ExcelOperation;
+  }
+
+  const toolName = String(record.tool ?? record.name ?? record.operation ?? record.kind ?? "");
+  const args = (record.args ?? record.input ?? record.parameters ?? record) as Record<string, any>;
+  switch (toolName) {
+    case "excel.range.write_values":
+    case "range.write_values":
+      assertWorkflowRangeArgs(toolName, args);
+      return {
+        kind: "range.write_values",
+        operationId: makeId<OperationId>("op"),
+        workbookId,
+        target: workflowTarget(workbookId, args),
+        values: args.values,
+        preserveFormats: true,
+        destructiveLevel: "values",
+        reason: reason ?? "MCP workflow write values"
+      } as ExcelOperation;
+    case "excel.range.write_formulas":
+    case "range.write_formulas":
+      assertWorkflowRangeArgs(toolName, args);
+      return {
+        kind: "range.write_formulas",
+        operationId: makeId<OperationId>("op"),
+        workbookId,
+        target: workflowTarget(workbookId, args),
+        formulas: args.formulas,
+        preserveFormats: true,
+        destructiveLevel: "values",
+        reason: reason ?? "MCP workflow write formulas"
+      } as ExcelOperation;
+    case "excel.range.write_number_formats":
+    case "range.write_number_formats":
+      assertWorkflowRangeArgs(toolName, args);
+      return {
+        kind: "range.write_number_formats",
+        operationId: makeId<OperationId>("op"),
+        workbookId,
+        target: workflowTarget(workbookId, args),
+        numberFormat: args.numberFormat,
+        preserveValues: true,
+        destructiveLevel: "format",
+        reason: reason ?? "MCP workflow write number formats"
+      } as ExcelOperation;
+    case "excel.range.clear_values_keep_format":
+    case "range.clear_values_keep_format":
+      assertWorkflowRangeArgs(toolName, args);
+      return {
+        kind: "range.clear_values_keep_format",
+        operationId: makeId<OperationId>("op"),
+        workbookId,
+        target: workflowTarget(workbookId, args),
+        destructiveLevel: "values",
+        reason: reason ?? "MCP workflow clear values"
+      } as ExcelOperation;
+    case "excel.sheet.create":
+    case "sheet.create":
+      if (typeof args.sheetName !== "string") {
+        throw new Error(`${toolName} requires sheetName.`);
+      }
+      return {
+        kind: "sheet.create",
+        operationId: makeId<OperationId>("op"),
+        workbookId,
+        sheetName: args.sheetName,
+        activate: args.activate,
+        destructiveLevel: "structure",
+        reason: reason ?? "MCP workflow sheet create"
+      } as ExcelOperation;
+    default:
+      throw new Error(`Unsupported workflow operation: ${toolName || "unknown"}. Use scoped range writes, clear-values-keep-format, sheet.create, or canonical ExcelOperation objects.`);
+  }
+}
+
+function workflowRanges(workbookId: WorkbookId, ranges: unknown): A1Range[] | undefined {
+  if (!Array.isArray(ranges)) {
+    return undefined;
+  }
+  return ranges.map((range, index) => {
+    if (!range || typeof range !== "object") {
+      throw new Error(`Workflow range ${index + 1} must be an object.`);
+    }
+    const record = range as Record<string, any>;
+    if (typeof record.sheetName !== "string" || typeof record.address !== "string") {
+      throw new Error(`Workflow range ${index + 1} requires sheetName and address.`);
+    }
+    return {
+      workbookId: (record.workbookId ?? workbookId) as WorkbookId,
+      sheetName: record.sheetName,
+      address: record.address
+    };
+  });
+}
+
+function workflowTarget(workbookId: WorkbookId, args: Record<string, any>): A1Range {
+  return {
+    workbookId: (args.workbookId ?? workbookId) as WorkbookId,
+    sheetName: args.sheetName,
+    address: args.address
+  };
+}
+
+function assertWorkflowRangeArgs(toolName: string, args: Record<string, any>): void {
+  if (typeof args.sheetName !== "string" || typeof args.address !== "string") {
+    throw new Error(`${toolName} requires sheetName and address so the workflow can snapshot a scoped range.`);
+  }
+}
+
+function workflowDestructiveLevel(kind: string) {
+  if (kind.startsWith("sheet.") || kind.startsWith("template.")) {
+    return "structure";
+  }
+  if (kind.includes("style") || kind.includes("format")) {
+    return "format";
+  }
+  if (kind.startsWith("range.")) {
+    return "values";
+  }
+  return "workbook";
 }
 
 function targetFromArgs(args: { workbookId: string; sheetName: string; address: string }): A1Range {

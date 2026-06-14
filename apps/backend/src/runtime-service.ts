@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   BackupManager,
   BatchCompiler,
+  cellCount,
   DefaultPermissionPolicy,
   buildFormulaDependencyGraph,
   attachConflictGuidance,
@@ -43,6 +44,7 @@ import type {
   ConflictTelemetrySummary,
   ConnectionId,
   DestructiveLevel,
+  DiffSummary,
   ExcelOperation,
   FormulaCompareResponse,
   FormulaDependencyGraph,
@@ -153,7 +155,7 @@ import type { AddinRpcClient } from "./addin-rpc-client.js";
 import { NativeFileBridge } from "./native-file-bridge.js";
 import { RuntimeStateStore } from "./state-store.js";
 
-const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.4";
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.5";
 
 export interface RuntimeServiceOptions {
   stateDir?: string;
@@ -4535,6 +4537,170 @@ export class RuntimeService {
     return { ...result, planId };
   }
 
+  async previewRiskyEdit(input: {
+    workbookId: WorkbookId;
+    operations: ExcelOperation[];
+    reason?: string;
+    goal?: string;
+    ranges?: A1Range[];
+    apply?: boolean;
+    allowSparseOverwrite?: boolean;
+    confirmationToken?: string;
+    agentId?: AgentId;
+    agentName?: string;
+    taskId?: TaskId;
+    role?: string;
+  }) {
+    const goal = input.goal ?? input.reason ?? "Scoped risky edit";
+    if (input.operations.length === 0) {
+      return {
+        ok: false,
+        workflow: "excel.workflow.preview_risky_edit",
+        applied: false,
+        completedSteps: [],
+        errorStep: "operations",
+        error: runtimeError("INVALID_ARGUMENT", "previewRiskyEdit requires at least one scoped operation.", {
+          retryable: false
+        })
+      };
+    }
+    const sparseWarnings = detectSparseOverwriteWarnings(input.operations);
+    if (sparseWarnings.length > 0 && input.allowSparseOverwrite !== true) {
+      return {
+        ok: false,
+        workflow: "excel.workflow.preview_risky_edit",
+        applied: false,
+        completedSteps: [],
+        errorStep: "sparse_write_guard",
+        warnings: sparseWarnings,
+        error: runtimeError("INVALID_ARGUMENT", "Risky workflow blocked a sparse/null-padded range write. Use the smallest changed range, use clear_values_keep_format for explicit clearing, or pass allowSparseOverwrite when this broad overwrite is intentional.", {
+          retryable: false,
+          details: { warnings: sparseWarnings }
+        })
+      };
+    }
+    const ranges = input.ranges?.length ? input.ranges : snapshotRangesFromOperations(input.workbookId, input.operations);
+    const before = await this.createWorkbookSnapshot({
+      workbookId: input.workbookId,
+      reason: `Before ${goal}`,
+      ...(ranges.length > 0 ? { ranges } : {})
+    });
+    if (!before.ok || !("snapshot" in before)) {
+      return {
+        ok: false,
+        workflow: "excel.workflow.preview_risky_edit",
+        applied: false,
+        completedSteps: [],
+        errorStep: "before_snapshot",
+        beforeSnapshotResult: before
+      };
+    }
+
+    const planRequest: PlanCreateRequest = {
+      workbookId: input.workbookId,
+      goal,
+      operations: input.operations,
+      baseSnapshotId: before.snapshot.snapshotId
+    };
+    if (input.agentId !== undefined) {
+      planRequest.agentId = input.agentId;
+    }
+    if (input.agentName !== undefined) {
+      planRequest.agentName = input.agentName;
+    }
+    if (input.taskId !== undefined) {
+      planRequest.taskId = input.taskId;
+    }
+    if (input.role !== undefined) {
+      planRequest.role = input.role;
+    }
+    const plan = this.createPlan(planRequest);
+    const planPreview = await this.previewPlan(plan.planId);
+    const completedSteps = ["before_snapshot", "plan_create", "plan_preview"];
+
+    if (input.apply === false) {
+      return {
+        ok: true,
+        workflow: "excel.workflow.preview_risky_edit",
+        applied: false,
+        completedSteps,
+        planId: plan.planId,
+        beforeSnapshot: before.snapshot,
+        planPreview,
+        recovery: {
+          beforeSnapshotId: before.snapshot.snapshotId,
+          rollbackAvailable: false
+        },
+        nextSteps: ["Apply the previewed plan with excel.plan.apply, then capture an after snapshot, diff, and rollback preview."]
+      };
+    }
+
+    const applyResult = await this.applyPlan(plan.planId, input.confirmationToken);
+    completedSteps.push("plan_apply");
+    if (!applyResult.ok) {
+      return {
+        ok: false,
+        workflow: "excel.workflow.preview_risky_edit",
+        applied: false,
+        completedSteps,
+        errorStep: "plan_apply",
+        planId: plan.planId,
+        transactionId: applyResult.transactionId,
+        beforeSnapshot: before.snapshot,
+        planPreview,
+        applyResult,
+        recovery: {
+          beforeSnapshotId: before.snapshot.snapshotId,
+          transactionId: applyResult.transactionId,
+          rollbackAvailable: false
+        }
+      };
+    }
+
+    const after = await this.createWorkbookSnapshot({
+      workbookId: input.workbookId,
+      reason: `After ${goal}`,
+      ranges: before.snapshot.affectedRanges
+    });
+    if (after.ok && "snapshot" in after) {
+      completedSteps.push("after_snapshot");
+    }
+    const diff = after.ok && "snapshot" in after
+      ? this.compareSnapshots(before.snapshot.snapshotId, after.snapshot.snapshotId)
+      : undefined;
+    if (diff?.ok) {
+      completedSteps.push("snapshot_diff");
+    }
+    const rollbackPreview = applyResult.transactionId !== undefined
+      ? this.previewTransactionRollback(applyResult.transactionId)
+      : undefined;
+    if (rollbackPreview !== undefined) {
+      completedSteps.push("rollback_preview");
+    }
+
+    return {
+      ok: Boolean(after.ok && diff?.ok),
+      workflow: "excel.workflow.preview_risky_edit",
+      applied: true,
+      completedSteps,
+      summary: riskyEditSummary(applyResult, diff, rollbackPreview),
+      planId: plan.planId,
+      transactionId: applyResult.transactionId,
+      beforeSnapshot: before.snapshot,
+      afterSnapshot: after.ok && "snapshot" in after ? after.snapshot : undefined,
+      planPreview,
+      applyResult,
+      diff,
+      rollbackPreview,
+      recovery: {
+        beforeSnapshotId: before.snapshot.snapshotId,
+        afterSnapshotId: after.ok && "snapshot" in after ? after.snapshot.snapshotId : undefined,
+        transactionId: applyResult.transactionId,
+        rollbackAvailable: rollbackPreview?.rollbackAvailable ?? false
+      }
+    };
+  }
+
   async rollbackPlan(planId: PlanId, confirmationToken?: string): Promise<OperationResult> {
     const plan = this.plans.getPlan(planId);
     if (!plan?.preview) {
@@ -5972,6 +6138,95 @@ function scopesFromBatch(workbookId: WorkbookId, operations: ExcelOperation[]): 
     scopes.push(...scopesFromOperation(workbookId, operation));
   }
   return dedupeScopes(scopes.length > 0 ? scopes : [{ type: "workbook", workbookId }]);
+}
+
+function snapshotRangesFromOperations(workbookId: WorkbookId, operations: ExcelOperation[]): A1Range[] {
+  const ranges: A1Range[] = [];
+  for (const scope of scopesFromBatch(workbookId, operations)) {
+    if (scope.type === "range" && scope.address !== undefined) {
+      ranges.push({
+        workbookId: scope.workbookId,
+        sheetName: scope.sheetName,
+        address: scope.address
+      });
+    }
+  }
+  const seen = new Set<string>();
+  return ranges.filter((range) => {
+    const key = `${range.workbookId}:${range.sheetName}:${range.address}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function detectSparseOverwriteWarnings(operations: ExcelOperation[]): OperationWarning[] {
+  const warnings: OperationWarning[] = [];
+  for (const operation of operations) {
+    if (operation.kind !== "range.write_values") {
+      continue;
+    }
+    const values = (operation as { values?: unknown[][] }).values;
+    if (!Array.isArray(values) || values.length === 0) {
+      continue;
+    }
+    const matrixCells = values.reduce((sum, row) => sum + (Array.isArray(row) ? row.length : 0), 0);
+    const nonEmptyCells = values.reduce(
+      (sum, row) => sum + (Array.isArray(row) ? row.filter((value) => value !== null && value !== undefined && value !== "").length : 0),
+      0
+    );
+    const targetCells = cellCount(operation.target.address);
+    const touchedCells = Math.max(matrixCells, targetCells);
+    if (touchedCells < 8 || nonEmptyCells === 0) {
+      continue;
+    }
+    const nonEmptyRatio = nonEmptyCells / touchedCells;
+    if (nonEmptyRatio <= 0.25 && touchedCells - nonEmptyCells >= 4) {
+      warnings.push({
+        code: "SPARSE_RANGE_WRITE_RISK",
+        message: `Sparse range write to ${operation.target.sheetName}!${operation.target.address} has ${nonEmptyCells}/${touchedCells} non-empty cell(s). Use a smaller range or an explicit clear operation.`,
+        target: operation.target,
+        details: {
+          operationId: operation.operationId,
+          nonEmptyCells,
+          touchedCells,
+          nonEmptyRatio
+        }
+      });
+    }
+  }
+  return warnings;
+}
+
+function riskyEditSummary(
+  applyResult: OperationResult,
+  diffResult: unknown,
+  rollbackPreview: { rollbackAvailable?: boolean; ok?: boolean; conflicts?: unknown[] } | undefined
+) {
+  const diff = (diffResult as { diff?: DiffSummary } | undefined)?.diff;
+  return {
+    transactionId: applyResult.transactionId,
+    backupIds: applyResult.backups,
+    warningCount: applyResult.warnings.length,
+    diff: diff
+      ? {
+          changedRanges: diff.changedRanges,
+          cellsChanged: diff.cellsChanged,
+          formulasChanged: diff.formulasChanged,
+          stylesChanged: diff.stylesChanged,
+          tablesChanged: diff.tablesChanged,
+          sheetsChanged: diff.sheetsChanged,
+          destructiveLevel: diff.destructiveLevel
+        }
+      : undefined,
+    rollback: {
+      previewed: rollbackPreview !== undefined,
+      available: rollbackPreview?.rollbackAvailable ?? false,
+      conflictCount: Array.isArray(rollbackPreview?.conflicts) ? rollbackPreview.conflicts.length : 0
+    }
+  };
 }
 
 function tableMutationScopes(request: { workbookId: WorkbookId; tableName?: string; sheetName?: string; address?: string }, ranges: A1Range[]): WorkbookScope[] {

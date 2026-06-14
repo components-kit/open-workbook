@@ -35,6 +35,11 @@ Capability-unavailable responses are preferred over simulated success when Offic
 ## Release Gates
 
 - `corepack pnpm verify` passes. This runs build, tests, and synthetic core benchmarks.
+- `corepack pnpm test:e2e` passes before release-gate E2E claims. This runs the generated E2E report, deterministic fake-host MCP sweep, and `test:e2e:agent:core`.
+- `corepack pnpm test:e2e:agent:core` passes with the default signed-in Codex model (`gpt-5.4-mini`) before large-workbook or multi-agent agent-safety claims. It validates skill-guided decisions for large table reorder/filter/sort/append/update and lock/conflict handling.
+- `corepack pnpm test:e2e:agent:quality` is reviewed before complex workflow quality claims. It is report-only by default and covers sheet/formula creation, formula repair, snapshot/diff/rollback preview, template/style repair, and pivot/chart decisions.
+- `corepack pnpm test:e2e:agent:quality:compare` is reviewed before comparing cheap-model baseline quality with a frontier model. Set `OPEN_WORKBOOK_E2E_CHEAP_MODEL` and `OPEN_WORKBOOK_E2E_FRONTIER_MODEL` to control the profiles.
+- `corepack pnpm test:e2e:agent:quality:gate` runs the cheap/frontier quality matrix in strict mode when a release claims workflow quality is passing rather than diagnostic.
 - MCP callable tool names stay in sync with the shared protocol catalog. `corepack pnpm verify` runs `scripts/validate-mcp-catalog.mjs` after build and fails if a stable or preview callable tool is missing from the MCP server or if the server registers a tool that is not in the callable catalog.
 - Tool surface docs stay in sync with the callable catalog. `corepack pnpm verify` runs `scripts/validate-docs-surface.mjs` and fails if `docs/tool-surface.md` omits an exposed stable or preview tool.
 - Package metadata stays publishable. `corepack pnpm verify` runs `scripts/validate-package-metadata.mjs` and fails if package versions, repository metadata, public/private publish intent, README presence, or `dist` entrypoints drift.
@@ -45,7 +50,7 @@ Capability-unavailable responses are preferred over simulated success when Offic
 - Fresh local install can run `npx -y @components-kit/open-workbook setup`, install `open-workbook-excel` with `npx skills add components-kit/open-workbook --skill open-workbook-excel`, generate/install a manifest, launch `npx -y @components-kit/open-workbook@latest mcp`, and report runtime status. If the runtime cannot bind or cannot be reached, CLI commands must fail with concise user-facing errors.
 - Excel add-in can be sideloaded on macOS and Windows using the generated manifest.
 - Native file bridge host smoke passes on macOS and Windows with `owb file-bridge smoke --workbook <open-workbook-name> --target <copy.xlsx>`.
-- Real Excel smoke test covers read, write, batch apply, template repair, rollback preview/apply, and conflict detection.
+- Real Excel smoke starts with `OPEN_WORKBOOK_LIVE_E2E=1 corepack pnpm test:e2e:live:mac` or `OPEN_WORKBOOK_LIVE_E2E=1 corepack pnpm test:e2e:live:windows` and must confirm the backend is reachable and the Excel add-in has an active workbook. For deeper host claims, add `-- --deep` to run a scratch-sheet range write, formula validation, snapshot diff, and rollback preview.
 - Multi-agent smoke test covers two MCP clients planning concurrently, one writer waiting on a lock, and telemetry reporting the contention.
 - Known Office.js host limitations are documented as `CAPABILITY_UNAVAILABLE` or warnings.
 

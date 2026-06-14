@@ -8,6 +8,12 @@ describe("tool catalog", () => {
     expect(ToolCatalog.length).toBeGreaterThan(200);
     expect(ToolCatalog.some((tool) => tool.name === "excel.runtime.get_capabilities")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.name === "excel.workbook.get_workbook_map")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.prepare_session")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.create_formula_sheet")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.create_template_report")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.create_pivot_chart_summary")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.repair_formula_errors")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.preview_risky_edit")).toBe(true);
   });
 
   it("exposes only stable tools by default", () => {
@@ -47,12 +53,27 @@ describe("tool catalog", () => {
     expect(exposed.some((tool) => tool.name === "excel.pivot.delete")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.chart.create")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.runtime.get_capabilities")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.runtime.get_selection")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.workflow.prepare_session")).toBe(true);
+    expect(exposed.find((tool) => tool.name === "excel.workflow.prepare_session")?.mutatesWorkbook).toBe(false);
+    expect(exposed.some((tool) => tool.name === "excel.workflow.create_formula_sheet")).toBe(true);
+    expect(exposed.find((tool) => tool.name === "excel.workflow.create_formula_sheet")?.requiresConfirmation).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.workflow.create_template_report")).toBe(true);
+    expect(exposed.find((tool) => tool.name === "excel.workflow.create_template_report")?.requiresConfirmation).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.workflow.create_pivot_chart_summary")).toBe(true);
+    expect(exposed.find((tool) => tool.name === "excel.workflow.create_pivot_chart_summary")?.requiresConfirmation).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.workflow.repair_formula_errors")).toBe(true);
+    expect(exposed.find((tool) => tool.name === "excel.workflow.repair_formula_errors")?.requiresConfirmation).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.workflow.preview_risky_edit")).toBe(true);
+    expect(exposed.find((tool) => tool.name === "excel.workflow.preview_risky_edit")?.requiresConfirmation).toBe(true);
+    expect(exposed.find((tool) => tool.name === "excel.runtime.get_selection")?.status).toBe("stable");
   });
 
-  it("can expose preview tools without exposing planned or unsupported tools", () => {
+  it("can include preview status without exposing planned or unsupported tools", () => {
     const exposed = getExposedToolCatalog({ includePreview: true });
     expect(exposed.some((tool) => tool.name === "excel.runtime.get_capabilities")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.runtime.get_selection" && tool.status === "preview")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.runtime.connect_addin" && tool.status === "stable")).toBe(true);
+    expect(exposed.every((tool) => tool.status === "stable" || tool.status === "preview")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.workbook.get_workbook_map" && tool.status === "stable")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.pivot.create" && tool.status === "stable")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.status === "planned")).toBe(false);

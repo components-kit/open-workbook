@@ -23,7 +23,6 @@ open-workbook-mcp
 - `OPEN_WORKBOOK_HOST`: backend host, default `127.0.0.1`
 - `OPEN_WORKBOOK_PORT`: backend port, default `37845`
 - `OPEN_WORKBOOK_ADDIN_PATH`: backend WebSocket path, default `/addin`
-- `OPEN_WORKBOOK_PREVIEW_TOOLS=1`: expose preview tools in addition to stable tools
 
 ## Notes
 

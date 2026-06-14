@@ -6,7 +6,7 @@ OpenCode is one possible MCP client. The generic Open Workbook install flow is s
 npx -y @components-kit/open-workbook setup
 ```
 
-Paste the generic MCP config printed by setup into OpenCode using the config shape OpenCode expects. If you prefer an OpenCode-shaped snippet from the local CLI, use:
+OpenCode uses its own MCP config shape. Generate an OpenCode-shaped snippet from the local CLI with:
 
 ```bash
 owb opencode config --id open-workbook --agent-name finance-agent
@@ -26,14 +26,15 @@ Example output:
 }
 ```
 
-For `npx`-based config, keep the command equivalent to:
+For `npx`-based OpenCode config, keep the command equivalent to:
 
 ```json
 {
-  "mcpServers": {
+  "mcp": {
     "open-workbook": {
-      "command": "npx",
-      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
+      "type": "local",
+      "command": ["npx", "-y", "@components-kit/open-workbook@latest", "mcp"],
+      "enabled": true
     }
   }
 }

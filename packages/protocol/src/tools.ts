@@ -8,6 +8,7 @@ export type ToolNamespace =
   | "sheet"
   | "range"
   | "batch"
+  | "workflow"
   | "template"
   | "style"
   | "formula"
@@ -54,6 +55,12 @@ const STABLE_TOOLS = new Set([
   "excel.runtime.get_status",
   "excel.runtime.get_capabilities",
   "excel.runtime.get_active_context",
+  "excel.runtime.get_selection",
+  "excel.runtime.connect_addin",
+  "excel.runtime.disconnect_addin",
+  "excel.runtime.ping_addin",
+  "excel.runtime.set_active_workbook",
+  "excel.runtime.set_active_sheet",
   "excel.workbook.list_open_workbooks",
   "excel.workbook.get_workbook_info",
   "excel.workbook.get_workbook_map",
@@ -131,6 +138,12 @@ const STABLE_TOOLS = new Set([
   "excel.batch.validate",
   "excel.batch.dry_run",
   "excel.batch.apply",
+  "excel.workflow.prepare_session",
+  "excel.workflow.create_formula_sheet",
+  "excel.workflow.create_template_report",
+  "excel.workflow.create_pivot_chart_summary",
+  "excel.workflow.repair_formula_errors",
+  "excel.workflow.preview_risky_edit",
   "excel.plan.create",
   "excel.plan.preview",
   "excel.plan.refresh_preview",
@@ -337,14 +350,7 @@ const STABLE_TOOLS = new Set([
   "excel.permissions.unlock_regions"
 ]);
 
-const PREVIEW_TOOLS = new Set([
-  "excel.runtime.connect_addin",
-  "excel.runtime.disconnect_addin",
-  "excel.runtime.ping_addin",
-  "excel.runtime.get_selection",
-  "excel.runtime.set_active_workbook",
-  "excel.runtime.set_active_sheet"
-]);
+const PREVIEW_TOOLS = new Set<string>();
 
 const TOOL_NAMES = [
   "excel.runtime.get_status",
@@ -433,6 +439,12 @@ const TOOL_NAMES = [
   "excel.batch.apply",
   "excel.batch.validate",
   "excel.batch.dry_run",
+  "excel.workflow.prepare_session",
+  "excel.workflow.create_formula_sheet",
+  "excel.workflow.create_template_report",
+  "excel.workflow.create_pivot_chart_summary",
+  "excel.workflow.repair_formula_errors",
+  "excel.workflow.preview_risky_edit",
   "excel.template.detect_templates",
   "excel.template.register",
   "excel.template.unregister",
@@ -709,6 +721,9 @@ function getToolStatus(name: string, namespace: ToolNamespace): CatalogStatus {
 }
 
 function isMutatingTool(name: string): boolean {
+  if (name === "excel.workflow.preview_risky_edit") {
+    return true;
+  }
   return /\.(set_|write_|create|copy|rename|delete|move|hide|unhide|protect|unprotect|clear|apply|repair|fill|append|update|resize|sort|save|restore|close|insert|merge|unmerge|lock|unlock|convert|calculate|recalculate|register|unregister|commit|rollback|cancel|refresh|invalidate|parse|normalize|trim|remove|standardize|split|import|embed)/.test(
     name
   );
@@ -722,6 +737,9 @@ function getDestructiveLevel(name: string, namespace: ToolNamespace): Destructiv
     return "workbook";
   }
   if (namespace === "sheet" || namespace === "template" || name.includes("insert_") || name.includes("delete_")) {
+    return "structure";
+  }
+  if (namespace === "workflow") {
     return "structure";
   }
   if (namespace === "style" || name.includes("format") || name.includes("theme")) {

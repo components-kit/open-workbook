@@ -22,7 +22,7 @@ const workspaceModuleDirs = new Map([
   ])]
 ]);
 const port = Number(process.env.OPEN_WORKBOOK_ADDIN_PORT ?? 37846);
-const host = process.env.OPEN_WORKBOOK_ADDIN_HOST ?? "localhost";
+const host = process.env.OPEN_WORKBOOK_ADDIN_HOST ?? "127.0.0.1";
 const protocol = "http";
 const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? readPackageVersion() ?? "0.1.1";
 

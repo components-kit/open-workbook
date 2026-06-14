@@ -91,8 +91,8 @@ Before publishing:
 2. Run `corepack pnpm verify`.
 3. Run `node packages/cli/dist/index.js doctor`.
 4. Run `corepack pnpm pack:dry-run`.
-5. Confirm `node packages/cli/dist/index.js setup --dry-run` prints the generic `npx @components-kit/open-workbook@latest mcp` config and `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
-6. Confirm `node packages/cli/dist/index.js upgrade --dry-run` prints the same config with upgrade wording.
+5. Confirm `node packages/cli/dist/index.js setup --dry-run` prints the `npx -y @components-kit/open-workbook@latest mcp` local stdio launch command and `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
+6. Confirm `node packages/cli/dist/index.js upgrade --dry-run` prints the same launch command with upgrade wording.
 7. Confirm generated manifests include the expected taskpane URL and `backendUrl`.
 8. Confirm `@components-kit/open-workbook-excel-addin` remains private.
 9. Confirm npm publish access is public for publishable scoped packages.
@@ -113,17 +113,10 @@ Existing users refresh local setup assets after a package update with:
 npx -y @components-kit/open-workbook@latest upgrade
 ```
 
-Users paste the printed MCP config into their agent UI:
+Users paste the printed MCP launch command into their agent UI's local stdio MCP configuration:
 
-```json
-{
-  "mcpServers": {
-    "open-workbook": {
-      "command": "npx",
-      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
-    }
-  }
-}
+```bash
+npx -y @components-kit/open-workbook@latest mcp
 ```
 
 They install the skill with:

@@ -18,17 +18,10 @@ Install:
 npx -y @components-kit/open-workbook setup
 ```
 
-Generic MCP config:
+MCP launch command:
 
-```json
-{
-  "mcpServers": {
-    "open-workbook": {
-      "command": "npx",
-      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
-    }
-  }
-}
+```bash
+npx -y @components-kit/open-workbook@latest mcp
 ```
 
 Skill install:
@@ -47,7 +40,7 @@ Agent instruction source:
 - [Full LLM Reference](https://raw.githubusercontent.com/components-kit/open-workbook/main/llms-full.txt): Complete generated project reference in one file
 - [Agent Skill: Open Workbook Excel](https://github.com/components-kit/open-workbook/tree/main/skills/open-workbook-excel): Skill source for fast, reliable live Excel automation through Open Workbook MCP
 - [README](https://github.com/components-kit/open-workbook/blob/main/README.md): Project overview, architecture, setup, and safety contract
-- [Installation](https://github.com/components-kit/open-workbook/blob/main/docs/installation.md): npx setup, generic MCP config, and Excel add-in startup flow
+- [Installation](https://github.com/components-kit/open-workbook/blob/main/docs/installation.md): npx setup, MCP launch command, and Excel add-in startup flow
 - [MCP Clients](https://github.com/components-kit/open-workbook/blob/main/docs/mcp-clients.md): Generic MCP client configuration
 - [Generic Instructions](https://github.com/components-kit/open-workbook/blob/main/docs/instructions.md): skills.sh install and fallback agent instructions
 - [Tool Surface](https://github.com/components-kit/open-workbook/blob/main/docs/tool-surface.md): Stable, preview, and capability-limited MCP tools

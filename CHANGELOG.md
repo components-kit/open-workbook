@@ -4,6 +4,53 @@ All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
 
+## [0.1.5] - 2026-06-14
+
+### Added
+
+- Added `excel.workflow.preview_risky_edit`, a combined scoped risky-edit workflow that returns before/after snapshots, diff, transaction metadata, and rollback preview.
+- Added `excel.workflow.prepare_session`, a read-only combined discovery workflow for runtime status, active context, capabilities, workbook map, and collaboration state.
+- Added `excel.workflow.create_formula_sheet`, a combined formula-sheet workflow with value writes, formula writes, number formats, and formula validation.
+- Added `excel.workflow.create_template_report`, a combined template report workflow with declared region fill, style comparison/repair, and template validation.
+- Added `excel.workflow.create_pivot_chart_summary`, a combined PivotTable/chart workflow with refresh and source validation.
+- Added `excel.workflow.repair_formula_errors`, a combined formula repair workflow with validation, pattern read, dependency graph inspection, scoped repair, and after-validation.
+- Combined mutating workflows now return an internal preflight payload so compact or low-cost agents can still establish workbook identity and capability context when they select a matched workflow directly.
+- Added release-gate E2E script entries for deterministic fake-host coverage, Codex agent decision coverage, live Excel host gates, and generated E2E reports.
+
+### Changed
+
+- Split Codex agent E2E into a blocking core safety lane and report-only workflow quality lane, with bundled `open-workbook-excel` skill guidance loaded into agent prompts.
+- Added report-only cheap/frontier Codex agent quality comparison and failure-category reporting for workflow diagnostics.
+- Replaced the live Excel E2E placeholder with an opt-in backend/add-in connectivity smoke contract that writes JSON and Markdown artifacts.
+- Strengthened skill and MCP tool guidance for formula writes, large table operations, formula repair, snapshots, diffs, and multi-agent locking.
+- Blocked sparse/null-padded risky workflow value writes by default and added strict quality gate scripts for cheap/frontier agent comparison.
+- Changed setup and upgrade output to print the MCP local stdio launch command instead of a client-specific config wrapper.
+
+## [0.1.4] - 2026-06-13
+
+### Added
+
+- Added a Vite-built React Excel taskpane with updated styling and bundled add-in assets.
+- Added packaged add-in icon assets and hosted manifest icon URLs for Excel ribbon and Developer Add-ins branding.
+
+### Changed
+
+- Kept the local taskpane server on loopback HTTP while using hosted HTTPS assets only for static branding icons.
+- Updated sideloading and advanced runtime documentation to match the local taskpane serving model.
+
+## [0.1.3] - 2026-06-13
+
+### Added
+
+- Added `owb upgrade` for refreshing local manifests and fallback instruction assets after package updates.
+- Added `excel.table.reorder_columns` for preserving Excel table identity while changing column order.
+- Added projected `excel.table.read` options for column selection, row windows, and payload facets on large tables.
+
+### Changed
+
+- Improved large-table guidance so agents avoid full-table rewrites and use table-native operations.
+- Limited `excel.clean.normalize_headers` writes to the normalized header row instead of rewriting the full source range.
+
 ## [0.1.2] - 2026-06-13
 
 ### Added

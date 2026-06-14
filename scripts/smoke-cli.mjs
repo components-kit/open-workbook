@@ -32,8 +32,10 @@ const checks = [
     assert: (result) =>
       result.status === 0 &&
       result.stdout.includes("@components-kit/open-workbook@latest") &&
+      result.stdout.includes("MCP launch command for your agent UI:") &&
+      result.stdout.includes("npx -y @components-kit/open-workbook@latest mcp") &&
+      result.stdout.includes("local stdio MCP server command") &&
       result.stdout.includes("npx skills add components-kit/open-workbook --skill open-workbook-excel") &&
-      result.stdout.includes("\"mcp\"") &&
       result.stdout.includes("instructions.md") &&
       result.stdout.includes("setup-manifest.xml") &&
       result.stdout.includes("restart the agent UI or MCP host")
@@ -47,6 +49,9 @@ const checks = [
       result.stdout.includes("upgrade-instructions.md") &&
       result.stdout.includes("upgrade-manifest.xml") &&
       result.stdout.includes("@components-kit/open-workbook@latest") &&
+      result.stdout.includes("MCP launch command for your agent UI:") &&
+      result.stdout.includes("npx -y @components-kit/open-workbook@latest mcp") &&
+      result.stdout.includes("local stdio MCP server command") &&
       result.stdout.includes("restart the agent UI or MCP host")
   },
   {

@@ -18,7 +18,7 @@ This file is generated for LLM and agent context. It combines the project README
 npx -y @components-kit/open-workbook setup
 \`\`\`
 
-Then install the skill with \`npx skills add components-kit/open-workbook --skill open-workbook-excel\` and paste the printed MCP config into an agent UI.
+Then install the skill with \`npx skills add components-kit/open-workbook --skill open-workbook-excel\` and paste the printed MCP launch command into an agent UI's local stdio MCP configuration.
 
 ## Production Rules
 

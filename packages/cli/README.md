@@ -8,7 +8,7 @@ User-facing package for installing, configuring, and running Open Workbook local
 npx -y @components-kit/open-workbook setup
 ```
 
-Setup prepares the Excel add-in manifest and prints generic MCP config.
+Setup prepares the Excel add-in manifest and prints the MCP launch command.
 For an existing install, run `npx -y @components-kit/open-workbook@latest upgrade` to refresh local setup assets after a package update.
 
 Install the Open Workbook Excel skill with skills.sh:
@@ -17,17 +17,10 @@ Install the Open Workbook Excel skill with skills.sh:
 npx skills add components-kit/open-workbook --skill open-workbook-excel
 ```
 
-Paste the printed MCP config into any MCP-capable agent UI:
+Use the printed MCP launch command in your agent UI's local stdio MCP configuration:
 
-```json
-{
-  "mcpServers": {
-    "open-workbook": {
-      "command": "npx",
-      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
-    }
-  }
-}
+```bash
+npx -y @components-kit/open-workbook@latest mcp
 ```
 
 `owb setup` also writes fallback instructions for clients that do not support skills.sh.
@@ -76,4 +69,3 @@ owb service manifest --target macos --service addin
 - `OPEN_WORKBOOK_STATE_DIR`
 - `OPEN_WORKBOOK_BACKUP_DIR`
 - `OPEN_WORKBOOK_EXPORT_DIR`
-- `OPEN_WORKBOOK_PREVIEW_TOOLS=1`

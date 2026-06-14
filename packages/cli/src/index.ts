@@ -10,7 +10,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../../..");
 const packageRoot = resolve(__dirname, "..");
 const publicPackageName = "@components-kit/open-workbook";
-const currentVersion = readPackageVersion([join(packageRoot, "package.json"), join(repoRoot, "package.json")]) ?? "0.1.4";
+const currentVersion = readPackageVersion([join(packageRoot, "package.json"), join(repoRoot, "package.json")]) ?? "0.1.5";
 const instructionFileName = "open-workbook-excel.md";
 const sourcePaths = {
   mcpServer: resolve(repoRoot, "apps/mcp-server/dist/index.js"),
@@ -615,30 +615,17 @@ async function runSetup(options: SetupOptions, mode: "setup" | "upgrade"): Promi
   console.log("");
   printManifestNextSteps(manifestPath);
   console.log("");
-  console.log("Paste this generic MCP config into any MCP-capable agent UI:");
-  console.log(JSON.stringify(genericMcpConfig(), null, 2));
+  console.log("MCP launch command for your agent UI:");
+  console.log(`npx -y ${publicPackageName}@latest mcp`);
+  console.log("Use it as a local stdio MCP server command. Config wrappers vary by client.");
   console.log("");
   console.log("Install or update the Open Workbook Excel skill with skills.sh:");
   console.log("npx skills add components-kit/open-workbook --skill open-workbook-excel");
-  console.log("");
-  console.log("For a global OpenCode install:");
-  console.log("npx skills add components-kit/open-workbook --skill open-workbook-excel -a opencode -g -y");
   console.log("");
   console.log("The fallback instruction file above is for clients that do not support skills.sh.");
   console.log("Start the agent UI before opening the Excel add-in so `npx ... mcp` can serve the taskpane and backend.");
   console.log("After upgrading Open Workbook, restart the agent UI or MCP host so `@latest` starts the new runtime.");
   await printLatestVersionNotice();
-}
-
-function genericMcpConfig(): unknown {
-  return {
-    mcpServers: {
-      "open-workbook": {
-        command: "npx",
-        args: ["-y", `${publicPackageName}@latest`, "mcp"]
-      }
-    }
-  };
 }
 
 async function printLatestVersionNotice(): Promise<void> {

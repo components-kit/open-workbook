@@ -10,6 +10,8 @@ These are default Open Workbook MCP workflows. Adjust scope and validation to th
 4. Call `excel.workbook.get_workbook_map`.
 5. For a specific sheet, call `excel.sheet.get_used_range` and scoped `excel.range.read_*` tools.
 
+Use `excel.workflow.prepare_session` when available to combine the first four calls plus collaboration state.
+
 Use display text when reporting what a user sees. Use values/formulas/number formats when making calculations or edits.
 
 ## Read And Analyze Data
@@ -31,7 +33,13 @@ Do not read the whole workbook when a named table, used range, or explicit range
 
 For a one-range value update, direct `excel.range.write_values` is acceptable because it routes through the backend safety lifecycle.
 
+For new sheets with formulas and number formats, prefer `excel.workflow.create_formula_sheet`.
+
+Combined mutating workflows return an internal `preflight` payload with runtime status, active context, capabilities, workbook map, and collaboration state before they mutate. Still prefer `excel.workflow.prepare_session` first when possible; use the matched combined workflow directly when the task is standard and speed/model reliability matters.
+
 ## Create A New Period Sheet From Template
+
+Prefer `excel.workflow.create_template_report` for standard template report creation.
 
 1. Call `excel.template.list` or `excel.template.detect_templates`.
 2. Register the template if needed with `excel.template.register`.
@@ -41,14 +49,17 @@ For a one-range value update, direct `excel.range.write_values` is acceptable be
 6. Validate with `excel.template.validate_sheet_against_template`.
 
 If no registered template exists, warn before mutation. Preserve the template's formatting, formulas, filters, print layout, tables, freeze panes, and named ranges.
+Do not replace this workflow with `excel.sheet.copy` unless the user asks for a raw sheet duplicate or the template tool is unavailable.
 
 ## Repair Formulas Or Styles
 
-1. Identify the template and target sheet/range.
-2. Capture current state with `excel.snapshot.create` when the repair may affect user work.
-3. Compare fingerprints with `excel.style.compare_fingerprint` or formula patterns with `excel.formula.validate_against_template`.
-4. Repair with `excel.repair.style_from_template`, `excel.repair.formulas_from_template`, `excel.style.copy_from_template`, or `excel.formula.repair_patterns`.
-5. Validate again and report any Office.js capability-status warnings.
+Prefer `excel.workflow.repair_formula_errors` for ordinary formula error repairs when you can identify the error range plus a source formula or explicit formula matrix.
+
+1. Find formula errors with `excel.formula.find_errors`, `excel.range.find_errors`, or `excel.validate.no_formula_errors`.
+2. Read neighboring patterns with `excel.formula.read_patterns` and dependencies with `excel.formula.get_dependency_graph` or trace tools.
+3. Capture current state with `excel.snapshot.create` when the repair may affect user work.
+4. Repair with `excel.formula.repair_patterns`, `excel.formula.fill_down`, `excel.formula.fill_right`, or scoped `excel.range.write_formulas`; for styles use `excel.style.copy_from_template` or `excel.style.repair_consistency`.
+5. Recalculate when formulas changed, validate with `excel.formula.validate` or `excel.validate.no_formula_errors`, and report warnings.
 
 Do not convert formulas to values unless the user explicitly asks or the workflow requires a static export.
 
@@ -76,14 +87,31 @@ Avoid full-table rewrites for layout changes such as column reorder; they are sl
 
 ## Create Or Update Pivots And Charts
 
+For a standard summary PivotTable plus chart, prefer `excel.workflow.create_pivot_chart_summary`.
+
 1. Confirm active host support with `excel.runtime.get_capabilities`.
 2. Inspect source tables/ranges and existing objects.
-3. For pivots, use `excel.pivot.validate_source`, `excel.pivot.create`, or `excel.pivot.rebuild_with_source`.
+3. For pivots, validate first with `excel.pivot.validate_source`, then use `excel.pivot.create` or `excel.pivot.rebuild_with_source`.
 4. For charts, use `excel.chart.create` or `excel.chart.update_data_source`.
 5. For template parity, use pivot/chart fingerprint or copy-from-template tools.
-6. Refresh and validate before reporting success.
+6. Refresh pivots and charts with `excel.pivot.refresh`/`excel.pivot.refresh_all` and `excel.chart.refresh`/`excel.chart.update_data_source`, then validate before reporting success.
 
 When Office.js cannot expose deterministic pivot/chart dimensions, return the capability warning instead of inventing proof.
+
+## Snapshot, Diff, And Rollback Preview
+
+Use `excel.workflow.preview_risky_edit` after discovery when the requested edit is scoped and the user expects proof, diff, and rollback preview. Pass a non-empty minimal operation list and leave `apply` enabled unless the user asked for preview only. It creates the before snapshot, plan preview, scoped apply, after snapshot, diff, and rollback preview in one response.
+
+If the combined workflow is unavailable:
+
+1. Create a before snapshot with `excel.snapshot.create` or `excel.workbook.snapshot`.
+2. Apply only the scoped edit requested by the user.
+3. Create an after snapshot.
+4. Compare with `excel.diff.summarize`, `excel.diff.create`, or `excel.snapshot.compare`.
+5. Preview rollback with `excel.transaction.preview_rollback` or `excel.transaction.preview_rollback_chain`.
+
+Do not actually roll back unless the user explicitly asks for rollback apply.
+Do not stop after creating a plan or making the edit; a snapshot/diff/rollback-preview workflow is incomplete until the diff and rollback preview tools have both run.
 
 ## Save, Export, And Back Up
 

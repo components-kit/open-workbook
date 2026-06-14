@@ -16,7 +16,7 @@ Daily spreadsheet work usually does not need the largest model available, but it
 
 The project is being prepared for npm distribution as `@components-kit/open-workbook`. It is not a Microsoft AppSource add-in and does not attempt to install itself into Excel without user or admin trust approval.
 
-Stable areas include runtime connection, workbook/sheet/range operations, reversible batches, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
+Stable areas include runtime connection, workbook/sheet/range operations, reversible batches, combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
 
 The simple flow is MCP-owned: `npx ... mcp` starts the MCP adapter, the local add-in taskpane server, and an embedded backend when no shared daemon is running. The shared `owb daemon` remains available for advanced multi-client coordination.
 
@@ -60,7 +60,7 @@ Run setup:
 npx -y @components-kit/open-workbook setup
 ```
 
-Setup prepares the Excel add-in manifest and prints the MCP config to add to your agent UI.
+Setup prepares the Excel add-in manifest and prints the MCP launch command to add to your agent UI's local stdio MCP configuration.
 For an existing install, refresh local setup assets after a package update with:
 
 ```bash
@@ -73,17 +73,10 @@ Install the agent skill with skills.sh:
 npx skills add components-kit/open-workbook --skill open-workbook-excel
 ```
 
-Paste the printed MCP config into any MCP-capable agent UI:
+Use the printed MCP launch command in your agent UI:
 
-```json
-{
-  "mcpServers": {
-    "open-workbook": {
-      "command": "npx",
-      "args": ["-y", "@components-kit/open-workbook@latest", "mcp"]
-    }
-  }
-}
+```bash
+npx -y @components-kit/open-workbook@latest mcp
 ```
 
 Start the agent UI before opening the Open Workbook add-in in Excel; the MCP command starts the local add-in asset server and backend for the simple flow.
@@ -145,13 +138,15 @@ Environment overrides:
 - `OPEN_WORKBOOK_STATE_DIR`
 - `OPEN_WORKBOOK_FILE_BRIDGE_URL`
 - `OPEN_WORKBOOK_FILE_BRIDGE_PORT`
-- `OPEN_WORKBOOK_PREVIEW_TOOLS=1`
 
 ## Common Commands
 
 ```bash
 corepack pnpm check
 corepack pnpm test
+corepack pnpm test:e2e:fast
+corepack pnpm test:e2e:agent:quality:compare
+corepack pnpm test:e2e:agent:quality:gate
 corepack pnpm build
 corepack pnpm verify
 corepack pnpm pack:dry-run
@@ -169,7 +164,7 @@ Open Workbook includes generic agent instruction source for fast, reliable live 
 - `skills/open-workbook-excel/SKILL.md`
 - `skills/open-workbook-excel/references/`
 
-Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`. The skill teaches agents to inspect runtime capabilities, choose the narrowest efficient MCP tool, batch workbook writes, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews. `owb instructions` remains available as a fallback for clients that do not support skills.sh.
+Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`. The skill teaches agents to inspect runtime capabilities, choose the narrowest efficient MCP tool, use combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows when they match the task, avoid sparse null-padded overwrites, batch workbook writes, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews. `owb instructions` remains available as a fallback for clients that do not support skills.sh.
 
 ## Safety Contract
 
