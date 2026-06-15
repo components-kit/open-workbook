@@ -1,6 +1,6 @@
 {
   "name": "@components-kit/open-workbook-excel-core",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Core planning, backup, snapshot, template, permission, and range utilities for Open Workbook.",
   "license": "MIT",
   "type": "module",

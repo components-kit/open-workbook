@@ -23,8 +23,10 @@ Then sideload a generated manifest into Excel. The source manifest is useful for
 You can inspect the generated manifest with:
 
 ```bash
-node packages/cli/dist/index.js sideload manifest
+node packages/cli/dist/index.js sideload manifest --development
 ```
+
+Development manifests use a separate Office add-in ID, display as `OpenWorkbook Local`, and write to `open-workbook-local.xml` on macOS. This keeps source sideloading from replacing the production `OpenWorkbook` manifest installed by `npx -y @components-kit/open-workbook@latest setup` or `upgrade`.
 
 ## macOS Manual Sideload
 
@@ -37,7 +39,7 @@ corepack pnpm sideload:mac
 With the CLI directly:
 
 ```bash
-owb sideload mac
+owb sideload mac --development
 ```
 
 Then restart Excel and open the add-in from the ribbon or Insert > Add-ins, depending on the Excel version.
@@ -61,7 +63,7 @@ corepack pnpm sideload:windows
 With the CLI directly:
 
 ```bash
-owb sideload windows --out open-workbook.xml
+owb sideload windows --development --out open-workbook-local.xml
 ```
 
 Custom local ports can be passed to every manifest-producing command:
@@ -69,6 +71,8 @@ Custom local ports can be passed to every manifest-producing command:
 ```bash
 owb sideload manifest --addin-url http://localhost:37846 --backend-url ws://127.0.0.1:37845/addin
 ```
+
+Omit `--development` when you intentionally want the production add-in identity.
 
 For local desktop sideloading, the taskpane and backend use loopback HTTP and WebSocket endpoints. Ribbon and Developer Add-ins branding images are static PNG assets served from ComponentsKit over HTTPS so Excel can load branded icons without requiring local certificates.
 

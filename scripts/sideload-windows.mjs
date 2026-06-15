@@ -3,11 +3,13 @@ import { resolve } from "node:path";
 
 const source = resolve("apps/excel-addin/manifest.xml");
 const outIndex = process.argv.indexOf("--out");
-const outputPath = resolve(outIndex >= 0 && process.argv[outIndex + 1] ? process.argv[outIndex + 1] : "open-workbook.xml");
+const outputPath = resolve(outIndex >= 0 && process.argv[outIndex + 1] ? process.argv[outIndex + 1] : "open-workbook-local.xml");
+const developmentManifestId = "6f2d2ac1-69b0-4eb6-a256-0a1fcb00d3e1";
 
 writeFileSync(outputPath, generateManifest(), "utf8");
 
 console.log(`Wrote manifest to ${outputPath}`);
+console.log("Manifest variant: development");
 console.log("Windows Excel sideloading uses a trusted shared-folder add-in catalog.");
 console.log("");
 console.log("Recommended steps:");
@@ -16,15 +18,29 @@ console.log("2. Share that folder in Windows and note its UNC path, for example 
 console.log(`3. Copy ${outputPath} into the shared folder.`);
 console.log("4. In Excel: File > Options > Trust Center > Trust Center Settings > Trusted Add-in Catalogs.");
 console.log("5. Add the UNC shared-folder path as a trusted catalog and select Show in Menu.");
-console.log("6. Restart Excel and insert the Open Workbook add-in from Shared Folder.");
+console.log("6. Restart Excel and insert the OpenWorkbook Local add-in from Shared Folder.");
 
 function generateManifest() {
   const addinUrl = trimTrailingSlash(defaultAddinUrl());
   const backendUrl = defaultBackendUrl();
   const taskpaneUrl = `${addinUrl}/taskpane.html?backendUrl=${encodeURIComponent(backendUrl)}`;
-  return readFileSync(source, "utf8")
+  return applyDevelopmentManifestIdentity(readFileSync(source, "utf8"))
     .replaceAll("http://localhost:37846/taskpane.html", taskpaneUrl)
     .replaceAll("http://localhost:37846", addinUrl);
+}
+
+function applyDevelopmentManifestIdentity(manifest) {
+  return manifest
+    .replace(/<Id>[^<]+<\/Id>/, `<Id>${developmentManifestId}</Id>`)
+    .replaceAll("OpenWorkbook.Group.ComponentsKit", "OpenWorkbookLocal.Group.ComponentsKit")
+    .replaceAll("OpenWorkbook.TaskpaneButton.ComponentsKit", "OpenWorkbookLocal.TaskpaneButton.ComponentsKit")
+    .replaceAll("OpenWorkbook.Taskpane.ComponentsKit", "OpenWorkbookLocal.Taskpane.ComponentsKit")
+    .replaceAll("OpenWorkbook.", "OpenWorkbookLocal.")
+    .replaceAll('DisplayName DefaultValue="OpenWorkbook"', 'DisplayName DefaultValue="OpenWorkbook Local"')
+    .replaceAll('DefaultValue="OpenWorkbook loaded"', 'DefaultValue="OpenWorkbook Local loaded"')
+    .replaceAll('DefaultValue="OpenWorkbook"', 'DefaultValue="OpenWorkbook Local"')
+    .replaceAll("OpenWorkbook connects Excel", "OpenWorkbook Local connects Excel")
+    .replaceAll("Open the OpenWorkbook taskpane.", "Open the OpenWorkbook Local taskpane.");
 }
 
 function defaultAddinUrl() {

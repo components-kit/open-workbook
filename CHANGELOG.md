@@ -4,6 +4,12 @@ All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
 
+## [0.1.7] - 2026-06-15
+
+### Added
+
+- Added a development sideload manifest variant with a separate Office add-in ID and `OpenWorkbook Local` display name so source installs can coexist with the production sideload.
+
 ## [0.1.6] - 2026-06-15
 
 ### Added

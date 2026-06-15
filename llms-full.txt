@@ -145,6 +145,12 @@ Use this MCP command in a local agent config:
 
 Manual sideloading and custom manifest generation are documented in [Sideloading](docs/sideloading.md).
 
+Source development sideloads should use the development variant so they do not replace the production add-in manifest:
+
+```bash
+node packages/cli/dist/index.js sideload mac --development
+```
+
 ## Runtime URLs
 
 Defaults:
@@ -189,6 +195,7 @@ node packages/cli/dist/index.js daemon status
 node packages/cli/dist/index.js file-bridge status
 node packages/cli/dist/index.js instructions
 node packages/cli/dist/index.js sideload manifest --out open-workbook.xml
+node packages/cli/dist/index.js sideload manifest --development --out open-workbook-local.xml
 ```
 
 ## Agent Instructions
@@ -269,6 +276,12 @@ Source: CHANGELOG.md
 All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
+
+## [0.1.7] - 2026-06-15
+
+### Added
+
+- Added a development sideload manifest variant with a separate Office add-in ID and `OpenWorkbook Local` display name so source installs can coexist with the production sideload.
 
 ## [0.1.6] - 2026-06-15
 
@@ -2486,6 +2499,7 @@ owb setup
 owb upgrade
 owb instructions
 owb sideload mac
+owb sideload mac --development
 owb sideload windows
 owb sideload manifest
 owb doctor
@@ -2501,6 +2515,7 @@ node packages/cli/dist/index.js setup --dry-run
 node packages/cli/dist/index.js upgrade --dry-run
 node packages/cli/dist/index.js instructions
 node packages/cli/dist/index.js sideload manifest --out /tmp/open-workbook.xml
+node packages/cli/dist/index.js sideload manifest --development --out /tmp/open-workbook-local.xml
 ```
 
 ## Package Dry Run
@@ -2713,8 +2728,10 @@ Then sideload a generated manifest into Excel. The source manifest is useful for
 You can inspect the generated manifest with:
 
 ```bash
-node packages/cli/dist/index.js sideload manifest
+node packages/cli/dist/index.js sideload manifest --development
 ```
+
+Development manifests use a separate Office add-in ID, display as `OpenWorkbook Local`, and write to `open-workbook-local.xml` on macOS. This keeps source sideloading from replacing the production `OpenWorkbook` manifest installed by `npx -y @components-kit/open-workbook@latest setup` or `upgrade`.
 
 ## macOS Manual Sideload
 
@@ -2727,7 +2744,7 @@ corepack pnpm sideload:mac
 With the CLI directly:
 
 ```bash
-owb sideload mac
+owb sideload mac --development
 ```
 
 Then restart Excel and open the add-in from the ribbon or Insert > Add-ins, depending on the Excel version.
@@ -2751,7 +2768,7 @@ corepack pnpm sideload:windows
 With the CLI directly:
 
 ```bash
-owb sideload windows --out open-workbook.xml
+owb sideload windows --development --out open-workbook-local.xml
 ```
 
 Custom local ports can be passed to every manifest-producing command:
@@ -2759,6 +2776,8 @@ Custom local ports can be passed to every manifest-producing command:
 ```bash
 owb sideload manifest --addin-url http://localhost:37846 --backend-url ws://127.0.0.1:37845/addin
 ```
+
+Omit `--development` when you intentionally want the production add-in identity.
 
 For local desktop sideloading, the taskpane and backend use loopback HTTP and WebSocket endpoints. Ribbon and Developer Add-ins branding images are static PNG assets served from ComponentsKit over HTTPS so Excel can load branded icons without requiring local certificates.
 

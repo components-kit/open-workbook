@@ -86,6 +86,21 @@ const checks = [
     }
   },
   {
+    name: "development sideload manifest",
+    args: ["sideload", "manifest", "--development", "--out", manifestPath, "--addin-url", "http://127.0.0.1:37846", "--backend-url", "ws://127.0.0.1:37845/addin"],
+    assert: (result) => {
+      if (result.status !== 0) {
+        return false;
+      }
+      const manifest = readFileSync(manifestPath, "utf8");
+      return (
+        manifest.includes("<Id>6f2d2ac1-69b0-4eb6-a256-0a1fcb00d3e1</Id>") &&
+        manifest.includes('DisplayName DefaultValue="OpenWorkbook Local"') &&
+        manifest.includes("OpenWorkbookLocal.Taskpane.ComponentsKit")
+      );
+    }
+  },
+  {
     name: "service manifest daemon",
     args: ["service", "manifest", "--target", "systemd", "--service", "daemon", "--command", "owb"],
     assert: (result) => result.status === 0 && result.stdout.includes("ExecStart='owb' 'daemon' 'start'")

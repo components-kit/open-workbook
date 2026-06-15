@@ -117,6 +117,12 @@ Use this MCP command in a local agent config:
 
 Manual sideloading and custom manifest generation are documented in [Sideloading](docs/sideloading.md).
 
+Source development sideloads should use the development variant so they do not replace the production add-in manifest:
+
+```bash
+node packages/cli/dist/index.js sideload mac --development
+```
+
 ## Runtime URLs
 
 Defaults:
@@ -161,6 +167,7 @@ node packages/cli/dist/index.js daemon status
 node packages/cli/dist/index.js file-bridge status
 node packages/cli/dist/index.js instructions
 node packages/cli/dist/index.js sideload manifest --out open-workbook.xml
+node packages/cli/dist/index.js sideload manifest --development --out open-workbook-local.xml
 ```
 
 ## Agent Instructions

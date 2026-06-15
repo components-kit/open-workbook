@@ -1,6 +1,6 @@
 {
   "name": "open-workbook",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "description": "Local-first MCP runtime for fast, reversible, template-aware Excel automation.",
   "license": "MIT",

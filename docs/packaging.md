@@ -48,6 +48,7 @@ owb setup
 owb upgrade
 owb instructions
 owb sideload mac
+owb sideload mac --development
 owb sideload windows
 owb sideload manifest
 owb doctor
@@ -63,6 +64,7 @@ node packages/cli/dist/index.js setup --dry-run
 node packages/cli/dist/index.js upgrade --dry-run
 node packages/cli/dist/index.js instructions
 node packages/cli/dist/index.js sideload manifest --out /tmp/open-workbook.xml
+node packages/cli/dist/index.js sideload manifest --development --out /tmp/open-workbook-local.xml
 ```
 
 ## Package Dry Run

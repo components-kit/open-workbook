@@ -20,7 +20,7 @@ OpenCode should launch the MCP stdio adapter from its config:
 
 Options:
   --no-file-bridge  Do not start the optional native file bridge.
-  --sideload-mac    Copy the generated manifest into Excel's macOS sideload folder before starting.
+  --sideload-mac    Copy the development manifest into Excel's macOS sideload folder before starting.
   -h, --help        Show this help.
 EOF
 }
@@ -54,7 +54,7 @@ if [[ ! -f "$CLI" ]]; then
 fi
 
 if [[ "$SIDELOAD_MAC" -eq 1 ]]; then
-  node "$CLI" sideload mac
+  node "$CLI" sideload mac --development
 fi
 
 pids=()

@@ -10,8 +10,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../../..");
 const packageRoot = resolve(__dirname, "..");
 const publicPackageName = "@components-kit/open-workbook";
-const currentVersion = readPackageVersion([join(packageRoot, "package.json"), join(repoRoot, "package.json")]) ?? "0.1.6";
+const currentVersion = readPackageVersion([join(packageRoot, "package.json"), join(repoRoot, "package.json")]) ?? "0.1.7";
 const instructionFileName = "open-workbook-excel.md";
+const developmentManifestId = "6f2d2ac1-69b0-4eb6-a256-0a1fcb00d3e1";
 const sourcePaths = {
   mcpServer: resolve(repoRoot, "apps/mcp-server/dist/index.js"),
   backend: resolve(repoRoot, "apps/backend/dist/index.js"),
@@ -264,31 +265,35 @@ sideload
   .description("Copy manifest to the Excel for macOS sideload folder")
   .option("--addin-url <url>", "Taskpane base URL", defaultAddinUrl())
   .option("--backend-url <url>", "Backend WebSocket URL", defaultBackendUrl())
-  .action((options: { addinUrl: string; backendUrl: string }) => {
+  .option("--development", "Generate a separate local development add-in identity")
+  .action((options: { addinUrl: string; backendUrl: string; development?: boolean }) => {
     if (process.platform !== "darwin") {
       fail("Mac sideload copies to the Excel for macOS WEF folder and must be run on macOS. Use `owb sideload manifest --out open-workbook.xml` on other platforms.");
     }
     const targetDir = join(homedir(), "Library/Containers/com.microsoft.Excel/Data/Documents/wef");
-    const target = join(targetDir, "open-workbook.xml");
+    const target = join(targetDir, options.development ? "open-workbook-local.xml" : "open-workbook.xml");
     mkdirSync(targetDir, { recursive: true });
-    writeFileSync(target, generateManifest(options), "utf8");
+    writeFileSync(target, generateManifest({ ...options, variant: manifestVariantFromOptions(options) }), "utf8");
     console.log(`Copied manifest to ${target}`);
+    console.log(`Manifest variant: ${options.development ? "development" : "production"}`);
     console.log(`Taskpane URL: ${options.addinUrl}`);
     console.log(`Backend URL: ${options.backendUrl}`);
-    console.log("Restart Excel, then open the Open Workbook add-in.");
+    console.log(`Restart Excel, then open the ${options.development ? "OpenWorkbook Local" : "Open Workbook"} add-in.`);
   });
 
 sideload
   .command("windows")
   .description("Print Windows trusted catalog sideload instructions")
-  .option("--out <path>", "Write generated manifest to this path", "open-workbook.xml")
+  .option("--out <path>", "Write generated manifest to this path")
   .option("--addin-url <url>", "Taskpane base URL", defaultAddinUrl())
   .option("--backend-url <url>", "Backend WebSocket URL", defaultBackendUrl())
-  .action((options: { out: string; addinUrl: string; backendUrl: string }) => {
-    const manifest = generateManifest(options);
-    const outputPath = resolve(options.out);
+  .option("--development", "Generate a separate local development add-in identity")
+  .action((options: { out?: string; addinUrl: string; backendUrl: string; development?: boolean }) => {
+    const manifest = generateManifest({ ...options, variant: manifestVariantFromOptions(options) });
+    const outputPath = resolve(options.out ?? defaultSideloadManifestFileName(options));
     writeFileSync(outputPath, manifest, "utf8");
     console.log(`Wrote manifest to ${outputPath}`);
+    console.log(`Manifest variant: ${options.development ? "development" : "production"}`);
     console.log("Windows Excel sideloading uses a trusted shared-folder add-in catalog.");
     console.log("");
     console.log("1. Create a folder such as C:\\open-workbook-addins.");
@@ -296,7 +301,7 @@ sideload
     console.log(`3. Copy ${outputPath} into the shared folder.`);
     console.log("4. In Excel: File > Options > Trust Center > Trust Center Settings > Trusted Add-in Catalogs.");
     console.log("5. Add the UNC shared-folder path as a trusted catalog and select Show in Menu.");
-    console.log("6. Restart Excel and insert Open Workbook from Shared Folder.");
+    console.log(`6. Restart Excel and insert ${options.development ? "OpenWorkbook Local" : "Open Workbook"} from Shared Folder.`);
   });
 
 sideload
@@ -305,8 +310,9 @@ sideload
   .option("--out <path>", "Write manifest to a file instead of stdout")
   .option("--addin-url <url>", "Taskpane base URL", defaultAddinUrl())
   .option("--backend-url <url>", "Backend WebSocket URL", defaultBackendUrl())
-  .action((options: { out?: string; addinUrl: string; backendUrl: string }) => {
-    const manifest = generateManifest(options);
+  .option("--development", "Generate a separate local development add-in identity")
+  .action((options: { out?: string; addinUrl: string; backendUrl: string; development?: boolean }) => {
+    const manifest = generateManifest({ ...options, variant: manifestVariantFromOptions(options) });
     if (options.out) {
       writeFileSync(resolve(options.out), manifest, "utf8");
       console.log(`Wrote manifest to ${resolve(options.out)}`);
@@ -535,16 +541,41 @@ async function printAddinServerStatus(addinUrl: string): Promise<void> {
   }
 }
 
-function generateManifest(options: { addinUrl: string; backendUrl: string }): string {
+type ManifestVariant = "production" | "development";
+
+function generateManifest(options: { addinUrl: string; backendUrl: string; variant?: ManifestVariant }): string {
   const manifestPath = resolveAsset("manifest");
   if (!existsSync(manifestPath)) {
     fail(`Missing manifest: ${manifestPath}`);
   }
   const addinUrl = trimTrailingSlash(options.addinUrl);
   const taskpaneUrl = `${addinUrl}/taskpane.html?backendUrl=${encodeURIComponent(options.backendUrl)}`;
-  return readFileSync(manifestPath, "utf8")
+  const manifest = readFileSync(manifestPath, "utf8")
     .replaceAll("http://localhost:37846/taskpane.html", taskpaneUrl)
     .replaceAll("http://localhost:37846", addinUrl);
+  return options.variant === "development" ? applyDevelopmentManifestIdentity(manifest) : manifest;
+}
+
+function applyDevelopmentManifestIdentity(manifest: string): string {
+  return manifest
+    .replace(/<Id>[^<]+<\/Id>/, `<Id>${developmentManifestId}</Id>`)
+    .replaceAll("OpenWorkbook.Group.ComponentsKit", "OpenWorkbookLocal.Group.ComponentsKit")
+    .replaceAll("OpenWorkbook.TaskpaneButton.ComponentsKit", "OpenWorkbookLocal.TaskpaneButton.ComponentsKit")
+    .replaceAll("OpenWorkbook.Taskpane.ComponentsKit", "OpenWorkbookLocal.Taskpane.ComponentsKit")
+    .replaceAll("OpenWorkbook.", "OpenWorkbookLocal.")
+    .replaceAll('DisplayName DefaultValue="OpenWorkbook"', 'DisplayName DefaultValue="OpenWorkbook Local"')
+    .replaceAll('DefaultValue="OpenWorkbook loaded"', 'DefaultValue="OpenWorkbook Local loaded"')
+    .replaceAll('DefaultValue="OpenWorkbook"', 'DefaultValue="OpenWorkbook Local"')
+    .replaceAll("OpenWorkbook connects Excel", "OpenWorkbook Local connects Excel")
+    .replaceAll("Open the OpenWorkbook taskpane.", "Open the OpenWorkbook Local taskpane.");
+}
+
+function manifestVariantFromOptions(options: { development?: boolean }): ManifestVariant {
+  return options.development ? "development" : "production";
+}
+
+function defaultSideloadManifestFileName(options: { development?: boolean }): string {
+  return options.development ? "open-workbook-local.xml" : "open-workbook.xml";
 }
 
 function generateGenericInstructions(): string {
