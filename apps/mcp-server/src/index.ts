@@ -82,6 +82,9 @@ const standalone = hasArg("--standalone") || process.env.OPEN_WORKBOOK_MCP_STAND
 const catalogOptions = {
   includePreview: process.env.OPEN_WORKBOOK_PREVIEW_TOOLS === "1"
 };
+const toolProfile = readArg("--tool-profile") ?? process.env.OPEN_WORKBOOK_TOOL_PROFILE ?? "full";
+const explicitToolNames = parseToolNameList(readArg("--tools") ?? process.env.OPEN_WORKBOOK_TOOLS);
+const disabledToolNames = parseToolNameList(readArg("--disable-tools") ?? process.env.OPEN_WORKBOOK_DISABLE_TOOLS);
 
 const STYLE_DIMENSIONS = [
   "columnWidths",
@@ -115,8 +118,103 @@ const STYLE_COPY_TOOL_DIMENSIONS: Record<string, StyleDimension> = {
   "excel.style.copy_hidden_rows_columns": "hiddenRowsColumns"
 };
 
+const COMPACT_PROFILE_TOOLS = new Set([
+  "excel.runtime.get_status",
+  "excel.runtime.get_capabilities",
+  "excel.runtime.get_active_context",
+  "excel.runtime.get_selection",
+  "excel.runtime.connect_addin",
+  "excel.runtime.ping_addin",
+  "excel.runtime.set_active_workbook",
+  "excel.runtime.set_active_sheet",
+  "excel.workbook.list_open_workbooks",
+  "excel.workbook.get_workbook_info",
+  "excel.workbook.get_workbook_map",
+  "excel.workbook.get_summary",
+  "excel.workbook.get_used_range_summary",
+  "excel.workbook.detect_external_changes",
+  "excel.workbook.calculate",
+  "excel.workbook.save",
+  "excel.sheet.list",
+  "excel.sheet.get_info",
+  "excel.sheet.get_summary",
+  "excel.sheet.get_used_range",
+  "excel.lookup.search_workbook",
+  "excel.lookup.find_headers",
+  "excel.lookup.find_tables_by_columns",
+  "excel.lookup.find_entity",
+  "excel.lookup.resolve_range",
+  "excel.lookup.inspect_match",
+  "excel.range.get_summary",
+  "excel.range.read_compact",
+  "excel.range.find_errors",
+  "excel.table.list",
+  "excel.table.get_info",
+  "excel.table.get_schema",
+  "excel.table.read_compact",
+  "excel.batch.validate",
+  "excel.batch.preflight",
+  "excel.batch.dry_run",
+  "excel.batch.apply",
+  "excel.batch.submit",
+  "excel.batch.submit_chunked",
+  "excel.job.list",
+  "excel.job.get",
+  "excel.job.wait",
+  "excel.workflow.prepare_session",
+  "excel.workflow.create_formula_sheet",
+  "excel.workflow.create_template_report",
+  "excel.workflow.create_pivot_chart_summary",
+  "excel.workflow.repair_formula_errors",
+  "excel.workflow.preview_risky_edit",
+  "excel.plan.create",
+  "excel.plan.preview",
+  "excel.plan.apply",
+  "excel.plan.rollback",
+  "excel.compact.get_resource",
+  "excel.compact.list_resources",
+  "excel.compact.clear_resources",
+  "excel.compact.get_cache_status",
+  "excel.compact.clear_cache",
+  "excel.snapshot.create",
+  "excel.snapshot.get_compact",
+  "excel.snapshot.compare_compact",
+  "excel.diff.summarize",
+  "excel.diff.get_compact",
+  "excel.validate.compact",
+  "excel.validate.no_formula_errors",
+  "excel.validate.no_broken_references",
+  "excel.validate.no_unintended_changes",
+  "excel.collab.get_status",
+  "excel.transaction.list",
+  "excel.transaction.get",
+  "excel.transaction.wait",
+  "excel.transaction.preview_rollback",
+  "excel.transaction.rollback"
+]);
+
+const READ_ONLY_PROFILE_TOOLS = new Set([...COMPACT_PROFILE_TOOLS].filter((name) =>
+  name.startsWith("excel.runtime.") ||
+  name.startsWith("excel.workbook.get_") ||
+  name === "excel.workbook.list_open_workbooks" ||
+  name.startsWith("excel.sheet.") ||
+  name.startsWith("excel.lookup.") ||
+  name.startsWith("excel.range.read_") ||
+  name === "excel.range.get_summary" ||
+  name === "excel.range.find_errors" ||
+  name.startsWith("excel.table.get_") ||
+  name === "excel.table.list" ||
+  name === "excel.table.read_compact" ||
+  name.startsWith("excel.compact.") ||
+  name.startsWith("excel.snapshot.get_") ||
+  name === "excel.snapshot.compare_compact" ||
+  name.startsWith("excel.diff.") ||
+  name.startsWith("excel.validate.") ||
+  name === "excel.collab.get_status"
+));
+
 const runtime = await createRuntimeFacade();
-const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.8";
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.9";
 const COMPACT_RESOURCE_LIMIT = 100;
 const COMPACT_DEFAULT_RESOURCE_THRESHOLD_BYTES = 24_000;
 
@@ -668,7 +766,8 @@ function registerRuntimeTools(mcp: McpServer): void {
       title: "Get Open Workbook capabilities",
       description: "Return complete tool/resource/prompt catalog status and runtime capability metadata.",
       inputSchema: {
-        includePreview: z.boolean().optional()
+        includePreview: z.boolean().optional(),
+        includeFullCatalog: z.boolean().optional()
       },
       annotations: {
         readOnlyHint: true,
@@ -676,8 +775,8 @@ function registerRuntimeTools(mcp: McpServer): void {
         openWorldHint: false
       }
     },
-    async ({ includePreview }: { includePreview?: boolean }) =>
-      jsonResult(runtime.getCapabilities(includePreview === undefined ? {} : { includePreview }))
+    async ({ includePreview, includeFullCatalog }: { includePreview?: boolean; includeFullCatalog?: boolean }) =>
+      jsonResult(runtimeCapabilities(includePreview, includeFullCatalog))
   );
 
   registerMcpTool(
@@ -748,6 +847,46 @@ function registerRuntimeTools(mcp: McpServer): void {
     },
     async ({ sheetName }: { sheetName: string }) => jsonResult(await runtime.setActiveSheet(sheetName))
   );
+}
+
+function runtimeCapabilities(includePreview?: boolean, includeFullCatalog?: boolean) {
+  const capabilities = runtime.getCapabilities(includePreview === undefined ? {} : { includePreview });
+  if (toolProfile === "full" || includeFullCatalog === true) {
+    return capabilities;
+  }
+  const typed = capabilities as Record<string, any>;
+  const catalog = typed.catalog as Record<string, any> | undefined;
+  const exposedToolNames = exposedProfileToolNames();
+  return {
+    ...typed,
+    catalog: catalog
+      ? {
+          total: catalog.total,
+          stable: catalog.stable,
+          preview: catalog.preview,
+          planned: catalog.planned,
+          unsupported: catalog.unsupported,
+          profile: toolProfile,
+          exposed: exposedToolNames.length,
+          tools: exposedToolNames
+        }
+      : undefined,
+    resources: Array.isArray(typed.resources) ? { count: typed.resources.length } : typed.resources,
+    prompts: Array.isArray(typed.prompts) ? { count: typed.prompts.length } : typed.prompts
+  };
+}
+
+function exposedProfileToolNames(): string[] {
+  if (explicitToolNames !== undefined) {
+    return [...explicitToolNames].filter((name) => shouldExposeMcpTool(name)).sort();
+  }
+  if (toolProfile === "compact") {
+    return [...COMPACT_PROFILE_TOOLS].filter((name) => shouldExposeMcpTool(name)).sort();
+  }
+  if (toolProfile === "read-only" || toolProfile === "readonly") {
+    return [...READ_ONLY_PROFILE_TOOLS].filter((name) => shouldExposeMcpTool(name)).sort();
+  }
+  return [];
 }
 
 function registerWorkbookTools(mcp: McpServer): void {
@@ -2896,7 +3035,7 @@ async function workflowPreflight(workbookId?: WorkbookId, includePreview = true)
   return {
     status,
     activeContext,
-    capabilities: runtime.getCapabilities({ includePreview }),
+    capabilities: runtimeCapabilities(includePreview),
     workbookMap: await runtime.getWorkbookMap(),
     collaboration: runtime.getCollaborationStatus(resolvedWorkbookId),
     workbookId: resolvedWorkbookId
@@ -6093,15 +6232,15 @@ function registerSnapshotTools(mcp: McpServer): void {
             return jsonResult(existing);
           }
           return jsonResult(
-            await runtime.createWorkbookSnapshot({
+            compactSnapshotCreationResult(await runtime.createWorkbookSnapshot({
               workbookId: existing.snapshot.workbookId,
               reason: args.reason ?? `Refresh snapshot ${args.snapshotId}`,
               ranges: existing.snapshot.affectedRanges
-            })
+            }))
           );
         }
         return jsonResult(
-          await runtime.createWorkbookSnapshot(snapshotRequest(args.workbookId, args.reason, args.ranges))
+          compactSnapshotCreationResult(await runtime.createWorkbookSnapshot(snapshotRequest(args.workbookId, args.reason, args.ranges)))
         );
       }
     );
@@ -6330,12 +6469,21 @@ function registerCompactTools(mcp: McpServer): void {
     "excel.compact.get_resource",
     {
       title: "Get compact detail resource",
-      description: "Fetch a stored compact detail payload by resource id or excel://compact URI.",
-      inputSchema: { resourceId: z.string().optional(), resourceUri: z.string().optional() },
+      description: "Fetch stored compact detail metadata by default. Set includePayload only when full detail is required.",
+      inputSchema: {
+        resourceId: z.string().optional(),
+        resourceUri: z.string().optional(),
+        mode: z.enum(["metadata", "preview", "page", "full"]).optional(),
+        includePayload: z.boolean().optional(),
+        maxPayloadBytes: z.number().int().min(0).optional(),
+        maxEstimatedTokens: z.number().int().min(0).optional(),
+        offset: z.number().int().min(0).optional(),
+        limit: z.number().int().min(1).max(24000).optional()
+      },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
-    ({ resourceId, resourceUri }: { resourceId?: string; resourceUri?: string }) =>
-      jsonResult(getCompactResource(resourceId ?? compactResourceIdFromUri(resourceUri ?? "")))
+    ({ resourceId, resourceUri, mode, includePayload, maxPayloadBytes, maxEstimatedTokens, offset, limit }: { resourceId?: string; resourceUri?: string; mode?: "metadata" | "preview" | "page" | "full"; includePayload?: boolean; maxPayloadBytes?: number; maxEstimatedTokens?: number; offset?: number; limit?: number }) =>
+      jsonResult(getCompactResource(resourceId ?? compactResourceIdFromUri(resourceUri ?? ""), compactResourceReadOptions({ mode, includePayload, maxPayloadBytes, maxEstimatedTokens, offset, limit })))
   );
 
   registerMcpTool(
@@ -6596,12 +6744,106 @@ function storeCompactResource(kind: CompactResourceKind, payload: unknown, title
   return resource;
 }
 
-function getCompactResource(resourceId: string) {
+type CompactResourceReadMode = "metadata" | "preview" | "page" | "full";
+
+function getCompactResource(
+  resourceId: string,
+  options: {
+    mode?: CompactResourceReadMode;
+    includePayload?: boolean;
+    maxPayloadBytes?: number;
+    maxEstimatedTokens?: number;
+    offset?: number;
+    limit?: number;
+  } = {}
+) {
   const resource = compactResources.get(compactResourceIdFromUri(resourceId));
   if (!resource) {
     return { ok: false, error: { code: "COMPACT_RESOURCE_NOT_FOUND", message: "Compact detail resource was not found or has expired." } };
   }
-  return { ok: true, ...resource };
+  const { payload, ...summary } = resource;
+  const mode = options.mode ?? (options.includePayload === true ? "full" : "metadata");
+  if (mode === "metadata") {
+    return {
+      ok: true,
+      ...summary,
+      payloadAvailable: true,
+      payloadIncluded: false,
+      message: "Use mode=preview or mode=page for bounded inspection, or mode=full/includePayload=true for full detail."
+    };
+  }
+  if (mode === "preview" || mode === "page") {
+    const serialized = JSON.stringify(payload, null, 2);
+    const defaultLimit = mode === "preview" ? 4000 : COMPACT_DEFAULT_RESOURCE_THRESHOLD_BYTES;
+    const limit = Math.max(1, Math.min(options.limit ?? defaultLimit, COMPACT_DEFAULT_RESOURCE_THRESHOLD_BYTES));
+    const offset = Math.max(0, Math.min(options.offset ?? 0, serialized.length));
+    const text = serialized.slice(offset, offset + limit);
+    const nextOffset = offset + text.length < serialized.length ? offset + text.length : undefined;
+    return {
+      ok: true,
+      ...summary,
+      payloadAvailable: true,
+      payloadIncluded: false,
+      mode,
+      format: "json-text",
+      offset,
+      limit,
+      text,
+      textBytes: Buffer.byteLength(text, "utf8"),
+      totalCharacters: serialized.length,
+      totalBytes: Buffer.byteLength(serialized, "utf8"),
+      ...(nextOffset !== undefined ? { nextOffset } : {})
+    };
+  }
+  const overBudget =
+    (options.maxPayloadBytes !== undefined && resource.payloadBytes > options.maxPayloadBytes) ||
+    (options.maxEstimatedTokens !== undefined && resource.estimatedTokens > options.maxEstimatedTokens);
+  if (overBudget) {
+    return {
+      ok: true,
+      ...summary,
+      payloadAvailable: true,
+      payloadIncluded: false,
+      budgetExceeded: true,
+      warnings: [
+        {
+          code: "COMPACT_RESOURCE_BUDGET_EXCEEDED",
+          message: "Stored detail exceeded the requested response budget. Raise the budget or inspect a smaller resource."
+        }
+      ]
+    };
+  }
+  return { ok: true, ...summary, payloadAvailable: true, payloadIncluded: true, payload };
+}
+
+function compactResourceReadOptions(options: {
+  mode?: CompactResourceReadMode | undefined;
+  includePayload?: boolean | undefined;
+  maxPayloadBytes?: number | undefined;
+  maxEstimatedTokens?: number | undefined;
+  offset?: number | undefined;
+  limit?: number | undefined;
+}) {
+  const normalized: { mode?: CompactResourceReadMode; includePayload?: boolean; maxPayloadBytes?: number; maxEstimatedTokens?: number; offset?: number; limit?: number } = {};
+  if (options.mode !== undefined) {
+    normalized.mode = options.mode;
+  }
+  if (options.includePayload !== undefined) {
+    normalized.includePayload = options.includePayload;
+  }
+  if (options.maxPayloadBytes !== undefined) {
+    normalized.maxPayloadBytes = options.maxPayloadBytes;
+  }
+  if (options.maxEstimatedTokens !== undefined) {
+    normalized.maxEstimatedTokens = options.maxEstimatedTokens;
+  }
+  if (options.offset !== undefined) {
+    normalized.offset = options.offset;
+  }
+  if (options.limit !== undefined) {
+    normalized.limit = options.limit;
+  }
+  return normalized;
 }
 
 function listCompactResources(kind?: string, limit = COMPACT_RESOURCE_LIMIT) {
@@ -6831,17 +7073,13 @@ async function compactRangeRead(args: RangeCompactReadRequest) {
       const sampleAddress = compactWindowAddress(args.address, sample.rowOffset, columnOffset, sample.rowCount, columnLimit);
       const sampleResult = await readRangeSnapshot(args.workbookId, args.sheetName, sampleAddress, facets);
       const sampleSnapshot = ((sampleResult as { data?: Array<{ snapshot?: any }> }).data ?? [])[0]?.snapshot;
+      const compactSnapshot = compactRangeSnapshotPayload(sampleSnapshot, facets);
       return {
         label: sample.label,
         rowOffset: sample.rowOffset,
         rowCount: sample.rowCount,
         address: sampleAddress,
-        fingerprint: sampleSnapshot?.fingerprint,
-        values: sampleSnapshot?.values,
-        formulas: sampleSnapshot?.formulas,
-        text: sampleSnapshot?.text,
-        numberFormat: sampleSnapshot?.numberFormat,
-        style: sampleSnapshot?.style,
+        ...compactSnapshot,
         ok: (sampleResult as { ok?: boolean }).ok,
         warnings: (sampleResult as { warnings?: unknown[] }).warnings ?? []
       };
@@ -6864,16 +7102,12 @@ async function compactRangeRead(args: RangeCompactReadRequest) {
     return withCompactTelemetry({ ok: false, ...summary, source: result }, { detailLevel: "compact", truncated, nextPage, maxPayloadBytes: args.maxPayloadBytes, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range read error", budgetSummary: { ok: false, ...summary } });
   }
   const snapshot = ((result as { data?: Array<{ snapshot?: any }> }).data ?? [])[0]?.snapshot;
+  const compactSnapshot = compactRangeSnapshotPayload(snapshot, facets);
   return withCompactTelemetry(
     {
       ok: true,
       ...summary,
-      fingerprint: snapshot?.fingerprint,
-      values: snapshot?.values,
-      formulas: snapshot?.formulas,
-      text: snapshot?.text,
-      numberFormat: snapshot?.numberFormat,
-      style: snapshot?.style,
+      ...compactSnapshot,
       warnings: (result as { warnings?: unknown[] }).warnings ?? [],
       telemetry: (result as { telemetry?: unknown }).telemetry
     },
@@ -6905,6 +7139,139 @@ async function tableSchema(selector: TableSelector) {
     { detailLevel: "summary" }
   );
   });
+}
+
+function compactRangeSnapshotPayload(snapshot: any, facets: RangeReadFacet[]): Record<string, unknown> {
+  if (!snapshot || typeof snapshot !== "object") {
+    return {};
+  }
+  const matrixEntries = [
+    ["values", snapshot.values],
+    ["formulas", snapshot.formulas],
+    ["text", snapshot.text],
+    ["numberFormat", snapshot.numberFormat],
+    ["style", snapshot.style]
+  ] as const;
+  const requestedEntries = matrixEntries.filter(([name, value]) => compactFacetOutputRequested(name, facets) && Array.isArray(value));
+  const bounds = compactMatrixBounds(requestedEntries.map(([, value]) => value as unknown[][]));
+  const output: Record<string, unknown> = {};
+  if (snapshot.fingerprint !== undefined) {
+    output.fingerprint = snapshot.fingerprint;
+  }
+  for (const [name, value] of requestedEntries) {
+    output[name] = trimMatrixToBounds(value as unknown[][], bounds);
+  }
+  if (bounds.sourceRows > bounds.rows || bounds.sourceColumns > bounds.columns) {
+    output.omittedEmpty = {
+      trailingRows: Math.max(0, bounds.sourceRows - bounds.rows),
+      trailingColumns: Math.max(0, bounds.sourceColumns - bounds.columns),
+      sourceRows: bounds.sourceRows,
+      sourceColumns: bounds.sourceColumns,
+      returnedRows: bounds.rows,
+      returnedColumns: bounds.columns
+    };
+  }
+  return output;
+}
+
+function compactFacetOutputRequested(name: string, facets: RangeReadFacet[]): boolean {
+  if (name === "numberFormat") {
+    return facets.includes("numberFormat");
+  }
+  if (name === "style") {
+    return facets.includes("style");
+  }
+  return facets.includes(name as RangeReadFacet);
+}
+
+function compactMatrixBounds(matrices: unknown[][][]): { sourceRows: number; sourceColumns: number; rows: number; columns: number } {
+  const sourceRows = matrices.reduce((max, matrix) => Math.max(max, matrix.length), 0);
+  const sourceColumns = matrices.reduce((max, matrix) => Math.max(max, ...matrix.map((row) => Array.isArray(row) ? row.length : 0)), 0);
+  let lastRow = -1;
+  let lastColumn = -1;
+  for (const matrix of matrices) {
+    for (let rowIndex = 0; rowIndex < matrix.length; rowIndex += 1) {
+      const row = matrix[rowIndex];
+      if (!Array.isArray(row)) {
+        continue;
+      }
+      for (let columnIndex = 0; columnIndex < row.length; columnIndex += 1) {
+        if (!isCompactEmptyCell(row[columnIndex])) {
+          lastRow = Math.max(lastRow, rowIndex);
+          lastColumn = Math.max(lastColumn, columnIndex);
+        }
+      }
+    }
+  }
+  return {
+    sourceRows,
+    sourceColumns,
+    rows: lastRow + 1,
+    columns: lastColumn + 1
+  };
+}
+
+function trimMatrixToBounds(matrix: unknown[][], bounds: { rows: number; columns: number }): unknown[][] {
+  if (bounds.rows === 0 || bounds.columns === 0) {
+    return [];
+  }
+  return matrix.slice(0, bounds.rows).map((row) => Array.isArray(row) ? row.slice(0, bounds.columns) : []);
+}
+
+function isCompactEmptyCell(value: unknown): boolean {
+  if (value === undefined || value === null || value === "") {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.every(isCompactEmptyCell);
+  }
+  if (typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>).length === 0;
+  }
+  return false;
+}
+
+function compactTablePayload(table: any): Record<string, unknown> {
+  if (!table || typeof table !== "object") {
+    return {};
+  }
+  const matrixEntries = [
+    ["values", table.values],
+    ["formulas", table.formulas],
+    ["text", table.text],
+    ["numberFormat", table.numberFormat]
+  ] as const;
+  const requestedEntries = matrixEntries.filter(([, value]) => Array.isArray(value));
+  const rowBounds = compactTableRowBounds(requestedEntries.map(([, value]) => value as unknown[][]));
+  const output: Record<string, unknown> = {};
+  if (table.headers !== undefined) {
+    output.headers = table.headers;
+  }
+  for (const [name, value] of requestedEntries) {
+    output[name] = (value as unknown[][]).slice(0, rowBounds.rows);
+  }
+  if (rowBounds.sourceRows > rowBounds.rows) {
+    output.omittedEmpty = {
+      trailingRows: rowBounds.sourceRows - rowBounds.rows,
+      sourceRows: rowBounds.sourceRows,
+      returnedRows: rowBounds.rows
+    };
+  }
+  return output;
+}
+
+function compactTableRowBounds(matrices: unknown[][][]): { sourceRows: number; rows: number } {
+  const sourceRows = matrices.reduce((max, matrix) => Math.max(max, matrix.length), 0);
+  let lastRow = -1;
+  for (const matrix of matrices) {
+    for (let rowIndex = 0; rowIndex < matrix.length; rowIndex += 1) {
+      const row = matrix[rowIndex];
+      if (Array.isArray(row) && row.some((cell) => !isCompactEmptyCell(cell))) {
+        lastRow = Math.max(lastRow, rowIndex);
+      }
+    }
+  }
+  return { sourceRows, rows: lastRow + 1 };
 }
 
 async function compactTableRead(args: TableCompactReadRequest) {
@@ -6947,16 +7314,13 @@ async function compactTableRead(args: TableCompactReadRequest) {
         rowLimit: sample.rowCount
       });
       const sampleTable = (sampleResult as { table?: any }).table;
+      const compactTable = compactTablePayload(sampleTable);
       return {
         label: sample.label,
         rowOffset: sample.rowOffset,
         rowCount: sample.rowCount,
         ok: (sampleResult as { ok?: boolean }).ok,
-        headers: sampleTable?.headers,
-        values: sampleTable?.values,
-        formulas: sampleTable?.formulas,
-        text: sampleTable?.text,
-        numberFormat: sampleTable?.numberFormat
+        ...compactTable
       };
     }));
     return withCompactTelemetry(
@@ -6983,15 +7347,12 @@ async function compactTableRead(args: TableCompactReadRequest) {
     rowLimit
   });
   const table = (result as { table?: any }).table;
+  const compactTable = compactTablePayload(table);
   return withCompactTelemetry(
     {
       ok: Boolean((result as { ok?: boolean }).ok),
       ...summary,
-      headers: table?.headers,
-      values: table?.values,
-      formulas: table?.formulas,
-      text: table?.text,
-      numberFormat: table?.numberFormat,
+      ...compactTable,
       source: (result as { ok?: boolean }).ok ? undefined : result
     },
     {
@@ -7419,6 +7780,42 @@ function compactSnapshot(snapshotId: SnapshotId, maxPayloadBytes?: number, maxEs
       budgetSummary: summary
     }
   );
+}
+
+function compactSnapshotCreationResult(result: unknown): unknown {
+  if (toolProfile === "full") {
+    return result;
+  }
+  const snapshot = (result as { snapshot?: any })?.snapshot;
+  if (!snapshot) {
+    return result;
+  }
+  const summary = snapshotSummary(snapshot);
+  const stored = storeCompactResource("snapshot", result, `Snapshot detail: ${summary.snapshotId}`);
+  return withCompactTelemetry(
+    {
+      ok: (result as { ok?: boolean }).ok,
+      snapshot: summary
+    },
+    {
+      detailLevel: "summary",
+      resourceUri: stored.uri,
+      resourceKind: "snapshot",
+      resourceTitle: `Snapshot detail: ${summary.snapshotId}`
+    }
+  );
+}
+
+function snapshotSummary(snapshot: Record<string, any>) {
+  return {
+    snapshotId: snapshot.snapshotId,
+    workbookId: snapshot.workbookId,
+    createdAt: snapshot.createdAt,
+    reason: snapshot.reason,
+    affectedRangeCount: snapshot.affectedRanges?.length ?? 0,
+    affectedRanges: snapshot.affectedRanges,
+    payloadRangeCount: snapshot.payload?.rangeSnapshots?.length ?? snapshot.rangeSnapshots?.length ?? 0
+  };
 }
 
 function compactSnapshotDiff(leftSnapshotId: SnapshotId, rightSnapshotId: SnapshotId, maxPayloadBytes?: number, maxEstimatedTokens?: number) {
@@ -8763,7 +9160,7 @@ function registerMcpTool(
   config: Record<string, unknown>,
   callback: (args: any, extra: any) => any
 ): void {
-  if (!isToolExposed(name, catalogOptions)) {
+  if (!shouldExposeMcpTool(name)) {
     return;
   }
   (mcp.registerTool as any)(name, config, async (args: any, extra: any) => {
@@ -8772,8 +9169,75 @@ function registerMcpTool(
     if (isWorkbookMutatingMcpTool(name)) {
       clearCompactCache(`mutation:${name}`);
     }
-    return decorated;
+    return enforceCompactResultBudget(name, decorated);
   });
+}
+
+function enforceCompactResultBudget(toolName: string, result: unknown) {
+  if (toolProfile === "full" || !isJsonTextResult(result)) {
+    return result;
+  }
+  if (toolName === "excel.compact.get_resource") {
+    return result;
+  }
+  const payloadBytes = Buffer.byteLength(result.content[0]!.text, "utf8");
+  if (payloadBytes <= COMPACT_DEFAULT_RESOURCE_THRESHOLD_BYTES) {
+    return result;
+  }
+  try {
+    const payload = JSON.parse(result.content[0]!.text) as Record<string, unknown>;
+    if (payload.resourceUri !== undefined && payload.budgetExceeded === true) {
+      return result;
+    }
+    const stored = storeCompactResource(compactResourceKindForTool(toolName), payload, `Full result: ${toolName}`);
+    const summary = compactResultSummary(toolName, payload, payloadBytes, stored);
+    return jsonResult(summary);
+  } catch {
+    const stored = storeCompactResource("generic", result.content[0]!.text, `Full text result: ${toolName}`);
+    return jsonResult({
+      ok: true,
+      toolName,
+      detailLevel: "summary",
+      budgetExceeded: true,
+      payloadBytes,
+      estimatedTokens: Math.ceil(payloadBytes / 4),
+      resourcePayloadBytes: stored.payloadBytes,
+      resourceEstimatedTokens: stored.estimatedTokens,
+      resourceUri: stored.uri,
+      warnings: [
+        {
+          code: "COMPACT_RESULT_BUDGET_EXCEEDED",
+          message: "Tool result exceeded compact response budget and was stored behind resourceUri."
+        }
+      ]
+    });
+  }
+}
+
+function shouldExposeMcpTool(name: string): boolean {
+  if (!isToolExposed(name, catalogOptions)) {
+    return false;
+  }
+  if (explicitToolNames !== undefined && !explicitToolNames.has(name)) {
+    return false;
+  }
+  if (disabledToolNames?.has(name)) {
+    return false;
+  }
+  if (explicitToolNames !== undefined) {
+    return true;
+  }
+  if (toolProfile === "full") {
+    return true;
+  }
+  if (toolProfile === "compact") {
+    return COMPACT_PROFILE_TOOLS.has(name);
+  }
+  if (toolProfile === "read-only" || toolProfile === "readonly") {
+    return READ_ONLY_PROFILE_TOOLS.has(name);
+  }
+  console.error(`Unknown OPEN_WORKBOOK_TOOL_PROFILE=${toolProfile}; falling back to full MCP tool surface.`);
+  return true;
 }
 
 function jsonResult(value: unknown) {
@@ -8821,9 +9285,18 @@ function addCompactMutationProof(result: unknown) {
     if (payload.compactProof !== undefined) {
       return result;
     }
+    const compactProof = summarizeMutationProof(payload);
+    if (toolProfile === "full") {
+      return jsonResult({
+        ...payload,
+        compactProof
+      });
+    }
+    const stored = storeCompactResource("mutation", payload, "Full mutation result");
     return jsonResult({
-      ...payload,
-      compactProof: summarizeMutationProof(payload)
+      ...compactMutationPayload(payload),
+      compactProof,
+      resourceUri: stored.uri
     });
   } catch {
     return result;
@@ -8862,6 +9335,206 @@ function summarizeMutationProof(payload: Record<string, unknown>) {
     payloadBytes: Buffer.byteLength(JSON.stringify(payload), "utf8"),
     estimatedTokens: Math.ceil(Buffer.byteLength(JSON.stringify(payload), "utf8") / 4)
   };
+}
+
+function compactMutationPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const output: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (key === "beforeSnapshot" || key === "afterSnapshot") {
+      output[key] = value && typeof value === "object" ? snapshotSummary(value as Record<string, any>) : value;
+      continue;
+    }
+    if (key === "backup") {
+      output[key] = summarizeBackup(value);
+      continue;
+    }
+    if (key === "diff") {
+      output[key] = summarizeDiffResult(value);
+      continue;
+    }
+    if (key === "planPreview") {
+      output[key] = summarizePlanPreview(value);
+      continue;
+    }
+    if (key === "applyResult") {
+      output[key] = summarizeOperationResult(value);
+      continue;
+    }
+    if (key === "beforeSnapshotResult") {
+      output[key] = summarizeOperationResult(value);
+      continue;
+    }
+    output[key] = value;
+  }
+  return output;
+}
+
+function summarizeBackup(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, any>;
+  return {
+    backupId: record.backupId,
+    workbookId: record.workbookId,
+    kind: record.kind,
+    reason: record.reason,
+    createdAt: record.createdAt,
+    affectedRangeCount: record.affectedRanges?.length ?? 0,
+    affectedRanges: record.affectedRanges,
+    payloadRef: record.payloadRef
+  };
+}
+
+function summarizeDiffResult(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, any>;
+  const diff = record.diff ?? record;
+  return {
+    ok: record.ok,
+    diffId: record.diffId,
+    summary: diff.summary ?? {
+      title: diff.title,
+      changedRanges: Array.isArray(diff.changedRanges) ? diff.changedRanges.slice(0, 20) : undefined,
+      changedRangesTruncated: Array.isArray(diff.changedRanges) && diff.changedRanges.length > 20,
+      cellsChanged: diff.cellsChanged,
+      formulasChanged: diff.formulasChanged,
+      stylesChanged: diff.stylesChanged,
+      tablesChanged: diff.tablesChanged,
+      sheetsChanged: diff.sheetsChanged,
+      destructiveLevel: diff.destructiveLevel
+    }
+  };
+}
+
+function summarizePlanPreview(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, any>;
+  return {
+    ok: record.ok,
+    planId: record.planId,
+    operationCount: record.operationCount ?? record.operations?.length,
+    requiredBackupCount: record.requiredBackups?.length ?? 0,
+    requiredBackups: record.requiredBackups,
+    diffSummary: record.diffSummary ?? summarizeDiffResult(record.diff),
+    confirmationRequired: record.confirmationRequired,
+    confirmationToken: record.confirmationToken,
+    warnings: Array.isArray(record.warnings) ? record.warnings.length : record.warnings
+  };
+}
+
+function summarizeOperationResult(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, any>;
+  return {
+    ok: record.ok,
+    transactionId: record.transactionId,
+    transactionStatus: record.transactionStatus,
+    rollbackAvailable: record.rollbackAvailable,
+    backups: record.backups,
+    backup: summarizeBackup(record.backup),
+    warnings: Array.isArray(record.warnings) ? record.warnings.length : record.warnings,
+    telemetry: record.telemetry,
+    error: record.error
+  };
+}
+
+function compactResourceKindForTool(toolName: string): CompactResourceKind {
+  if (toolName.includes(".snapshot.")) {
+    return "snapshot";
+  }
+  if (toolName.includes(".diff.")) {
+    return "diff";
+  }
+  if (toolName.includes(".validate.")) {
+    return "validation";
+  }
+  if (isWorkbookMutatingMcpTool(toolName)) {
+    return "mutation";
+  }
+  if (toolName.includes(".read") || toolName.includes(".lookup.") || toolName.includes(".summary") || toolName.includes(".schema")) {
+    return "read";
+  }
+  return "generic";
+}
+
+function compactResultSummary(toolName: string, payload: Record<string, unknown>, payloadBytes: number, stored: CompactStoredResource) {
+  return {
+    ok: payload.ok ?? true,
+    toolName,
+    detailLevel: "summary",
+    budgetExceeded: true,
+    payloadBytes: Math.min(payloadBytes, COMPACT_DEFAULT_RESOURCE_THRESHOLD_BYTES),
+    estimatedTokens: Math.ceil(Math.min(payloadBytes, COMPACT_DEFAULT_RESOURCE_THRESHOLD_BYTES) / 4),
+    resourcePayloadBytes: stored.payloadBytes,
+    resourceEstimatedTokens: stored.estimatedTokens,
+    resourceUri: stored.uri,
+    summary: summarizePayloadForBudget(payload),
+    warnings: [
+      ...asWarningArray(payload.warnings),
+      {
+        code: "COMPACT_RESULT_BUDGET_EXCEEDED",
+        message: "Tool result exceeded compact response budget and was stored behind resourceUri."
+      }
+    ]
+  };
+}
+
+function summarizePayloadForBudget(payload: Record<string, unknown>) {
+  return {
+    transactionId: payload.transactionId,
+    transactionStatus: payload.transactionStatus,
+    taskId: payload.taskId,
+    rollbackAvailable: payload.rollbackAvailable,
+    backups: payload.backups,
+    backup: summarizeBackup(payload.backup),
+    snapshot: payload.snapshot && typeof payload.snapshot === "object" ? snapshotSummary(payload.snapshot as Record<string, any>) : undefined,
+    diffSummary: payload.diffSummary ?? summarizeDiffResult(payload.diff),
+    compactProof: payload.compactProof,
+    telemetry: payload.telemetry,
+    validation: validationSummary(payload),
+    table: summarizeTablePayload(payload.table),
+    source: summarizeSourcePayload(payload)
+  };
+}
+
+function summarizeTablePayload(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const table = value as Record<string, any>;
+  return {
+    info: table.info
+      ? {
+          workbookId: table.info.workbookId,
+          tableName: table.info.tableName,
+          rowCount: table.info.rowCount,
+          columnCount: table.info.columnCount
+        }
+      : undefined,
+    headerCount: Array.isArray(table.headers?.[0]) ? table.headers[0].length : undefined,
+    rowCount: Array.isArray(table.values) ? table.values.length : undefined,
+    hasValues: Array.isArray(table.values),
+    hasFormulas: Array.isArray(table.formulas),
+    hasText: Array.isArray(table.text),
+    hasNumberFormat: Array.isArray(table.numberFormat)
+  };
+}
+
+function summarizeSourcePayload(payload: Record<string, unknown>) {
+  if (Array.isArray(payload.data)) {
+    return {
+      dataCount: payload.data.length,
+      snapshotCount: payload.data.filter((item) => Boolean((item as { snapshot?: unknown }).snapshot)).length
+    };
+  }
+  return undefined;
 }
 
 function validationSummary(payload: Record<string, unknown>) {
@@ -8917,6 +9590,17 @@ function readArg(name: string): string | undefined {
     return process.argv[index + 1];
   }
   return undefined;
+}
+
+function parseToolNameList(value: string | undefined): Set<string> | undefined {
+  if (value === undefined || value.trim() === "") {
+    return undefined;
+  }
+  const names = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return names.length > 0 ? new Set(names) : undefined;
 }
 
 function trimTrailingSlash(value: string): string {

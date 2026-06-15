@@ -107,6 +107,12 @@ Use the printed MCP launch command in your agent UI:
 npx -y @components-kit/open-workbook@latest mcp
 ```
 
+For MCP clients that include every available tool schema in each model request, use the smaller practical surface:
+
+```bash
+npx -y @components-kit/open-workbook@latest mcp --tool-profile compact
+```
+
 Start the agent UI before opening the Open Workbook add-in in Excel; the MCP command starts the local add-in asset server and backend for the simple flow.
 
 ## Source Development
@@ -168,6 +174,9 @@ Environment overrides:
 - `OPEN_WORKBOOK_PORT`
 - `OPEN_WORKBOOK_ADDIN_PATH`
 - `OPEN_WORKBOOK_ADDIN_RPC_TIMEOUT_MS`
+- `OPEN_WORKBOOK_TOOL_PROFILE`
+- `OPEN_WORKBOOK_TOOLS`
+- `OPEN_WORKBOOK_DISABLE_TOOLS`
 - `OPEN_WORKBOOK_BATCH_DIRECT_OPERATION_THRESHOLD`
 - `OPEN_WORKBOOK_BATCH_DIRECT_PAYLOAD_BYTES`
 - `OPEN_WORKBOOK_BATCH_DIRECT_CELL_THRESHOLD`
@@ -282,6 +291,19 @@ Source: CHANGELOG.md
 All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
+
+## [0.1.9] - 2026-06-15
+
+### Added
+
+- Added generic MCP tool profiles with `full`, `compact`, and `read-only` surfaces plus explicit allow/deny list controls for agent UIs that need lower context overhead.
+- Added guarded compact resource inspection with metadata, preview, page, and full modes so stored detail can be inspected without pulling large payloads into model context by default.
+
+### Changed
+
+- Compact mode now hides raw high-context range and table reads, trims empty compact-read output, and applies a hard response budget that stores oversized results behind `resourceUri`.
+- Compact capabilities and workflow preflight responses now return profile summaries unless the full catalog is explicitly requested.
+- Snapshot, backup, and mutation responses now keep workbook recovery payloads local and return metadata, rollback proof, and resource handles instead of inline cell matrices.
 
 ## [0.1.8] - 2026-06-15
 
@@ -1247,6 +1269,8 @@ The full namespace is represented in the protocol catalog, but MCP only exposes 
 - `planned`: intentionally omitted from the production MCP surface until the contract and implementation are ready.
 - `unsupported`: listed by capabilities only when a host or adapter cannot provide a deterministic implementation.
 
+`owb mcp` exposes the full stable tool surface unless a smaller profile is requested. Set `OPEN_WORKBOOK_TOOL_PROFILE=compact` or pass `owb mcp --tool-profile compact` for clients that include available tool schemas and outputs in model context. The compact profile keeps discovery, compact reads, batch/plan/workflow mutation paths, validation proof, diff/snapshot summaries, jobs, and rollback tools while hiding specialized one-off tools. It intentionally hides raw range facet reads such as `excel.range.read_values` so agents do not dump large sparse ranges full of blank cells. In compact/read-only profiles, `excel.runtime.get_capabilities` returns a profile summary by default; pass `includeFullCatalog: true` only when the full catalog is needed. `OPEN_WORKBOOK_TOOL_PROFILE=read-only` exposes a read-oriented subset. For tighter control, pass `--tools` / `OPEN_WORKBOOK_TOOLS` as a comma-separated allowlist, and `--disable-tools` / `OPEN_WORKBOOK_DISABLE_TOOLS` as a comma-separated denylist.
+
 `excel.runtime.get_capabilities` is the source of truth for the complete catalog, resources, prompts, runtime connection status, and active Excel host capability status. When an add-in is connected, it includes the host platform, Office version when available, Office API-set support such as `ExcelApi` versions, and derived feature statuses for ranges, tables, pivots, charts, and known host-limited paths. Without a connected add-in, it returns a daemon fallback that marks Excel host capabilities as `unknown`.
 
 ## Stable Tool Groups
@@ -1318,7 +1342,7 @@ Lookup and compact context tools reduce token use by exposing target candidates 
 
 `excel.range.read_compact` and `excel.table.read_compact` are additive token-saving read paths. They default to bounded values-only output, support paging/projection, deterministic head/middle/tail sampling, and opt-in facets, and return `truncated`, `nextPage`, `payloadBytes`, and `estimatedTokens`. Existing full read tools remain unchanged for compatibility and for exact-data tasks.
 
-Large or budget-limited compact results can return an `excel://compact/{resource_id}` handle instead of embedding full detail. Fetch it with `excel.compact.get_resource` or as an MCP resource. `excel.snapshot.get_compact`, `excel.snapshot.compare_compact`, and `excel.diff.get_compact` use this pattern for snapshot and diff details. Summary/schema cache entries are local to the MCP process and are cleared automatically after workbook-mutating tools; `excel.compact.get_cache_status` and `excel.compact.clear_cache` expose the cache lifecycle.
+Large or budget-limited compact results can return an `excel://compact/{resource_id}` handle instead of embedding full detail. `excel.compact.get_resource` returns metadata by default; use `mode: "preview"` or `mode: "page"` for bounded JSON-text inspection, and pass `mode: "full"` or `includePayload: true` only for explicit full-detail inspection with optional payload/token budgets. `excel.snapshot.get_compact`, `excel.snapshot.compare_compact`, and `excel.diff.get_compact` use this pattern for snapshot and diff details. Summary/schema cache entries are local to the MCP process and are cleared automatically after workbook-mutating tools; `excel.compact.get_cache_status` and `excel.compact.clear_cache` expose the cache lifecycle.
 
 `excel.validate.compact` returns validation issue counts, severity counts, categories, and a few examples while storing the full validation report behind a compact resource URI. Use it before reporting validation proof unless the user needs the full issue list inline.
 
@@ -2063,6 +2087,10 @@ Every read/write result records:
 Compact summary and read tools also return `payloadBytes`, rough `estimatedTokens`, `truncated`, and optional `nextPage` metadata so agents can stop before sending oversized workbook context to the model.
 Budget-limited compact responses may return `resourceUri` handles for full details. Mutation results include `compactProof` metadata so agents can report changed cells/ranges, warnings, backup IDs, and rollback availability without reading changed sheets back.
 
+For MCP clients that resend all tool schemas with each generation, workbook payload savings can be hidden by tool-schema overhead. Use `owb mcp --tool-profile compact` or `OPEN_WORKBOOK_TOOL_PROFILE=compact` to expose a smaller practical tool surface. Compact mode also hides raw range facet reads such as `excel.range.read_values`; use `excel.range.read_compact` so sparse ranges can be bounded, trimmed, and paged. `excel.runtime.get_capabilities` and workflow preflights return profile-aware capability summaries in compact mode unless the caller asks for the full catalog. OpenCode config snippets generated by `owb opencode config` use the compact profile by default.
+
+Snapshot creation and mutation results can contain full before/after workbook payloads for rollback. In compact mode, these responses return metadata, IDs, counts, rollback proof, and a `resourceUri` for the full detail instead of embedding snapshot, backup, or diff bodies inline. Stored detail can be inspected with metadata, preview, or paged resource reads before requesting full payloads.
+
 Lookup tools are cheaper than workbook scans when the agent does not know where data lives. They return ranked sheet/table/column/header/entity/range candidates and encoded `matchId` values; use `excel.lookup.inspect_match` on one candidate before falling back to `excel.range.read_compact`.
 
 Initial releases collect telemetry first, then set hard SLOs from real workbook tests.
@@ -2485,12 +2513,14 @@ Example output:
   "mcp": {
     "open-workbook": {
       "type": "local",
-      "command": ["owb", "mcp", "--agent-name", "finance-agent"],
+      "command": ["owb", "mcp", "--agent-name", "finance-agent", "--tool-profile", "compact"],
       "enabled": true
     }
   }
 }
 ```
+
+The generated OpenCode snippet uses `--tool-profile compact` by default. This keeps the MCP tool schema surface smaller for clients that send all available tool definitions with each generation. Use `--tool-profile full` when you need the entire Open Workbook tool surface in OpenCode.
 
 For `npx`-based OpenCode config, keep the command equivalent to:
 
@@ -2499,7 +2529,7 @@ For `npx`-based OpenCode config, keep the command equivalent to:
   "mcp": {
     "open-workbook": {
       "type": "local",
-      "command": ["npx", "-y", "@components-kit/open-workbook@latest", "mcp"],
+      "command": ["npx", "-y", "@components-kit/open-workbook@latest", "mcp", "--tool-profile", "compact"],
       "enabled": true
     }
   }

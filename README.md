@@ -79,6 +79,12 @@ Use the printed MCP launch command in your agent UI:
 npx -y @components-kit/open-workbook@latest mcp
 ```
 
+For MCP clients that include every available tool schema in each model request, use the smaller practical surface:
+
+```bash
+npx -y @components-kit/open-workbook@latest mcp --tool-profile compact
+```
+
 Start the agent UI before opening the Open Workbook add-in in Excel; the MCP command starts the local add-in asset server and backend for the simple flow.
 
 ## Source Development
@@ -140,6 +146,9 @@ Environment overrides:
 - `OPEN_WORKBOOK_PORT`
 - `OPEN_WORKBOOK_ADDIN_PATH`
 - `OPEN_WORKBOOK_ADDIN_RPC_TIMEOUT_MS`
+- `OPEN_WORKBOOK_TOOL_PROFILE`
+- `OPEN_WORKBOOK_TOOLS`
+- `OPEN_WORKBOOK_DISABLE_TOOLS`
 - `OPEN_WORKBOOK_BATCH_DIRECT_OPERATION_THRESHOLD`
 - `OPEN_WORKBOOK_BATCH_DIRECT_PAYLOAD_BYTES`
 - `OPEN_WORKBOOK_BATCH_DIRECT_CELL_THRESHOLD`

@@ -2,7 +2,7 @@
   "mcp": {
     "open-workbook": {
       "type": "local",
-      "command": ["owb", "mcp"],
+      "command": ["owb", "mcp", "--tool-profile", "compact"],
       "enabled": true
     }
   }

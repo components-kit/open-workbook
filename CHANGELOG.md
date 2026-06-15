@@ -4,6 +4,19 @@ All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
 
+## [0.1.9] - 2026-06-15
+
+### Added
+
+- Added generic MCP tool profiles with `full`, `compact`, and `read-only` surfaces plus explicit allow/deny list controls for agent UIs that need lower context overhead.
+- Added guarded compact resource inspection with metadata, preview, page, and full modes so stored detail can be inspected without pulling large payloads into model context by default.
+
+### Changed
+
+- Compact mode now hides raw high-context range and table reads, trims empty compact-read output, and applies a hard response budget that stores oversized results behind `resourceUri`.
+- Compact capabilities and workflow preflight responses now return profile summaries unless the full catalog is explicitly requested.
+- Snapshot, backup, and mutation responses now keep workbook recovery payloads local and return metadata, rollback proof, and resource handles instead of inline cell matrices.
+
 ## [0.1.8] - 2026-06-15
 
 ### Added

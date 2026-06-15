@@ -160,7 +160,7 @@ import type { AddinRpcClient } from "./addin-rpc-client.js";
 import { NativeFileBridge } from "./native-file-bridge.js";
 import { RuntimeStateStore } from "./state-store.js";
 
-const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.8";
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.9";
 
 export interface RuntimeServiceOptions {
   stateDir?: string;
@@ -4039,7 +4039,6 @@ export class RuntimeService {
       affectedRanges: snapshotResult.snapshot.affectedRanges,
       payloadRef: snapshotResult.snapshot.snapshotId
     });
-    backup.payload = snapshotResult.snapshot.payload;
     backup.payloadRef = await this.persistBackupPayload(backup.backupId, snapshotResult.snapshot.payload);
     this.persistState();
     return { ok: true, backup };
@@ -5029,7 +5028,7 @@ export class RuntimeService {
       };
     }
 
-    const operations = this.createRollbackOperations(planId);
+    const operations = await this.createRollbackOperations(planId);
     if (operations.length === 0) {
       return {
         ok: false,
@@ -5623,15 +5622,18 @@ export class RuntimeService {
 
     const backups =
       request.mode === "apply"
-        ? compiled.requiredBackups.map((kind) =>
-            this.backups.createBackup({
+        ? await Promise.all(compiled.requiredBackups.map(async (kind) => {
+            const backup = this.backups.createBackup({
               workbookId: request.workbookId,
               kind,
               reason: `Before ${request.operations.map((operation) => operation.kind).join(", ")}`,
-              affectedRanges: compiled.targetFingerprints.map((fingerprint) => fingerprint.range),
-              payload: kind === "region" ? beforeSnapshot : undefined
-            })
-          )
+              affectedRanges: compiled.targetFingerprints.map((fingerprint) => fingerprint.range)
+            });
+            if (kind === "region" && beforeSnapshot !== undefined) {
+              backup.payloadRef = await this.persistBackupPayload(backup.backupId, beforeSnapshot);
+            }
+            return backup;
+          }))
         : [];
 
     const executionRequest =
@@ -5828,7 +5830,7 @@ export class RuntimeService {
       .filter((source): source is TemplateExecutionSource => source !== undefined);
   }
 
-  private createRollbackOperations(planId: PlanId): ExcelOperation[] {
+  private async createRollbackOperations(planId: PlanId): Promise<ExcelOperation[]> {
     const plan = this.plans.getPlan(planId);
     if (!plan?.preview) {
       return [];
@@ -5852,7 +5854,7 @@ export class RuntimeService {
 
     for (const backupId of plan.preview.requiredBackups) {
       const backup = this.backups.getBackup(backupId);
-      const snapshot = backup?.payload as WorkbookSnapshotResponse | undefined;
+      const snapshot = backup ? await this.loadBackupPayload(backup) : undefined;
       if (!snapshot?.rangeSnapshots) {
         continue;
       }

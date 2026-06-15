@@ -1,6 +1,6 @@
 {
   "name": "@components-kit/open-workbook-excel-addin",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Office.js Excel add-in runtime for Open Workbook local automation.",
   "license": "MIT",
   "private": true,
