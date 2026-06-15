@@ -9,22 +9,29 @@ Choose the narrowest Open Workbook MCP interface that preserves workbook intent.
 - Active workbook and selection context: `excel.runtime.get_active_context`
 - Host/tool capability matrix: `excel.runtime.get_capabilities`
 - Workbook structure: `excel.workbook.get_workbook_map`
+- Compact workbook structure: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`
+- Workbook lookup: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, `excel.lookup.resolve_range`, `excel.lookup.inspect_match`
 - Open workbooks: `excel.workbook.list_open_workbooks`
-- Sheets: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.get_used_range`
+- Sheets: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.get_summary`, `excel.sheet.get_used_range`
 
 Prefer `excel.workflow.prepare_session` as the first call. If capabilities are unknown because the add-in is disconnected, stop and ask for runtime setup instead of guessing.
 
 ## Reading Data
 
+- Compact range/table discovery: `excel.range.get_summary`, `excel.table.get_schema`
+- Unknown target lookup: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, `excel.lookup.resolve_range`
+- Focused candidate preview: `excel.lookup.inspect_match`
+- Compact bounded reads: `excel.range.read_compact`, `excel.table.read_compact`
+- Stored compact details: `excel.compact.get_resource`, `excel.compact.list_resources`
 - Values only: `excel.range.read_values`
 - Formulas only: `excel.range.read_formulas`
 - Display text for user-visible output: `excel.range.read_display_text`
 - Formatting: `excel.range.read_number_formats`, `excel.range.read_styles`
 - Full cell payload: `excel.range.read_full`
 - Search and diagnostics: `excel.range.search`, `excel.range.find_blank_cells`, `excel.range.find_errors`
-- Table-shaped data: `excel.table.read`; pass `columns`, `rowOffset`, `rowLimit`, and include flags for large tables
+- Table-shaped full data: `excel.table.read`; pass `columns`, `rowOffset`, `rowLimit`, and include flags for large tables
 
-Use explicit sheet/address ranges whenever possible. Use used-range or workbook-wide scans only for audits, validation, search, or discovery. For simple reads, use the facet-specific range tools instead of `excel.range.read_full`.
+Use lookup tools before reading when the target sheet, table, header, entity, or range is unknown. Use compact summaries or schemas before cell bodies once the target scope is known. Use explicit sheet/address ranges whenever possible. Use used-range or workbook-wide scans only for audits, validation, search, or discovery. For simple reads, use `excel.range.read_compact` or the facet-specific range tools instead of `excel.range.read_full`.
 
 ## Writing Data
 
@@ -55,7 +62,7 @@ When a noninteractive agent run cannot apply a mutation, create an `excel.plan.c
 
 ## Tables, Filters, And Sorts
 
-- Inspect tables: `excel.table.list`, `excel.table.get_info`, `excel.table.read`
+- Inspect tables: `excel.table.list`, `excel.table.get_info`, `excel.table.get_schema`, `excel.table.read_compact`
 - Append or update rows: `excel.table.append_rows`, `excel.table.update_rows`
 - Reorder columns: `excel.table.reorder_columns`
 - Resize or structure changes: `excel.table.resize`, `excel.table.copy_structure`
@@ -65,7 +72,7 @@ When a noninteractive agent run cannot apply a mutation, create an `excel.plan.c
 Use table tools instead of range tools when the target is an Excel table. This preserves headers, totals rows, filters, structured references, and table styles.
 Before table reorder, filter, sort, append, or update operations, call `excel.table.get_info` or `excel.workbook.get_workbook_map`. For table filters, use `excel.table.apply_filters` rather than generic filter tools. After table structure or row mutations, call `excel.validate.tables`; after filter/sort changes, call `excel.validate.filters`.
 Do not clear and recreate a table to reorder columns; use `excel.table.reorder_columns`, or stop for confirmation before any destructive rebuild.
-For large tables, avoid full `excel.table.read` unless the user asks for all rows. Pass `rowLimit`, `rowOffset`, and `columns` for targeted discovery, then mutate with table-native tools.
+For large tables, avoid full `excel.table.read` unless the user asks for all rows. Use `excel.table.get_schema` first, then `excel.table.read_compact` with `rowLimit`, `rowOffset`, and `columns` for targeted discovery before mutating with table-native tools.
 
 ## Templates, Styles, And Formulas
 
@@ -94,14 +101,17 @@ Use `excel.workflow.create_pivot_chart_summary` for standard summary requests th
 ## Validation And Recovery
 
 - Workbook/sheet health: `excel.validate.workbook`, `excel.validate.sheet`
+- Compact validation proof: `excel.validate.compact`
 - Formula errors: `excel.validate.no_formula_errors`, `excel.formula.find_errors`
 - Broken references: `excel.validate.no_broken_references`
 - Template/style/table/filter checks: `excel.validate.template_consistency`, `excel.validate.styles`, `excel.validate.tables`, `excel.validate.filters`
 - Unintended changes: `excel.validate.no_unintended_changes`
+
+Prefer `excel.validate.compact` when issue counts, severity counts, and a few examples are enough. It returns a compact resource URI for the full report.
 - Combined risky edit workflow: `excel.workflow.preview_risky_edit`
-- Snapshots and diffs: `excel.snapshot.create`, `excel.snapshot.compare`, `excel.diff.summarize`
+- Snapshots and diffs: `excel.snapshot.create`, `excel.snapshot.get_compact`, `excel.snapshot.compare_compact`, `excel.diff.summarize`, `excel.diff.get_compact`
 - Rollback: `excel.plan.rollback`, `excel.transaction.preview_rollback`, `excel.transaction.rollback`, `excel.transaction.preview_rollback_chain`, `excel.transaction.rollback_chain`
 - File backups: `excel.backup.create_file`, `excel.backup.verify`, `excel.backup.restore_file`
 
 Always present validation issues with severity and target, not vague success/failure language.
-Diff tools require two snapshots. For risky scoped edits, use `excel.workflow.preview_risky_edit` after discovery when available, with a non-empty minimal operation list. If using separate tools, create a before snapshot, make the scoped edit, create an after snapshot, call `excel.diff.summarize` or `excel.snapshot.compare`, then preview rollback with `excel.transaction.preview_rollback` or `excel.transaction.preview_rollback_chain`.
+Diff tools require two snapshots. For risky scoped edits, use `excel.workflow.preview_risky_edit` after discovery when available, with a non-empty minimal operation list. If using separate tools, create a before snapshot, make the scoped edit, create an after snapshot, call `excel.diff.summarize`, `excel.diff.get_compact`, or `excel.snapshot.compare_compact`, then preview rollback with `excel.transaction.preview_rollback` or `excel.transaction.preview_rollback_chain`.

@@ -29,6 +29,8 @@ export type ToolNamespace =
   | "diff"
   | "events"
   | "snapshot"
+  | "compact"
+  | "lookup"
   | "validate"
   | "repair"
   | "clean"
@@ -65,6 +67,8 @@ const STABLE_TOOLS = new Set([
   "excel.workbook.list_open_workbooks",
   "excel.workbook.get_workbook_info",
   "excel.workbook.get_workbook_map",
+  "excel.workbook.get_summary",
+  "excel.workbook.get_used_range_summary",
   "excel.workbook.snapshot",
   "excel.workbook.refresh_snapshot",
   "excel.workbook.get_snapshot",
@@ -92,6 +96,7 @@ const STABLE_TOOLS = new Set([
   "excel.workbook.close",
   "excel.sheet.list",
   "excel.sheet.get_info",
+  "excel.sheet.get_summary",
   "excel.sheet.create",
   "excel.sheet.copy",
   "excel.sheet.rename",
@@ -108,6 +113,8 @@ const STABLE_TOOLS = new Set([
   "excel.range.read_number_formats",
   "excel.range.read_display_text",
   "excel.range.read_styles",
+  "excel.range.read_compact",
+  "excel.range.get_summary",
   "excel.range.read_hyperlinks",
   "excel.range.read_comments",
   "excel.range.read_notes",
@@ -118,6 +125,12 @@ const STABLE_TOOLS = new Set([
   "excel.range.search",
   "excel.range.find_blank_cells",
   "excel.range.find_errors",
+  "excel.lookup.search_workbook",
+  "excel.lookup.find_headers",
+  "excel.lookup.find_tables_by_columns",
+  "excel.lookup.find_entity",
+  "excel.lookup.resolve_range",
+  "excel.lookup.inspect_match",
   "excel.range.write_values",
   "excel.range.write_formulas",
   "excel.range.write_number_formats",
@@ -199,6 +212,7 @@ const STABLE_TOOLS = new Set([
   "excel.diff.create",
   "excel.diff.summarize",
   "excel.diff.get_details",
+  "excel.diff.get_compact",
   "excel.diff.export_json",
   "excel.diff.export_html",
   "excel.events.subscribe",
@@ -206,10 +220,18 @@ const STABLE_TOOLS = new Set([
   "excel.events.get_recent",
   "excel.events.clear",
   "excel.events.set_debounce",
+  "excel.compact.get_resource",
+  "excel.compact.list_resources",
+  "excel.compact.delete_resource",
+  "excel.compact.clear_resources",
+  "excel.compact.get_cache_status",
+  "excel.compact.clear_cache",
   "excel.snapshot.create",
   "excel.snapshot.refresh",
   "excel.snapshot.get",
+  "excel.snapshot.get_compact",
   "excel.snapshot.compare",
+  "excel.snapshot.compare_compact",
   "excel.snapshot.invalidate",
   "excel.snapshot.list",
   "excel.snapshot.delete",
@@ -262,7 +284,9 @@ const STABLE_TOOLS = new Set([
   "excel.formula.explain",
   "excel.table.list",
   "excel.table.get_info",
+  "excel.table.get_schema",
   "excel.table.read",
+  "excel.table.read_compact",
   "excel.table.create",
   "excel.table.resize",
   "excel.table.reorder_columns",
@@ -321,6 +345,7 @@ const STABLE_TOOLS = new Set([
   "excel.region.write_values",
   "excel.region.fill",
   "excel.validate.workbook",
+  "excel.validate.compact",
   "excel.validate.sheet",
   "excel.validate.template_consistency",
   "excel.validate.formulas",
@@ -376,6 +401,8 @@ const TOOL_NAMES = [
   "excel.workbook.list_open_workbooks",
   "excel.workbook.get_workbook_info",
   "excel.workbook.get_workbook_map",
+  "excel.workbook.get_summary",
+  "excel.workbook.get_used_range_summary",
   "excel.workbook.snapshot",
   "excel.workbook.refresh_snapshot",
   "excel.workbook.get_snapshot",
@@ -403,6 +430,7 @@ const TOOL_NAMES = [
   "excel.workbook.close",
   "excel.sheet.list",
   "excel.sheet.get_info",
+  "excel.sheet.get_summary",
   "excel.sheet.create",
   "excel.sheet.copy",
   "excel.sheet.rename",
@@ -419,6 +447,8 @@ const TOOL_NAMES = [
   "excel.range.read_number_formats",
   "excel.range.read_display_text",
   "excel.range.read_styles",
+  "excel.range.read_compact",
+  "excel.range.get_summary",
   "excel.range.read_hyperlinks",
   "excel.range.read_comments",
   "excel.range.read_notes",
@@ -429,6 +459,12 @@ const TOOL_NAMES = [
   "excel.range.search",
   "excel.range.find_blank_cells",
   "excel.range.find_errors",
+  "excel.lookup.search_workbook",
+  "excel.lookup.find_headers",
+  "excel.lookup.find_tables_by_columns",
+  "excel.lookup.find_entity",
+  "excel.lookup.resolve_range",
+  "excel.lookup.inspect_match",
   "excel.range.write_values",
   "excel.range.write_formulas",
   "excel.range.write_number_formats",
@@ -509,7 +545,9 @@ const TOOL_NAMES = [
   "excel.formula.explain",
   "excel.table.list",
   "excel.table.get_info",
+  "excel.table.get_schema",
   "excel.table.read",
+  "excel.table.read_compact",
   "excel.table.create",
   "excel.table.resize",
   "excel.table.reorder_columns",
@@ -617,6 +655,7 @@ const TOOL_NAMES = [
   "excel.diff.create",
   "excel.diff.summarize",
   "excel.diff.get_details",
+  "excel.diff.get_compact",
   "excel.diff.export_json",
   "excel.diff.export_html",
   "excel.events.subscribe",
@@ -624,14 +663,23 @@ const TOOL_NAMES = [
   "excel.events.get_recent",
   "excel.events.clear",
   "excel.events.set_debounce",
+  "excel.compact.get_resource",
+  "excel.compact.list_resources",
+  "excel.compact.delete_resource",
+  "excel.compact.clear_resources",
+  "excel.compact.get_cache_status",
+  "excel.compact.clear_cache",
   "excel.snapshot.create",
   "excel.snapshot.refresh",
   "excel.snapshot.get",
+  "excel.snapshot.get_compact",
   "excel.snapshot.compare",
+  "excel.snapshot.compare_compact",
   "excel.snapshot.invalidate",
   "excel.snapshot.list",
   "excel.snapshot.delete",
   "excel.validate.workbook",
+  "excel.validate.compact",
   "excel.validate.sheet",
   "excel.validate.template_consistency",
   "excel.validate.formulas",
@@ -742,6 +790,9 @@ function getToolStatus(name: string, namespace: ToolNamespace): CatalogStatus {
 }
 
 function isMutatingTool(name: string): boolean {
+  if (name.startsWith("excel.compact.")) {
+    return false;
+  }
   if (name === "excel.workflow.preview_risky_edit") {
     return true;
   }
@@ -780,7 +831,17 @@ function getRequiredCapabilities(name: string, namespace: ToolNamespace): string
     return ["worksheet.basic"];
   }
   if (namespace === "range") {
-    return [name.includes(".read_") || name.endsWith(".search") || name.endsWith(".find_errors") ? "range.read" : "range.write"];
+    return [
+      name.includes(".read_") || name.endsWith(".get_summary") || name.endsWith(".search") || name.endsWith(".find_errors")
+        ? "range.read"
+        : "range.write"
+    ];
+  }
+  if (namespace === "compact") {
+    return ["runtime.session"];
+  }
+  if (namespace === "lookup") {
+    return ["range.read"];
   }
   return [`${namespace}.basic`];
 }

@@ -9,6 +9,8 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 - Use table APIs for table-shaped work.
 - Group writes by workbook, sheet, and contiguous range.
 - Read only requested properties.
+- Start unknown targets with lookup tools, then inspect one candidate.
+- Start known large scopes with compact summaries and schemas.
 - Use `excel.runtime.get_capabilities` before trying expensive or host-limited features.
 
 ## Reads
@@ -18,8 +20,13 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 - For formula review, read formulas or formula patterns.
 - For formatting review, read number formats or styles only for the relevant range.
 - For table analysis, read the table instead of a sheet-sized range.
+- For unknown sheet/table/header/entity targets, use `excel.lookup.*` before reading cells.
+- For exploratory reads, use `excel.range.read_compact` or `excel.table.read_compact` before full reads.
 
 Avoid workbook-wide reads unless the task is search, validation, audit, or discovery.
+
+Compact reads return payload/token telemetry, truncation status, and continuation metadata. Page only when more rows or columns are needed.
+When a compact response includes `resourceUri`, fetch it only if the full detail is required.
 
 ## Writes
 
@@ -43,3 +50,5 @@ Automatic timeout retry is limited to style-only batches because repeating the s
 ## Telemetry
 
 Read tool results for duration, sync count, payload bytes, cells read/written, range count, chunk count, engine, and warnings. Use that telemetry to explain unusually slow or partial work.
+For compact reads, also inspect `estimatedTokens`, `truncated`, and `nextPage` before requesting more workbook data.
+For mutation results, prefer the returned `compactProof` summary over reading changed ranges back into the model.

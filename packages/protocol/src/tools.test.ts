@@ -8,6 +8,15 @@ describe("tool catalog", () => {
     expect(ToolCatalog.length).toBeGreaterThan(200);
     expect(ToolCatalog.some((tool) => tool.name === "excel.runtime.get_capabilities")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.name === "excel.workbook.get_workbook_map")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.workbook.get_summary")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.range.read_compact")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.table.read_compact")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.lookup.search_workbook")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.lookup.inspect_match")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.compact.get_resource")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.validate.compact")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.snapshot.get_compact")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.diff.get_compact")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.prepare_session")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.create_formula_sheet")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.create_template_report")).toBe(true);
@@ -40,6 +49,29 @@ describe("tool catalog", () => {
     expect(exposed.some((tool) => tool.name === "excel.range.find_errors")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.workbook.close")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.workbook.export_copy")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.workbook.get_summary")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.workbook.get_used_range_summary")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.sheet.get_summary")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.range.get_summary")).toBe(true);
+    expect(exposed.find((tool) => tool.name === "excel.range.get_summary")?.requiredCapabilities).toContain("range.read");
+    expect(exposed.some((tool) => tool.name === "excel.range.read_compact")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.table.get_schema")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.table.read_compact")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.lookup.search_workbook")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.lookup.find_headers")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.lookup.find_tables_by_columns")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.lookup.find_entity")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.lookup.resolve_range")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.lookup.inspect_match")).toBe(true);
+    expect(exposed.find((tool) => tool.name === "excel.lookup.search_workbook")?.mutatesWorkbook).toBe(false);
+    expect(exposed.find((tool) => tool.name === "excel.lookup.search_workbook")?.requiredCapabilities).toContain("range.read");
+    expect(exposed.some((tool) => tool.name === "excel.compact.get_resource")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.compact.clear_cache")).toBe(true);
+    expect(exposed.find((tool) => tool.name === "excel.compact.clear_cache")?.mutatesWorkbook).toBe(false);
+    expect(exposed.some((tool) => tool.name === "excel.validate.compact")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.snapshot.get_compact")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.snapshot.compare_compact")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.diff.get_compact")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.validate.workbook")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.validate.no_unintended_changes")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.repair.style_from_template")).toBe(true);
@@ -81,6 +113,7 @@ describe("tool catalog", () => {
 
   it("tracks resources and prompts as catalog entries", () => {
     expect(ResourceCatalog.some((resource) => resource.uriTemplate === "excel://runtime/status")).toBe(true);
+    expect(ResourceCatalog.some((resource) => resource.uriTemplate === "excel://compact/{resource_id}")).toBe(true);
     expect(ResourceCatalog.every((resource) => resource.status === "stable")).toBe(true);
     expect(PromptCatalog.some((prompt) => prompt.name === "excel.prompts.create_next_month_sheet" && prompt.status === "stable")).toBe(true);
   });

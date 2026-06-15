@@ -16,7 +16,7 @@ Daily spreadsheet work usually does not need the largest model available, but it
 
 The project is being prepared for npm distribution as `@components-kit/open-workbook`. It is not a Microsoft AppSource add-in and does not attempt to install itself into Excel without user or admin trust approval.
 
-Stable areas include runtime connection, workbook/sheet/range operations, reversible batches, combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
+Stable areas include runtime connection, workbook/sheet/range operations, compact workbook/table/range discovery, workbook-wide lookup/search, compact paged reads with token telemetry, reversible batches, combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
 
 The simple flow is MCP-owned: `npx ... mcp` starts the MCP adapter, the local add-in taskpane server, and an embedded backend when no shared daemon is running. The shared `owb daemon` remains available for advanced multi-client coordination.
 
@@ -151,6 +151,12 @@ Environment overrides:
 - `OPEN_WORKBOOK_FILE_BRIDGE_URL`
 - `OPEN_WORKBOOK_FILE_BRIDGE_PORT`
 
+## Token-Saving Reads
+
+Open Workbook exposes compact discovery, lookup, and read tools so agents can inspect workbook structure before sending cell bodies to a model. When the target is unknown, start with `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range`, then inspect one candidate with `excel.lookup.inspect_match`. When the target is known, use `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, or `excel.range.get_summary`, then use `excel.table.read_compact` or `excel.range.read_compact` for bounded values-first pages. Compact responses include `payloadBytes`, rough `estimatedTokens`, `truncated`, and `nextPage`; existing full-read tools remain available for exact-data tasks.
+
+When details would exceed a caller's budget, compact tools can store the full payload locally and return an `excel://compact/{resource_id}` handle for later retrieval through `excel.compact.get_resource`. Compact summary/schema cache entries are invalidated after workbook mutations. Use `excel.validate.compact` for validation proof that returns counts and examples inline while keeping the full issue report behind a resource handle.
+
 ## Common Commands
 
 ```bash
@@ -177,7 +183,7 @@ Open Workbook includes generic agent instruction source for fast, reliable live 
 - `skills/open-workbook-excel/SKILL.md`
 - `skills/open-workbook-excel/references/`
 
-Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`. The skill teaches agents to inspect runtime capabilities, choose the narrowest efficient MCP tool, use combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows when they match the task, avoid sparse null-padded overwrites, batch workbook writes, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews. `owb instructions` remains available as a fallback for clients that do not support skills.sh.
+Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`. The skill teaches agents to inspect runtime capabilities, use lookup before broad reads, choose the narrowest efficient MCP tool, use combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows when they match the task, avoid sparse null-padded overwrites, batch workbook writes, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews. `owb instructions` remains available as a fallback for clients that do not support skills.sh.
 
 ## Safety Contract
 

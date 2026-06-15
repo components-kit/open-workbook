@@ -4,6 +4,16 @@ All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
 
+## [0.1.8] - 2026-06-15
+
+### Added
+
+- Added compact token-saving discovery and read tools: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, `excel.range.get_summary`, `excel.range.read_compact`, and `excel.table.read_compact`.
+- Added lookup-first token-saving tools: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, `excel.lookup.resolve_range`, and `excel.lookup.inspect_match`.
+- Added compact read telemetry with `payloadBytes`, rough `estimatedTokens`, truncation status, and continuation metadata so agents can avoid sending broad workbook payloads to models by default.
+- Added local compact detail resources, compact cache lifecycle tools, `excel.validate.compact`, and additive mutation `compactProof` metadata so large details can be expanded only when needed.
+- Added compact snapshot and diff access through `excel.snapshot.get_compact`, `excel.snapshot.compare_compact`, and `excel.diff.get_compact`.
+
 ## [0.1.7] - 2026-06-15
 
 ### Added

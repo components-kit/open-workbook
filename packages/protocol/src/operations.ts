@@ -26,6 +26,18 @@ export interface OperationWarning {
   details?: Record<string, unknown>;
 }
 
+export interface CompactResponseMetadata {
+  payloadBytes: number;
+  estimatedTokens: number;
+  truncated: boolean;
+  detailLevel: "summary" | "compact" | "full";
+  nextPage?: {
+    rowOffset?: number;
+    columnOffset?: number;
+  } | undefined;
+  resourceUri?: string | undefined;
+}
+
 export interface OperationBase {
   operationId: OperationId;
   workbookId: WorkbookId;
@@ -685,6 +697,104 @@ export interface TableReadRequest extends TableSelector {
   columns?: Array<string | number>;
   rowOffset?: number;
   rowLimit?: number;
+}
+
+export type CompactReadMode = "window" | "summary" | "sample";
+
+export interface CompactReadBudget {
+  maxRows?: number;
+  maxColumns?: number;
+  maxCells?: number;
+  maxPayloadBytes?: number;
+  maxEstimatedTokens?: number;
+}
+
+export interface RangeCompactReadRequest extends CompactReadBudget {
+  workbookId: WorkbookId;
+  sheetName: string;
+  address: string;
+  mode?: CompactReadMode;
+  rowOffset?: number;
+  columnOffset?: number;
+  includeValues?: boolean;
+  includeFormulas?: boolean;
+  includeText?: boolean;
+  includeNumberFormats?: boolean;
+  includeStyles?: boolean;
+}
+
+export interface TableCompactReadRequest extends CompactReadBudget, TableSelector {
+  mode?: CompactReadMode;
+  columns?: Array<string | number>;
+  rowOffset?: number;
+  includeValues?: boolean;
+  includeFormulas?: boolean;
+  includeText?: boolean;
+  includeNumberFormats?: boolean;
+}
+
+export interface LookupWorkbookSearchRequest extends CompactReadBudget {
+  workbookId: WorkbookId;
+  query: string;
+  sheetNames?: string[];
+  includeSheets?: boolean;
+  includeTables?: boolean;
+  completeMatch?: boolean;
+  matchCase?: boolean;
+  maxMatches?: number;
+  maxPreviewRows?: number;
+}
+
+export interface LookupFindHeadersRequest extends CompactReadBudget {
+  workbookId: WorkbookId;
+  query?: string;
+  headers?: string[];
+  sheetNames?: string[];
+  maxRowsPerSheet?: number;
+  maxMatches?: number;
+}
+
+export interface LookupFindTablesByColumnsRequest extends CompactReadBudget {
+  workbookId: WorkbookId;
+  requiredColumns: string[];
+  optionalColumns?: string[];
+  minScore?: number;
+  maxMatches?: number;
+}
+
+export interface LookupFindEntityRequest extends CompactReadBudget {
+  workbookId: WorkbookId;
+  entity: string;
+  kind?: "text" | "number" | "date" | "any";
+  sheetNames?: string[];
+  completeMatch?: boolean;
+  matchCase?: boolean;
+  maxMatches?: number;
+  maxPreviewRows?: number;
+}
+
+export interface LookupResolveRangeRequest extends CompactReadBudget {
+  workbookId: WorkbookId;
+  target: string;
+  kind?: "table" | "column" | "header" | "entity" | "range" | "any";
+  preferredSheetName?: string;
+  preferredTableName?: string;
+  maxMatches?: number;
+}
+
+export interface LookupInspectMatchRequest extends CompactReadBudget {
+  workbookId: WorkbookId;
+  matchId?: string;
+  kind?: "sheet" | "table" | "column" | "header" | "entity" | "range";
+  sheetName?: string;
+  tableName?: string;
+  columnName?: string;
+  address?: string;
+  maxRows?: number;
+  maxColumns?: number;
+  includeValues?: boolean;
+  includeFormulas?: boolean;
+  includeText?: boolean;
 }
 
 export interface TableColumnRef {

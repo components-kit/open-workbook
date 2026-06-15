@@ -9,6 +9,11 @@ Open Workbook treats speed as a correctness requirement because slow workbook au
 - Do not call `context.sync()` inside per-cell loops.
 - Use 2D array assignments for values and formulas.
 - Load only requested Office.js properties.
+- Start unknown target discovery with lookup tools: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range`.
+- Start known-scope large workbook reads with compact context: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, or `excel.range.get_summary`.
+- Prefer `excel.table.read_compact` and `excel.range.read_compact` for exploratory reads, broad used ranges, and large tables; page or project only the rows/columns needed for the task.
+- Use `excel.validate.compact` when validation counts and examples are enough; fetch the returned compact resource only when full details are needed.
+- Reserve full reads for explicit user requests, audits, exports, or exact-data tasks that genuinely need every cell or facet.
 - Group operations by workbook, sheet, and contiguous range.
 - Chunk large payloads before Office.js limits.
 - Use `excel.batch.preflight` before applying large generated batches. It tells the agent whether to apply directly, submit to the queue, or use `excel.batch.submit_chunked`.
@@ -42,7 +47,25 @@ Every read/write result records:
 - engine name and version
 - warning count
 
+Compact summary and read tools also return `payloadBytes`, rough `estimatedTokens`, `truncated`, and optional `nextPage` metadata so agents can stop before sending oversized workbook context to the model.
+Budget-limited compact responses may return `resourceUri` handles for full details. Mutation results include `compactProof` metadata so agents can report changed cells/ranges, warnings, backup IDs, and rollback availability without reading changed sheets back.
+
+Lookup tools are cheaper than workbook scans when the agent does not know where data lives. They return ranked sheet/table/column/header/entity/range candidates and encoded `matchId` values; use `excel.lookup.inspect_match` on one candidate before falling back to `excel.range.read_compact`.
+
 Initial releases collect telemetry first, then set hard SLOs from real workbook tests.
+
+## Token Budget Examples
+
+Compact workflows should usually cut large workbook context by 80-99%:
+
+- Use `excel.table.get_schema` plus a 50-row `excel.table.read_compact` page instead of sending a 10,000-row table.
+- Use `excel.range.get_summary` plus projected `excel.range.read_compact` facets instead of `excel.range.read_full` over a used range.
+- Use `excel.lookup.find_headers` or `excel.lookup.resolve_range` instead of reading every sheet's first 100 rows to find a target column.
+- Use `excel.validate.compact`, `excel.snapshot.compare_compact`, or `excel.diff.get_compact` when issue/diff counts and examples are enough; fetch the `resourceUri` only for full detail review.
+
+## Model Routing
+
+Compact discovery, schema inspection, deterministic table/range mutations, validation proof, and rollback reporting are good candidates for cheaper models because Open Workbook handles the Excel mechanics locally. Escalate to larger models when the task requires ambiguous business reasoning, complex transformation design, or user-facing narrative synthesis from multiple compact evidence sources.
 
 ## Synthetic Core Benchmark
 

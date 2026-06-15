@@ -38,8 +38,10 @@ import type {
   SnapshotId,
   TaskId,
   StyleDimension,
+  RangeCompactReadRequest,
   TableAppendRowsRequest,
   TableApplyFiltersRequest,
+  TableCompactReadRequest,
   TableCopyStructureRequest,
   TableCreateRequest,
   TableReadRequest,
@@ -50,6 +52,12 @@ import type {
   TableSetTotalRowRequest,
   TableSortRequest,
   TableUpdateRowsRequest,
+  LookupFindEntityRequest,
+  LookupFindHeadersRequest,
+  LookupFindTablesByColumnsRequest,
+  LookupInspectMatchRequest,
+  LookupResolveRangeRequest,
+  LookupWorkbookSearchRequest,
   TemplateId,
   TransactionId,
   WorkbookScope,
@@ -108,7 +116,34 @@ const STYLE_COPY_TOOL_DIMENSIONS: Record<string, StyleDimension> = {
 };
 
 const runtime = await createRuntimeFacade();
-const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.7";
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.8";
+const COMPACT_RESOURCE_LIMIT = 100;
+const COMPACT_DEFAULT_RESOURCE_THRESHOLD_BYTES = 24_000;
+
+type CompactResourceKind = "read" | "validation" | "diff" | "snapshot" | "mutation" | "summary" | "generic";
+
+interface CompactStoredResource {
+  resourceId: string;
+  uri: string;
+  kind: CompactResourceKind;
+  title?: string | undefined;
+  createdAt: string;
+  payloadBytes: number;
+  estimatedTokens: number;
+  payload: unknown;
+}
+
+interface CompactCacheEntry {
+  key: string;
+  createdAt: string;
+  value: unknown;
+}
+
+const compactResources = new Map<string, CompactStoredResource>();
+const compactCache = new Map<string, CompactCacheEntry>();
+let compactCacheInvalidationCount = 0;
+let compactCacheLastInvalidatedAt: string | undefined;
+let compactLastObservedEventId: string | undefined;
 
 const server = new McpServer({
   name: "open-workbook",
@@ -120,6 +155,7 @@ registerWorkbookTools(server);
 registerBackupTools(server);
 registerSheetTools(server);
 registerRangeTools(server);
+registerLookupTools(server);
 registerBatchTools(server);
 registerWorkflowTools(server);
 registerPlanTools(server);
@@ -146,6 +182,7 @@ registerRepairTools(server);
 registerSnapshotTools(server);
 registerDiffTools(server);
 registerEventTools(server);
+registerCompactTools(server);
 registerResources(server);
 registerPrompts(server);
 
@@ -347,6 +384,14 @@ function registerResources(mcp: McpServer): void {
       const planId = resourceVariable(variables, "plan_id") as PlanId;
       return runtime.getPlanDiffResource(workbookId, planId);
     }
+  );
+
+  registerJsonTemplateResource(
+    mcp,
+    "compact detail resource",
+    "excel://compact/{resource_id}",
+    "Stored compact-context detail payload returned by token-saving Open Workbook tools.",
+    async (_uri, variables) => getCompactResource(resourceVariable(variables, "resource_id"))
   );
 }
 
@@ -757,6 +802,38 @@ function registerWorkbookTools(mcp: McpServer): void {
       }
     },
     async () => jsonResult(await runtime.getWorkbookMap())
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.workbook.get_summary",
+    {
+      title: "Get compact workbook summary",
+      description: "Return compact workbook structure, sheet counts, table names, used-range dimensions, and token telemetry without cell bodies.",
+      inputSchema: { workbookId: z.string().optional() },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ workbookId }: { workbookId?: string }) => jsonResult(await workbookSummary(workbookId as WorkbookId | undefined))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.workbook.get_used_range_summary",
+    {
+      title: "Get compact workbook used-range summary",
+      description: "Return used-range dimensions for workbook sheets without loading cell payloads.",
+      inputSchema: { workbookId: z.string().optional() },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ workbookId }: { workbookId?: string }) => jsonResult(await workbookUsedRangeSummary(workbookId as WorkbookId | undefined))
   );
 
   registerMcpTool(
@@ -1380,6 +1457,19 @@ function registerSheetTools(mcp: McpServer): void {
 
   registerMcpTool(
     mcp,
+    "excel.sheet.get_summary",
+    {
+      title: "Get compact worksheet summary",
+      description: "Return one worksheet's used-range dimensions, table names, and token telemetry without cell bodies.",
+      inputSchema: { workbookId: z.string().optional(), sheetName: z.string() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ workbookId, sheetName }: { workbookId?: string; sheetName: string }) =>
+      jsonResult(await sheetSummary(sheetName, workbookId as WorkbookId | undefined))
+  );
+
+  registerMcpTool(
+    mcp,
     "excel.sheet.get_used_range",
     {
       title: "Get worksheet used range",
@@ -1503,6 +1593,60 @@ function registerRangeTools(mcp: McpServer): void {
         jsonResult(await readRangeSnapshot(workbookId, sheetName, address, rangeReadFacets(name)))
     );
   }
+
+  const compactReadSchema = {
+    ...readSchema,
+    mode: z.enum(["window", "summary", "sample"]).optional(),
+    rowOffset: z.number().int().min(0).optional(),
+    columnOffset: z.number().int().min(0).optional(),
+    maxRows: z.number().int().min(0).max(10000).optional(),
+    maxColumns: z.number().int().min(0).max(1000).optional(),
+    maxCells: z.number().int().min(0).max(1000000).optional(),
+    maxPayloadBytes: z.number().int().min(0).optional(),
+    maxEstimatedTokens: z.number().int().min(0).optional(),
+    includeValues: z.boolean().optional(),
+    includeFormulas: z.boolean().optional(),
+    includeText: z.boolean().optional(),
+    includeNumberFormats: z.boolean().optional(),
+    includeStyles: z.boolean().optional()
+  };
+
+  registerMcpTool(
+    mcp,
+    "excel.range.read_compact",
+    {
+      title: "Read compact Excel range",
+      description: "Read a bounded values-first range window with opt-in facets, truncation metadata, and token telemetry.",
+      inputSchema: compactReadSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async (args: RangeCompactReadRequest) => jsonResult(await compactRangeRead(args))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.range.get_summary",
+    {
+      title: "Get compact range summary",
+      description: "Return range dimensions, cell count, default compact-read window, and token telemetry without cell bodies.",
+      inputSchema: {
+        workbookId: z.string(),
+        sheetName: z.string(),
+        address: z.string()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ workbookId, sheetName, address }: { workbookId: string; sheetName: string; address: string }) =>
+      jsonResult(rangeSummary(workbookId as WorkbookId, sheetName, address))
+  );
 
   for (const [name, method] of [
     ["excel.range.read_hyperlinks", "range.read_hyperlinks"],
@@ -1778,6 +1922,148 @@ function registerRangeTools(mcp: McpServer): void {
       reason: `MCP ${name}`
     }));
   }
+}
+
+function registerLookupTools(mcp: McpServer): void {
+  const budgetSchema = {
+    maxRows: z.number().int().min(0).max(10000).optional(),
+    maxColumns: z.number().int().min(0).max(1000).optional(),
+    maxCells: z.number().int().min(0).max(1000000).optional(),
+    maxPayloadBytes: z.number().int().min(0).optional(),
+    maxEstimatedTokens: z.number().int().min(0).optional()
+  };
+  const lookupAnnotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
+
+  registerMcpTool(
+    mcp,
+    "excel.lookup.search_workbook",
+    {
+      title: "Search workbook compactly",
+      description: "Search sheet names, table schemas, and used ranges across a workbook, returning ranked compact matches instead of full sheets.",
+      inputSchema: {
+        workbookId: z.string(),
+        query: z.string(),
+        sheetNames: z.array(z.string()).optional(),
+        includeSheets: z.boolean().optional(),
+        includeTables: z.boolean().optional(),
+        completeMatch: z.boolean().optional(),
+        matchCase: z.boolean().optional(),
+        maxMatches: z.number().int().min(1).max(1000).optional(),
+        maxPreviewRows: z.number().int().min(0).max(25).optional(),
+        ...budgetSchema
+      },
+      annotations: lookupAnnotations
+    },
+    async (args: LookupWorkbookSearchRequest) => jsonResult(await lookupSearchWorkbook(args))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.lookup.find_headers",
+    {
+      title: "Find workbook headers compactly",
+      description: "Find matching table columns and likely header cells from bounded top-of-sheet scans.",
+      inputSchema: {
+        workbookId: z.string(),
+        query: z.string().optional(),
+        headers: z.array(z.string()).optional(),
+        sheetNames: z.array(z.string()).optional(),
+        maxRowsPerSheet: z.number().int().min(1).max(100).optional(),
+        maxMatches: z.number().int().min(1).max(1000).optional(),
+        ...budgetSchema
+      },
+      annotations: lookupAnnotations
+    },
+    async (args: LookupFindHeadersRequest) => jsonResult(await lookupFindHeaders(args))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.lookup.find_tables_by_columns",
+    {
+      title: "Find tables by column set",
+      description: "Rank workbook tables by required and optional column names without reading table rows.",
+      inputSchema: {
+        workbookId: z.string(),
+        requiredColumns: z.array(z.string()),
+        optionalColumns: z.array(z.string()).optional(),
+        minScore: z.number().min(0).max(1).optional(),
+        maxMatches: z.number().int().min(1).max(1000).optional(),
+        ...budgetSchema
+      },
+      annotations: lookupAnnotations
+    },
+    async (args: LookupFindTablesByColumnsRequest) => jsonResult(await lookupFindTablesByColumns(args))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.lookup.find_entity",
+    {
+      title: "Find entity compactly",
+      description: "Locate a text, number, date, or generic entity across workbook used ranges with compact ranked results.",
+      inputSchema: {
+        workbookId: z.string(),
+        entity: z.string(),
+        kind: z.enum(["text", "number", "date", "any"]).optional(),
+        sheetNames: z.array(z.string()).optional(),
+        completeMatch: z.boolean().optional(),
+        matchCase: z.boolean().optional(),
+        maxMatches: z.number().int().min(1).max(1000).optional(),
+        maxPreviewRows: z.number().int().min(0).max(25).optional(),
+        ...budgetSchema
+      },
+      annotations: lookupAnnotations
+    },
+    async (args: LookupFindEntityRequest) => jsonResult(await lookupFindEntity(args))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.lookup.resolve_range",
+    {
+      title: "Resolve workbook range target",
+      description: "Resolve a natural target string to a table, column, header, entity, sheet, or A1 range candidate before reading data.",
+      inputSchema: {
+        workbookId: z.string(),
+        target: z.string(),
+        kind: z.enum(["table", "column", "header", "entity", "range", "any"]).optional(),
+        preferredSheetName: z.string().optional(),
+        preferredTableName: z.string().optional(),
+        maxMatches: z.number().int().min(1).max(1000).optional(),
+        ...budgetSchema
+      },
+      annotations: lookupAnnotations
+    },
+    async (args: LookupResolveRangeRequest) => jsonResult(await lookupResolveRange(args))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.lookup.inspect_match",
+    {
+      title: "Inspect lookup match compactly",
+      description: "Read a bounded preview for one lookup match, preserving compact telemetry and avoiding broad sheet reads.",
+      inputSchema: {
+        workbookId: z.string(),
+        matchId: z.string().optional(),
+        kind: z.enum(["sheet", "table", "column", "header", "entity", "range"]).optional(),
+        sheetName: z.string().optional(),
+        tableName: z.string().optional(),
+        columnName: z.string().optional(),
+        address: z.string().optional(),
+        maxRows: z.number().int().min(0).max(10000).optional(),
+        maxColumns: z.number().int().min(0).max(1000).optional(),
+        includeValues: z.boolean().optional(),
+        includeFormulas: z.boolean().optional(),
+        includeText: z.boolean().optional(),
+        maxPayloadBytes: z.number().int().min(0).optional(),
+        maxEstimatedTokens: z.number().int().min(0).optional()
+      },
+      annotations: lookupAnnotations
+    },
+    async (args: LookupInspectMatchRequest) => jsonResult(await lookupInspectMatch(args))
+  );
 }
 
 function registerBatchTools(mcp: McpServer): void {
@@ -3652,6 +3938,18 @@ function registerTableTools(mcp: McpServer): void {
 
   registerMcpTool(
     mcp,
+    "excel.table.get_schema",
+    {
+      title: "Get compact Excel table schema",
+      description: "Return table columns, dimensions, style flags, and token telemetry without row data.",
+      inputSchema: tableSelectorSchema(),
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async (args: any) => jsonResult(await tableSchema(tableSelector(args)))
+  );
+
+  registerMcpTool(
+    mcp,
     "excel.table.read",
     {
       title: "Read Excel table",
@@ -3669,6 +3967,32 @@ function registerTableTools(mcp: McpServer): void {
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
     async (args: any) => jsonResult(await runtime.readTable(tableReadRequest(args)))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.table.read_compact",
+    {
+      title: "Read compact Excel table",
+      description: "Read a bounded values-first table page with projection, opt-in facets, truncation metadata, and token telemetry.",
+      inputSchema: {
+        ...tableSelectorSchema(),
+        mode: z.enum(["window", "summary", "sample"]).optional(),
+        includeValues: z.boolean().optional(),
+        includeFormulas: z.boolean().optional(),
+        includeText: z.boolean().optional(),
+        includeNumberFormats: z.boolean().optional(),
+        columns: z.array(z.union([z.string(), z.number().int().min(0)])).optional(),
+        rowOffset: z.number().int().min(0).optional(),
+        maxRows: z.number().int().min(0).max(10000).optional(),
+        maxColumns: z.number().int().min(0).max(1000).optional(),
+        maxCells: z.number().int().min(0).max(1000000).optional(),
+        maxPayloadBytes: z.number().int().min(0).optional(),
+        maxEstimatedTokens: z.number().int().min(0).optional()
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async (args: TableCompactReadRequest) => jsonResult(await compactTableRead(args))
   );
 
   registerMcpTool(
@@ -5407,6 +5731,42 @@ function registerValidateTools(mcp: McpServer): void {
 
   registerMcpTool(
     mcp,
+    "excel.validate.compact",
+    {
+      title: "Run compact validation",
+      description: "Run a validator and return concise issue counts/examples with full details stored behind a compact resource URI.",
+      inputSchema: {
+        workbookId: z.string(),
+        validator: z.enum([
+          "workbook",
+          "sheet",
+          "formulas",
+          "styles",
+          "tables",
+          "filters",
+          "print_layout",
+          "no_broken_references",
+          "no_formula_errors",
+          "no_unintended_changes"
+        ]),
+        sheetName: z.string().optional(),
+        address: z.string().optional(),
+        tableName: z.string().optional(),
+        templateId: z.string().optional(),
+        snapshotId: z.string().optional(),
+        leftSnapshotId: z.string().optional(),
+        rightSnapshotId: z.string().optional(),
+        maxIssues: z.number().int().min(0).max(100).optional(),
+        maxPayloadBytes: z.number().int().min(0).optional(),
+        maxEstimatedTokens: z.number().int().min(0).optional()
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async (args: any) => jsonResult(await compactValidation(args))
+  );
+
+  registerMcpTool(
+    mcp,
     "excel.validate.sheet",
     {
       title: "Validate sheet",
@@ -5761,6 +6121,19 @@ function registerSnapshotTools(mcp: McpServer): void {
 
   registerMcpTool(
     mcp,
+    "excel.snapshot.get_compact",
+    {
+      title: "Get compact snapshot",
+      description: "Return snapshot metadata and store full snapshot payload behind a compact resource URI.",
+      inputSchema: { snapshotId: z.string(), maxPayloadBytes: z.number().int().min(0).optional(), maxEstimatedTokens: z.number().int().min(0).optional() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    ({ snapshotId, maxPayloadBytes, maxEstimatedTokens }: { snapshotId: string; maxPayloadBytes?: number; maxEstimatedTokens?: number }) =>
+      jsonResult(compactSnapshot(snapshotId as SnapshotId, maxPayloadBytes, maxEstimatedTokens))
+  );
+
+  registerMcpTool(
+    mcp,
     "excel.snapshot.list",
     {
       title: "List snapshots",
@@ -5785,6 +6158,24 @@ function registerSnapshotTools(mcp: McpServer): void {
     },
     async ({ leftSnapshotId, rightSnapshotId }: { leftSnapshotId: string; rightSnapshotId: string }) =>
       jsonResult(runtime.compareSnapshots(leftSnapshotId as SnapshotId, rightSnapshotId as SnapshotId))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.snapshot.compare_compact",
+    {
+      title: "Compare snapshots compactly",
+      description: "Return a compact snapshot diff summary and store full diff details behind a compact resource URI.",
+      inputSchema: {
+        leftSnapshotId: z.string(),
+        rightSnapshotId: z.string(),
+        maxPayloadBytes: z.number().int().min(0).optional(),
+        maxEstimatedTokens: z.number().int().min(0).optional()
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    ({ leftSnapshotId, rightSnapshotId, maxPayloadBytes, maxEstimatedTokens }: { leftSnapshotId: string; rightSnapshotId: string; maxPayloadBytes?: number; maxEstimatedTokens?: number }) =>
+      jsonResult(compactSnapshotDiff(leftSnapshotId as SnapshotId, rightSnapshotId as SnapshotId, maxPayloadBytes, maxEstimatedTokens))
   );
 
   registerMcpTool(
@@ -5832,6 +6223,24 @@ function registerDiffTools(mcp: McpServer): void {
       }
     );
   }
+
+  registerMcpTool(
+    mcp,
+    "excel.diff.get_compact",
+    {
+      title: "Get compact diff",
+      description: "Return a compact diff summary and store full diff details behind a compact resource URI.",
+      inputSchema: {
+        leftSnapshotId: z.string(),
+        rightSnapshotId: z.string(),
+        maxPayloadBytes: z.number().int().min(0).optional(),
+        maxEstimatedTokens: z.number().int().min(0).optional()
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    ({ leftSnapshotId, rightSnapshotId, maxPayloadBytes, maxEstimatedTokens }: { leftSnapshotId: string; rightSnapshotId: string; maxPayloadBytes?: number; maxEstimatedTokens?: number }) =>
+      jsonResult(compactSnapshotDiff(leftSnapshotId as SnapshotId, rightSnapshotId as SnapshotId, maxPayloadBytes, maxEstimatedTokens))
+  );
 
   registerMcpTool(
     mcp,
@@ -5912,6 +6321,82 @@ function registerEventTools(mcp: McpServer): void {
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
     },
     async ({ debounceMs }: { debounceMs: number }) => jsonResult(runtime.setEventDebounce(debounceMs))
+  );
+}
+
+function registerCompactTools(mcp: McpServer): void {
+  registerMcpTool(
+    mcp,
+    "excel.compact.get_resource",
+    {
+      title: "Get compact detail resource",
+      description: "Fetch a stored compact detail payload by resource id or excel://compact URI.",
+      inputSchema: { resourceId: z.string().optional(), resourceUri: z.string().optional() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    ({ resourceId, resourceUri }: { resourceId?: string; resourceUri?: string }) =>
+      jsonResult(getCompactResource(resourceId ?? compactResourceIdFromUri(resourceUri ?? "")))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.compact.list_resources",
+    {
+      title: "List compact detail resources",
+      description: "List stored compact detail resources without returning their payloads.",
+      inputSchema: { kind: z.string().optional(), limit: z.number().int().min(1).max(COMPACT_RESOURCE_LIMIT).optional() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    ({ kind, limit }: { kind?: string; limit?: number }) => jsonResult(listCompactResources(kind, limit))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.compact.delete_resource",
+    {
+      title: "Delete compact detail resource",
+      description: "Delete one stored compact detail payload.",
+      inputSchema: { resourceId: z.string().optional(), resourceUri: z.string().optional() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    ({ resourceId, resourceUri }: { resourceId?: string; resourceUri?: string }) =>
+      jsonResult(deleteCompactResource(resourceId ?? compactResourceIdFromUri(resourceUri ?? "")))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.compact.clear_resources",
+    {
+      title: "Clear compact detail resources",
+      description: "Clear stored compact detail payloads from this MCP process.",
+      inputSchema: { kind: z.string().optional() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    ({ kind }: { kind?: string }) => jsonResult(clearCompactResources(kind))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.compact.get_cache_status",
+    {
+      title: "Get compact cache status",
+      description: "Return compact summary/schema cache size and invalidation metadata.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    () => jsonResult(getCompactCacheStatus())
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.compact.clear_cache",
+    {
+      title: "Clear compact cache",
+      description: "Clear compact summary/schema cache entries from this MCP process.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    () => jsonResult(clearCompactCache("manual"))
   );
 }
 
@@ -6014,6 +6499,1510 @@ function tableReadRequest(args: {
     request.rowLimit = args.rowLimit;
   }
   return request;
+}
+
+type CompactDetailLevel = "summary" | "compact" | "full";
+
+interface CompactTelemetryOptions {
+  detailLevel: CompactDetailLevel;
+  truncated?: boolean;
+  nextPage?: { rowOffset?: number; columnOffset?: number } | undefined;
+  resourceUri?: string | undefined;
+  resourceKind?: CompactResourceKind | undefined;
+  resourceTitle?: string | undefined;
+  resourcePayload?: unknown;
+  storeResource?: boolean | undefined;
+  maxPayloadBytes?: number | undefined;
+  maxEstimatedTokens?: number | undefined;
+  budgetSummary?: Record<string, unknown> | undefined;
+}
+
+interface ParsedCompactA1Address {
+  startRow: number;
+  startColumn: number;
+  endRow: number;
+  endColumn: number;
+}
+
+function withCompactTelemetry<T extends Record<string, unknown>>(payload: T, options: CompactTelemetryOptions): T & {
+  payloadBytes: number;
+  estimatedTokens: number;
+  truncated: boolean;
+  detailLevel: CompactDetailLevel;
+  nextPage?: { rowOffset?: number; columnOffset?: number } | undefined;
+  resourceUri?: string | undefined;
+} {
+  const originalPayloadBytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
+  const originalEstimatedTokens = Math.ceil(originalPayloadBytes / 4);
+  const maxPayloadBytes = options.maxPayloadBytes ?? (options.budgetSummary !== undefined ? COMPACT_DEFAULT_RESOURCE_THRESHOLD_BYTES : undefined);
+  const overBudget =
+    (maxPayloadBytes !== undefined && originalPayloadBytes > maxPayloadBytes) ||
+    (options.maxEstimatedTokens !== undefined && originalEstimatedTokens > options.maxEstimatedTokens);
+  const stored = options.storeResource || overBudget
+    ? storeCompactResource(options.resourceKind ?? "generic", options.resourcePayload ?? payload, options.resourceTitle)
+    : undefined;
+  const output = overBudget && options.budgetSummary !== undefined
+    ? {
+        ...options.budgetSummary,
+        budgetExceeded: true,
+        warnings: [
+          ...asWarningArray(options.budgetSummary.warnings),
+          {
+            code: "COMPACT_BUDGET_EXCEEDED",
+            message: "Full compact detail exceeded the response budget and was stored behind resourceUri."
+          }
+        ],
+        resourcePayloadBytes: originalPayloadBytes,
+        resourceEstimatedTokens: originalEstimatedTokens
+      } as unknown as T
+    : payload;
+  const payloadBytes = Buffer.byteLength(JSON.stringify(output), "utf8");
+  return {
+    ...output,
+    payloadBytes,
+    estimatedTokens: Math.ceil(payloadBytes / 4),
+    truncated: options.truncated ?? false,
+    detailLevel: options.detailLevel,
+    ...(options.nextPage !== undefined ? { nextPage: options.nextPage } : {}),
+    ...(stored !== undefined ? { resourceUri: stored.uri } : options.resourceUri !== undefined ? { resourceUri: options.resourceUri } : {})
+  };
+}
+
+function asWarningArray(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : [];
+}
+
+function storeCompactResource(kind: CompactResourceKind, payload: unknown, title?: string): CompactStoredResource {
+  const resourceId = makeId<string>("compact");
+  const payloadBytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
+  const resource: CompactStoredResource = {
+    resourceId,
+    uri: `excel://compact/${resourceId}`,
+    kind,
+    title,
+    createdAt: new Date().toISOString(),
+    payloadBytes,
+    estimatedTokens: Math.ceil(payloadBytes / 4),
+    payload
+  };
+  compactResources.set(resourceId, resource);
+  while (compactResources.size > COMPACT_RESOURCE_LIMIT) {
+    const oldestKey = compactResources.keys().next().value as string | undefined;
+    if (oldestKey === undefined) {
+      break;
+    }
+    compactResources.delete(oldestKey);
+  }
+  return resource;
+}
+
+function getCompactResource(resourceId: string) {
+  const resource = compactResources.get(compactResourceIdFromUri(resourceId));
+  if (!resource) {
+    return { ok: false, error: { code: "COMPACT_RESOURCE_NOT_FOUND", message: "Compact detail resource was not found or has expired." } };
+  }
+  return { ok: true, ...resource };
+}
+
+function listCompactResources(kind?: string, limit = COMPACT_RESOURCE_LIMIT) {
+  const resources = [...compactResources.values()]
+    .filter((resource) => kind === undefined || resource.kind === kind)
+    .slice(-limit)
+    .map(({ payload, ...summary }) => summary);
+  return { ok: true, resources };
+}
+
+function deleteCompactResource(resourceId: string) {
+  const normalized = compactResourceIdFromUri(resourceId);
+  return { ok: compactResources.delete(normalized), resourceId: normalized };
+}
+
+function clearCompactResources(kind?: string) {
+  let deleted = 0;
+  for (const [resourceId, resource] of compactResources) {
+    if (kind === undefined || resource.kind === kind) {
+      compactResources.delete(resourceId);
+      deleted += 1;
+    }
+  }
+  return { ok: true, deleted };
+}
+
+function compactResourceIdFromUri(value: string): string {
+  return value.startsWith("excel://compact/") ? value.slice("excel://compact/".length) : value;
+}
+
+async function compactCacheValue<T>(key: string, producer: () => Promise<T> | T): Promise<T> {
+  await invalidateCompactCacheForWorkbookEvents();
+  const cached = compactCache.get(key);
+  if (cached !== undefined) {
+    return cached.value as T;
+  }
+  const value = await producer();
+  compactCache.set(key, { key, createdAt: new Date().toISOString(), value });
+  return value;
+}
+
+async function invalidateCompactCacheForWorkbookEvents(): Promise<void> {
+  try {
+    const recent = await runtime.getRecentEvents(1) as { events?: Array<{ eventId?: string; method?: string }> };
+    const event = recent.events?.[0];
+    if (!event?.eventId || event.eventId === compactLastObservedEventId) {
+      return;
+    }
+    compactLastObservedEventId = event.eventId;
+    if (event.method !== "addin.heartbeat") {
+      clearCompactCache(`event:${event.method ?? "unknown"}`);
+    }
+  } catch {
+    // Compact caching must never make read-only workbook discovery fail.
+  }
+}
+
+function getCompactCacheStatus() {
+  return {
+    ok: true,
+    size: compactCache.size,
+    invalidationCount: compactCacheInvalidationCount,
+    lastInvalidatedAt: compactCacheLastInvalidatedAt,
+    keys: [...compactCache.keys()]
+  };
+}
+
+function clearCompactCache(reason: string) {
+  const cleared = compactCache.size;
+  compactCache.clear();
+  compactCacheInvalidationCount += 1;
+  compactCacheLastInvalidatedAt = new Date().toISOString();
+  return { ok: true, cleared, reason, invalidationCount: compactCacheInvalidationCount, invalidatedAt: compactCacheLastInvalidatedAt };
+}
+
+async function workbookSummary(workbookId?: WorkbookId) {
+  return compactCacheValue(`workbookSummary:${workbookId ?? "active"}`, async () => {
+  const result = await runtime.getWorkbookMap();
+  const map = "map" in result ? result.map as { workbook?: any; sheets?: any[] } : undefined;
+  if (!result.ok || !map) {
+    return withCompactTelemetry({ ok: false, workbookId, source: result }, { detailLevel: "summary" });
+  }
+  const sheets = map.sheets ?? [];
+  const tableNames = sheets.flatMap((sheet) => (sheet.tables ?? []).map((table: { name: string }) => table.name));
+  const usedRangeCells = sheets.reduce((sum, sheet) => sum + usedRangeCellCount(sheet.usedRange), 0);
+  return withCompactTelemetry(
+    {
+      ok: true,
+      workbook: map.workbook,
+      workbookId: workbookId ?? map.workbook?.workbookId,
+      sheetCount: sheets.length,
+      tableCount: tableNames.length,
+      usedRangeCells,
+      sheets: sheets.map((sheet) => ({
+        name: sheet.name,
+        position: sheet.position,
+        visibility: sheet.visibility,
+        usedRange: sheet.usedRange,
+        tableCount: sheet.tables?.length ?? 0,
+        tables: (sheet.tables ?? []).map((table: { name: string }) => table.name)
+      }))
+    },
+    { detailLevel: "summary" }
+  );
+  });
+}
+
+async function workbookUsedRangeSummary(workbookId?: WorkbookId) {
+  return compactCacheValue(`workbookUsedRangeSummary:${workbookId ?? "active"}`, async () => {
+  const result = await runtime.getWorkbookMap();
+  const map = "map" in result ? result.map as { workbook?: any; sheets?: any[] } : undefined;
+  if (!result.ok || !map) {
+    return withCompactTelemetry({ ok: false, workbookId, source: result }, { detailLevel: "summary" });
+  }
+  const sheets = map.sheets ?? [];
+  return withCompactTelemetry(
+    {
+      ok: true,
+      workbookId: workbookId ?? map.workbook?.workbookId,
+      usedRanges: sheets.map((sheet) => ({
+        sheetName: sheet.name,
+        usedRange: sheet.usedRange,
+        cellCount: usedRangeCellCount(sheet.usedRange)
+      })),
+      totalCells: sheets.reduce((sum, sheet) => sum + usedRangeCellCount(sheet.usedRange), 0)
+    },
+    { detailLevel: "summary" }
+  );
+  });
+}
+
+async function sheetSummary(sheetName: string, workbookId?: WorkbookId) {
+  return compactCacheValue(`sheetSummary:${workbookId ?? "active"}:${sheetName}`, async () => {
+  const info = await selectSheetInfo(sheetName);
+  const workbook = (info.result as { map?: { workbook?: any } }).map?.workbook;
+  return withCompactTelemetry(
+    {
+      ok: info.ok,
+      workbookId: workbookId ?? workbook?.workbookId,
+      sheetName,
+      usedRange: info.sheet?.usedRange,
+      cellCount: usedRangeCellCount(info.sheet?.usedRange),
+      tableCount: info.sheet?.tables?.length ?? 0,
+      tables: (info.sheet?.tables ?? []).map((table: { name: string }) => table.name),
+      sheet: info.sheet
+    },
+    { detailLevel: "summary" }
+  );
+  });
+}
+
+function rangeSummary(workbookId: WorkbookId, sheetName: string, address: string) {
+  const parsed = parseCompactA1Address(address);
+  const rowCount = parsed.endRow - parsed.startRow + 1;
+  const columnCount = parsed.endColumn - parsed.startColumn + 1;
+  const defaultRows = Math.min(rowCount, 50);
+  const defaultColumns = Math.min(columnCount, 25);
+  return withCompactTelemetry(
+    {
+      ok: true,
+      workbookId,
+      sheetName,
+      address,
+      rowCount,
+      columnCount,
+      cellCount: rowCount * columnCount,
+      defaultCompactWindow: {
+        address: compactWindowAddress(address, 0, 0, defaultRows, defaultColumns),
+        rowCount: defaultRows,
+        columnCount: defaultColumns,
+        cellCount: defaultRows * defaultColumns
+      }
+    },
+    { detailLevel: "summary", truncated: rowCount > defaultRows || columnCount > defaultColumns }
+  );
+}
+
+async function compactRangeRead(args: RangeCompactReadRequest) {
+  const mode = args.mode ?? "window";
+  const parsed = parseCompactA1Address(args.address);
+  const sourceRowCount = parsed.endRow - parsed.startRow + 1;
+  const sourceColumnCount = parsed.endColumn - parsed.startColumn + 1;
+  const rowOffset = Math.min(args.rowOffset ?? 0, sourceRowCount);
+  const columnOffset = Math.min(args.columnOffset ?? 0, sourceColumnCount);
+  const maxRows = args.maxRows ?? 50;
+  const maxColumns = args.maxColumns ?? 25;
+  const availableRows = Math.max(0, sourceRowCount - rowOffset);
+  const availableColumns = Math.max(0, sourceColumnCount - columnOffset);
+  const columnLimit = Math.min(maxColumns, availableColumns);
+  const maxRowsByCells = args.maxCells !== undefined && columnLimit > 0 ? Math.floor(args.maxCells / columnLimit) : maxRows;
+  const rowLimit = Math.min(maxRows, maxRowsByCells, availableRows);
+  const windowAddress = rowLimit > 0 && columnLimit > 0
+    ? compactWindowAddress(args.address, rowOffset, columnOffset, rowLimit, columnLimit)
+    : compactWindowAddress(args.address, rowOffset, columnOffset, 1, 1);
+  const truncated = rowOffset + rowLimit < sourceRowCount || columnOffset + columnLimit < sourceColumnCount;
+  const summary = {
+    workbookId: args.workbookId,
+    sheetName: args.sheetName,
+    address: args.address,
+    mode,
+    source: {
+      rowCount: sourceRowCount,
+      columnCount: sourceColumnCount,
+      cellCount: sourceRowCount * sourceColumnCount
+    },
+    window: {
+      address: windowAddress,
+      rowOffset,
+      columnOffset,
+      rowCount: rowLimit,
+      columnCount: columnLimit,
+      cellCount: rowLimit * columnLimit
+    },
+    sampled: mode === "sample"
+  };
+  const nextPage = truncated ? { rowOffset: rowOffset + rowLimit, columnOffset } : undefined;
+  if (mode === "summary" || rowLimit === 0 || columnLimit === 0) {
+    return withCompactTelemetry({ ok: true, ...summary }, { detailLevel: "summary", truncated, nextPage, maxPayloadBytes: args.maxPayloadBytes, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range summary", budgetSummary: { ok: true, ...summary } });
+  }
+
+  const facets = compactRangeFacets(args);
+  if (facets.length === 0) {
+    return withCompactTelemetry({ ok: true, ...summary }, { detailLevel: "compact", truncated, nextPage, maxPayloadBytes: args.maxPayloadBytes, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range read", budgetSummary: { ok: true, ...summary } });
+  }
+  if (mode === "sample" && sourceRowCount > rowLimit) {
+    const samples = await Promise.all(compactSampleWindows(sourceRowCount, rowLimit).map(async (sample) => {
+      const sampleAddress = compactWindowAddress(args.address, sample.rowOffset, columnOffset, sample.rowCount, columnLimit);
+      const sampleResult = await readRangeSnapshot(args.workbookId, args.sheetName, sampleAddress, facets);
+      const sampleSnapshot = ((sampleResult as { data?: Array<{ snapshot?: any }> }).data ?? [])[0]?.snapshot;
+      return {
+        label: sample.label,
+        rowOffset: sample.rowOffset,
+        rowCount: sample.rowCount,
+        address: sampleAddress,
+        fingerprint: sampleSnapshot?.fingerprint,
+        values: sampleSnapshot?.values,
+        formulas: sampleSnapshot?.formulas,
+        text: sampleSnapshot?.text,
+        numberFormat: sampleSnapshot?.numberFormat,
+        style: sampleSnapshot?.style,
+        ok: (sampleResult as { ok?: boolean }).ok,
+        warnings: (sampleResult as { warnings?: unknown[] }).warnings ?? []
+      };
+    }));
+    return withCompactTelemetry(
+      { ok: true, ...summary, samples },
+      {
+        detailLevel: "compact",
+        truncated,
+        maxPayloadBytes: args.maxPayloadBytes,
+        maxEstimatedTokens: args.maxEstimatedTokens,
+        resourceKind: "read",
+        resourceTitle: "Compact range sample",
+        budgetSummary: { ok: true, ...summary, sampleCount: samples.length }
+      }
+    );
+  }
+  const result = await readRangeSnapshot(args.workbookId, args.sheetName, windowAddress, facets);
+  if (!(result as { ok?: boolean }).ok) {
+    return withCompactTelemetry({ ok: false, ...summary, source: result }, { detailLevel: "compact", truncated, nextPage, maxPayloadBytes: args.maxPayloadBytes, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range read error", budgetSummary: { ok: false, ...summary } });
+  }
+  const snapshot = ((result as { data?: Array<{ snapshot?: any }> }).data ?? [])[0]?.snapshot;
+  return withCompactTelemetry(
+    {
+      ok: true,
+      ...summary,
+      fingerprint: snapshot?.fingerprint,
+      values: snapshot?.values,
+      formulas: snapshot?.formulas,
+      text: snapshot?.text,
+      numberFormat: snapshot?.numberFormat,
+      style: snapshot?.style,
+      warnings: (result as { warnings?: unknown[] }).warnings ?? [],
+      telemetry: (result as { telemetry?: unknown }).telemetry
+    },
+    {
+      detailLevel: "compact",
+      truncated,
+      nextPage,
+      maxPayloadBytes: args.maxPayloadBytes,
+      maxEstimatedTokens: args.maxEstimatedTokens,
+      resourceKind: "read",
+      resourceTitle: "Compact range read",
+      budgetSummary: { ok: true, ...summary, warnings: (result as { warnings?: unknown[] }).warnings ?? [] }
+    }
+  );
+}
+
+async function tableSchema(selector: TableSelector) {
+  return compactCacheValue(`tableSchema:${selector.workbookId}:${selector.tableName}`, async () => {
+  const result = await runtime.getTableInfo(selector);
+  const info = (result as { info?: any }).info;
+  return withCompactTelemetry(
+    {
+      ok: Boolean((result as { ok?: boolean }).ok && info),
+      workbookId: selector.workbookId,
+      tableName: selector.tableName,
+      schema: info ? tableInfoSchema(info) : undefined,
+      source: info ? undefined : result
+    },
+    { detailLevel: "summary" }
+  );
+  });
+}
+
+async function compactTableRead(args: TableCompactReadRequest) {
+  const mode = args.mode ?? "window";
+  const schemaResult = await runtime.getTableInfo(tableSelector(args));
+  const info = (schemaResult as { info?: any }).info;
+  if (!(schemaResult as { ok?: boolean }).ok || !info) {
+    return withCompactTelemetry({ ok: false, workbookId: args.workbookId, tableName: args.tableName, source: schemaResult }, { detailLevel: "summary" });
+  }
+  const selectedColumns = compactTableColumns(info, args.columns, args.maxColumns);
+  const rowOffset = Math.min(args.rowOffset ?? 0, info.rowCount);
+  const maxRows = args.maxRows ?? 50;
+  const maxRowsByCells = args.maxCells !== undefined && selectedColumns.length > 0 ? Math.floor(args.maxCells / selectedColumns.length) : maxRows;
+  const rowLimit = Math.min(maxRows, maxRowsByCells, Math.max(0, info.rowCount - rowOffset));
+  const truncated = rowOffset + rowLimit < info.rowCount || selectedColumns.length < info.columnCount;
+  const summary = {
+    workbookId: args.workbookId,
+    tableName: args.tableName,
+    mode,
+    schema: tableInfoSchema(info),
+    rowOffset,
+    rowLimit,
+    projectedColumns: selectedColumns,
+    sampled: mode === "sample"
+  };
+  const nextPage = truncated && rowOffset + rowLimit < info.rowCount ? { rowOffset: rowOffset + rowLimit } : undefined;
+  if (mode === "summary" || rowLimit === 0 || selectedColumns.length === 0) {
+    return withCompactTelemetry({ ok: true, ...summary }, { detailLevel: "summary", truncated, nextPage, maxPayloadBytes: args.maxPayloadBytes, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact table summary", budgetSummary: { ok: true, ...summary } });
+  }
+  if (mode === "sample" && info.rowCount > rowLimit) {
+    const samples = await Promise.all(compactSampleWindows(info.rowCount, rowLimit).map(async (sample) => {
+      const sampleResult = await runtime.readTable({
+        ...tableSelector(args),
+        includeValues: args.includeValues ?? true,
+        includeFormulas: args.includeFormulas === true,
+        includeText: args.includeText === true,
+        includeNumberFormats: args.includeNumberFormats === true,
+        columns: selectedColumns.map((column: { name: string }) => column.name),
+        rowOffset: sample.rowOffset,
+        rowLimit: sample.rowCount
+      });
+      const sampleTable = (sampleResult as { table?: any }).table;
+      return {
+        label: sample.label,
+        rowOffset: sample.rowOffset,
+        rowCount: sample.rowCount,
+        ok: (sampleResult as { ok?: boolean }).ok,
+        headers: sampleTable?.headers,
+        values: sampleTable?.values,
+        formulas: sampleTable?.formulas,
+        text: sampleTable?.text,
+        numberFormat: sampleTable?.numberFormat
+      };
+    }));
+    return withCompactTelemetry(
+      { ok: true, ...summary, samples },
+      {
+        detailLevel: "compact",
+        truncated,
+        maxPayloadBytes: args.maxPayloadBytes,
+        maxEstimatedTokens: args.maxEstimatedTokens,
+        resourceKind: "read",
+        resourceTitle: "Compact table sample",
+        budgetSummary: { ok: true, ...summary, sampleCount: samples.length }
+      }
+    );
+  }
+  const result = await runtime.readTable({
+    ...tableSelector(args),
+    includeValues: args.includeValues ?? true,
+    includeFormulas: args.includeFormulas === true,
+    includeText: args.includeText === true,
+    includeNumberFormats: args.includeNumberFormats === true,
+    columns: selectedColumns.map((column: { name: string }) => column.name),
+    rowOffset,
+    rowLimit
+  });
+  const table = (result as { table?: any }).table;
+  return withCompactTelemetry(
+    {
+      ok: Boolean((result as { ok?: boolean }).ok),
+      ...summary,
+      headers: table?.headers,
+      values: table?.values,
+      formulas: table?.formulas,
+      text: table?.text,
+      numberFormat: table?.numberFormat,
+      source: (result as { ok?: boolean }).ok ? undefined : result
+    },
+    {
+      detailLevel: "compact",
+      truncated,
+      nextPage,
+      maxPayloadBytes: args.maxPayloadBytes,
+      maxEstimatedTokens: args.maxEstimatedTokens,
+      resourceKind: "read",
+      resourceTitle: "Compact table read",
+      budgetSummary: { ok: Boolean((result as { ok?: boolean }).ok), ...summary }
+    }
+  );
+}
+
+type LookupMatchKind = "sheet" | "table" | "column" | "header" | "entity" | "range";
+
+interface LookupMatch {
+  matchId?: string;
+  kind: LookupMatchKind;
+  sheetName?: string | undefined;
+  tableName?: string | undefined;
+  columnName?: string | undefined;
+  address?: string | undefined;
+  score: number;
+  reason: string;
+  schema?: unknown;
+  preview?: unknown;
+}
+
+async function lookupSearchWorkbook(args: LookupWorkbookSearchRequest) {
+  const workbookId = args.workbookId as WorkbookId;
+  const context = await lookupWorkbookContext(workbookId, args.sheetNames);
+  if (!context.ok) {
+    return withCompactTelemetry({ ok: false, workbookId, query: args.query, source: context.source }, { detailLevel: "summary" });
+  }
+  const matches: LookupMatch[] = [];
+  if (args.includeSheets !== false) {
+    for (const sheet of context.sheets) {
+      if (lookupMatches(String(sheet.name), args.query, args)) {
+        matches.push(lookupMatch({
+          kind: "sheet",
+          sheetName: sheet.name,
+          address: sheet.usedRange?.address,
+          score: lookupScore(sheet.name, args.query, args.completeMatch),
+          reason: "sheet name"
+        }));
+      }
+    }
+  }
+  if (args.includeTables !== false) {
+    matches.push(...lookupTableMatches(context.tables, args.query, args));
+  }
+  matches.push(...await lookupUsedRangeMatches(workbookId, context.sheets, args.query, args, "range"));
+  return compactLookupResponse({
+    workbookId,
+    query: args.query,
+    matches,
+    maxMatches: args.maxMatches ?? 25,
+    maxPayloadBytes: args.maxPayloadBytes,
+    maxEstimatedTokens: args.maxEstimatedTokens,
+    resourceTitle: `Workbook lookup: ${args.query}`
+  });
+}
+
+async function lookupFindHeaders(args: LookupFindHeadersRequest) {
+  const workbookId = args.workbookId as WorkbookId;
+  const terms = lookupTerms(args.headers ?? (args.query ? [args.query] : []));
+  const context = await lookupWorkbookContext(workbookId, args.sheetNames);
+  if (!context.ok) {
+    return withCompactTelemetry({ ok: false, workbookId, query: args.query, headers: args.headers, source: context.source }, { detailLevel: "summary" });
+  }
+  const matches: LookupMatch[] = [];
+  for (const table of context.tables) {
+    for (const column of table.columns ?? []) {
+      const columnName = String(column.name ?? "");
+      if (terms.length === 0 || terms.some((term) => lookupMatches(columnName, term, args))) {
+        matches.push(lookupMatch({
+          kind: "header",
+          sheetName: table.sheetName,
+          tableName: table.tableName,
+          columnName,
+          address: table.headerAddress ?? table.address,
+          score: terms.length === 0 ? 0.55 : Math.max(...terms.map((term) => lookupScore(columnName, term, false))),
+          reason: "table header",
+          schema: { tableName: table.tableName, column }
+        }));
+      }
+    }
+  }
+  const maxRowsPerSheet = args.maxRowsPerSheet ?? 10;
+  const maxColumns = args.maxColumns ?? 50;
+  for (const sheet of context.sheets) {
+    const usedAddress = sheet.usedRange?.address;
+    if (!usedAddress) {
+      continue;
+    }
+    try {
+      const result = await compactRangeRead({
+        workbookId,
+        sheetName: sheet.name,
+        address: usedAddress,
+        mode: "window",
+        maxRows: maxRowsPerSheet,
+        maxColumns,
+        includeValues: true,
+        includeText: true
+      });
+      const rows = lookupRowsFromCompactRead(result);
+      for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+        for (let columnIndex = 0; columnIndex < (rows[rowIndex] ?? []).length; columnIndex += 1) {
+          const value = rows[rowIndex]?.[columnIndex];
+          const text = value === undefined || value === null ? "" : String(value);
+          if (text === "" || (terms.length > 0 && !terms.some((term) => lookupMatches(text, term, args)))) {
+            continue;
+          }
+          matches.push(lookupMatch({
+            kind: "header",
+            sheetName: sheet.name,
+            address: compactWindowAddress(usedAddress, rowIndex, columnIndex, 1, 1),
+            columnName: text,
+            score: terms.length === 0 ? Math.max(0.15, 0.5 - rowIndex * 0.03) : Math.max(...terms.map((term) => lookupScore(text, term, false))),
+            reason: `bounded sheet header scan row ${rowIndex + 1}`
+          }));
+        }
+      }
+    } catch {
+      // Lookup should remain useful even when one sheet cannot be scanned.
+    }
+  }
+  return compactLookupResponse({
+    workbookId,
+    query: args.query,
+    headers: args.headers,
+    matches,
+    maxMatches: args.maxMatches ?? 25,
+    maxPayloadBytes: args.maxPayloadBytes,
+    maxEstimatedTokens: args.maxEstimatedTokens,
+    resourceTitle: "Header lookup"
+  });
+}
+
+async function lookupFindTablesByColumns(args: LookupFindTablesByColumnsRequest) {
+  const workbookId = args.workbookId as WorkbookId;
+  const context = await lookupWorkbookContext(workbookId);
+  if (!context.ok) {
+    return withCompactTelemetry({ ok: false, workbookId, requiredColumns: args.requiredColumns, source: context.source }, { detailLevel: "summary" });
+  }
+  const required = lookupTerms(args.requiredColumns);
+  const optional = lookupTerms(args.optionalColumns ?? []);
+  const matches = context.tables
+    .map((table): LookupMatch | undefined => {
+      const columns = (table.columns ?? []).map((column: { name?: string }) => String(column.name ?? ""));
+      const requiredHits = required.filter((term) => columns.some((column: string) => lookupNormalized(column) === term || lookupNormalized(column).includes(term)));
+      if (required.length > 0 && requiredHits.length < required.length) {
+        return undefined;
+      }
+      const optionalHits = optional.filter((term) => columns.some((column: string) => lookupNormalized(column) === term || lookupNormalized(column).includes(term)));
+      const denominator = Math.max(1, required.length + optional.length * 0.5);
+      const score = Math.min(1, (requiredHits.length + optionalHits.length * 0.5) / denominator);
+      if (score < (args.minScore ?? 0)) {
+        return undefined;
+      }
+      return lookupMatch({
+        kind: "table",
+        sheetName: table.sheetName,
+        tableName: table.tableName,
+        address: table.address,
+        score,
+        reason: `matched ${requiredHits.length}/${required.length} required and ${optionalHits.length}/${optional.length} optional columns`,
+        schema: tableInfoSchema(table)
+      });
+    })
+    .filter((match): match is LookupMatch => match !== undefined);
+  return compactLookupResponse({
+    workbookId,
+    requiredColumns: args.requiredColumns,
+    optionalColumns: args.optionalColumns,
+    matches,
+    maxMatches: args.maxMatches ?? 25,
+    maxPayloadBytes: args.maxPayloadBytes,
+    maxEstimatedTokens: args.maxEstimatedTokens,
+    resourceTitle: "Table column lookup"
+  });
+}
+
+async function lookupFindEntity(args: LookupFindEntityRequest) {
+  const workbookId = args.workbookId as WorkbookId;
+  const context = await lookupWorkbookContext(workbookId, args.sheetNames);
+  if (!context.ok) {
+    return withCompactTelemetry({ ok: false, workbookId, entity: args.entity, source: context.source }, { detailLevel: "summary" });
+  }
+  const matches = await lookupUsedRangeMatches(workbookId, context.sheets, args.entity, args, "entity");
+  return compactLookupResponse({
+    workbookId,
+    entity: args.entity,
+    entityKind: args.kind ?? "any",
+    matches,
+    maxMatches: args.maxMatches ?? 25,
+    maxPayloadBytes: args.maxPayloadBytes,
+    maxEstimatedTokens: args.maxEstimatedTokens,
+    resourceTitle: `Entity lookup: ${args.entity}`
+  });
+}
+
+async function lookupResolveRange(args: LookupResolveRangeRequest) {
+  const workbookId = args.workbookId as WorkbookId;
+  const kind = args.kind ?? "any";
+  const context = await lookupWorkbookContext(workbookId, args.preferredSheetName ? [args.preferredSheetName] : undefined);
+  if (!context.ok) {
+    return withCompactTelemetry({ ok: false, workbookId, target: args.target, source: context.source }, { detailLevel: "summary" });
+  }
+  const matches: LookupMatch[] = [];
+  const parsedRange = lookupParseRangeTarget(args.target, args.preferredSheetName);
+  if ((kind === "any" || kind === "range") && parsedRange) {
+    matches.push(lookupMatch({
+      kind: "range",
+      sheetName: parsedRange.sheetName,
+      address: parsedRange.address,
+      score: 1,
+      reason: "explicit A1 range"
+    }));
+  }
+  if (kind === "any" || kind === "table" || kind === "column") {
+    for (const table of context.tables) {
+      if (args.preferredTableName && table.tableName !== args.preferredTableName) {
+        continue;
+      }
+      if ((kind === "any" || kind === "table") && lookupMatches(String(table.tableName), args.target, args)) {
+        matches.push(lookupMatch({
+          kind: "table",
+          sheetName: table.sheetName,
+          tableName: table.tableName,
+          address: table.address,
+          score: lookupScore(table.tableName, args.target, false),
+          reason: "table name",
+          schema: tableInfoSchema(table)
+        }));
+      }
+      if (kind === "any" || kind === "column") {
+        for (const column of table.columns ?? []) {
+          if (lookupMatches(String(column.name), args.target, args)) {
+            matches.push(lookupMatch({
+              kind: "column",
+              sheetName: table.sheetName,
+              tableName: table.tableName,
+              columnName: column.name,
+              address: table.address,
+              score: lookupScore(column.name, args.target, false),
+              reason: "table column",
+              schema: { tableName: table.tableName, column }
+            }));
+          }
+        }
+      }
+    }
+  }
+  if (kind === "any" || kind === "header") {
+    const headerRequest: LookupFindHeadersRequest = {
+      workbookId,
+      query: args.target,
+      maxRowsPerSheet: 10
+    };
+    if (args.preferredSheetName !== undefined) {
+      headerRequest.sheetNames = [args.preferredSheetName];
+    }
+    if (args.maxMatches !== undefined) {
+      headerRequest.maxMatches = args.maxMatches;
+    }
+    const headerResult = await lookupFindHeaders(headerRequest);
+    matches.push(...((headerResult as { matches?: LookupMatch[] }).matches ?? []));
+  }
+  if (kind === "any" || kind === "entity") {
+    matches.push(...await lookupUsedRangeMatches(workbookId, context.sheets, args.target, args, "entity"));
+  }
+  return compactLookupResponse({
+    workbookId,
+    target: args.target,
+    targetKind: kind,
+    matches,
+    maxMatches: args.maxMatches ?? 10,
+    maxPayloadBytes: args.maxPayloadBytes,
+    maxEstimatedTokens: args.maxEstimatedTokens,
+    resourceTitle: `Range resolution: ${args.target}`
+  });
+}
+
+async function lookupInspectMatch(args: LookupInspectMatchRequest) {
+  const decoded = args.matchId ? lookupDecodeMatchId(args.matchId) : undefined;
+  const match = { ...decoded, ...args };
+  const workbookId = args.workbookId as WorkbookId;
+  if (match.tableName) {
+    const request: TableCompactReadRequest = {
+      workbookId,
+      tableName: match.tableName,
+      mode: "window",
+      maxRows: args.maxRows ?? 10,
+      maxColumns: args.maxColumns ?? 25,
+      includeValues: args.includeValues ?? true,
+      includeFormulas: args.includeFormulas === true,
+      includeText: args.includeText === true
+    };
+    if (match.columnName !== undefined) {
+      request.columns = [match.columnName];
+    }
+    if (args.maxPayloadBytes !== undefined) {
+      request.maxPayloadBytes = args.maxPayloadBytes;
+    }
+    if (args.maxEstimatedTokens !== undefined) {
+      request.maxEstimatedTokens = args.maxEstimatedTokens;
+    }
+    return compactTableRead(request);
+  }
+  let sheetName = match.sheetName;
+  let address = match.address;
+  if (sheetName && !address) {
+    const context = await lookupWorkbookContext(workbookId, [sheetName]);
+    address = context.sheets[0]?.usedRange?.address;
+  }
+  if (sheetName && address) {
+    const request: RangeCompactReadRequest = {
+      workbookId,
+      sheetName,
+      address,
+      mode: "window",
+      maxRows: args.maxRows ?? 10,
+      maxColumns: args.maxColumns ?? 25,
+      includeValues: args.includeValues ?? true,
+      includeFormulas: args.includeFormulas === true,
+      includeText: args.includeText === true
+    };
+    if (args.maxPayloadBytes !== undefined) {
+      request.maxPayloadBytes = args.maxPayloadBytes;
+    }
+    if (args.maxEstimatedTokens !== undefined) {
+      request.maxEstimatedTokens = args.maxEstimatedTokens;
+    }
+    return compactRangeRead(request);
+  }
+  return withCompactTelemetry(
+    {
+      ok: false,
+      workbookId,
+      error: {
+        code: "LOOKUP_MATCH_TARGET_REQUIRED",
+        message: "Provide matchId from a lookup response or direct sheetName/address/tableName fields."
+      }
+    },
+    { detailLevel: "summary" }
+  );
+}
+
+async function compactValidation(args: {
+  workbookId: string;
+  validator: string;
+  sheetName?: string;
+  targetSheetName?: string;
+  address?: string;
+  tableName?: string;
+  templateId?: string;
+  snapshotId?: string;
+  leftSnapshotId?: string;
+  rightSnapshotId?: string;
+  maxIssues?: number;
+  maxPayloadBytes?: number;
+  maxEstimatedTokens?: number;
+}) {
+  const workbookId = args.workbookId as WorkbookId;
+  const report = await runCompactValidator(args, workbookId);
+  const issues = Array.isArray((report as { issues?: unknown[] }).issues) ? (report as { issues: unknown[] }).issues : [];
+  const maxIssues = args.maxIssues ?? 5;
+  const summary = {
+    ok: (report as { ok?: boolean }).ok,
+    workbookId,
+    validator: args.validator,
+    scope: (report as { scope?: unknown }).scope,
+    issueCount: (report as { issueCount?: number }).issueCount ?? issues.length,
+    severityCounts: compactSeverityCounts(issues),
+    categories: compactIssueCategories(issues),
+    examples: issues.slice(0, maxIssues).map(compactIssueExample),
+    examplesTruncated: issues.length > maxIssues
+  };
+  return withCompactTelemetry(
+    summary,
+    {
+      detailLevel: "summary",
+      truncated: issues.length > maxIssues,
+      storeResource: true,
+      resourceKind: "validation",
+      resourceTitle: `Validation detail: ${args.validator}`,
+      resourcePayload: report,
+      maxPayloadBytes: args.maxPayloadBytes,
+      maxEstimatedTokens: args.maxEstimatedTokens,
+      budgetSummary: summary
+    }
+  );
+}
+
+function compactSnapshot(snapshotId: SnapshotId, maxPayloadBytes?: number, maxEstimatedTokens?: number) {
+  const result = runtime.getSnapshot(snapshotId);
+  const snapshot = (result as { snapshot?: any }).snapshot;
+  const summary = snapshot
+    ? {
+        ok: true,
+        snapshotId,
+        workbookId: snapshot.workbookId,
+        createdAt: snapshot.createdAt,
+        reason: snapshot.reason,
+        affectedRangeCount: snapshot.affectedRanges?.length ?? 0,
+        affectedRanges: snapshot.affectedRanges,
+        payloadRangeCount: snapshot.payload?.rangeSnapshots?.length ?? 0
+      }
+    : { ok: false, snapshotId, error: (result as { error?: unknown }).error };
+  return withCompactTelemetry(
+    summary,
+    {
+      detailLevel: "summary",
+      truncated: false,
+      storeResource: Boolean(snapshot),
+      resourceKind: "snapshot",
+      resourceTitle: `Snapshot detail: ${snapshotId}`,
+      resourcePayload: result,
+      maxPayloadBytes,
+      maxEstimatedTokens,
+      budgetSummary: summary
+    }
+  );
+}
+
+function compactSnapshotDiff(leftSnapshotId: SnapshotId, rightSnapshotId: SnapshotId, maxPayloadBytes?: number, maxEstimatedTokens?: number) {
+  const result = runtime.compareSnapshots(leftSnapshotId, rightSnapshotId);
+  const diff = (result as { diff?: any }).diff;
+  const summary = diff
+    ? {
+        ok: true,
+        leftSnapshotId,
+        rightSnapshotId,
+        title: diff.summary?.title,
+        changedRangeCount: diff.summary?.changedRanges?.length ?? diff.changedRanges?.length ?? 0,
+        cellsChanged: diff.summary?.cellsChanged ?? diff.cellsChanged,
+        formulasChanged: diff.summary?.formulasChanged ?? diff.formulasChanged,
+        stylesChanged: diff.summary?.stylesChanged ?? diff.stylesChanged,
+        tablesChanged: diff.summary?.tablesChanged ?? diff.tablesChanged,
+        sheetsChanged: diff.summary?.sheetsChanged ?? diff.sheetsChanged,
+        destructiveLevel: diff.summary?.destructiveLevel ?? diff.destructiveLevel,
+        changedRanges: (diff.summary?.changedRanges ?? diff.changedRanges ?? []).slice(0, 20),
+        changedRangesTruncated: (diff.summary?.changedRanges ?? diff.changedRanges ?? []).length > 20
+      }
+    : { ok: false, leftSnapshotId, rightSnapshotId, error: (result as { error?: unknown }).error };
+  return withCompactTelemetry(
+    summary,
+    {
+      detailLevel: "summary",
+      truncated: Boolean((summary as { changedRangesTruncated?: boolean }).changedRangesTruncated),
+      storeResource: Boolean(diff),
+      resourceKind: "diff",
+      resourceTitle: `Snapshot diff: ${leftSnapshotId}..${rightSnapshotId}`,
+      resourcePayload: result,
+      maxPayloadBytes,
+      maxEstimatedTokens,
+      budgetSummary: summary
+    }
+  );
+}
+
+async function runCompactValidator(args: {
+  workbookId: string;
+  validator: string;
+  sheetName?: string;
+  targetSheetName?: string;
+  address?: string;
+  tableName?: string;
+  templateId?: string;
+  snapshotId?: string;
+  leftSnapshotId?: string;
+  rightSnapshotId?: string;
+}, workbookId: WorkbookId) {
+  switch (args.validator) {
+    case "workbook":
+      return runtime.validateWorkbook({ workbookId });
+    case "sheet":
+      return runtime.validateSheet({ workbookId, sheetName: requiredCompactArg(args.sheetName, "sheetName") });
+    case "formulas":
+      return runtime.validateFormulas({ workbookId, ...compactOptional({ sheetName: args.sheetName, address: args.address }) });
+    case "styles":
+      return runtime.validateStyles(compactStylesValidationRequest(workbookId, args));
+    case "tables":
+      return runtime.validateTables(compactTablesValidationRequest(workbookId, args));
+    case "filters":
+      return runtime.validateFilters({ workbookId, ...compactOptional({ tableName: args.tableName }) });
+    case "print_layout":
+      return runtime.validatePrintLayout(compactPrintLayoutValidationRequest(workbookId, args));
+    case "no_broken_references":
+      return runtime.validateNoBrokenReferences({ workbookId, ...compactOptional({ sheetName: args.sheetName, address: args.address }) });
+    case "no_formula_errors":
+      return runtime.validateNoFormulaErrors({ workbookId, ...compactOptional({ sheetName: args.sheetName, address: args.address }) });
+    case "no_unintended_changes":
+      return runtime.validateNoUnintendedChanges(compactUnintendedChangesValidationRequest(workbookId, args));
+    default:
+      return {
+        ok: false,
+        workbookId,
+        scope: args.validator,
+        issueCount: 1,
+        issues: [
+          {
+            code: "VALIDATOR_UNSUPPORTED",
+            severity: "error",
+            category: "validation",
+            message: `Unsupported compact validator: ${args.validator}`
+          }
+        ]
+      };
+  }
+}
+
+function compactSeverityCounts(issues: unknown[]) {
+  const counts: Record<string, number> = {};
+  for (const issue of issues) {
+    const severity = typeof issue === "object" && issue !== null && "severity" in issue ? String((issue as { severity?: unknown }).severity) : "unknown";
+    counts[severity] = (counts[severity] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function compactStylesValidationRequest(
+  workbookId: WorkbookId,
+  args: { sheetName?: string; templateId?: string; targetSheetName?: string }
+): { workbookId: WorkbookId; templateId?: TemplateId; targetSheetName?: string; sheetName?: string } {
+  const request: { workbookId: WorkbookId; templateId?: TemplateId; targetSheetName?: string; sheetName?: string } = { workbookId };
+  if (args.sheetName !== undefined) {
+    request.sheetName = args.sheetName;
+  }
+  if (args.templateId !== undefined) {
+    request.templateId = args.templateId as TemplateId;
+  }
+  if (args.targetSheetName !== undefined) {
+    request.targetSheetName = args.targetSheetName;
+  }
+  return request;
+}
+
+function compactTablesValidationRequest(
+  workbookId: WorkbookId,
+  args: { tableName?: string; templateId?: string }
+): { workbookId: WorkbookId; tableName?: string; templateId?: TemplateId } {
+  const request: { workbookId: WorkbookId; tableName?: string; templateId?: TemplateId } = { workbookId };
+  if (args.tableName !== undefined) {
+    request.tableName = args.tableName;
+  }
+  if (args.templateId !== undefined) {
+    request.templateId = args.templateId as TemplateId;
+  }
+  return request;
+}
+
+function compactPrintLayoutValidationRequest(
+  workbookId: WorkbookId,
+  args: { templateId?: string; targetSheetName?: string }
+): { workbookId: WorkbookId; templateId?: TemplateId; targetSheetName?: string } {
+  const request: { workbookId: WorkbookId; templateId?: TemplateId; targetSheetName?: string } = { workbookId };
+  if (args.templateId !== undefined) {
+    request.templateId = args.templateId as TemplateId;
+  }
+  if (args.targetSheetName !== undefined) {
+    request.targetSheetName = args.targetSheetName;
+  }
+  return request;
+}
+
+function compactUnintendedChangesValidationRequest(
+  workbookId: WorkbookId,
+  args: { snapshotId?: string; leftSnapshotId?: string; rightSnapshotId?: string }
+): { workbookId: WorkbookId; snapshotId?: SnapshotId; leftSnapshotId?: SnapshotId; rightSnapshotId?: SnapshotId } {
+  const request: { workbookId: WorkbookId; snapshotId?: SnapshotId; leftSnapshotId?: SnapshotId; rightSnapshotId?: SnapshotId } = { workbookId };
+  if (args.snapshotId !== undefined) {
+    request.snapshotId = args.snapshotId as SnapshotId;
+  }
+  if (args.leftSnapshotId !== undefined) {
+    request.leftSnapshotId = args.leftSnapshotId as SnapshotId;
+  }
+  if (args.rightSnapshotId !== undefined) {
+    request.rightSnapshotId = args.rightSnapshotId as SnapshotId;
+  }
+  return request;
+}
+
+function compactIssueCategories(issues: unknown[]) {
+  return [...new Set(issues.map((issue) => typeof issue === "object" && issue !== null && "category" in issue ? String((issue as { category?: unknown }).category) : "unknown"))];
+}
+
+function compactIssueExample(issue: unknown) {
+  if (typeof issue !== "object" || issue === null) {
+    return issue;
+  }
+  const typed = issue as { code?: unknown; severity?: unknown; category?: unknown; message?: unknown; target?: unknown };
+  return {
+    code: typed.code,
+    severity: typed.severity,
+    category: typed.category,
+    message: typed.message,
+    target: typed.target
+  };
+}
+
+function requiredCompactArg<T>(value: T | undefined, name: string): T {
+  if (value === undefined || value === "") {
+    throw new Error(`${name} is required for this compact validator.`);
+  }
+  return value;
+}
+
+function usedRangeCellCount(usedRange: { rowCount?: number; columnCount?: number } | undefined): number {
+  return (usedRange?.rowCount ?? 0) * (usedRange?.columnCount ?? 0);
+}
+
+function tableInfoSchema(info: any) {
+  return {
+    workbookId: info.workbookId,
+    tableName: info.tableName,
+    sheetName: info.sheetName,
+    address: info.address,
+    headerAddress: info.headerAddress,
+    rowCount: info.rowCount,
+    columnCount: info.columnCount,
+    columns: info.columns ?? [],
+    style: info.style,
+    showHeaders: info.showHeaders,
+    showTotals: info.showTotals,
+    showFilterButton: info.showFilterButton,
+    showBandedRows: info.showBandedRows,
+    showBandedColumns: info.showBandedColumns,
+    hasFilters: info.filters !== undefined,
+    hasSort: info.sort !== undefined
+  };
+}
+
+async function lookupWorkbookContext(workbookId: WorkbookId, sheetNames?: string[]) {
+  const result = await runtime.getWorkbookMap();
+  const map = "map" in result ? result.map as { workbook?: any; sheets?: any[] } : undefined;
+  if (!(result as { ok?: boolean }).ok || !map) {
+    return { ok: false as const, workbookId, source: result, sheets: [], tables: [] };
+  }
+  const requestedSheets = new Set((sheetNames ?? []).map(lookupNormalized));
+  const sheets = (map.sheets ?? []).filter((sheet) => requestedSheets.size === 0 || requestedSheets.has(lookupNormalized(sheet.name)));
+  const tableRefs = sheets.flatMap((sheet) =>
+    (sheet.tables ?? []).map((table: { name?: string; tableName?: string }) => ({
+      sheetName: sheet.name,
+      tableName: table.name ?? table.tableName
+    }))
+  ).filter((table) => table.tableName);
+  const tables = await Promise.all(tableRefs.map(async (table) => {
+    try {
+      const infoResult = await runtime.getTableInfo({ workbookId, tableName: table.tableName as string });
+      const info = (infoResult as { info?: any }).info;
+      return info ? { ...info, sheetName: info.sheetName ?? table.sheetName } : undefined;
+    } catch {
+      return undefined;
+    }
+  }));
+  return {
+    ok: true as const,
+    workbookId,
+    workbook: map.workbook,
+    sheets,
+    tables: tables.filter((table): table is any => table !== undefined)
+  };
+}
+
+function lookupTableMatches(tables: any[], query: string, options: { completeMatch?: boolean; matchCase?: boolean }): LookupMatch[] {
+  const matches: LookupMatch[] = [];
+  for (const table of tables) {
+    const schema = tableInfoSchema(table);
+    if (lookupMatches(String(table.tableName), query, options)) {
+      matches.push(lookupMatch({
+        kind: "table",
+        sheetName: table.sheetName,
+        tableName: table.tableName,
+        address: table.address,
+        score: lookupScore(table.tableName, query, options.completeMatch),
+        reason: "table name",
+        schema
+      }));
+    }
+    for (const column of table.columns ?? []) {
+      if (lookupMatches(String(column.name), query, options)) {
+        matches.push(lookupMatch({
+          kind: "column",
+          sheetName: table.sheetName,
+          tableName: table.tableName,
+          columnName: column.name,
+          address: table.address,
+          score: lookupScore(column.name, query, options.completeMatch),
+          reason: "table column",
+          schema: { tableName: table.tableName, column }
+        }));
+      }
+    }
+  }
+  return matches;
+}
+
+async function lookupUsedRangeMatches(
+  workbookId: WorkbookId,
+  sheets: any[],
+  query: string,
+  options: unknown,
+  kind: "entity" | "range"
+): Promise<LookupMatch[]> {
+  const matches: LookupMatch[] = [];
+  const lookupOptions = options as { completeMatch?: boolean; matchCase?: boolean; maxPreviewRows?: number };
+  for (const sheet of sheets) {
+    const address = sheet.usedRange?.address;
+    if (!address) {
+      continue;
+    }
+    try {
+      const result = await runtime.readRangeMetadata("range.search", {
+        workbookId,
+        sheetName: sheet.name,
+        address,
+        text: query,
+        completeMatch: lookupOptions.completeMatch,
+        matchCase: lookupOptions.matchCase
+      });
+      const found = (result as { matches?: { address?: string; areaCount?: number; cellCount?: number; isNullObject?: boolean } }).matches;
+      if (!found?.address || found.isNullObject) {
+        continue;
+      }
+      const match = lookupMatch({
+        kind,
+        sheetName: sheet.name,
+        address: found.address,
+        score: lookupOptions.completeMatch ? 0.92 : 0.82,
+        reason: `${kind === "entity" ? "entity" : "range"} text match`,
+        preview: {
+          areaCount: found.areaCount,
+          cellCount: found.cellCount
+        }
+      });
+      if ((lookupOptions.maxPreviewRows ?? 0) > 0) {
+        match.preview = await lookupPreviewRange(workbookId, sheet.name, found.address, lookupOptions.maxPreviewRows ?? 3);
+      }
+      matches.push(match);
+    } catch {
+      // Ignore sheet-local search failures; other sheets and metadata can still guide the model.
+    }
+  }
+  return matches;
+}
+
+async function lookupPreviewRange(workbookId: WorkbookId, sheetName: string, address: string, maxRows: number) {
+  try {
+    const result = await compactRangeRead({
+      workbookId,
+      sheetName,
+      address,
+      mode: "window",
+      maxRows,
+      maxColumns: 10,
+      includeValues: true,
+      includeText: true
+    });
+    return {
+      address: (result as { window?: { address?: string } }).window?.address ?? address,
+      values: (result as { values?: unknown }).values,
+      text: (result as { text?: unknown }).text
+    };
+  } catch {
+    return { address };
+  }
+}
+
+function compactLookupResponse(args: {
+  workbookId: WorkbookId;
+  matches: LookupMatch[];
+  maxMatches: number;
+  maxPayloadBytes?: number | undefined;
+  maxEstimatedTokens?: number | undefined;
+  resourceTitle: string;
+  [key: string]: unknown;
+}) {
+  const allMatches = lookupSortAndDedupe(args.matches);
+  const shownMatches = allMatches.slice(0, args.maxMatches);
+  const summary = {
+    ok: true,
+    workbookId: args.workbookId,
+    ...Object.fromEntries(Object.entries(args).filter(([key]) =>
+      !["workbookId", "matches", "maxMatches", "maxPayloadBytes", "maxEstimatedTokens", "resourceTitle"].includes(key)
+    )),
+    matchCount: allMatches.length,
+    matches: shownMatches,
+    matchesTruncated: shownMatches.length < allMatches.length
+  };
+  return withCompactTelemetry(
+    summary,
+    {
+      detailLevel: "summary",
+      truncated: shownMatches.length < allMatches.length,
+      maxPayloadBytes: args.maxPayloadBytes,
+      maxEstimatedTokens: args.maxEstimatedTokens,
+      resourceKind: "summary",
+      resourceTitle: args.resourceTitle,
+      resourcePayload: { ...summary, matches: allMatches, matchesTruncated: false },
+      budgetSummary: { ...summary, matches: shownMatches.map(({ preview, schema, ...match }) => match) }
+    }
+  );
+}
+
+function lookupMatch(match: LookupMatch): LookupMatch {
+  return {
+    ...match,
+    score: Number(match.score.toFixed(3)),
+    matchId: lookupEncodeMatchId(match)
+  };
+}
+
+function lookupSortAndDedupe(matches: LookupMatch[]): LookupMatch[] {
+  const best = new Map<string, LookupMatch>();
+  for (const match of matches) {
+    const key = [match.kind, match.sheetName, match.tableName, match.columnName, match.address].map((value) => value ?? "").join("|");
+    const existing = best.get(key);
+    if (!existing || match.score > existing.score) {
+      best.set(key, match);
+    }
+  }
+  return [...best.values()].sort((left, right) =>
+    right.score - left.score ||
+    String(left.sheetName ?? "").localeCompare(String(right.sheetName ?? "")) ||
+    String(left.tableName ?? "").localeCompare(String(right.tableName ?? "")) ||
+    String(left.address ?? "").localeCompare(String(right.address ?? ""))
+  );
+}
+
+function lookupTerms(values: string[]): string[] {
+  return values.map(lookupNormalized).filter((value) => value !== "");
+}
+
+function lookupMatches(candidate: string, query: string, options: unknown): boolean {
+  const lookupOptions = options as { completeMatch?: boolean; matchCase?: boolean };
+  const left = lookupOptions.matchCase ? candidate.trim() : lookupNormalized(candidate);
+  const right = lookupOptions.matchCase ? query.trim() : lookupNormalized(query);
+  return lookupOptions.completeMatch ? left === right : left.includes(right);
+}
+
+function lookupScore(candidate: string, query: string, completeMatch?: boolean): number {
+  const left = lookupNormalized(candidate);
+  const right = lookupNormalized(query);
+  if (left === right) {
+    return 1;
+  }
+  if (completeMatch) {
+    return 0;
+  }
+  if (left.startsWith(right)) {
+    return 0.9;
+  }
+  return left.includes(right) ? 0.75 : 0;
+}
+
+function lookupNormalized(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function lookupRowsFromCompactRead(result: unknown): unknown[][] {
+  const typed = result as { text?: unknown[][]; values?: unknown[][] };
+  return Array.isArray(typed.text) ? typed.text : Array.isArray(typed.values) ? typed.values : [];
+}
+
+function lookupParseRangeTarget(target: string, preferredSheetName?: string) {
+  const parts = target.split("!");
+  const sheetName = parts.length > 1 ? parts.slice(0, -1).join("!").replace(/^'|'$/g, "") : preferredSheetName;
+  const address = parts.length > 1 ? parts[parts.length - 1] : target;
+  if (address === undefined) {
+    return undefined;
+  }
+  try {
+    parseCompactA1Address(address);
+    return sheetName ? { sheetName, address } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function lookupEncodeMatchId(match: LookupMatch): string {
+  const payload = JSON.stringify({
+    kind: match.kind,
+    sheetName: match.sheetName,
+    tableName: match.tableName,
+    columnName: match.columnName,
+    address: match.address
+  });
+  return `lookup:${Buffer.from(payload, "utf8").toString("base64url")}`;
+}
+
+function lookupDecodeMatchId(matchId: string): Partial<LookupMatch> | undefined {
+  if (!matchId.startsWith("lookup:")) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(Buffer.from(matchId.slice("lookup:".length), "base64url").toString("utf8")) as Partial<LookupMatch>;
+  } catch {
+    return undefined;
+  }
+}
+
+function compactTableColumns(info: any, requested: Array<string | number> | undefined, maxColumns: number | undefined) {
+  const columns = info.columns ?? [];
+  if (requested?.length) {
+    return columns.filter((column: { name: string; index: number; id?: number }) =>
+      requested.some((item) => item === column.name || item === column.index || item === column.id)
+    );
+  }
+  return columns.slice(0, maxColumns ?? 25);
+}
+
+function compactRangeFacets(args: RangeCompactReadRequest): RangeReadFacet[] {
+  const facets: RangeReadFacet[] = [];
+  if (args.includeValues !== false) {
+    facets.push("values");
+  }
+  if (args.includeFormulas === true) {
+    facets.push("formulas");
+  }
+  if (args.includeText === true) {
+    facets.push("text");
+  }
+  if (args.includeNumberFormats === true) {
+    facets.push("numberFormat");
+  }
+  if (args.includeStyles === true) {
+    facets.push("style");
+  }
+  return facets;
+}
+
+function compactSampleWindows(totalRows: number, requestedRows: number): Array<{ label: "head" | "middle" | "tail"; rowOffset: number; rowCount: number }> {
+  const sampleRows = Math.max(1, Math.min(totalRows, requestedRows));
+  if (totalRows <= sampleRows) {
+    return [{ label: "head", rowOffset: 0, rowCount: totalRows }];
+  }
+  const headRows = Math.max(1, Math.floor(sampleRows / 3));
+  const middleRows = Math.max(1, Math.floor(sampleRows / 3));
+  const tailRows = Math.max(1, sampleRows - headRows - middleRows);
+  const middleOffset = Math.max(headRows, Math.floor((totalRows - middleRows) / 2));
+  const tailOffset = Math.max(middleOffset + middleRows, totalRows - tailRows);
+  const windows = [
+    { label: "head" as const, rowOffset: 0, rowCount: headRows },
+    { label: "middle" as const, rowOffset: middleOffset, rowCount: Math.min(middleRows, totalRows - middleOffset) },
+    { label: "tail" as const, rowOffset: tailOffset, rowCount: Math.min(tailRows, totalRows - tailOffset) }
+  ];
+  return windows.filter((window, index, all) =>
+    window.rowCount > 0 &&
+    all.findIndex((candidate) => rangesOverlap(candidate.rowOffset, candidate.rowCount, window.rowOffset, window.rowCount)) === index
+  );
+}
+
+function rangesOverlap(leftOffset: number, leftCount: number, rightOffset: number, rightCount: number): boolean {
+  const leftEnd = leftOffset + leftCount;
+  const rightEnd = rightOffset + rightCount;
+  return leftOffset < rightEnd && rightOffset < leftEnd;
+}
+
+function compactWindowAddress(address: string, rowOffset: number, columnOffset: number, rowCount: number, columnCount: number): string {
+  const parsed = parseCompactA1Address(address);
+  const startRow = parsed.startRow + rowOffset;
+  const startColumn = parsed.startColumn + columnOffset;
+  const endRow = startRow + Math.max(rowCount, 1) - 1;
+  const endColumn = startColumn + Math.max(columnCount, 1) - 1;
+  const start = `${compactColumnName(startColumn)}${startRow}`;
+  const end = `${compactColumnName(endColumn)}${endRow}`;
+  return start === end ? start : `${start}:${end}`;
+}
+
+function parseCompactA1Address(address: string): ParsedCompactA1Address {
+  const range = stripResourceSheetName(address).trim();
+  const match = /^(?<startCol>[A-Z]+)(?<startRow>\d+)(?::(?<endCol>[A-Z]+)(?<endRow>\d+))?$/i.exec(range);
+  if (!match?.groups?.startCol || !match.groups.startRow) {
+    throw new Error(`Invalid A1 address: ${address}`);
+  }
+  const startColumn = compactColumnNumber(match.groups.startCol);
+  const startRow = Number(match.groups.startRow);
+  const endColumn = compactColumnNumber(match.groups.endCol ?? match.groups.startCol);
+  const endRow = Number(match.groups.endRow ?? match.groups.startRow);
+  if (startRow < 1 || endRow < startRow || endColumn < startColumn) {
+    throw new Error(`Invalid A1 range bounds: ${address}`);
+  }
+  return { startRow, startColumn, endRow, endColumn };
+}
+
+function compactColumnNumber(columnName: string): number {
+  let value = 0;
+  for (const char of columnName.toUpperCase()) {
+    const code = char.charCodeAt(0);
+    if (code < 65 || code > 90) {
+      throw new Error(`Invalid column name: ${columnName}`);
+    }
+    value = value * 26 + (code - 64);
+  }
+  return value;
+}
+
+function compactColumnName(columnNumber: number): string {
+  let value = "";
+  let n = columnNumber;
+  while (n > 0) {
+    n -= 1;
+    value = String.fromCharCode(65 + (n % 26)) + value;
+    n = Math.floor(n / 26);
+  }
+  return value;
 }
 
 function tableCreateRequest(args: any): TableCreateRequest {
@@ -6777,7 +8766,14 @@ function registerMcpTool(
   if (!isToolExposed(name, catalogOptions)) {
     return;
   }
-  (mcp.registerTool as any)(name, config, callback);
+  (mcp.registerTool as any)(name, config, async (args: any, extra: any) => {
+    const result = await callback(args, extra);
+    const decorated = isWorkbookMutatingMcpTool(name) ? addCompactMutationProof(result) : result;
+    if (isWorkbookMutatingMcpTool(name)) {
+      clearCompactCache(`mutation:${name}`);
+    }
+    return decorated;
+  });
 }
 
 function jsonResult(value: unknown) {
@@ -6788,6 +8784,96 @@ function jsonResult(value: unknown) {
         text: JSON.stringify(value, null, 2)
       }
     ]
+  };
+}
+
+function isWorkbookMutatingMcpTool(name: string): boolean {
+  const namespace = name.split(".")[1];
+  if (!namespace || name.startsWith("excel.compact.")) {
+    return false;
+  }
+  if (namespace === "workbook") {
+    return /\.(calculate|save|save_as|restore_backup|close|embed|import)/.test(name);
+  }
+  if (namespace === "plan") {
+    return /\.(apply|rollback)/.test(name);
+  }
+  if (namespace === "transaction") {
+    return /\.(rollback|rollback_chain)/.test(name);
+  }
+  if (!new Set(["sheet", "range", "batch", "workflow", "template", "style", "formula", "table", "filter", "sort", "pivot", "chart", "names", "region", "repair", "clean"]).has(namespace)) {
+    return false;
+  }
+  if (name === "excel.workflow.preview_risky_edit") {
+    return true;
+  }
+  return /\.(set_|write_|create|copy|rename|delete|move|hide|unhide|protect|unprotect|clear|apply|repair|fill|append|update|resize|sort|save|restore|close|insert|merge|unmerge|lock|unlock|convert|calculate|recalculate|register|unregister|commit|rollback|cancel|refresh|invalidate|parse|normalize|trim|remove|standardize|split|import|embed)/.test(
+    name
+  );
+}
+
+function addCompactMutationProof(result: unknown) {
+  if (!isJsonTextResult(result)) {
+    return result;
+  }
+  try {
+    const payload = JSON.parse(result.content[0]!.text) as Record<string, unknown>;
+    if (payload.compactProof !== undefined) {
+      return result;
+    }
+    return jsonResult({
+      ...payload,
+      compactProof: summarizeMutationProof(payload)
+    });
+  } catch {
+    return result;
+  }
+}
+
+function isJsonTextResult(result: unknown): result is { content: Array<{ type: "text"; text: string }> } {
+  return Boolean(
+    result &&
+    typeof result === "object" &&
+    Array.isArray((result as { content?: unknown }).content) &&
+    (result as { content: Array<{ text?: unknown }> }).content[0]?.text !== undefined
+  );
+}
+
+function summarizeMutationProof(payload: Record<string, unknown>) {
+  const diffSummary = payload.diffSummary as Record<string, unknown> | undefined;
+  const telemetry = payload.telemetry as Record<string, unknown> | undefined;
+  const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+  const validation = validationSummary(payload);
+  return {
+    ok: payload.ok,
+    transactionId: payload.transactionId,
+    transactionStatus: payload.transactionStatus,
+    taskId: payload.taskId,
+    rollbackAvailable: payload.rollbackAvailable,
+    backups: payload.backups,
+    changedRanges: diffSummary?.changedRanges,
+    cellsChanged: diffSummary?.cellsChanged ?? telemetry?.cellsWritten,
+    formulasChanged: diffSummary?.formulasChanged,
+    stylesChanged: diffSummary?.stylesChanged,
+    tablesChanged: diffSummary?.tablesChanged,
+    sheetsChanged: diffSummary?.sheetsChanged,
+    warnings: warnings.length,
+    validation,
+    payloadBytes: Buffer.byteLength(JSON.stringify(payload), "utf8"),
+    estimatedTokens: Math.ceil(Buffer.byteLength(JSON.stringify(payload), "utf8") / 4)
+  };
+}
+
+function validationSummary(payload: Record<string, unknown>) {
+  const issueCount = typeof payload.issueCount === "number" ? payload.issueCount : undefined;
+  const issues = Array.isArray(payload.issues) ? payload.issues : undefined;
+  const severityCounts = (payload.severityCounts ?? payload.summary) as unknown;
+  if (issueCount === undefined && issues === undefined && severityCounts === undefined) {
+    return undefined;
+  }
+  return {
+    issueCount: issueCount ?? issues?.length ?? 0,
+    severityCounts
   };
 }
 

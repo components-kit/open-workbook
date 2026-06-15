@@ -21,6 +21,10 @@ If the add-in is disconnected, ask the user to start their agent UI so it launch
 
 ## Tool Selection
 
+- When the target is unknown, use lookup first: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range`, then inspect one candidate with `excel.lookup.inspect_match`.
+- Start with compact context tools for known large scopes: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, and `excel.range.get_summary`.
+- Prefer `excel.range.read_compact` and `excel.table.read_compact` for exploratory data reads. Page or project only the rows, columns, and facets needed for the current task.
+- Use `excel.validate.compact` for validation proof when counts/examples are enough. Fetch `excel://compact/{resource_id}` details only if the user or task needs the full report.
 - Use `excel.range.read_*` for scoped cell data and metadata.
 - Use `excel.table.*` for structured table rows, filters, sorts, totals, and table resizing.
 - Use `excel.template.*`, `excel.style.*`, and `excel.formula.*` when preserving or repairing templates matters.
@@ -45,19 +49,19 @@ For detailed routing, read `references/tool-selection.md`.
 - Never write cell-by-cell loops. Batch values, formulas, number formats, and styles as 2D matrices over contiguous ranges.
 - Never pad a broad range write with `null` or blanks when only a smaller range is intended. Write the smallest changed rectangle or use explicit clear tools.
 - Read only the workbook properties needed for the task. Avoid broad workbook scans unless the task is audit, validation, search, or repair.
+- Do not use full range/table reads when compact summaries, schemas, samples, or projected pages are enough. Full reads are for explicit user requests, audits, exports, or exact-data tasks.
 - Treat `CAPABILITY_UNAVAILABLE`, partial capability warnings, and Office.js host limits as real results. Explain them and choose a supported path.
 - Preserve existing template conventions over generic formatting rules.
 - After mutation, validate the affected area and surface backups, transaction IDs, warnings, diffs, and rollback options.
+- Treat `compactProof` on mutation results as the default reportable proof. Do not read back whole changed sheets unless exact cell data is required.
 
 ## Critical Recipes
 
-- Sheet with formulas: prefer `excel.workflow.create_formula_sheet`; if using separate tools, create the sheet, write labels/constants with `excel.range.write_values`, write formulas with `excel.range.write_formulas`, write number formats with `excel.range.write_number_formats`, then validate with `excel.formula.validate` or `excel.validate.no_formula_errors`. Do not put formula strings into `write_values`.
-- Large table reorder/filter/sort/append/update: always inspect the table first with `excel.table.get_info` or `excel.workbook.get_workbook_map`. Use bounded `excel.table.read` only when row data is needed, then use `excel.table.reorder_columns`, `excel.table.apply_filters`, `excel.table.sort`, `excel.table.append_rows`, or `excel.table.update_rows`. For table filters, prefer `excel.table.apply_filters` over generic filter tools. After mutation, validate with `excel.validate.tables` for table changes and `excel.validate.filters` for filter/sort changes. Never clear, recreate, or rewrite the whole table for these tasks.
-- Formula repair: prefer `excel.workflow.repair_formula_errors` when the error range and source formula range are known. Otherwise find errors, read nearby formula patterns, inspect dependencies, repair with `excel.formula.repair_patterns`, `excel.formula.fill_down`, `excel.formula.fill_right`, or scoped `excel.range.write_formulas`, recalculate if needed, then validate. Never convert formulas to values unless explicitly requested.
-- Template report: prefer `excel.workflow.create_template_report`; if using separate tools, create the sheet from template, clear/fill declared regions, compare styles, repair style drift, and validate against the template.
-- Snapshot/diff/rollback preview: after discovery, prefer `excel.workflow.preview_risky_edit` for a scoped risky edit with a non-empty minimal operation list. If using separate tools, create a before snapshot, make the scoped change, create an after snapshot, call `excel.diff.summarize` or `excel.snapshot.compare` with both snapshot IDs, then use rollback preview tools without actually rolling back unless asked.
-- Pivot/chart summary: prefer `excel.workflow.create_pivot_chart_summary`; if using separate tools, check capability, create the PivotTable, refresh it, create/update the chart, refresh/update the chart source, and validate the PivotTable source before reporting success.
-- Multi-agent work: start with `excel.collab.get_status`, create or inspect the task, acquire the narrowest lock, follow conflict guidance, perform or plan the scoped operation, then release locks.
+- Sheet/formula, template-report, pivot/chart, risky-edit, and formula-repair tasks: prefer the matching `excel.workflow.*` tool, then validate compactly.
+- Large table work: inspect schema first, read compact pages only when row data is needed, mutate with table-native tools, then validate tables/filters.
+- Unknown target work: resolve the sheet/table/column/range with lookup tools before reading data.
+- Snapshot/diff/rollback proof: prefer compact diff or risky-edit workflow results; fetch full compact resources only for detailed review.
+- Multi-agent work: use collaboration/task/lock tools before mutation.
 
 ## Workflow References
 

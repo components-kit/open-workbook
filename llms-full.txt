@@ -44,7 +44,7 @@ Daily spreadsheet work usually does not need the largest model available, but it
 
 The project is being prepared for npm distribution as `@components-kit/open-workbook`. It is not a Microsoft AppSource add-in and does not attempt to install itself into Excel without user or admin trust approval.
 
-Stable areas include runtime connection, workbook/sheet/range operations, reversible batches, combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
+Stable areas include runtime connection, workbook/sheet/range operations, compact workbook/table/range discovery, workbook-wide lookup/search, compact paged reads with token telemetry, reversible batches, combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
 
 The simple flow is MCP-owned: `npx ... mcp` starts the MCP adapter, the local add-in taskpane server, and an embedded backend when no shared daemon is running. The shared `owb daemon` remains available for advanced multi-client coordination.
 
@@ -179,6 +179,12 @@ Environment overrides:
 - `OPEN_WORKBOOK_FILE_BRIDGE_URL`
 - `OPEN_WORKBOOK_FILE_BRIDGE_PORT`
 
+## Token-Saving Reads
+
+Open Workbook exposes compact discovery, lookup, and read tools so agents can inspect workbook structure before sending cell bodies to a model. When the target is unknown, start with `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range`, then inspect one candidate with `excel.lookup.inspect_match`. When the target is known, use `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, or `excel.range.get_summary`, then use `excel.table.read_compact` or `excel.range.read_compact` for bounded values-first pages. Compact responses include `payloadBytes`, rough `estimatedTokens`, `truncated`, and `nextPage`; existing full-read tools remain available for exact-data tasks.
+
+When details would exceed a caller's budget, compact tools can store the full payload locally and return an `excel://compact/{resource_id}` handle for later retrieval through `excel.compact.get_resource`. Compact summary/schema cache entries are invalidated after workbook mutations. Use `excel.validate.compact` for validation proof that returns counts and examples inline while keeping the full issue report behind a resource handle.
+
 ## Common Commands
 
 ```bash
@@ -205,7 +211,7 @@ Open Workbook includes generic agent instruction source for fast, reliable live 
 - `skills/open-workbook-excel/SKILL.md`
 - `skills/open-workbook-excel/references/`
 
-Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`. The skill teaches agents to inspect runtime capabilities, choose the narrowest efficient MCP tool, use combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows when they match the task, avoid sparse null-padded overwrites, batch workbook writes, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews. `owb instructions` remains available as a fallback for clients that do not support skills.sh.
+Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`. The skill teaches agents to inspect runtime capabilities, use lookup before broad reads, choose the narrowest efficient MCP tool, use combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows when they match the task, avoid sparse null-padded overwrites, batch workbook writes, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews. `owb instructions` remains available as a fallback for clients that do not support skills.sh.
 
 ## Safety Contract
 
@@ -276,6 +282,16 @@ Source: CHANGELOG.md
 All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
+
+## [0.1.8] - 2026-06-15
+
+### Added
+
+- Added compact token-saving discovery and read tools: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, `excel.range.get_summary`, `excel.range.read_compact`, and `excel.table.read_compact`.
+- Added lookup-first token-saving tools: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, `excel.lookup.resolve_range`, and `excel.lookup.inspect_match`.
+- Added compact read telemetry with `payloadBytes`, rough `estimatedTokens`, truncation status, and continuation metadata so agents can avoid sending broad workbook payloads to models by default.
+- Added local compact detail resources, compact cache lifecycle tools, `excel.validate.compact`, and additive mutation `compactProof` metadata so large details can be expanded only when needed.
+- Added compact snapshot and diff access through `excel.snapshot.get_compact`, `excel.snapshot.compare_compact`, and `excel.diff.get_compact`.
 
 ## [0.1.7] - 2026-06-15
 
@@ -413,6 +429,10 @@ If the add-in is disconnected, ask the user to start their agent UI so it launch
 
 ## Tool Selection
 
+- When the target is unknown, use lookup first: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range`, then inspect one candidate with `excel.lookup.inspect_match`.
+- Start with compact context tools for known large scopes: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, and `excel.range.get_summary`.
+- Prefer `excel.range.read_compact` and `excel.table.read_compact` for exploratory data reads. Page or project only the rows, columns, and facets needed for the current task.
+- Use `excel.validate.compact` for validation proof when counts/examples are enough. Fetch `excel://compact/{resource_id}` details only if the user or task needs the full report.
 - Use `excel.range.read_*` for scoped cell data and metadata.
 - Use `excel.table.*` for structured table rows, filters, sorts, totals, and table resizing.
 - Use `excel.template.*`, `excel.style.*`, and `excel.formula.*` when preserving or repairing templates matters.
@@ -437,19 +457,19 @@ For detailed routing, read `references/tool-selection.md`.
 - Never write cell-by-cell loops. Batch values, formulas, number formats, and styles as 2D matrices over contiguous ranges.
 - Never pad a broad range write with `null` or blanks when only a smaller range is intended. Write the smallest changed rectangle or use explicit clear tools.
 - Read only the workbook properties needed for the task. Avoid broad workbook scans unless the task is audit, validation, search, or repair.
+- Do not use full range/table reads when compact summaries, schemas, samples, or projected pages are enough. Full reads are for explicit user requests, audits, exports, or exact-data tasks.
 - Treat `CAPABILITY_UNAVAILABLE`, partial capability warnings, and Office.js host limits as real results. Explain them and choose a supported path.
 - Preserve existing template conventions over generic formatting rules.
 - After mutation, validate the affected area and surface backups, transaction IDs, warnings, diffs, and rollback options.
+- Treat `compactProof` on mutation results as the default reportable proof. Do not read back whole changed sheets unless exact cell data is required.
 
 ## Critical Recipes
 
-- Sheet with formulas: prefer `excel.workflow.create_formula_sheet`; if using separate tools, create the sheet, write labels/constants with `excel.range.write_values`, write formulas with `excel.range.write_formulas`, write number formats with `excel.range.write_number_formats`, then validate with `excel.formula.validate` or `excel.validate.no_formula_errors`. Do not put formula strings into `write_values`.
-- Large table reorder/filter/sort/append/update: always inspect the table first with `excel.table.get_info` or `excel.workbook.get_workbook_map`. Use bounded `excel.table.read` only when row data is needed, then use `excel.table.reorder_columns`, `excel.table.apply_filters`, `excel.table.sort`, `excel.table.append_rows`, or `excel.table.update_rows`. For table filters, prefer `excel.table.apply_filters` over generic filter tools. After mutation, validate with `excel.validate.tables` for table changes and `excel.validate.filters` for filter/sort changes. Never clear, recreate, or rewrite the whole table for these tasks.
-- Formula repair: prefer `excel.workflow.repair_formula_errors` when the error range and source formula range are known. Otherwise find errors, read nearby formula patterns, inspect dependencies, repair with `excel.formula.repair_patterns`, `excel.formula.fill_down`, `excel.formula.fill_right`, or scoped `excel.range.write_formulas`, recalculate if needed, then validate. Never convert formulas to values unless explicitly requested.
-- Template report: prefer `excel.workflow.create_template_report`; if using separate tools, create the sheet from template, clear/fill declared regions, compare styles, repair style drift, and validate against the template.
-- Snapshot/diff/rollback preview: after discovery, prefer `excel.workflow.preview_risky_edit` for a scoped risky edit with a non-empty minimal operation list. If using separate tools, create a before snapshot, make the scoped change, create an after snapshot, call `excel.diff.summarize` or `excel.snapshot.compare` with both snapshot IDs, then use rollback preview tools without actually rolling back unless asked.
-- Pivot/chart summary: prefer `excel.workflow.create_pivot_chart_summary`; if using separate tools, check capability, create the PivotTable, refresh it, create/update the chart, refresh/update the chart source, and validate the PivotTable source before reporting success.
-- Multi-agent work: start with `excel.collab.get_status`, create or inspect the task, acquire the narrowest lock, follow conflict guidance, perform or plan the scoped operation, then release locks.
+- Sheet/formula, template-report, pivot/chart, risky-edit, and formula-repair tasks: prefer the matching `excel.workflow.*` tool, then validate compactly.
+- Large table work: inspect schema first, read compact pages only when row data is needed, mutate with table-native tools, then validate tables/filters.
+- Unknown target work: resolve the sheet/table/column/range with lookup tools before reading data.
+- Snapshot/diff/rollback proof: prefer compact diff or risky-edit workflow results; fetch full compact resources only for detailed review.
+- Multi-agent work: use collaboration/task/lock tools before mutation.
 
 ## Workflow References
 
@@ -474,22 +494,29 @@ Choose the narrowest Open Workbook MCP interface that preserves workbook intent.
 - Active workbook and selection context: `excel.runtime.get_active_context`
 - Host/tool capability matrix: `excel.runtime.get_capabilities`
 - Workbook structure: `excel.workbook.get_workbook_map`
+- Compact workbook structure: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`
+- Workbook lookup: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, `excel.lookup.resolve_range`, `excel.lookup.inspect_match`
 - Open workbooks: `excel.workbook.list_open_workbooks`
-- Sheets: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.get_used_range`
+- Sheets: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.get_summary`, `excel.sheet.get_used_range`
 
 Prefer `excel.workflow.prepare_session` as the first call. If capabilities are unknown because the add-in is disconnected, stop and ask for runtime setup instead of guessing.
 
 ## Reading Data
 
+- Compact range/table discovery: `excel.range.get_summary`, `excel.table.get_schema`
+- Unknown target lookup: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, `excel.lookup.resolve_range`
+- Focused candidate preview: `excel.lookup.inspect_match`
+- Compact bounded reads: `excel.range.read_compact`, `excel.table.read_compact`
+- Stored compact details: `excel.compact.get_resource`, `excel.compact.list_resources`
 - Values only: `excel.range.read_values`
 - Formulas only: `excel.range.read_formulas`
 - Display text for user-visible output: `excel.range.read_display_text`
 - Formatting: `excel.range.read_number_formats`, `excel.range.read_styles`
 - Full cell payload: `excel.range.read_full`
 - Search and diagnostics: `excel.range.search`, `excel.range.find_blank_cells`, `excel.range.find_errors`
-- Table-shaped data: `excel.table.read`; pass `columns`, `rowOffset`, `rowLimit`, and include flags for large tables
+- Table-shaped full data: `excel.table.read`; pass `columns`, `rowOffset`, `rowLimit`, and include flags for large tables
 
-Use explicit sheet/address ranges whenever possible. Use used-range or workbook-wide scans only for audits, validation, search, or discovery. For simple reads, use the facet-specific range tools instead of `excel.range.read_full`.
+Use lookup tools before reading when the target sheet, table, header, entity, or range is unknown. Use compact summaries or schemas before cell bodies once the target scope is known. Use explicit sheet/address ranges whenever possible. Use used-range or workbook-wide scans only for audits, validation, search, or discovery. For simple reads, use `excel.range.read_compact` or the facet-specific range tools instead of `excel.range.read_full`.
 
 ## Writing Data
 
@@ -520,7 +547,7 @@ When a noninteractive agent run cannot apply a mutation, create an `excel.plan.c
 
 ## Tables, Filters, And Sorts
 
-- Inspect tables: `excel.table.list`, `excel.table.get_info`, `excel.table.read`
+- Inspect tables: `excel.table.list`, `excel.table.get_info`, `excel.table.get_schema`, `excel.table.read_compact`
 - Append or update rows: `excel.table.append_rows`, `excel.table.update_rows`
 - Reorder columns: `excel.table.reorder_columns`
 - Resize or structure changes: `excel.table.resize`, `excel.table.copy_structure`
@@ -530,7 +557,7 @@ When a noninteractive agent run cannot apply a mutation, create an `excel.plan.c
 Use table tools instead of range tools when the target is an Excel table. This preserves headers, totals rows, filters, structured references, and table styles.
 Before table reorder, filter, sort, append, or update operations, call `excel.table.get_info` or `excel.workbook.get_workbook_map`. For table filters, use `excel.table.apply_filters` rather than generic filter tools. After table structure or row mutations, call `excel.validate.tables`; after filter/sort changes, call `excel.validate.filters`.
 Do not clear and recreate a table to reorder columns; use `excel.table.reorder_columns`, or stop for confirmation before any destructive rebuild.
-For large tables, avoid full `excel.table.read` unless the user asks for all rows. Pass `rowLimit`, `rowOffset`, and `columns` for targeted discovery, then mutate with table-native tools.
+For large tables, avoid full `excel.table.read` unless the user asks for all rows. Use `excel.table.get_schema` first, then `excel.table.read_compact` with `rowLimit`, `rowOffset`, and `columns` for targeted discovery before mutating with table-native tools.
 
 ## Templates, Styles, And Formulas
 
@@ -559,17 +586,20 @@ Use `excel.workflow.create_pivot_chart_summary` for standard summary requests th
 ## Validation And Recovery
 
 - Workbook/sheet health: `excel.validate.workbook`, `excel.validate.sheet`
+- Compact validation proof: `excel.validate.compact`
 - Formula errors: `excel.validate.no_formula_errors`, `excel.formula.find_errors`
 - Broken references: `excel.validate.no_broken_references`
 - Template/style/table/filter checks: `excel.validate.template_consistency`, `excel.validate.styles`, `excel.validate.tables`, `excel.validate.filters`
 - Unintended changes: `excel.validate.no_unintended_changes`
+
+Prefer `excel.validate.compact` when issue counts, severity counts, and a few examples are enough. It returns a compact resource URI for the full report.
 - Combined risky edit workflow: `excel.workflow.preview_risky_edit`
-- Snapshots and diffs: `excel.snapshot.create`, `excel.snapshot.compare`, `excel.diff.summarize`
+- Snapshots and diffs: `excel.snapshot.create`, `excel.snapshot.get_compact`, `excel.snapshot.compare_compact`, `excel.diff.summarize`, `excel.diff.get_compact`
 - Rollback: `excel.plan.rollback`, `excel.transaction.preview_rollback`, `excel.transaction.rollback`, `excel.transaction.preview_rollback_chain`, `excel.transaction.rollback_chain`
 - File backups: `excel.backup.create_file`, `excel.backup.verify`, `excel.backup.restore_file`
 
 Always present validation issues with severity and target, not vague success/failure language.
-Diff tools require two snapshots. For risky scoped edits, use `excel.workflow.preview_risky_edit` after discovery when available, with a non-empty minimal operation list. If using separate tools, create a before snapshot, make the scoped edit, create an after snapshot, call `excel.diff.summarize` or `excel.snapshot.compare`, then preview rollback with `excel.transaction.preview_rollback` or `excel.transaction.preview_rollback_chain`.
+Diff tools require two snapshots. For risky scoped edits, use `excel.workflow.preview_risky_edit` after discovery when available, with a non-empty minimal operation list. If using separate tools, create a before snapshot, make the scoped edit, create an after snapshot, call `excel.diff.summarize`, `excel.diff.get_compact`, or `excel.snapshot.compare_compact`, then preview rollback with `excel.transaction.preview_rollback` or `excel.transaction.preview_rollback_chain`.
 
 ---
 
@@ -796,6 +826,8 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 - Use table APIs for table-shaped work.
 - Group writes by workbook, sheet, and contiguous range.
 - Read only requested properties.
+- Start unknown targets with lookup tools, then inspect one candidate.
+- Start known large scopes with compact summaries and schemas.
 - Use `excel.runtime.get_capabilities` before trying expensive or host-limited features.
 
 ## Reads
@@ -805,8 +837,13 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 - For formula review, read formulas or formula patterns.
 - For formatting review, read number formats or styles only for the relevant range.
 - For table analysis, read the table instead of a sheet-sized range.
+- For unknown sheet/table/header/entity targets, use `excel.lookup.*` before reading cells.
+- For exploratory reads, use `excel.range.read_compact` or `excel.table.read_compact` before full reads.
 
 Avoid workbook-wide reads unless the task is search, validation, audit, or discovery.
+
+Compact reads return payload/token telemetry, truncation status, and continuation metadata. Page only when more rows or columns are needed.
+When a compact response includes `resourceUri`, fetch it only if the full detail is required.
 
 ## Writes
 
@@ -830,6 +867,8 @@ Automatic timeout retry is limited to style-only batches because repeating the s
 ## Telemetry
 
 Read tool results for duration, sync count, payload bytes, cells read/written, range count, chunk count, engine, and warnings. Use that telemetry to explain unusually slow or partial work.
+For compact reads, also inspect `estimatedTokens`, `truncated`, and `nextPage` before requesting more workbook data.
+For mutation results, prefer the returned `compactProof` summary over reading changed ranges back into the model.
 
 ---
 
@@ -1213,22 +1252,24 @@ The full namespace is represented in the protocol catalog, but MCP only exposes 
 ## Stable Tool Groups
 
 - Runtime: `excel.runtime.get_status`, `excel.runtime.connect_addin`, `excel.runtime.disconnect_addin`, `excel.runtime.ping_addin`, `excel.runtime.get_capabilities`, `excel.runtime.get_active_context`, `excel.runtime.get_selection`, `excel.runtime.set_active_workbook`, `excel.runtime.set_active_sheet`
-- Workbook: `excel.workbook.list_open_workbooks`, `excel.workbook.get_workbook_info`, `excel.workbook.get_workbook_map`, `excel.workbook.snapshot`, `excel.workbook.refresh_snapshot`, `excel.workbook.get_snapshot`, `excel.workbook.detect_external_changes`, `excel.workbook.calculate`, `excel.workbook.save`, `excel.workbook.save_as`, `excel.workbook.create_backup`, `excel.workbook.restore_backup`, `excel.workbook.export_copy`, `excel.workbook.export_local_config`, `excel.workbook.import_local_config`, `excel.workbook.embed_local_config`, `excel.workbook.read_embedded_local_config`, `excel.workbook.import_embedded_local_config`, `excel.workbook.close`
+- Workbook: `excel.workbook.list_open_workbooks`, `excel.workbook.get_workbook_info`, `excel.workbook.get_workbook_map`, `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.workbook.snapshot`, `excel.workbook.refresh_snapshot`, `excel.workbook.get_snapshot`, `excel.workbook.detect_external_changes`, `excel.workbook.calculate`, `excel.workbook.save`, `excel.workbook.save_as`, `excel.workbook.create_backup`, `excel.workbook.restore_backup`, `excel.workbook.export_copy`, `excel.workbook.export_local_config`, `excel.workbook.import_local_config`, `excel.workbook.embed_local_config`, `excel.workbook.read_embedded_local_config`, `excel.workbook.import_embedded_local_config`, `excel.workbook.close`
 - File backups: `excel.backup.create_file`, `excel.backup.list`, `excel.backup.get`, `excel.backup.verify`, `excel.backup.restore_file`, `excel.backup.delete`, `excel.backup.prune`, `excel.backup.pin`, `excel.backup.unpin`
-- Sheet: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.create`, `excel.sheet.copy`, `excel.sheet.rename`, `excel.sheet.delete`, `excel.sheet.hide`, `excel.sheet.unhide`, `excel.sheet.protect`, `excel.sheet.unprotect`, `excel.sheet.clear`, `excel.sheet.get_used_range`, `excel.sheet.set_tab_color`
-- Range: `excel.range.read_values`, `excel.range.read_formulas`, `excel.range.read_number_formats`, `excel.range.read_display_text`, `excel.range.read_styles`, `excel.range.read_full`, `excel.range.write_values`, `excel.range.write_formulas`, `excel.range.write_number_formats`, `excel.range.write_styles`, `excel.range.clear`, `excel.range.clear_values`, `excel.range.clear_formats`, `excel.range.clear_values_keep_format`, `excel.range.copy`, `excel.range.move`, `excel.range.insert_rows`, `excel.range.delete_rows`, `excel.range.insert_columns`, `excel.range.delete_columns`, `excel.range.autofit_columns`, `excel.range.autofit_rows`, `excel.range.merge`, `excel.range.unmerge`
+- Sheet: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.get_summary`, `excel.sheet.create`, `excel.sheet.copy`, `excel.sheet.rename`, `excel.sheet.delete`, `excel.sheet.hide`, `excel.sheet.unhide`, `excel.sheet.protect`, `excel.sheet.unprotect`, `excel.sheet.clear`, `excel.sheet.get_used_range`, `excel.sheet.set_tab_color`
+- Range: `excel.range.read_values`, `excel.range.read_formulas`, `excel.range.read_number_formats`, `excel.range.read_display_text`, `excel.range.read_styles`, `excel.range.read_compact`, `excel.range.get_summary`, `excel.range.read_full`, `excel.range.write_values`, `excel.range.write_formulas`, `excel.range.write_number_formats`, `excel.range.write_styles`, `excel.range.clear`, `excel.range.clear_values`, `excel.range.clear_formats`, `excel.range.clear_values_keep_format`, `excel.range.copy`, `excel.range.move`, `excel.range.insert_rows`, `excel.range.delete_rows`, `excel.range.insert_columns`, `excel.range.delete_columns`, `excel.range.autofit_columns`, `excel.range.autofit_rows`, `excel.range.merge`, `excel.range.unmerge`
 - Advanced range reads: `excel.range.read_hyperlinks`, `excel.range.read_comments`, `excel.range.read_notes`, `excel.range.read_merged_cells`, `excel.range.read_data_validation`, `excel.range.read_conditional_formatting`, `excel.range.search`, `excel.range.find_blank_cells`, `excel.range.find_errors`
+- Lookup: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, `excel.lookup.resolve_range`, `excel.lookup.inspect_match`
 - Batch, workflow, and plan: `excel.batch.validate`, `excel.batch.dry_run`, `excel.batch.apply`, `excel.workflow.prepare_session`, `excel.workflow.create_formula_sheet`, `excel.workflow.create_template_report`, `excel.workflow.create_pivot_chart_summary`, `excel.workflow.repair_formula_errors`, `excel.workflow.preview_risky_edit`, `excel.plan.create`, `excel.plan.preview`, `excel.plan.refresh_preview`, `excel.plan.rebase`, `excel.plan.apply`, `excel.plan.rollback`
 - Multi-agent coordination: `excel.task.create`, `excel.task.claim`, `excel.task.update`, `excel.task.set_progress`, `excel.task.add_blocker`, `excel.task.resolve_blocker`, `excel.task.evaluate_schedule`, `excel.task.resume_ready`, `excel.task.complete`, `excel.task.fail`, `excel.task.cancel`, `excel.task.list`, `excel.task.get`, `excel.collab.get_status`, `excel.collab.list_agents`, `excel.collab.list_tasks`, `excel.collab.list_locks`, `excel.collab.list_transactions`, `excel.collab.get_conflicts`, `excel.collab.get_recent_events`, `excel.lock.get_policy`, `excel.lock.set_policy`, `excel.lock.acquire`, `excel.lock.renew`, `excel.lock.release`, `excel.conflict.get_guidance`, `excel.conflict.explain`, `excel.conflict.get_telemetry`, `excel.conflict.clear_telemetry`, `excel.transaction.list`, `excel.transaction.get`, `excel.transaction.preview_rollback`, `excel.transaction.rollback`, `excel.transaction.preview_rollback_chain`, `excel.transaction.rollback_chain`
-- Snapshot and diff: `excel.snapshot.create`, `excel.snapshot.refresh`, `excel.snapshot.get`, `excel.snapshot.compare`, `excel.snapshot.invalidate`, `excel.snapshot.list`, `excel.snapshot.delete`, `excel.diff.create`, `excel.diff.summarize`, `excel.diff.get_details`, `excel.diff.export_json`, `excel.diff.export_html`
+- Snapshot and diff: `excel.snapshot.create`, `excel.snapshot.refresh`, `excel.snapshot.get`, `excel.snapshot.get_compact`, `excel.snapshot.compare`, `excel.snapshot.compare_compact`, `excel.snapshot.invalidate`, `excel.snapshot.list`, `excel.snapshot.delete`, `excel.diff.create`, `excel.diff.summarize`, `excel.diff.get_details`, `excel.diff.get_compact`, `excel.diff.export_json`, `excel.diff.export_html`
 - Events: `excel.events.subscribe`, `excel.events.unsubscribe`, `excel.events.get_recent`, `excel.events.clear`, `excel.events.set_debounce`
+- Compact context: `excel.compact.get_resource`, `excel.compact.list_resources`, `excel.compact.delete_resource`, `excel.compact.clear_resources`, `excel.compact.get_cache_status`, `excel.compact.clear_cache`
 - Templates: `excel.template.detect_templates`, `excel.template.register`, `excel.template.unregister`, `excel.template.get`, `excel.template.list`, `excel.template.infer_regions`, `excel.template.create_sheet_from_template`, `excel.template.clear_data_regions`, `excel.template.fill_regions`, `excel.template.validate_sheet_against_template`, `excel.template.repair_sheet_from_template`
 - Style and formula preservation: `excel.style.get_fingerprint`, `excel.style.compare_fingerprint`, `excel.style.copy_from_template`, `excel.style.apply_style`, `excel.style.validate_consistency`, `excel.style.repair_consistency`, `excel.style.get_theme`, `excel.style.apply_theme`, `excel.style.copy_column_widths`, `excel.style.copy_row_heights`, `excel.style.copy_borders`, `excel.style.copy_fills`, `excel.style.copy_fonts`, `excel.style.copy_alignment`, `excel.style.copy_number_formats`, `excel.style.copy_conditional_formatting`, `excel.style.copy_data_validation`, `excel.style.copy_freeze_panes`, `excel.style.copy_print_settings`, `excel.style.copy_page_layout`, `excel.style.copy_hidden_rows_columns`, `excel.formula.read_patterns`, `excel.formula.copy_patterns`, `excel.formula.fill_down`, `excel.formula.fill_right`, `excel.formula.validate`, `excel.formula.validate_against_template`, `excel.formula.repair_patterns`, `excel.formula.find_errors`, `excel.formula.find_circular_references`, `excel.formula.get_dependency_graph`, `excel.formula.trace_precedents`, `excel.formula.trace_dependents`, `excel.formula.convert_to_values`, `excel.formula.recalculate`, `excel.formula.explain`
-- Tables: `excel.table.list`, `excel.table.get_info`, `excel.table.read`, `excel.table.create`, `excel.table.resize`, `excel.table.reorder_columns`, `excel.table.append_rows`, `excel.table.update_rows`, `excel.table.clear_data_keep_formulas`, `excel.table.clear_filters`, `excel.table.apply_filters`, `excel.table.preserve_filters`, `excel.table.sort`, `excel.table.set_total_row`, `excel.table.set_style`, `excel.table.copy_structure`, `excel.table.validate_against_template`
+- Tables: `excel.table.list`, `excel.table.get_info`, `excel.table.get_schema`, `excel.table.read`, `excel.table.read_compact`, `excel.table.create`, `excel.table.resize`, `excel.table.reorder_columns`, `excel.table.append_rows`, `excel.table.update_rows`, `excel.table.clear_data_keep_formulas`, `excel.table.clear_filters`, `excel.table.apply_filters`, `excel.table.preserve_filters`, `excel.table.sort`, `excel.table.set_total_row`, `excel.table.set_style`, `excel.table.copy_structure`, `excel.table.validate_against_template`
 - Filters and sort: `excel.filter.get_filters`, `excel.filter.apply`, `excel.filter.clear`, `excel.filter.preserve_from_template`, `excel.filter.validate`, `excel.sort.apply`, `excel.sort.clear`, `excel.sort.preserve_from_template`
 - PivotTables and charts: `excel.pivot.list`, `excel.pivot.get_info`, `excel.pivot.create`, `excel.pivot.refresh`, `excel.pivot.refresh_all`, `excel.pivot.update_source`, `excel.pivot.copy_from_template`, `excel.pivot.delete`, `excel.pivot.validate_source`, `excel.pivot.get_capability_matrix`, `excel.pivot.get_fingerprint`, `excel.pivot.compare_fingerprint`, `excel.pivot.diff`, `excel.pivot.repair_from_template`, `excel.pivot.rebuild_with_source`, `excel.chart.list`, `excel.chart.get_info`, `excel.chart.create`, `excel.chart.update_data_source`, `excel.chart.copy_from_template`, `excel.chart.refresh`, `excel.chart.delete`, `excel.chart.validate_against_template`
 - Names and regions: `excel.names.list`, `excel.names.get`, `excel.names.create`, `excel.names.update`, `excel.names.delete`, `excel.region.detect`, `excel.region.register`, `excel.region.list`, `excel.region.get`, `excel.region.clear_values`, `excel.region.write_values`, `excel.region.fill`
-- Validation: `excel.validate.workbook`, `excel.validate.sheet`, `excel.validate.template_consistency`, `excel.validate.formulas`, `excel.validate.styles`, `excel.validate.tables`, `excel.validate.filters`, `excel.validate.print_layout`, `excel.validate.no_broken_references`, `excel.validate.no_formula_errors`, `excel.validate.no_unintended_changes`
+- Validation: `excel.validate.workbook`, `excel.validate.compact`, `excel.validate.sheet`, `excel.validate.template_consistency`, `excel.validate.formulas`, `excel.validate.styles`, `excel.validate.tables`, `excel.validate.filters`, `excel.validate.print_layout`, `excel.validate.no_broken_references`, `excel.validate.no_formula_errors`, `excel.validate.no_unintended_changes`
 - Repair: `excel.repair.style_from_template`, `excel.repair.formulas_from_template`, `excel.repair.filters_from_template`, `excel.repair.table_structure`, `excel.repair.print_layout`, `excel.repair.named_ranges`, `excel.repair.formula_errors`, `excel.repair.merged_cells`
 - Cleaning: `excel.clean.detect_header_row`, `excel.clean.normalize_headers`, `excel.clean.trim_whitespace`, `excel.clean.remove_duplicates`, `excel.clean.parse_dates`, `excel.clean.parse_numbers`, `excel.clean.standardize_currency`, `excel.clean.fill_missing_values`, `excel.clean.split_column`, `excel.clean.merge_columns`, `excel.clean.detect_outliers`, `excel.clean.fuzzy_match`
 - Permissions: `excel.permissions.get`, `excel.permissions.set`, `excel.permissions.require_confirmation`, `excel.permissions.set_scope`, `excel.permissions.allow_destructive_actions`, `excel.permissions.allow_macro_execution`, `excel.permissions.lock_regions`, `excel.permissions.unlock_regions`
@@ -1246,6 +1287,7 @@ The full namespace is represented in the protocol catalog, but MCP only exposes 
 - `excel://workbooks/{workbook_id}/templates`
 - `excel://workbooks/{workbook_id}/snapshots/{snapshot_id}`
 - `excel://workbooks/{workbook_id}/plans/{plan_id}/diff`
+- `excel://compact/{resource_id}`
 
 Resources return JSON and are registered through the MCP server. Workbook/sheet resources that need live workbook state return explicit add-in disconnected or range unavailable errors when Excel is not connected instead of fabricating stale data.
 
@@ -1269,6 +1311,18 @@ No mutating tool should bypass the backend safety lifecycle. It must validate pe
 `excel.batch.apply`, `excel.workflow.preview_risky_edit`, `excel.plan.apply`, and all stable mutating sheet/range tools route through backend snapshots, backup records, target-region conflict checks, and add-in Office.js execution.
 
 `excel.workflow.prepare_session` is the preferred first call for agent workflows. It returns runtime status, active context, capabilities, workbook map, and collaboration state in one read-only result so agents can establish workbook identity before mutation.
+
+Lookup and compact context tools reduce token use by exposing target candidates and workbook structure before cell data. Use `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range` when the target sheet, table, column, entity, or range is unknown. Use `excel.lookup.inspect_match` to read one bounded candidate preview instead of probing whole sheets.
+
+`excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, and `excel.range.get_summary` return dimensions, table/schema metadata, truncation status, `payloadBytes`, and rough `estimatedTokens` without full cell matrices. Use them before broad reads when the target scope is already known.
+
+`excel.range.read_compact` and `excel.table.read_compact` are additive token-saving read paths. They default to bounded values-only output, support paging/projection, deterministic head/middle/tail sampling, and opt-in facets, and return `truncated`, `nextPage`, `payloadBytes`, and `estimatedTokens`. Existing full read tools remain unchanged for compatibility and for exact-data tasks.
+
+Large or budget-limited compact results can return an `excel://compact/{resource_id}` handle instead of embedding full detail. Fetch it with `excel.compact.get_resource` or as an MCP resource. `excel.snapshot.get_compact`, `excel.snapshot.compare_compact`, and `excel.diff.get_compact` use this pattern for snapshot and diff details. Summary/schema cache entries are local to the MCP process and are cleared automatically after workbook-mutating tools; `excel.compact.get_cache_status` and `excel.compact.clear_cache` expose the cache lifecycle.
+
+`excel.validate.compact` returns validation issue counts, severity counts, categories, and a few examples while storing the full validation report behind a compact resource URI. Use it before reporting validation proof unless the user needs the full issue list inline.
+
+Workbook-mutating MCP tool results include an additive `compactProof` object with changed cells/ranges, backup/rollback metadata, warning counts, validation counts when present, and rough response token telemetry.
 
 Combined mutating workflows also include an internal read-only preflight before mutation and return that `preflight` payload. Agents should still call `excel.workflow.prepare_session` first when possible, but a matched combined workflow can safely establish workbook identity and capability context itself when a cheap or compact model selects the workflow directly.
 
@@ -1968,6 +2022,11 @@ Open Workbook treats speed as a correctness requirement because slow workbook au
 - Do not call `context.sync()` inside per-cell loops.
 - Use 2D array assignments for values and formulas.
 - Load only requested Office.js properties.
+- Start unknown target discovery with lookup tools: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range`.
+- Start known-scope large workbook reads with compact context: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, or `excel.range.get_summary`.
+- Prefer `excel.table.read_compact` and `excel.range.read_compact` for exploratory reads, broad used ranges, and large tables; page or project only the rows/columns needed for the task.
+- Use `excel.validate.compact` when validation counts and examples are enough; fetch the returned compact resource only when full details are needed.
+- Reserve full reads for explicit user requests, audits, exports, or exact-data tasks that genuinely need every cell or facet.
 - Group operations by workbook, sheet, and contiguous range.
 - Chunk large payloads before Office.js limits.
 - Use `excel.batch.preflight` before applying large generated batches. It tells the agent whether to apply directly, submit to the queue, or use `excel.batch.submit_chunked`.
@@ -2001,7 +2060,25 @@ Every read/write result records:
 - engine name and version
 - warning count
 
+Compact summary and read tools also return `payloadBytes`, rough `estimatedTokens`, `truncated`, and optional `nextPage` metadata so agents can stop before sending oversized workbook context to the model.
+Budget-limited compact responses may return `resourceUri` handles for full details. Mutation results include `compactProof` metadata so agents can report changed cells/ranges, warnings, backup IDs, and rollback availability without reading changed sheets back.
+
+Lookup tools are cheaper than workbook scans when the agent does not know where data lives. They return ranked sheet/table/column/header/entity/range candidates and encoded `matchId` values; use `excel.lookup.inspect_match` on one candidate before falling back to `excel.range.read_compact`.
+
 Initial releases collect telemetry first, then set hard SLOs from real workbook tests.
+
+## Token Budget Examples
+
+Compact workflows should usually cut large workbook context by 80-99%:
+
+- Use `excel.table.get_schema` plus a 50-row `excel.table.read_compact` page instead of sending a 10,000-row table.
+- Use `excel.range.get_summary` plus projected `excel.range.read_compact` facets instead of `excel.range.read_full` over a used range.
+- Use `excel.lookup.find_headers` or `excel.lookup.resolve_range` instead of reading every sheet's first 100 rows to find a target column.
+- Use `excel.validate.compact`, `excel.snapshot.compare_compact`, or `excel.diff.get_compact` when issue/diff counts and examples are enough; fetch the `resourceUri` only for full detail review.
+
+## Model Routing
+
+Compact discovery, schema inspection, deterministic table/range mutations, validation proof, and rollback reporting are good candidates for cheaper models because Open Workbook handles the Excel mechanics locally. Escalate to larger models when the task requires ambiguous business reasoning, complex transformation design, or user-facing narrative synthesis from multiple compact evidence sources.
 
 ## Synthetic Core Benchmark
 
