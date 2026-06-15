@@ -14,6 +14,8 @@ describe("tool catalog", () => {
     expect(ToolCatalog.some((tool) => tool.name === "excel.lookup.search_workbook")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.name === "excel.lookup.inspect_match")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.name === "excel.compact.get_resource")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.compact.gc_resources")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.compact.context_stats")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.name === "excel.validate.compact")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.name === "excel.snapshot.get_compact")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.name === "excel.diff.get_compact")).toBe(true);
@@ -23,6 +25,8 @@ describe("tool catalog", () => {
     expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.create_pivot_chart_summary")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.repair_formula_errors")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.preview_risky_edit")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.inspect_analyze")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.rollback_validate")).toBe(true);
   });
 
   it("exposes only stable tools by default", () => {
@@ -67,6 +71,8 @@ describe("tool catalog", () => {
     expect(exposed.find((tool) => tool.name === "excel.lookup.search_workbook")?.requiredCapabilities).toContain("range.read");
     expect(exposed.some((tool) => tool.name === "excel.compact.get_resource")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.compact.clear_cache")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.compact.gc_resources")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.compact.context_stats")).toBe(true);
     expect(exposed.find((tool) => tool.name === "excel.compact.clear_cache")?.mutatesWorkbook).toBe(false);
     expect(exposed.some((tool) => tool.name === "excel.validate.compact")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.snapshot.get_compact")).toBe(true);
@@ -98,6 +104,10 @@ describe("tool catalog", () => {
     expect(exposed.find((tool) => tool.name === "excel.workflow.repair_formula_errors")?.requiresConfirmation).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.workflow.preview_risky_edit")).toBe(true);
     expect(exposed.find((tool) => tool.name === "excel.workflow.preview_risky_edit")?.requiresConfirmation).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.workflow.inspect_analyze")).toBe(true);
+    expect(exposed.find((tool) => tool.name === "excel.workflow.inspect_analyze")?.mutatesWorkbook).toBe(false);
+    expect(exposed.some((tool) => tool.name === "excel.workflow.rollback_validate")).toBe(true);
+    expect(exposed.find((tool) => tool.name === "excel.workflow.rollback_validate")?.requiresConfirmation).toBe(true);
     expect(exposed.find((tool) => tool.name === "excel.runtime.get_selection")?.status).toBe("stable");
   });
 

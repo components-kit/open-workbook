@@ -160,7 +160,7 @@ import type { AddinRpcClient } from "./addin-rpc-client.js";
 import { NativeFileBridge } from "./native-file-bridge.js";
 import { RuntimeStateStore } from "./state-store.js";
 
-const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.9";
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.10";
 
 export interface RuntimeServiceOptions {
   stateDir?: string;

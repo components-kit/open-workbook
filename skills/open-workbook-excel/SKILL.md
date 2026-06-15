@@ -23,20 +23,26 @@ If the add-in is disconnected, ask the user to start their agent UI so it launch
 
 - When the target is unknown, use lookup first: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range`, then inspect one candidate with `excel.lookup.inspect_match`.
 - Start with compact context tools for known large scopes: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, and `excel.range.get_summary`.
-- Prefer `excel.range.read_compact` and `excel.table.read_compact` for exploratory data reads. Page or project only the rows, columns, and facets needed for the current task.
+- Prefer `excel.range.read_compact` and `excel.table.read_compact` for exploratory data reads. In compact profile, treat brief proof plus `contextId`/`resourceUri` as enough unless exact cell bodies are required.
 - Use `excel.validate.compact` for validation proof when counts/examples are enough. Fetch `excel://compact/{resource_id}` details only if the user or task needs the full report.
+- If a tool returns `nextActionRecommendation: "answer_now"`, answer from the compact proof instead of continuing to inspect or validate unless the user asked for exhaustive audit.
+- Treat high-confidence compact proofs with `reasoningHints` such as "Agent can answer now" as a stop signal. Fetch `contextId` details only for failures, warnings, low confidence, truncation, or explicit audit requests.
+- For long sessions or token debugging, call `excel.compact.context_stats` instead of listing or fetching full resources.
 - Use `excel.range.read_*` for scoped cell data and metadata.
 - Use `excel.table.*` for structured table rows, filters, sorts, totals, and table resizing.
 - Use `excel.template.*`, `excel.style.*`, and `excel.formula.*` when preserving or repairing templates matters.
 - Use `excel.plan.*` for previewable multi-step changes that need rollback and stale-target checks.
 - Use `excel.batch.preflight` before large generated writes, then choose direct apply, queued submit, or `excel.batch.submit_chunked` with job progress based on the recommendation.
-- Use `excel.batch.*` for compact, direct range mutations that still need backups, fingerprints, permissions, and transaction logging.
+- Use `excel.batch.*` for compact, direct range mutations that still need backups, fingerprints, permissions, and transaction logging. Provide `idempotencyKey` on mutating tools when retrying or when the agent may be interrupted.
 - Use `excel.workflow.create_formula_sheet` for standard sheet creation with values, formulas, number formats, and formula validation in one response.
 - Use `excel.workflow.repair_formula_errors` for formula error repair when you have an error range plus a source formula range or exact formulas to write.
 - Use `excel.workflow.preview_risky_edit` for scoped risky edits that need before/after snapshots, a diff, and rollback preview in one response. Provide at least one minimal scoped operation and leave `apply` enabled unless the user asked for preview only.
 - Use `excel.workflow.create_template_report` for standard template report creation that needs region clear/fill, style comparison/repair, and validation in one response.
 - Use `excel.workflow.create_pivot_chart_summary` for standard PivotTable plus chart summary tasks that need create, refresh, and validation in one response.
+- Use `excel.workflow.inspect_analyze` for deterministic analysis such as missing values, duplicates, type profiling, and basic numeric summaries instead of asking the model to calculate from raw rows.
+- Use `excel.workflow.rollback_validate` when a recovery task should rollback or restore, recalculate, validate, and return proof in one call.
 Combined mutating workflows include a read-only preflight payload before mutation; still prefer `excel.workflow.prepare_session` first when possible.
+- After a mutation returns `invalidatedContextIds`, do not reuse those old compact resources; read fresh compact context only if the next step truly needs it.
 - Use `excel.validate.*` before and after risky changes.
 - Use `excel.backup.*`, `excel.snapshot.*`, `excel.transaction.*`, and `excel.job.*` for recovery, audit, long-running progress, rollback previews, and rollback chains.
 - Use `excel.task.*`, `excel.lock.*`, `excel.collab.*`, and `excel.conflict.*` for multi-agent workbook work.

@@ -4,6 +4,21 @@ All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
 
+## [0.1.10] - 2026-06-15
+
+### Added
+
+- Added compact context garbage collection and context statistics tools for pruning stored workbook detail and debugging token savings.
+- Added `excel.workflow.inspect_analyze` for deterministic local table/range profiling with compact proof and stored full detail.
+- Added `excel.workflow.rollback_validate` to combine rollback or backup restore, recalculation, and compact workbook validation in one recovery workflow.
+- Added compact-profile validation that keeps the advertised tool surface aligned with the protocol catalog.
+
+### Changed
+
+- Compact profile responses now support brief/standard/verbose response modes, bounded proof output, answer-now recommendations, confidence metadata, and stale context invalidation after mutations.
+- Mutating batch and workflow tools now accept `idempotencyKey` so retries can return prior proof instead of applying workbook edits twice.
+- Synthetic benchmarks now include compact response-size and token-savings coverage for large reads, validation failures, and mutation/diff proof.
+
 ## [0.1.9] - 2026-06-15
 
 ### Added

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from "node:crypto";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import * as z from "zod/v4";
@@ -167,6 +168,8 @@ const COMPACT_PROFILE_TOOLS = new Set([
   "excel.workflow.create_pivot_chart_summary",
   "excel.workflow.repair_formula_errors",
   "excel.workflow.preview_risky_edit",
+  "excel.workflow.inspect_analyze",
+  "excel.workflow.rollback_validate",
   "excel.plan.create",
   "excel.plan.preview",
   "excel.plan.apply",
@@ -174,6 +177,8 @@ const COMPACT_PROFILE_TOOLS = new Set([
   "excel.compact.get_resource",
   "excel.compact.list_resources",
   "excel.compact.clear_resources",
+  "excel.compact.gc_resources",
+  "excel.compact.context_stats",
   "excel.compact.get_cache_status",
   "excel.compact.clear_cache",
   "excel.snapshot.create",
@@ -214,20 +219,38 @@ const READ_ONLY_PROFILE_TOOLS = new Set([...COMPACT_PROFILE_TOOLS].filter((name)
 ));
 
 const runtime = await createRuntimeFacade();
-const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.9";
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.10";
 const COMPACT_RESOURCE_LIMIT = 100;
 const COMPACT_DEFAULT_RESOURCE_THRESHOLD_BYTES = 24_000;
+const COMPACT_LIMITS = {
+  maxToolResultChars: 4_000,
+  maxSummaryChars: 2_000,
+  maxExamples: 5,
+  maxWarnings: 10,
+  maxValidationIssues: 20,
+  maxSchemaFields: 50,
+  maxSampleRows: 10,
+  maxSampleCols: 20
+} as const;
 
 type CompactResourceKind = "read" | "validation" | "diff" | "snapshot" | "mutation" | "summary" | "generic";
+type CompactResponseMode = "brief" | "standard" | "verbose";
+type CompactNextActionRecommendation = "answer_now" | "fetch_more_context" | "validate_then_answer" | "needs_user_confirmation";
+type CompactConfidence = "high" | "medium" | "low";
 
 interface CompactStoredResource {
   resourceId: string;
   uri: string;
   kind: CompactResourceKind;
   title?: string | undefined;
+  scope?: Record<string, unknown> | undefined;
+  sourceHash?: string | undefined;
+  pinned?: boolean | undefined;
   createdAt: string;
+  lastAccessedAt: string;
   payloadBytes: number;
   estimatedTokens: number;
+  accessCount: number;
   payload: unknown;
 }
 
@@ -239,9 +262,25 @@ interface CompactCacheEntry {
 
 const compactResources = new Map<string, CompactStoredResource>();
 const compactCache = new Map<string, CompactCacheEntry>();
+const compactIdempotencyRecords = new Map<string, CompactIdempotencyRecord>();
 let compactCacheInvalidationCount = 0;
 let compactCacheLastInvalidatedAt: string | undefined;
 let compactLastObservedEventId: string | undefined;
+let compactToolResultCount = 0;
+let compactToolResultBytes = 0;
+let compactToolStoredBytes = 0;
+let compactCacheHitCount = 0;
+let compactCacheMissCount = 0;
+const COMPACT_RESOURCE_TTL_MS = 60 * 60 * 1000;
+const COMPACT_IDEMPOTENCY_TTL_MS = 60 * 60 * 1000;
+
+interface CompactIdempotencyRecord {
+  idempotencyKey: string;
+  toolName: string;
+  operationHash: string;
+  createdAt: string;
+  resultText: string;
+}
 
 const server = new McpServer({
   name: "open-workbook",
@@ -1743,6 +1782,8 @@ function registerRangeTools(mcp: McpServer): void {
     maxCells: z.number().int().min(0).max(1000000).optional(),
     maxPayloadBytes: z.number().int().min(0).optional(),
     maxEstimatedTokens: z.number().int().min(0).optional(),
+    budget: compactBudgetSchema().optional(),
+    responseMode: z.enum(["brief", "standard", "verbose"]).optional(),
     includeValues: z.boolean().optional(),
     includeFormulas: z.boolean().optional(),
     includeText: z.boolean().optional(),
@@ -2197,7 +2238,9 @@ function registerLookupTools(mcp: McpServer): void {
         includeFormulas: z.boolean().optional(),
         includeText: z.boolean().optional(),
         maxPayloadBytes: z.number().int().min(0).optional(),
-        maxEstimatedTokens: z.number().int().min(0).optional()
+        maxEstimatedTokens: z.number().int().min(0).optional(),
+        budget: compactBudgetSchema().optional(),
+        responseMode: z.enum(["brief", "standard", "verbose"]).optional()
       },
       annotations: lookupAnnotations
     },
@@ -2295,6 +2338,7 @@ function registerBatchTools(mcp: McpServer): void {
         operations: z.array(z.any()),
         confirmationToken: z.string().optional(),
         expectedTargetFingerprints: z.array(z.any()).optional(),
+        idempotencyKey: z.string().optional(),
         agentId: z.string().optional(),
         agentName: z.string().optional(),
         taskId: z.string().optional(),
@@ -2311,6 +2355,7 @@ function registerBatchTools(mcp: McpServer): void {
       operations,
       confirmationToken,
       expectedTargetFingerprints,
+      idempotencyKey: _idempotencyKey,
       agentId,
       agentName,
       taskId,
@@ -2320,6 +2365,7 @@ function registerBatchTools(mcp: McpServer): void {
       operations: unknown[];
       confirmationToken?: string;
       expectedTargetFingerprints?: unknown[];
+      idempotencyKey?: string;
       agentId?: string;
       agentName?: string;
       taskId?: string;
@@ -2365,6 +2411,7 @@ function registerBatchTools(mcp: McpServer): void {
         operations: z.array(z.any()),
         confirmationToken: z.string().optional(),
         expectedTargetFingerprints: z.array(z.any()).optional(),
+        idempotencyKey: z.string().optional(),
         agentId: z.string().optional(),
         agentName: z.string().optional(),
         taskId: z.string().optional(),
@@ -2381,6 +2428,7 @@ function registerBatchTools(mcp: McpServer): void {
       operations,
       confirmationToken,
       expectedTargetFingerprints,
+      idempotencyKey: _idempotencyKey,
       agentId,
       agentName,
       taskId,
@@ -2390,6 +2438,7 @@ function registerBatchTools(mcp: McpServer): void {
       operations: unknown[];
       confirmationToken?: string;
       expectedTargetFingerprints?: unknown[];
+      idempotencyKey?: string;
       agentId?: string;
       agentName?: string;
       taskId?: string;
@@ -2436,6 +2485,7 @@ function registerBatchTools(mcp: McpServer): void {
         goal: z.string().optional(),
         confirmationToken: z.string().optional(),
         expectedTargetFingerprints: z.array(z.any()).optional(),
+        idempotencyKey: z.string().optional(),
         agentId: z.string().optional(),
         agentName: z.string().optional(),
         taskId: z.string().optional(),
@@ -2453,6 +2503,7 @@ function registerBatchTools(mcp: McpServer): void {
       goal,
       confirmationToken,
       expectedTargetFingerprints,
+      idempotencyKey: _idempotencyKey,
       agentId,
       agentName,
       taskId,
@@ -2463,6 +2514,7 @@ function registerBatchTools(mcp: McpServer): void {
       goal?: string;
       confirmationToken?: string;
       expectedTargetFingerprints?: unknown[];
+      idempotencyKey?: string;
       agentId?: string;
       agentName?: string;
       taskId?: string;
@@ -2972,6 +3024,7 @@ function registerWorkflowTools(mcp: McpServer): void {
         apply: z.boolean().optional(),
         allowSparseOverwrite: z.boolean().optional(),
         confirmationToken: z.string().optional(),
+        idempotencyKey: z.string().optional(),
         agentId: z.string().optional(),
         agentName: z.string().optional(),
         taskId: z.string().optional(),
@@ -3025,6 +3078,54 @@ function registerWorkflowTools(mcp: McpServer): void {
       return jsonResult({ ...result, preflight });
     }
   );
+
+  registerMcpTool(
+    mcp,
+    "excel.workflow.inspect_analyze",
+    {
+      title: "Inspect and analyze Excel data",
+      description: "Read a table or range locally, compute compact profiling statistics, and store full analysis behind a context resource.",
+      inputSchema: {
+        workbookId: z.string(),
+        tableName: z.string().optional(),
+        sheetName: z.string().optional(),
+        address: z.string().optional(),
+        maxRows: z.number().int().min(1).max(10000).optional(),
+        responseMode: z.enum(["brief", "standard", "verbose"]).optional(),
+        budget: compactBudgetSchema().optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async (args: any) => jsonResult(await workflowInspectAnalyze(args))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.workflow.rollback_validate",
+    {
+      title: "Rollback and validate Excel workbook",
+      description: "Rollback a transaction or restore a backup, recalculate the workbook, validate it, and return compact proof.",
+      inputSchema: {
+        workbookId: z.string(),
+        transactionId: z.string().optional(),
+        backupId: z.string().optional(),
+        confirmationToken: z.string().optional(),
+        idempotencyKey: z.string().optional(),
+        responseMode: z.enum(["brief", "standard", "verbose"]).optional(),
+        budget: compactBudgetSchema().optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false
+      }
+    },
+    async (args: any) => jsonResult(await workflowRollbackValidate(args))
+  );
 }
 
 async function workflowPreflight(workbookId?: WorkbookId, includePreview = true) {
@@ -3040,6 +3141,247 @@ async function workflowPreflight(workbookId?: WorkbookId, includePreview = true)
     collaboration: runtime.getCollaborationStatus(resolvedWorkbookId),
     workbookId: resolvedWorkbookId
   };
+}
+
+async function workflowInspectAnalyze(args: {
+  workbookId: string;
+  tableName?: string;
+  sheetName?: string;
+  address?: string;
+  maxRows?: number;
+  responseMode?: CompactResponseMode;
+  budget?: Record<string, unknown>;
+}) {
+  const workbookId = args.workbookId as WorkbookId;
+  const budget = compactRequestedBudget(args);
+  const maxRows = Math.min(args.maxRows ?? 1000, 10000);
+  const source = args.tableName
+    ? await workflowAnalyzeTable(workbookId, args.tableName, maxRows)
+    : args.sheetName && args.address
+      ? await workflowAnalyzeRange(workbookId, args.sheetName, args.address)
+      : { ok: false, error: { code: "ANALYZE_TARGET_REQUIRED", message: "Provide either tableName or sheetName plus address." } };
+  if (!(source as { ok?: boolean }).ok) {
+    return withCompactTelemetry(
+      { ok: false, workflow: "excel.workflow.inspect_analyze", workbookId, tableName: args.tableName, sheetName: args.sheetName, address: args.address, source },
+      {
+        detailLevel: "summary",
+        responseMode: args.responseMode,
+        nextActionRecommendation: "fetch_more_context",
+        reasoningHints: ["Analysis target could not be read"],
+        confidence: "low",
+        confidenceReasons: ["Read failed before local analysis"],
+        maxPayloadBytes: budget.maxChars
+      }
+    );
+  }
+  const matrix = (source as { rows?: unknown[][] }).rows ?? [];
+  const headers = (source as { headers?: string[] }).headers ?? workflowDefaultHeaders(matrix);
+  const rows = workflowDataRows(headers, matrix);
+  const analysis = analyzeTabularRows(headers, rows);
+  const fullPayload = { ok: true, workflow: "excel.workflow.inspect_analyze", source, analysis };
+  const summary = {
+    ok: true,
+    workflow: "excel.workflow.inspect_analyze",
+    workbookId,
+    tableName: args.tableName,
+    sheetName: args.sheetName,
+    address: args.address,
+    shape: analysis.shape,
+    detectedColumns: analysis.columns.slice(0, budget.maxExamples),
+    issueSummary: analysis.issueSummary,
+    numericSummary: analysis.numericSummary.slice(0, budget.maxExamples),
+    duplicateRowCount: analysis.duplicateRowCount,
+    budgetSummary: budget.applied
+  };
+  return withCompactTelemetry(summary, {
+    detailLevel: "summary",
+    responseMode: args.responseMode,
+    storeResource: true,
+    resourceKind: "summary",
+    resourceTitle: "Workflow inspect/analyze detail",
+    resourcePayload: fullPayload,
+    resourceScope: compactReadScope({ workbookId, tableName: args.tableName, sheetName: args.sheetName, address: args.address }),
+    sourceHash: compactSourceHash(fullPayload),
+    nextActionRecommendation: "answer_now",
+    reasoningHints: ["Local analysis completed", "Full row/profile detail is stored behind contextId", "Agent can answer from the compact summary"],
+    confidence: "high",
+    confidenceReasons: ["Data was read locally", "Deterministic profiling completed inside MCP"],
+    maxPayloadBytes: budget.maxChars,
+    budgetSummary: summary
+  });
+}
+
+async function workflowAnalyzeTable(workbookId: WorkbookId, tableName: string, maxRows: number) {
+  const result = await runtime.readTable({ workbookId, tableName, includeValues: true, rowOffset: 0, rowLimit: maxRows });
+  const table = (result as { table?: { headers?: string[]; values?: unknown[][] } }).table;
+  if (!(result as { ok?: boolean }).ok || !table) {
+    return { ok: false, source: result };
+  }
+  return { ok: true, sourceType: "table", workbookId, tableName, headers: table.headers ?? workflowDefaultHeaders(table.values ?? []), rows: table.values ?? [] };
+}
+
+async function workflowAnalyzeRange(workbookId: WorkbookId, sheetName: string, address: string) {
+  const result = await readRangeSnapshot(workbookId, sheetName, address, ["values"]);
+  const snapshot = ((result as { data?: Array<{ snapshot?: { values?: unknown[][] } }> }).data ?? [])[0]?.snapshot;
+  if (!(result as { ok?: boolean }).ok || !snapshot) {
+    return { ok: false, source: result };
+  }
+  const values = snapshot.values ?? [];
+  return { ok: true, sourceType: "range", workbookId, sheetName, address, headers: workflowDefaultHeaders(values), rows: values };
+}
+
+function workflowDefaultHeaders(matrix: unknown[][]): string[] {
+  const firstRow = matrix[0] ?? [];
+  if (firstRow.length > 0 && firstRow.every((value) => typeof value === "string" && value.trim().length > 0)) {
+    return firstRow.map((value) => String(value));
+  }
+  const width = matrix.reduce((max, row) => Math.max(max, Array.isArray(row) ? row.length : 0), 0);
+  return Array.from({ length: width }, (_unused, index) => `Column ${index + 1}`);
+}
+
+function workflowDataRows(headers: string[], matrix: unknown[][]): unknown[][] {
+  if (matrix.length === 0) {
+    return [];
+  }
+  const firstRow = matrix[0] ?? [];
+  const hasHeaderRow = headers.length > 0 && firstRow.length === headers.length && firstRow.every((value, index) => String(value) === headers[index]);
+  return hasHeaderRow ? matrix.slice(1) : matrix;
+}
+
+function analyzeTabularRows(headers: string[], rows: unknown[][]) {
+  const rowHashes = new Map<string, number>();
+  let duplicateRowCount = 0;
+  for (const row of rows) {
+    const key = JSON.stringify(row);
+    const count = rowHashes.get(key) ?? 0;
+    if (count === 1) {
+      duplicateRowCount += 1;
+    }
+    rowHashes.set(key, count + 1);
+  }
+  const columns = headers.map((header, columnIndex) => analyzeColumn(header, rows.map((row) => row[columnIndex])));
+  return {
+    shape: { rows: rows.length, columns: headers.length },
+    columns,
+    issueSummary: {
+      missingValues: columns.reduce((sum, column) => sum + column.missingCount, 0),
+      duplicateRows: duplicateRowCount,
+      formulaErrors: columns.reduce((sum, column) => sum + column.formulaErrorCount, 0)
+    },
+    numericSummary: columns.filter((column) => column.inferredType === "number").map((column) => ({
+      name: column.name,
+      count: column.nonEmptyCount,
+      min: column.min,
+      max: column.max,
+      average: column.average
+    })),
+    duplicateRowCount
+  };
+}
+
+function analyzeColumn(name: string, values: unknown[]) {
+  const nonEmpty = values.filter((value) => !isCompactEmptyCell(value));
+  const numericValues = nonEmpty
+    .map((value) => typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : NaN)
+    .filter((value) => Number.isFinite(value));
+  const formulaErrorCount = nonEmpty.filter((value) => typeof value === "string" && /^#(VALUE!|REF!|DIV\/0!|NAME\?|N\/A|NULL!|NUM!)/.test(value)).length;
+  const inferredType = numericValues.length > 0 && numericValues.length >= nonEmpty.length * 0.8
+    ? "number"
+    : nonEmpty.some((value) => value instanceof Date || (typeof value === "string" && !Number.isNaN(Date.parse(value))))
+      ? "date"
+      : "text";
+  const sum = numericValues.reduce((total, value) => total + value, 0);
+  return {
+    name,
+    inferredType,
+    nonEmptyCount: nonEmpty.length,
+    missingCount: values.length - nonEmpty.length,
+    distinctCount: new Set(nonEmpty.map((value) => JSON.stringify(value))).size,
+    formulaErrorCount,
+    ...(numericValues.length > 0 ? { min: Math.min(...numericValues), max: Math.max(...numericValues), average: Number((sum / numericValues.length).toFixed(6)) } : {})
+  };
+}
+
+async function workflowRollbackValidate(args: {
+  workbookId: string;
+  transactionId?: string;
+  backupId?: string;
+  confirmationToken?: string;
+  responseMode?: CompactResponseMode;
+  budget?: Record<string, unknown>;
+}) {
+  const workbookId = args.workbookId as WorkbookId;
+  const budget = compactRequestedBudget(args);
+  if (!args.transactionId && !args.backupId) {
+    return withCompactTelemetry(
+      {
+        ok: false,
+        workflow: "excel.workflow.rollback_validate",
+        workbookId,
+        error: {
+          code: "ROLLBACK_TARGET_REQUIRED",
+          message: "Provide transactionId or backupId."
+        }
+      },
+      {
+        detailLevel: "summary",
+        responseMode: args.responseMode,
+        nextActionRecommendation: "needs_user_confirmation",
+        reasoningHints: ["Rollback target was missing"],
+        confidence: "high",
+        confidenceReasons: ["No rollback was attempted"],
+        maxPayloadBytes: budget.maxChars
+      }
+    );
+  }
+  const rollbackResult = args.transactionId
+    ? await runtime.rollbackTransaction(args.transactionId as TransactionId, args.confirmationToken)
+    : await runtime.restoreBackup(args.backupId as BackupId, args.confirmationToken);
+  const calculation = await runtime.calculateWorkbook(workbookId, "recalculate");
+  const validation = await runtime.validateWorkbook({ workbookId });
+  const validationIssues = Array.isArray((validation as { issues?: unknown[] }).issues) ? (validation as { issues: unknown[] }).issues : [];
+  const ok = Boolean((rollbackResult as { ok?: boolean }).ok && (calculation as { ok?: boolean }).ok !== false && (validation as { ok?: boolean }).ok);
+  const fullPayload = { ok, workflow: "excel.workflow.rollback_validate", rollbackResult, calculation, validation };
+  const summary = {
+    ok,
+    workflow: "excel.workflow.rollback_validate",
+    workbookId,
+    transactionId: args.transactionId,
+    backupId: args.backupId,
+    rollback: summarizeOperationResult(rollbackResult),
+    calculationOk: (calculation as { ok?: boolean }).ok,
+    validationSummary: {
+      ok: (validation as { ok?: boolean }).ok,
+      issueCount: (validation as { issueCount?: number }).issueCount ?? validationIssues.length,
+      severityCounts: compactSeverityCounts(validationIssues),
+      categories: compactIssueCategories(validationIssues),
+      examples: validationIssues.slice(0, budget.maxIssues).map(compactIssueExample),
+      examplesTruncated: validationIssues.length > budget.maxIssues
+    },
+    budgetSummary: budget.applied
+  };
+  return withCompactTelemetry(summary, {
+    detailLevel: "summary",
+    responseMode: args.responseMode,
+    storeResource: true,
+    resourceKind: "mutation",
+    resourceTitle: "Workflow rollback/validate detail",
+    resourcePayload: fullPayload,
+    resourceScope: compactReadScope({ workbookId, transactionId: args.transactionId, backupId: args.backupId }),
+    sourceHash: compactSourceHash(fullPayload),
+    nextActionRecommendation: ok ? "answer_now" : "fetch_more_context",
+    reasoningHints: ok
+      ? ["Rollback completed", "Workbook recalculation and validation completed", "Agent can answer now"]
+      : ["Rollback workflow reported issues", "Fetch context preview before final answer"],
+    confidence: ok && validationIssues.length === 0 ? "high" : ok ? "medium" : "low",
+    confidenceReasons: [
+      (rollbackResult as { ok?: boolean }).ok === false ? "Rollback reported failure" : "Rollback step completed",
+      (calculation as { ok?: boolean }).ok === false ? "Recalculation reported failure" : "Recalculation step completed",
+      (validation as { ok?: boolean }).ok === false ? "Validation reported failure" : "Validation step completed"
+    ],
+    maxPayloadBytes: budget.maxChars,
+    budgetSummary: summary
+  });
 }
 
 function registerPlanTools(mcp: McpServer): void {
@@ -4127,7 +4469,9 @@ function registerTableTools(mcp: McpServer): void {
         maxColumns: z.number().int().min(0).max(1000).optional(),
         maxCells: z.number().int().min(0).max(1000000).optional(),
         maxPayloadBytes: z.number().int().min(0).optional(),
-        maxEstimatedTokens: z.number().int().min(0).optional()
+        maxEstimatedTokens: z.number().int().min(0).optional(),
+        budget: compactBudgetSchema().optional(),
+        responseMode: z.enum(["brief", "standard", "verbose"]).optional()
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
@@ -5897,7 +6241,9 @@ function registerValidateTools(mcp: McpServer): void {
         rightSnapshotId: z.string().optional(),
         maxIssues: z.number().int().min(0).max(100).optional(),
         maxPayloadBytes: z.number().int().min(0).optional(),
-        maxEstimatedTokens: z.number().int().min(0).optional()
+        maxEstimatedTokens: z.number().int().min(0).optional(),
+        budget: compactBudgetSchema().optional(),
+        responseMode: z.enum(["brief", "standard", "verbose"]).optional()
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
@@ -6264,11 +6610,11 @@ function registerSnapshotTools(mcp: McpServer): void {
     {
       title: "Get compact snapshot",
       description: "Return snapshot metadata and store full snapshot payload behind a compact resource URI.",
-      inputSchema: { snapshotId: z.string(), maxPayloadBytes: z.number().int().min(0).optional(), maxEstimatedTokens: z.number().int().min(0).optional() },
+      inputSchema: { snapshotId: z.string(), maxPayloadBytes: z.number().int().min(0).optional(), maxEstimatedTokens: z.number().int().min(0).optional(), responseMode: z.enum(["brief", "standard", "verbose"]).optional(), budget: compactBudgetSchema().optional() },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
-    ({ snapshotId, maxPayloadBytes, maxEstimatedTokens }: { snapshotId: string; maxPayloadBytes?: number; maxEstimatedTokens?: number }) =>
-      jsonResult(compactSnapshot(snapshotId as SnapshotId, maxPayloadBytes, maxEstimatedTokens))
+    ({ snapshotId, maxPayloadBytes, maxEstimatedTokens, responseMode, budget }: { snapshotId: string; maxPayloadBytes?: number; maxEstimatedTokens?: number; responseMode?: CompactResponseMode; budget?: Record<string, unknown> }) =>
+      jsonResult(compactSnapshot(compactSnapshotOptions(snapshotId as SnapshotId, { maxPayloadBytes, maxEstimatedTokens, responseMode, budget })))
   );
 
   registerMcpTool(
@@ -6309,12 +6655,14 @@ function registerSnapshotTools(mcp: McpServer): void {
         leftSnapshotId: z.string(),
         rightSnapshotId: z.string(),
         maxPayloadBytes: z.number().int().min(0).optional(),
-        maxEstimatedTokens: z.number().int().min(0).optional()
+        maxEstimatedTokens: z.number().int().min(0).optional(),
+        responseMode: z.enum(["brief", "standard", "verbose"]).optional(),
+        budget: compactBudgetSchema().optional()
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
-    ({ leftSnapshotId, rightSnapshotId, maxPayloadBytes, maxEstimatedTokens }: { leftSnapshotId: string; rightSnapshotId: string; maxPayloadBytes?: number; maxEstimatedTokens?: number }) =>
-      jsonResult(compactSnapshotDiff(leftSnapshotId as SnapshotId, rightSnapshotId as SnapshotId, maxPayloadBytes, maxEstimatedTokens))
+    ({ leftSnapshotId, rightSnapshotId, maxPayloadBytes, maxEstimatedTokens, responseMode, budget }: { leftSnapshotId: string; rightSnapshotId: string; maxPayloadBytes?: number; maxEstimatedTokens?: number; responseMode?: CompactResponseMode; budget?: Record<string, unknown> }) =>
+      jsonResult(compactSnapshotDiff(compactSnapshotDiffOptions(leftSnapshotId as SnapshotId, rightSnapshotId as SnapshotId, { maxPayloadBytes, maxEstimatedTokens, responseMode, budget })))
   );
 
   registerMcpTool(
@@ -6373,12 +6721,14 @@ function registerDiffTools(mcp: McpServer): void {
         leftSnapshotId: z.string(),
         rightSnapshotId: z.string(),
         maxPayloadBytes: z.number().int().min(0).optional(),
-        maxEstimatedTokens: z.number().int().min(0).optional()
+        maxEstimatedTokens: z.number().int().min(0).optional(),
+        responseMode: z.enum(["brief", "standard", "verbose"]).optional(),
+        budget: compactBudgetSchema().optional()
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
-    ({ leftSnapshotId, rightSnapshotId, maxPayloadBytes, maxEstimatedTokens }: { leftSnapshotId: string; rightSnapshotId: string; maxPayloadBytes?: number; maxEstimatedTokens?: number }) =>
-      jsonResult(compactSnapshotDiff(leftSnapshotId as SnapshotId, rightSnapshotId as SnapshotId, maxPayloadBytes, maxEstimatedTokens))
+    ({ leftSnapshotId, rightSnapshotId, maxPayloadBytes, maxEstimatedTokens, responseMode, budget }: { leftSnapshotId: string; rightSnapshotId: string; maxPayloadBytes?: number; maxEstimatedTokens?: number; responseMode?: CompactResponseMode; budget?: Record<string, unknown> }) =>
+      jsonResult(compactSnapshotDiff(compactSnapshotDiffOptions(leftSnapshotId as SnapshotId, rightSnapshotId as SnapshotId, { maxPayloadBytes, maxEstimatedTokens, responseMode, budget })))
   );
 
   registerMcpTool(
@@ -6492,10 +6842,18 @@ function registerCompactTools(mcp: McpServer): void {
     {
       title: "List compact detail resources",
       description: "List stored compact detail resources without returning their payloads.",
-      inputSchema: { kind: z.string().optional(), limit: z.number().int().min(1).max(COMPACT_RESOURCE_LIMIT).optional() },
+      inputSchema: {
+        kind: z.string().optional(),
+        workbook: z.string().optional(),
+        worksheet: z.string().optional(),
+        olderThanSeconds: z.number().int().min(0).optional(),
+        includePinned: z.boolean().optional(),
+        limit: z.number().int().min(1).max(COMPACT_RESOURCE_LIMIT).optional()
+      },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
-    ({ kind, limit }: { kind?: string; limit?: number }) => jsonResult(listCompactResources(kind, limit))
+    ({ kind, workbook, worksheet, olderThanSeconds, includePinned, limit }: { kind?: string; workbook?: string; worksheet?: string; olderThanSeconds?: number; includePinned?: boolean; limit?: number }) =>
+      jsonResult(listCompactResources(compactOptional({ kind, workbook, worksheet, olderThanSeconds, includePinned, limit })))
   );
 
   registerMcpTool(
@@ -6521,6 +6879,36 @@ function registerCompactTools(mcp: McpServer): void {
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
     ({ kind }: { kind?: string }) => jsonResult(clearCompactResources(kind))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.compact.gc_resources",
+    {
+      title: "Garbage collect compact context resources",
+      description: "Delete expired unpinned compact detail payloads from this MCP process.",
+      inputSchema: {
+        kind: z.string().optional(),
+        maxAgeMs: z.number().int().min(0).optional(),
+        keepNewest: z.number().int().min(0).max(COMPACT_RESOURCE_LIMIT).optional(),
+        includePinned: z.boolean().optional()
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    ({ kind, maxAgeMs, keepNewest, includePinned }: { kind?: string; maxAgeMs?: number; keepNewest?: number; includePinned?: boolean }) =>
+      jsonResult(gcCompactResources(compactOptional({ kind, maxAgeMs, keepNewest, includePinned })))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.compact.context_stats",
+    {
+      title: "Get compact context stats",
+      description: "Return compact resource counts, stored bytes, token estimates, and cache-hit telemetry.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    () => jsonResult(compactContextStats())
   );
 
   registerMcpTool(
@@ -6653,12 +7041,19 @@ type CompactDetailLevel = "summary" | "compact" | "full";
 
 interface CompactTelemetryOptions {
   detailLevel: CompactDetailLevel;
+  responseMode?: CompactResponseMode | undefined;
   truncated?: boolean;
   nextPage?: { rowOffset?: number; columnOffset?: number } | undefined;
   resourceUri?: string | undefined;
   resourceKind?: CompactResourceKind | undefined;
   resourceTitle?: string | undefined;
   resourcePayload?: unknown;
+  resourceScope?: Record<string, unknown> | undefined;
+  sourceHash?: string | undefined;
+  nextActionRecommendation?: CompactNextActionRecommendation | undefined;
+  reasoningHints?: string[] | undefined;
+  confidence?: CompactConfidence | undefined;
+  confidenceReasons?: string[] | undefined;
   storeResource?: boolean | undefined;
   maxPayloadBytes?: number | undefined;
   maxEstimatedTokens?: number | undefined;
@@ -6682,66 +7077,310 @@ function withCompactTelemetry<T extends Record<string, unknown>>(payload: T, opt
 } {
   const originalPayloadBytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
   const originalEstimatedTokens = Math.ceil(originalPayloadBytes / 4);
+  const responseMode = compactResponseMode(options.responseMode);
+  const shouldStoreForBrief = responseMode === "brief" && options.budgetSummary !== undefined && options.resourcePayload !== undefined;
   const maxPayloadBytes = options.maxPayloadBytes ?? (options.budgetSummary !== undefined ? COMPACT_DEFAULT_RESOURCE_THRESHOLD_BYTES : undefined);
   const overBudget =
     (maxPayloadBytes !== undefined && originalPayloadBytes > maxPayloadBytes) ||
     (options.maxEstimatedTokens !== undefined && originalEstimatedTokens > options.maxEstimatedTokens);
-  const stored = options.storeResource || overBudget
-    ? storeCompactResource(options.resourceKind ?? "generic", options.resourcePayload ?? payload, options.resourceTitle)
+  const resourceMetadata: { title?: string; scope?: Record<string, unknown>; sourceHash?: string } = {};
+  if (options.resourceTitle !== undefined) {
+    resourceMetadata.title = options.resourceTitle;
+  }
+  if (options.resourceScope !== undefined) {
+    resourceMetadata.scope = options.resourceScope;
+  }
+  if (options.sourceHash !== undefined) {
+    resourceMetadata.sourceHash = options.sourceHash;
+  }
+  const beforeResourceCount = compactResources.size;
+  const stored = options.storeResource || overBudget || shouldStoreForBrief
+    ? storeCompactResource(options.resourceKind ?? "generic", options.resourcePayload ?? payload, resourceMetadata)
     : undefined;
-  const output = overBudget && options.budgetSummary !== undefined
+  const cacheHit = stored !== undefined && compactResources.size === beforeResourceCount;
+  const output = (overBudget || shouldStoreForBrief) && options.budgetSummary !== undefined
     ? {
         ...options.budgetSummary,
-        budgetExceeded: true,
+        budgetExceeded: overBudget,
         warnings: [
           ...asWarningArray(options.budgetSummary.warnings),
-          {
-            code: "COMPACT_BUDGET_EXCEEDED",
-            message: "Full compact detail exceeded the response budget and was stored behind resourceUri."
-          }
+          ...(overBudget
+            ? [{
+                code: "COMPACT_BUDGET_EXCEEDED",
+                message: "Full compact detail exceeded the response budget and was stored behind resourceUri."
+              }]
+            : [])
         ],
         resourcePayloadBytes: originalPayloadBytes,
         resourceEstimatedTokens: originalEstimatedTokens
       } as unknown as T
     : payload;
-  const payloadBytes = Buffer.byteLength(JSON.stringify(output), "utf8");
+  const limitedOutput = enforceCompactOutputLimits(output as Record<string, unknown>, {
+    originalPayloadBytes,
+    originalEstimatedTokens,
+    overBudget,
+    ...(stored !== undefined ? { stored } : {})
+  }) as T;
+  const payloadBytes = Buffer.byteLength(JSON.stringify(limitedOutput), "utf8");
+  compactToolResultCount += 1;
+  compactToolResultBytes += payloadBytes;
+  compactToolStoredBytes += stored?.payloadBytes ?? 0;
+  if (stored !== undefined) {
+    if (cacheHit) {
+      compactCacheHitCount += 1;
+    } else {
+      compactCacheMissCount += 1;
+    }
+  }
   return {
-    ...output,
+    ...limitedOutput,
     payloadBytes,
     estimatedTokens: Math.ceil(payloadBytes / 4),
     truncated: options.truncated ?? false,
     detailLevel: options.detailLevel,
+    responseMode,
+    telemetry: compactTelemetrySummary(payloadBytes, stored, cacheHit),
+    ...(options.nextActionRecommendation !== undefined ? { nextActionRecommendation: options.nextActionRecommendation } : {}),
+    ...(options.reasoningHints !== undefined ? { reasoningHints: limitStringList(options.reasoningHints, COMPACT_LIMITS.maxWarnings) } : {}),
+    ...(options.confidence !== undefined ? { confidence: options.confidence } : {}),
+    ...(options.confidenceReasons !== undefined ? { confidenceReasons: limitStringList(options.confidenceReasons, COMPACT_LIMITS.maxWarnings) } : {}),
     ...(options.nextPage !== undefined ? { nextPage: options.nextPage } : {}),
-    ...(stored !== undefined ? { resourceUri: stored.uri } : options.resourceUri !== undefined ? { resourceUri: options.resourceUri } : {})
+    ...(stored !== undefined ? { resourceUri: stored.uri, contextId: stored.resourceId } : options.resourceUri !== undefined ? { resourceUri: options.resourceUri, contextId: compactResourceIdFromUri(options.resourceUri) } : {})
   };
+}
+
+function enforceCompactOutputLimits(
+  output: Record<string, unknown>,
+  options: {
+    stored?: CompactStoredResource;
+    originalPayloadBytes: number;
+    originalEstimatedTokens: number;
+    overBudget: boolean;
+  }
+): Record<string, unknown> {
+  const compacted = { ...output };
+  const omittedCounts: Record<string, number> = {};
+  if (typeof compacted.summary === "string" && compacted.summary.length > COMPACT_LIMITS.maxSummaryChars) {
+    omittedCounts.summaryChars = compacted.summary.length - COMPACT_LIMITS.maxSummaryChars;
+    compacted.summary = `${compacted.summary.slice(0, COMPACT_LIMITS.maxSummaryChars)}...`;
+  }
+  for (const key of ["examples", "issues", "warnings", "changedRanges", "affectedRanges", "sampleRows", "sampleColumns"]) {
+    const value = compacted[key];
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    const limit = compactArrayLimit(key);
+    if (value.length > limit) {
+      omittedCounts[key] = value.length - limit;
+      compacted[key] = value.slice(0, limit);
+      compacted[`${key}Truncated`] = true;
+    }
+  }
+  let serialized = JSON.stringify(compacted);
+  if (serialized.length > COMPACT_LIMITS.maxToolResultChars && options.stored !== undefined) {
+    const keepKeys = [
+      "ok",
+      "toolName",
+      "workbookId",
+      "sheetName",
+      "address",
+      "tableName",
+      "validator",
+      "summary",
+      "source",
+      "window",
+      "shape",
+      "issueCount",
+      "severityCounts",
+      "categories",
+      "changedRangeCount",
+      "cellsChanged",
+      "formulasChanged",
+      "stylesChanged",
+      "tablesChanged",
+      "sheetsChanged",
+      "destructiveLevel",
+      "compactProof",
+      "validationSummary",
+      "diffSummary",
+      "transactionId",
+      "backupId",
+      "rollbackAvailable"
+    ];
+    const reduced: Record<string, unknown> = {};
+    for (const key of keepKeys) {
+      if (compacted[key] !== undefined) {
+        reduced[key] = compacted[key];
+      }
+    }
+    serialized = JSON.stringify(reduced);
+    Object.assign(compacted, reduced);
+    for (const key of Object.keys(compacted)) {
+      if (!(key in reduced)) {
+        delete compacted[key];
+      }
+    }
+    compacted.budgetExceeded = true;
+  }
+  if (Object.keys(omittedCounts).length > 0) {
+    compacted.omittedCounts = omittedCounts;
+    compacted.truncated = true;
+  }
+  if (options.stored !== undefined) {
+    compacted.fullResult = {
+      contextId: options.stored.resourceId,
+      resourceUri: options.stored.uri
+    };
+    compacted.resourcePayloadBytes = options.originalPayloadBytes;
+    compacted.resourceEstimatedTokens = options.originalEstimatedTokens;
+    compacted.estimatedTokensSaved = Math.max(0, options.originalEstimatedTokens - Math.ceil(Buffer.byteLength(JSON.stringify(compacted), "utf8") / 4));
+  }
+  if (options.overBudget) {
+    compacted.budgetExceeded = true;
+  }
+  return compacted;
+}
+
+function compactArrayLimit(key: string): number {
+  if (key === "warnings") {
+    return COMPACT_LIMITS.maxWarnings;
+  }
+  if (key === "issues") {
+    return COMPACT_LIMITS.maxValidationIssues;
+  }
+  if (key === "sampleRows") {
+    return COMPACT_LIMITS.maxSampleRows;
+  }
+  if (key === "sampleColumns") {
+    return COMPACT_LIMITS.maxSampleCols;
+  }
+  return COMPACT_LIMITS.maxExamples;
+}
+
+function compactTelemetrySummary(payloadBytes: number, stored?: CompactStoredResource, cacheHit = false) {
+  return {
+    responseBytes: payloadBytes,
+    estimatedResponseTokens: Math.ceil(payloadBytes / 4),
+    storedPayloadBytes: stored?.payloadBytes ?? 0,
+    estimatedStoredTokens: stored?.estimatedTokens ?? 0,
+    estimatedTokensSaved: stored ? Math.max(0, stored.estimatedTokens - Math.ceil(payloadBytes / 4)) : 0,
+    cacheHit
+  };
+}
+
+function limitStringList(values: string[], limit: number): string[] {
+  return values.filter((value) => typeof value === "string" && value.length > 0).slice(0, limit);
+}
+
+function compactResponseMode(requested?: CompactResponseMode): CompactResponseMode {
+  if (requested !== undefined) {
+    return requested;
+  }
+  return toolProfile === "compact" ? "brief" : "standard";
+}
+
+function compactBudgetSchema() {
+  return z.object({
+    maxRows: z.number().int().min(0).optional(),
+    maxCols: z.number().int().min(0).optional(),
+    maxChars: z.number().int().min(0).optional(),
+    maxIssues: z.number().int().min(0).optional(),
+    maxExamples: z.number().int().min(0).optional(),
+    maxWarnings: z.number().int().min(0).optional()
+  });
+}
+
+function compactRequestedBudget(args: { budget?: Record<string, unknown>; maxRows?: number; maxColumns?: number; maxPayloadBytes?: number; maxIssues?: number }) {
+  const budget = args.budget && typeof args.budget === "object" ? args.budget : {};
+  const maxRows = compactClampNumber(budget.maxRows, args.maxRows, COMPACT_LIMITS.maxSampleRows);
+  const maxColumns = compactClampNumber(budget.maxCols, args.maxColumns, COMPACT_LIMITS.maxSampleCols);
+  const maxChars = compactClampNumber(budget.maxChars, args.maxPayloadBytes, COMPACT_LIMITS.maxToolResultChars);
+  const maxIssues = compactClampNumber(budget.maxIssues, args.maxIssues, COMPACT_LIMITS.maxValidationIssues);
+  const maxExamples = compactClampNumber(budget.maxExamples, undefined, COMPACT_LIMITS.maxExamples);
+  const maxWarnings = compactClampNumber(budget.maxWarnings, undefined, COMPACT_LIMITS.maxWarnings);
+  return {
+    maxRows,
+    maxColumns,
+    maxChars,
+    maxIssues,
+    maxExamples,
+    maxWarnings,
+    requested: budget,
+    applied: { maxRows, maxColumns, maxChars, maxIssues, maxExamples, maxWarnings }
+  };
+}
+
+function compactClampNumber(primary: unknown, fallback: number | undefined, max: number): number {
+  const value = typeof primary === "number" ? primary : fallback;
+  if (value === undefined) {
+    return max;
+  }
+  return Math.max(0, Math.min(value, max));
 }
 
 function asWarningArray(value: unknown): Array<Record<string, unknown>> {
   return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : [];
 }
 
-function storeCompactResource(kind: CompactResourceKind, payload: unknown, title?: string): CompactStoredResource {
+function compactSourceHash(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+}
+
+function compactReadScope(input: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(input).filter(([, value]) => value !== undefined)
+  );
+}
+
+function storeCompactResource(
+  kind: CompactResourceKind,
+  payload: unknown,
+  options: string | { title?: string; scope?: Record<string, unknown>; sourceHash?: string; pinned?: boolean } = {}
+): CompactStoredResource {
   const resourceId = makeId<string>("compact");
   const payloadBytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
+  const metadata = typeof options === "string" ? { title: options } : options;
+  const existing = findExistingCompactResource(kind, metadata.scope, metadata.sourceHash);
+  if (existing) {
+    existing.lastAccessedAt = new Date().toISOString();
+    return existing;
+  }
+  const now = new Date().toISOString();
   const resource: CompactStoredResource = {
     resourceId,
     uri: `excel://compact/${resourceId}`,
     kind,
-    title,
-    createdAt: new Date().toISOString(),
+    title: metadata.title,
+    scope: metadata.scope,
+    sourceHash: metadata.sourceHash,
+    pinned: metadata.pinned,
+    createdAt: now,
+    lastAccessedAt: now,
     payloadBytes,
     estimatedTokens: Math.ceil(payloadBytes / 4),
+    accessCount: 0,
     payload
   };
   compactResources.set(resourceId, resource);
-  while (compactResources.size > COMPACT_RESOURCE_LIMIT) {
-    const oldestKey = compactResources.keys().next().value as string | undefined;
-    if (oldestKey === undefined) {
-      break;
-    }
-    compactResources.delete(oldestKey);
-  }
+  gcCompactResources({ keepNewest: COMPACT_RESOURCE_LIMIT, maxAgeMs: COMPACT_RESOURCE_TTL_MS });
   return resource;
+}
+
+function findExistingCompactResource(kind: CompactResourceKind, scope?: Record<string, unknown>, sourceHash?: string): CompactStoredResource | undefined {
+  if (!sourceHash) {
+    return undefined;
+  }
+  const scopeHash = scope ? compactSourceHash(scope) : undefined;
+  for (const resource of compactResources.values()) {
+    if (resource.kind !== kind || resource.sourceHash !== sourceHash) {
+      continue;
+    }
+    const resourceScopeHash = resource.scope ? compactSourceHash(resource.scope) : undefined;
+    if (resourceScopeHash === scopeHash) {
+      return resource;
+    }
+  }
+  return undefined;
 }
 
 type CompactResourceReadMode = "metadata" | "preview" | "page" | "full";
@@ -6761,12 +7400,15 @@ function getCompactResource(
   if (!resource) {
     return { ok: false, error: { code: "COMPACT_RESOURCE_NOT_FOUND", message: "Compact detail resource was not found or has expired." } };
   }
+  resource.lastAccessedAt = new Date().toISOString();
+  resource.accessCount += 1;
   const { payload, ...summary } = resource;
   const mode = options.mode ?? (options.includePayload === true ? "full" : "metadata");
   if (mode === "metadata") {
     return {
       ok: true,
       ...summary,
+      contextId: summary.resourceId,
       payloadAvailable: true,
       payloadIncluded: false,
       message: "Use mode=preview or mode=page for bounded inspection, or mode=full/includePayload=true for full detail."
@@ -6782,6 +7424,7 @@ function getCompactResource(
     return {
       ok: true,
       ...summary,
+      contextId: summary.resourceId,
       payloadAvailable: true,
       payloadIncluded: false,
       mode,
@@ -6802,6 +7445,7 @@ function getCompactResource(
     return {
       ok: true,
       ...summary,
+      contextId: summary.resourceId,
       payloadAvailable: true,
       payloadIncluded: false,
       budgetExceeded: true,
@@ -6813,7 +7457,7 @@ function getCompactResource(
       ]
     };
   }
-  return { ok: true, ...summary, payloadAvailable: true, payloadIncluded: true, payload };
+  return { ok: true, ...summary, contextId: summary.resourceId, payloadAvailable: true, payloadIncluded: true, payload };
 }
 
 function compactResourceReadOptions(options: {
@@ -6846,12 +7490,57 @@ function compactResourceReadOptions(options: {
   return normalized;
 }
 
-function listCompactResources(kind?: string, limit = COMPACT_RESOURCE_LIMIT) {
+function listCompactResources(options: { kind?: string; workbook?: string; worksheet?: string; olderThanSeconds?: number; includePinned?: boolean; limit?: number } = {}) {
+  const now = Date.now();
   const resources = [...compactResources.values()]
-    .filter((resource) => kind === undefined || resource.kind === kind)
-    .slice(-limit)
-    .map(({ payload, ...summary }) => summary);
-  return { ok: true, resources };
+    .filter((resource) => options.kind === undefined || resource.kind === options.kind)
+    .filter((resource) => options.includePinned === true || resource.pinned !== true)
+    .filter((resource) => options.workbook === undefined || resource.scope?.workbookId === options.workbook || resource.scope?.workbook === options.workbook)
+    .filter((resource) => options.worksheet === undefined || resource.scope?.sheetName === options.worksheet || resource.scope?.worksheet === options.worksheet)
+    .filter((resource) => options.olderThanSeconds === undefined || now - Date.parse(resource.lastAccessedAt) > options.olderThanSeconds * 1000)
+    .sort((left, right) => Date.parse(right.lastAccessedAt) - Date.parse(left.lastAccessedAt))
+    .slice(0, options.limit ?? COMPACT_RESOURCE_LIMIT)
+    .map(({ payload, ...summary }) => ({ ...summary, contextId: summary.resourceId }));
+  const totalPayloadBytes = resources.reduce((sum, resource) => sum + resource.payloadBytes, 0);
+  return { ok: true, count: resources.length, totalPayloadBytes, totalEstimatedTokens: Math.ceil(totalPayloadBytes / 4), resources };
+}
+
+function compactContextStats() {
+  const resources = [...compactResources.values()];
+  const totalPayloadBytes = resources.reduce((sum, resource) => sum + resource.payloadBytes, 0);
+  const totalEstimatedTokens = resources.reduce((sum, resource) => sum + resource.estimatedTokens, 0);
+  const largestResources = resources
+    .sort((left, right) => right.payloadBytes - left.payloadBytes)
+    .slice(0, 10)
+    .map(({ payload, ...summary }) => ({ ...summary, contextId: summary.resourceId }));
+  const cacheAttempts = compactCacheHitCount + compactCacheMissCount;
+  return {
+    ok: true,
+    resourcesCount: resources.length,
+    totalPayloadBytes,
+    estimatedStoredTokens: totalEstimatedTokens,
+    largestResources,
+    toolResults: {
+      count: compactToolResultCount,
+      responseBytes: compactToolResultBytes,
+      estimatedResponseTokens: Math.ceil(compactToolResultBytes / 4),
+      storedPayloadBytes: compactToolStoredBytes,
+      estimatedStoredTokens: Math.ceil(compactToolStoredBytes / 4),
+      estimatedTokensSaved: Math.max(0, Math.ceil(compactToolStoredBytes / 4) - Math.ceil(compactToolResultBytes / 4))
+    },
+    cache: {
+      cacheEntries: compactCache.size,
+      cacheHits: compactCacheHitCount,
+      cacheMisses: compactCacheMissCount,
+      cacheHitRate: cacheAttempts === 0 ? 0 : Number((compactCacheHitCount / cacheAttempts).toFixed(4)),
+      invalidationCount: compactCacheInvalidationCount,
+      lastInvalidatedAt: compactCacheLastInvalidatedAt
+    },
+    idempotency: {
+      records: compactIdempotencyRecords.size,
+      ttlMs: COMPACT_IDEMPOTENCY_TTL_MS
+    }
+  };
 }
 
 function deleteCompactResource(resourceId: string) {
@@ -6870,6 +7559,35 @@ function clearCompactResources(kind?: string) {
   return { ok: true, deleted };
 }
 
+function gcCompactResources(options: { kind?: string; maxAgeMs?: number; keepNewest?: number; includePinned?: boolean } = {}) {
+  const now = Date.now();
+  const maxAgeMs = options.maxAgeMs ?? COMPACT_RESOURCE_TTL_MS;
+  const keepNewest = options.keepNewest ?? COMPACT_RESOURCE_LIMIT;
+  const eligible = [...compactResources.entries()]
+    .filter(([, resource]) => options.kind === undefined || resource.kind === options.kind)
+    .filter(([, resource]) => options.includePinned === true || resource.pinned !== true);
+  const sortedByAccess = eligible.sort(([, left], [, right]) => Date.parse(right.lastAccessedAt) - Date.parse(left.lastAccessedAt));
+  const keep = new Set(sortedByAccess.slice(0, keepNewest).map(([resourceId]) => resourceId));
+  let deleted = 0;
+  let expired = 0;
+  let overflow = 0;
+  for (const [resourceId, resource] of sortedByAccess) {
+    const ageMs = now - Date.parse(resource.lastAccessedAt);
+    const shouldDeleteExpired = maxAgeMs >= 0 && ageMs > maxAgeMs;
+    const shouldDeleteOverflow = !keep.has(resourceId);
+    if (shouldDeleteExpired || shouldDeleteOverflow) {
+      compactResources.delete(resourceId);
+      deleted += 1;
+      if (shouldDeleteExpired) {
+        expired += 1;
+      } else {
+        overflow += 1;
+      }
+    }
+  }
+  return { ok: true, deleted, expired, overflow, remaining: compactResources.size, maxAgeMs, keepNewest };
+}
+
 function compactResourceIdFromUri(value: string): string {
   return value.startsWith("excel://compact/") ? value.slice("excel://compact/".length) : value;
 }
@@ -6878,10 +7596,12 @@ async function compactCacheValue<T>(key: string, producer: () => Promise<T> | T)
   await invalidateCompactCacheForWorkbookEvents();
   const cached = compactCache.get(key);
   if (cached !== undefined) {
+    compactCacheHitCount += 1;
     return cached.value as T;
   }
   const value = await producer();
   compactCache.set(key, { key, createdAt: new Date().toISOString(), value });
+  compactCacheMissCount += 1;
   return value;
 }
 
@@ -7023,13 +7743,15 @@ function rangeSummary(workbookId: WorkbookId, sheetName: string, address: string
 
 async function compactRangeRead(args: RangeCompactReadRequest) {
   const mode = args.mode ?? "window";
+  const responseMode = compactResponseMode(args.responseMode);
+  const budget = compactRequestedBudget(args as RangeCompactReadRequest & { budget?: Record<string, unknown> });
   const parsed = parseCompactA1Address(args.address);
   const sourceRowCount = parsed.endRow - parsed.startRow + 1;
   const sourceColumnCount = parsed.endColumn - parsed.startColumn + 1;
   const rowOffset = Math.min(args.rowOffset ?? 0, sourceRowCount);
   const columnOffset = Math.min(args.columnOffset ?? 0, sourceColumnCount);
-  const maxRows = args.maxRows ?? 50;
-  const maxColumns = args.maxColumns ?? 25;
+  const maxRows = budget.maxRows;
+  const maxColumns = budget.maxColumns;
   const availableRows = Math.max(0, sourceRowCount - rowOffset);
   const availableColumns = Math.max(0, sourceColumnCount - columnOffset);
   const columnLimit = Math.min(maxColumns, availableColumns);
@@ -7061,12 +7783,12 @@ async function compactRangeRead(args: RangeCompactReadRequest) {
   };
   const nextPage = truncated ? { rowOffset: rowOffset + rowLimit, columnOffset } : undefined;
   if (mode === "summary" || rowLimit === 0 || columnLimit === 0) {
-    return withCompactTelemetry({ ok: true, ...summary }, { detailLevel: "summary", truncated, nextPage, maxPayloadBytes: args.maxPayloadBytes, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range summary", budgetSummary: { ok: true, ...summary } });
+    return withCompactTelemetry({ ok: true, ...summary, budgetSummary: budget.applied }, { detailLevel: "summary", responseMode, truncated, nextPage, maxPayloadBytes: budget.maxChars, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range summary" });
   }
 
   const facets = compactRangeFacets(args);
   if (facets.length === 0) {
-    return withCompactTelemetry({ ok: true, ...summary }, { detailLevel: "compact", truncated, nextPage, maxPayloadBytes: args.maxPayloadBytes, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range read", budgetSummary: { ok: true, ...summary } });
+    return withCompactTelemetry({ ok: true, ...summary, budgetSummary: budget.applied }, { detailLevel: "compact", responseMode, truncated, nextPage, maxPayloadBytes: budget.maxChars, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range read" });
   }
   if (mode === "sample" && sourceRowCount > rowLimit) {
     const samples = await Promise.all(compactSampleWindows(sourceRowCount, rowLimit).map(async (sample) => {
@@ -7084,42 +7806,59 @@ async function compactRangeRead(args: RangeCompactReadRequest) {
         warnings: (sampleResult as { warnings?: unknown[] }).warnings ?? []
       };
     }));
+    const payload = { ok: true, ...summary, samples };
+    const sourceHash = compactSourceHash({ type: "rangeSample", payload });
     return withCompactTelemetry(
-      { ok: true, ...summary, samples },
+      payload,
       {
         detailLevel: "compact",
+        responseMode,
         truncated,
-        maxPayloadBytes: args.maxPayloadBytes,
+        maxPayloadBytes: budget.maxChars,
         maxEstimatedTokens: args.maxEstimatedTokens,
         resourceKind: "read",
         resourceTitle: "Compact range sample",
-        budgetSummary: { ok: true, ...summary, sampleCount: samples.length }
+        resourcePayload: payload,
+        resourceScope: compactReadScope({ workbookId: args.workbookId, sheetName: args.sheetName, address: args.address, mode, rowOffset, columnOffset }),
+        sourceHash,
+        budgetSummary: { ok: true, ...summary, sampleCount: samples.length, sourceHash, budgetSummary: budget.applied }
       }
     );
   }
   const result = await readRangeSnapshot(args.workbookId, args.sheetName, windowAddress, facets);
   if (!(result as { ok?: boolean }).ok) {
-    return withCompactTelemetry({ ok: false, ...summary, source: result }, { detailLevel: "compact", truncated, nextPage, maxPayloadBytes: args.maxPayloadBytes, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range read error", budgetSummary: { ok: false, ...summary } });
+    const payload = { ok: false, ...summary, source: result };
+    return withCompactTelemetry(payload, { detailLevel: "compact", responseMode, truncated, nextPage, maxPayloadBytes: budget.maxChars, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range read error", resourcePayload: payload, resourceScope: compactReadScope({ workbookId: args.workbookId, sheetName: args.sheetName, address: args.address, mode, rowOffset, columnOffset }), sourceHash: compactSourceHash(payload), budgetSummary: { ok: false, ...summary, budgetSummary: budget.applied } });
   }
   const snapshot = ((result as { data?: Array<{ snapshot?: any }> }).data ?? [])[0]?.snapshot;
   const compactSnapshot = compactRangeSnapshotPayload(snapshot, facets);
+  const payload = {
+    ok: true,
+    ...summary,
+    ...compactSnapshot,
+    warnings: (result as { warnings?: unknown[] }).warnings ?? [],
+    telemetry: (result as { telemetry?: unknown }).telemetry
+  };
+  const sourceHash = compactSourceHash({ type: "range", fingerprint: (compactSnapshot.fingerprint as unknown) ?? snapshot?.fingerprint, windowAddress, facets });
   return withCompactTelemetry(
-    {
-      ok: true,
-      ...summary,
-      ...compactSnapshot,
-      warnings: (result as { warnings?: unknown[] }).warnings ?? [],
-      telemetry: (result as { telemetry?: unknown }).telemetry
-    },
+    payload,
     {
       detailLevel: "compact",
+      responseMode,
       truncated,
       nextPage,
-      maxPayloadBytes: args.maxPayloadBytes,
+      maxPayloadBytes: budget.maxChars,
       maxEstimatedTokens: args.maxEstimatedTokens,
       resourceKind: "read",
       resourceTitle: "Compact range read",
-      budgetSummary: { ok: true, ...summary, warnings: (result as { warnings?: unknown[] }).warnings ?? [] }
+      resourcePayload: payload,
+      resourceScope: compactReadScope({ workbookId: args.workbookId, sheetName: args.sheetName, address: args.address, windowAddress, mode, rowOffset, columnOffset }),
+      sourceHash,
+      nextActionRecommendation: "answer_now",
+      reasoningHints: ["Compact range proof returned", "Full detail is stored behind contextId", "No additional read is required unless the user asks for exact rows"],
+      confidence: "medium",
+      confidenceReasons: ["Range was read successfully", truncated ? "Result is windowed or paged" : "Requested range window is complete"],
+      budgetSummary: { ok: true, ...summary, warnings: (result as { warnings?: unknown[] }).warnings ?? [], sourceHash, budgetSummary: budget.applied }
     }
   );
 }
@@ -7276,14 +8015,16 @@ function compactTableRowBounds(matrices: unknown[][][]): { sourceRows: number; r
 
 async function compactTableRead(args: TableCompactReadRequest) {
   const mode = args.mode ?? "window";
+  const responseMode = compactResponseMode(args.responseMode);
+  const budget = compactRequestedBudget(args as TableCompactReadRequest & { budget?: Record<string, unknown> });
   const schemaResult = await runtime.getTableInfo(tableSelector(args));
   const info = (schemaResult as { info?: any }).info;
   if (!(schemaResult as { ok?: boolean }).ok || !info) {
     return withCompactTelemetry({ ok: false, workbookId: args.workbookId, tableName: args.tableName, source: schemaResult }, { detailLevel: "summary" });
   }
-  const selectedColumns = compactTableColumns(info, args.columns, args.maxColumns);
+  const selectedColumns = compactTableColumns(info, args.columns, budget.maxColumns);
   const rowOffset = Math.min(args.rowOffset ?? 0, info.rowCount);
-  const maxRows = args.maxRows ?? 50;
+  const maxRows = budget.maxRows;
   const maxRowsByCells = args.maxCells !== undefined && selectedColumns.length > 0 ? Math.floor(args.maxCells / selectedColumns.length) : maxRows;
   const rowLimit = Math.min(maxRows, maxRowsByCells, Math.max(0, info.rowCount - rowOffset));
   const truncated = rowOffset + rowLimit < info.rowCount || selectedColumns.length < info.columnCount;
@@ -7299,7 +8040,7 @@ async function compactTableRead(args: TableCompactReadRequest) {
   };
   const nextPage = truncated && rowOffset + rowLimit < info.rowCount ? { rowOffset: rowOffset + rowLimit } : undefined;
   if (mode === "summary" || rowLimit === 0 || selectedColumns.length === 0) {
-    return withCompactTelemetry({ ok: true, ...summary }, { detailLevel: "summary", truncated, nextPage, maxPayloadBytes: args.maxPayloadBytes, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact table summary", budgetSummary: { ok: true, ...summary } });
+    return withCompactTelemetry({ ok: true, ...summary, budgetSummary: budget.applied }, { detailLevel: "summary", responseMode, truncated, nextPage, maxPayloadBytes: budget.maxChars, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact table summary" });
   }
   if (mode === "sample" && info.rowCount > rowLimit) {
     const samples = await Promise.all(compactSampleWindows(info.rowCount, rowLimit).map(async (sample) => {
@@ -7323,16 +8064,22 @@ async function compactTableRead(args: TableCompactReadRequest) {
         ...compactTable
       };
     }));
+    const payload = { ok: true, ...summary, samples };
+    const sourceHash = compactSourceHash({ type: "tableSample", payload });
     return withCompactTelemetry(
-      { ok: true, ...summary, samples },
+      payload,
       {
         detailLevel: "compact",
+        responseMode,
         truncated,
-        maxPayloadBytes: args.maxPayloadBytes,
+        maxPayloadBytes: budget.maxChars,
         maxEstimatedTokens: args.maxEstimatedTokens,
         resourceKind: "read",
         resourceTitle: "Compact table sample",
-        budgetSummary: { ok: true, ...summary, sampleCount: samples.length }
+        resourcePayload: payload,
+        resourceScope: compactReadScope({ workbookId: args.workbookId, tableName: args.tableName, mode, rowOffset }),
+        sourceHash,
+        budgetSummary: { ok: true, ...summary, sampleCount: samples.length, sourceHash, budgetSummary: budget.applied }
       }
     );
   }
@@ -7348,22 +8095,29 @@ async function compactTableRead(args: TableCompactReadRequest) {
   });
   const table = (result as { table?: any }).table;
   const compactTable = compactTablePayload(table);
+  const payload = {
+    ok: Boolean((result as { ok?: boolean }).ok),
+    ...summary,
+    ...compactTable,
+    source: (result as { ok?: boolean }).ok ? undefined : result
+  };
+  const sourceHash = compactSourceHash({ type: "table", tableName: args.tableName, rowOffset, rowLimit, selectedColumns, headers: compactTable.headers, values: compactTable.values, formulas: compactTable.formulas, text: compactTable.text, numberFormat: compactTable.numberFormat });
   return withCompactTelemetry(
-    {
-      ok: Boolean((result as { ok?: boolean }).ok),
-      ...summary,
-      ...compactTable,
-      source: (result as { ok?: boolean }).ok ? undefined : result
-    },
+    payload,
     {
       detailLevel: "compact",
+      responseMode,
       truncated,
       nextPage,
-      maxPayloadBytes: args.maxPayloadBytes,
+      maxPayloadBytes: budget.maxChars,
       maxEstimatedTokens: args.maxEstimatedTokens,
       resourceKind: "read",
       resourceTitle: "Compact table read",
-      budgetSummary: { ok: Boolean((result as { ok?: boolean }).ok), ...summary }
+      resourcePayload: payload,
+      resourceScope: compactReadScope({ workbookId: args.workbookId, tableName: args.tableName, mode, rowOffset }),
+      sourceHash,
+      nextActionRecommendation: "answer_now",
+      budgetSummary: { ok: Boolean((result as { ok?: boolean }).ok), ...summary, sourceHash, budgetSummary: budget.applied }
     }
   );
 }
@@ -7719,11 +8473,14 @@ async function compactValidation(args: {
   maxIssues?: number;
   maxPayloadBytes?: number;
   maxEstimatedTokens?: number;
+  responseMode?: CompactResponseMode;
+  budget?: Record<string, unknown>;
 }) {
   const workbookId = args.workbookId as WorkbookId;
+  const budget = compactRequestedBudget(args);
   const report = await runCompactValidator(args, workbookId);
   const issues = Array.isArray((report as { issues?: unknown[] }).issues) ? (report as { issues: unknown[] }).issues : [];
-  const maxIssues = args.maxIssues ?? 5;
+  const maxIssues = budget.maxIssues;
   const summary = {
     ok: (report as { ok?: boolean }).ok,
     workbookId,
@@ -7739,19 +8496,46 @@ async function compactValidation(args: {
     summary,
     {
       detailLevel: "summary",
+      responseMode: args.responseMode,
       truncated: issues.length > maxIssues,
       storeResource: true,
       resourceKind: "validation",
       resourceTitle: `Validation detail: ${args.validator}`,
       resourcePayload: report,
-      maxPayloadBytes: args.maxPayloadBytes,
+      resourceScope: compactReadScope({ workbookId, validator: args.validator, sheetName: args.sheetName, address: args.address, tableName: args.tableName, templateId: args.templateId }),
+      sourceHash: compactSourceHash(report),
+      nextActionRecommendation: (report as { ok?: boolean }).ok ? "answer_now" : "fetch_more_context",
+      reasoningHints: compactValidationReasoningHints(Boolean((report as { ok?: boolean }).ok), issues.length),
+      confidence: compactValidationConfidence(Boolean((report as { ok?: boolean }).ok), issues.length, summary.examplesTruncated),
+      confidenceReasons: compactValidationConfidenceReasons(Boolean((report as { ok?: boolean }).ok), issues.length, summary.examplesTruncated),
+      maxPayloadBytes: budget.maxChars,
       maxEstimatedTokens: args.maxEstimatedTokens,
-      budgetSummary: summary
+      budgetSummary: { ...summary, budgetSummary: budget.applied }
     }
   );
 }
 
-function compactSnapshot(snapshotId: SnapshotId, maxPayloadBytes?: number, maxEstimatedTokens?: number) {
+function compactSnapshotOptions(snapshotId: SnapshotId, options: { maxPayloadBytes?: number | undefined; maxEstimatedTokens?: number | undefined; responseMode?: CompactResponseMode | undefined; budget?: Record<string, unknown> | undefined }) {
+  const args: { snapshotId: SnapshotId; maxPayloadBytes?: number; maxEstimatedTokens?: number; responseMode?: CompactResponseMode; budget?: Record<string, unknown> } = { snapshotId };
+  if (options.maxPayloadBytes !== undefined) args.maxPayloadBytes = options.maxPayloadBytes;
+  if (options.maxEstimatedTokens !== undefined) args.maxEstimatedTokens = options.maxEstimatedTokens;
+  if (options.responseMode !== undefined) args.responseMode = options.responseMode;
+  if (options.budget !== undefined) args.budget = options.budget;
+  return args;
+}
+
+function compactSnapshotDiffOptions(leftSnapshotId: SnapshotId, rightSnapshotId: SnapshotId, options: { maxPayloadBytes?: number | undefined; maxEstimatedTokens?: number | undefined; responseMode?: CompactResponseMode | undefined; budget?: Record<string, unknown> | undefined }) {
+  const args: { leftSnapshotId: SnapshotId; rightSnapshotId: SnapshotId; maxPayloadBytes?: number; maxEstimatedTokens?: number; responseMode?: CompactResponseMode; budget?: Record<string, unknown> } = { leftSnapshotId, rightSnapshotId };
+  if (options.maxPayloadBytes !== undefined) args.maxPayloadBytes = options.maxPayloadBytes;
+  if (options.maxEstimatedTokens !== undefined) args.maxEstimatedTokens = options.maxEstimatedTokens;
+  if (options.responseMode !== undefined) args.responseMode = options.responseMode;
+  if (options.budget !== undefined) args.budget = options.budget;
+  return args;
+}
+
+function compactSnapshot(args: { snapshotId: SnapshotId; maxPayloadBytes?: number; maxEstimatedTokens?: number; responseMode?: CompactResponseMode; budget?: Record<string, unknown> }) {
+  const { snapshotId, maxEstimatedTokens, responseMode } = args;
+  const budget = compactRequestedBudget(args);
   const result = runtime.getSnapshot(snapshotId);
   const snapshot = (result as { snapshot?: any }).snapshot;
   const summary = snapshot
@@ -7770,14 +8554,21 @@ function compactSnapshot(snapshotId: SnapshotId, maxPayloadBytes?: number, maxEs
     summary,
     {
       detailLevel: "summary",
+      responseMode,
       truncated: false,
       storeResource: Boolean(snapshot),
       resourceKind: "snapshot",
       resourceTitle: `Snapshot detail: ${snapshotId}`,
       resourcePayload: result,
-      maxPayloadBytes,
+      resourceScope: compactReadScope({ snapshotId, workbookId: snapshot?.workbookId }),
+      sourceHash: compactSourceHash(result),
+      nextActionRecommendation: "answer_now",
+      reasoningHints: ["Snapshot metadata is available", "Full snapshot payload is stored behind contextId"],
+      confidence: snapshot ? "high" : "low",
+      confidenceReasons: snapshot ? ["Snapshot was found", "Snapshot payload was stored locally"] : ["Snapshot was not found"],
+      maxPayloadBytes: budget.maxChars,
       maxEstimatedTokens,
-      budgetSummary: summary
+      budgetSummary: { ...summary, budgetSummary: budget.applied }
     }
   );
 }
@@ -7791,7 +8582,11 @@ function compactSnapshotCreationResult(result: unknown): unknown {
     return result;
   }
   const summary = snapshotSummary(snapshot);
-  const stored = storeCompactResource("snapshot", result, `Snapshot detail: ${summary.snapshotId}`);
+  const stored = storeCompactResource("snapshot", result, {
+    title: `Snapshot detail: ${summary.snapshotId}`,
+    scope: compactReadScope({ snapshotId: summary.snapshotId, workbookId: summary.workbookId }),
+    sourceHash: compactSourceHash(result)
+  });
   return withCompactTelemetry(
     {
       ok: (result as { ok?: boolean }).ok,
@@ -7801,7 +8596,8 @@ function compactSnapshotCreationResult(result: unknown): unknown {
       detailLevel: "summary",
       resourceUri: stored.uri,
       resourceKind: "snapshot",
-      resourceTitle: `Snapshot detail: ${summary.snapshotId}`
+      resourceTitle: `Snapshot detail: ${summary.snapshotId}`,
+      nextActionRecommendation: "validate_then_answer"
     }
   );
 }
@@ -7818,7 +8614,9 @@ function snapshotSummary(snapshot: Record<string, any>) {
   };
 }
 
-function compactSnapshotDiff(leftSnapshotId: SnapshotId, rightSnapshotId: SnapshotId, maxPayloadBytes?: number, maxEstimatedTokens?: number) {
+function compactSnapshotDiff(args: { leftSnapshotId: SnapshotId; rightSnapshotId: SnapshotId; maxPayloadBytes?: number; maxEstimatedTokens?: number; responseMode?: CompactResponseMode; budget?: Record<string, unknown> }) {
+  const { leftSnapshotId, rightSnapshotId, maxEstimatedTokens, responseMode } = args;
+  const budget = compactRequestedBudget(args);
   const result = runtime.compareSnapshots(leftSnapshotId, rightSnapshotId);
   const diff = (result as { diff?: any }).diff;
   const summary = diff
@@ -7834,24 +8632,82 @@ function compactSnapshotDiff(leftSnapshotId: SnapshotId, rightSnapshotId: Snapsh
         tablesChanged: diff.summary?.tablesChanged ?? diff.tablesChanged,
         sheetsChanged: diff.summary?.sheetsChanged ?? diff.sheetsChanged,
         destructiveLevel: diff.summary?.destructiveLevel ?? diff.destructiveLevel,
-        changedRanges: (diff.summary?.changedRanges ?? diff.changedRanges ?? []).slice(0, 20),
-        changedRangesTruncated: (diff.summary?.changedRanges ?? diff.changedRanges ?? []).length > 20
+        changedRanges: (diff.summary?.changedRanges ?? diff.changedRanges ?? []).slice(0, budget.maxExamples),
+        changedRangesTruncated: (diff.summary?.changedRanges ?? diff.changedRanges ?? []).length > budget.maxExamples
       }
     : { ok: false, leftSnapshotId, rightSnapshotId, error: (result as { error?: unknown }).error };
   return withCompactTelemetry(
     summary,
     {
       detailLevel: "summary",
+      responseMode,
       truncated: Boolean((summary as { changedRangesTruncated?: boolean }).changedRangesTruncated),
       storeResource: Boolean(diff),
       resourceKind: "diff",
       resourceTitle: `Snapshot diff: ${leftSnapshotId}..${rightSnapshotId}`,
       resourcePayload: result,
-      maxPayloadBytes,
+      resourceScope: compactReadScope({ leftSnapshotId, rightSnapshotId }),
+      sourceHash: compactSourceHash(result),
+      nextActionRecommendation: "answer_now",
+      reasoningHints: diff ? ["Compact diff summary returned", "Full diff detail is stored behind contextId", "No further diff read is required unless audit detail is requested"] : ["Diff was not available"],
+      confidence: compactDiffConfidence(Boolean(diff), summary),
+      confidenceReasons: compactDiffConfidenceReasons(Boolean(diff), summary),
+      maxPayloadBytes: budget.maxChars,
       maxEstimatedTokens,
-      budgetSummary: summary
+      budgetSummary: { ...summary, budgetSummary: budget.applied }
     }
   );
+}
+
+function compactValidationReasoningHints(ok: boolean, issueCount: number): string[] {
+  if (ok && issueCount === 0) {
+    return ["Workbook validation passed", "No validation issues were returned", "Agent can answer now"];
+  }
+  if (ok) {
+    return ["Validation completed with non-blocking issues", "Inspect contextId only if the user asked for audit detail"];
+  }
+  return ["Validation failed", "Fetch preview/page context before claiming the workbook is fixed"];
+}
+
+function compactValidationConfidence(ok: boolean, issueCount: number, truncated: boolean): CompactConfidence {
+  if (!ok) {
+    return "low";
+  }
+  if (issueCount === 0 && !truncated) {
+    return "high";
+  }
+  return "medium";
+}
+
+function compactValidationConfidenceReasons(ok: boolean, issueCount: number, truncated: boolean): string[] {
+  const reasons: string[] = [];
+  reasons.push(ok ? "Validation completed successfully" : "Validation reported failure");
+  reasons.push(issueCount === 0 ? "No issues were found" : `${issueCount} issue(s) were found`);
+  if (truncated) {
+    reasons.push("Issue examples were truncated");
+  }
+  return reasons;
+}
+
+function compactDiffConfidence(diffAvailable: boolean, summary: Record<string, unknown>): CompactConfidence {
+  if (!diffAvailable) {
+    return "low";
+  }
+  if (summary.changedRangesTruncated === true) {
+    return "medium";
+  }
+  return "high";
+}
+
+function compactDiffConfidenceReasons(diffAvailable: boolean, summary: Record<string, unknown>): string[] {
+  if (!diffAvailable) {
+    return ["Diff was not available"];
+  }
+  const reasons = ["Snapshot diff completed", "Full diff detail was stored locally"];
+  if (summary.changedRangesTruncated === true) {
+    reasons.push("Changed range examples were truncated");
+  }
+  return reasons;
 }
 
 async function runCompactValidator(args: {
@@ -9163,14 +10019,138 @@ function registerMcpTool(
   if (!shouldExposeMcpTool(name)) {
     return;
   }
-  (mcp.registerTool as any)(name, config, async (args: any, extra: any) => {
+  const registeredConfig = withIdempotencySchema(name, config);
+  (mcp.registerTool as any)(name, registeredConfig, async (args: any, extra: any) => {
+    const idempotencyReplay = getIdempotencyReplay(name, args);
+    if (idempotencyReplay !== undefined) {
+      return idempotencyReplay;
+    }
     const result = await callback(args, extra);
     const decorated = isWorkbookMutatingMcpTool(name) ? addCompactMutationProof(result) : result;
     if (isWorkbookMutatingMcpTool(name)) {
       clearCompactCache(`mutation:${name}`);
     }
-    return enforceCompactResultBudget(name, decorated);
+    const finalResult = enforceCompactResultBudget(name, decorated);
+    storeIdempotencyResult(name, args, finalResult);
+    return finalResult;
   });
+}
+
+function withIdempotencySchema(toolName: string, config: Record<string, unknown>): Record<string, unknown> {
+  if (!isWorkbookMutatingMcpTool(toolName)) {
+    return config;
+  }
+  const inputSchema = config.inputSchema;
+  if (!inputSchema || typeof inputSchema !== "object" || Array.isArray(inputSchema)) {
+    return config;
+  }
+  if ("idempotencyKey" in inputSchema) {
+    return config;
+  }
+  return {
+    ...config,
+    inputSchema: {
+      ...(inputSchema as Record<string, unknown>),
+      idempotencyKey: z.string().optional()
+    }
+  };
+}
+
+function getIdempotencyReplay(toolName: string, args: Record<string, unknown> | undefined) {
+  const idempotencyKey = typeof args?.idempotencyKey === "string" ? args.idempotencyKey : undefined;
+  if (!idempotencyKey || !isWorkbookMutatingMcpTool(toolName)) {
+    return undefined;
+  }
+  const requestArgs = args as Record<string, unknown>;
+  pruneIdempotencyRecords();
+  const recordKey = compactIdempotencyRecordKey(toolName, idempotencyKey);
+  const record = compactIdempotencyRecords.get(recordKey);
+  if (!record) {
+    return undefined;
+  }
+  const operationHash = compactIdempotencyOperationHash(toolName, requestArgs);
+  if (record.operationHash !== operationHash) {
+    return jsonResult({
+      ok: false,
+      toolName,
+      idempotencyKey,
+      idempotencyConflict: true,
+      error: {
+        code: "IDEMPOTENCY_KEY_CONFLICT",
+        message: "This idempotencyKey was already used with a different mutation payload. Use a new key for a different edit.",
+        retryable: false
+      },
+      nextActionRecommendation: "needs_user_confirmation",
+      reasoningHints: ["Idempotency key conflict detected", "Do not retry this mutation with the same key and different payload"],
+      confidence: "high",
+      confidenceReasons: ["Stored operation hash differs from retry operation hash"]
+    });
+  }
+  try {
+    const replayPayload = JSON.parse(record.resultText) as Record<string, unknown>;
+    return jsonResult({
+      ...replayPayload,
+      idempotentReplay: true,
+      idempotencyKey,
+      originalTransactionId: replayPayload.transactionId ?? (replayPayload.compactProof as { transactionId?: unknown } | undefined)?.transactionId,
+      nextActionRecommendation: replayPayload.nextActionRecommendation ?? "answer_now",
+      reasoningHints: [
+        "Returned cached idempotent mutation result",
+        "The mutation was not executed again",
+        ...limitStringList(Array.isArray(replayPayload.reasoningHints) ? replayPayload.reasoningHints as string[] : [], COMPACT_LIMITS.maxWarnings - 2)
+      ]
+    });
+  } catch {
+    return jsonResult({
+      ok: true,
+      toolName,
+      idempotentReplay: true,
+      idempotencyKey,
+      text: record.resultText,
+      nextActionRecommendation: "answer_now"
+    });
+  }
+}
+
+function storeIdempotencyResult(toolName: string, args: Record<string, unknown> | undefined, result: unknown): void {
+  const idempotencyKey = typeof args?.idempotencyKey === "string" ? args.idempotencyKey : undefined;
+  if (!idempotencyKey || !isWorkbookMutatingMcpTool(toolName) || !isJsonTextResult(result)) {
+    return;
+  }
+  const requestArgs = args as Record<string, unknown>;
+  pruneIdempotencyRecords();
+  compactIdempotencyRecords.set(compactIdempotencyRecordKey(toolName, idempotencyKey), {
+    idempotencyKey,
+    toolName,
+    operationHash: compactIdempotencyOperationHash(toolName, requestArgs),
+    createdAt: new Date().toISOString(),
+    resultText: result.content[0]!.text
+  });
+}
+
+function compactIdempotencyRecordKey(toolName: string, idempotencyKey: string): string {
+  return `${toolName}:${idempotencyKey}`;
+}
+
+function compactIdempotencyOperationHash(toolName: string, args: Record<string, unknown>): string {
+  const { idempotencyKey: _idempotencyKey, ...operationArgs } = args;
+  return compactSourceHash({ toolName, args: operationArgs });
+}
+
+function pruneIdempotencyRecords(): void {
+  const now = Date.now();
+  for (const [key, record] of compactIdempotencyRecords) {
+    if (now - Date.parse(record.createdAt) > COMPACT_IDEMPOTENCY_TTL_MS) {
+      compactIdempotencyRecords.delete(key);
+    }
+  }
+  const overflow = compactIdempotencyRecords.size - COMPACT_RESOURCE_LIMIT;
+  if (overflow <= 0) {
+    return;
+  }
+  for (const [key] of [...compactIdempotencyRecords.entries()].sort(([, left], [, right]) => Date.parse(left.createdAt) - Date.parse(right.createdAt)).slice(0, overflow)) {
+    compactIdempotencyRecords.delete(key);
+  }
 }
 
 function enforceCompactResultBudget(toolName: string, result: unknown) {
@@ -9181,7 +10161,7 @@ function enforceCompactResultBudget(toolName: string, result: unknown) {
     return result;
   }
   const payloadBytes = Buffer.byteLength(result.content[0]!.text, "utf8");
-  if (payloadBytes <= COMPACT_DEFAULT_RESOURCE_THRESHOLD_BYTES) {
+  if (payloadBytes <= COMPACT_LIMITS.maxToolResultChars) {
     return result;
   }
   try {
@@ -9198,12 +10178,16 @@ function enforceCompactResultBudget(toolName: string, result: unknown) {
       ok: true,
       toolName,
       detailLevel: "summary",
+      responseMode: "brief",
       budgetExceeded: true,
-      payloadBytes,
-      estimatedTokens: Math.ceil(payloadBytes / 4),
+      payloadBytes: COMPACT_LIMITS.maxToolResultChars,
+      estimatedTokens: Math.ceil(COMPACT_LIMITS.maxToolResultChars / 4),
       resourcePayloadBytes: stored.payloadBytes,
       resourceEstimatedTokens: stored.estimatedTokens,
+      estimatedTokensSaved: Math.max(0, stored.estimatedTokens - Math.ceil(COMPACT_LIMITS.maxToolResultChars / 4)),
+      contextId: stored.resourceId,
       resourceUri: stored.uri,
+      telemetry: compactTelemetrySummary(COMPACT_LIMITS.maxToolResultChars, stored, false),
       warnings: [
         {
           code: "COMPACT_RESULT_BUDGET_EXCEEDED",
@@ -9292,10 +10276,20 @@ function addCompactMutationProof(result: unknown) {
         compactProof
       });
     }
+    const invalidatedContextIds = invalidateCompactResourcesForMutation(payload);
     const stored = storeCompactResource("mutation", payload, "Full mutation result");
+    const nextActionRecommendation = mutationNextActionRecommendation(payload, compactProof);
+    const confidence = mutationConfidence(payload, compactProof, nextActionRecommendation);
     return jsonResult({
       ...compactMutationPayload(payload),
       compactProof,
+      invalidatedContextIds,
+      contextId: stored.resourceId,
+      nextActionRecommendation,
+      reasoningHints: mutationReasoningHints(nextActionRecommendation),
+      confidence,
+      confidenceReasons: mutationConfidenceReasons(payload, compactProof, confidence),
+      telemetry: compactTelemetrySummary(Buffer.byteLength(JSON.stringify(compactMutationPayload(payload)), "utf8"), stored, false),
       resourceUri: stored.uri
     });
   } catch {
@@ -9335,6 +10329,108 @@ function summarizeMutationProof(payload: Record<string, unknown>) {
     payloadBytes: Buffer.byteLength(JSON.stringify(payload), "utf8"),
     estimatedTokens: Math.ceil(Buffer.byteLength(JSON.stringify(payload), "utf8") / 4)
   };
+}
+
+function mutationNextActionRecommendation(payload: Record<string, unknown>, compactProof: { ok?: unknown; validation?: unknown }): CompactNextActionRecommendation {
+  if (payload.ok === false || compactProof.ok === false) {
+    return "fetch_more_context";
+  }
+  if (payload.confirmationRequired === true || payload.confirmationToken !== undefined) {
+    return "needs_user_confirmation";
+  }
+  const validation = compactProof.validation as { ok?: boolean; issueCount?: number } | undefined;
+  if (validation && validation.ok === false && (validation.issueCount ?? 0) > 0) {
+    return "fetch_more_context";
+  }
+  return "answer_now";
+}
+
+function invalidateCompactResourcesForMutation(payload: Record<string, unknown>): string[] {
+  if (payload.ok === false) {
+    return [];
+  }
+  const workbookId = findStringFieldDeep(payload, "workbookId");
+  if (!workbookId) {
+    return [];
+  }
+  const invalidated: string[] = [];
+  for (const [resourceId, resource] of compactResources) {
+    if (resource.kind === "mutation") {
+      continue;
+    }
+    if (!compactResourceMatchesWorkbook(resource, workbookId)) {
+      continue;
+    }
+    compactResources.delete(resourceId);
+    invalidated.push(resourceId);
+  }
+  return invalidated;
+}
+
+function compactResourceMatchesWorkbook(resource: CompactStoredResource, workbookId: string): boolean {
+  const scope = resource.scope;
+  if (scope?.workbookId === workbookId || scope?.workbook === workbookId) {
+    return true;
+  }
+  return findStringFieldDeep(scope, "workbookId") === workbookId;
+}
+
+function findStringFieldDeep(value: unknown, fieldName: string, seen = new Set<unknown>()): string | undefined {
+  if (!value || typeof value !== "object" || seen.has(value)) {
+    return undefined;
+  }
+  seen.add(value);
+  const record = value as Record<string, unknown>;
+  if (typeof record[fieldName] === "string") {
+    return record[fieldName];
+  }
+  for (const nested of Object.values(record)) {
+    if (!nested || typeof nested !== "object") {
+      continue;
+    }
+    const found = findStringFieldDeep(nested, fieldName, seen);
+    if (found !== undefined) {
+      return found;
+    }
+  }
+  return undefined;
+}
+
+function mutationReasoningHints(nextActionRecommendation: CompactNextActionRecommendation): string[] {
+  if (nextActionRecommendation === "answer_now") {
+    return ["Mutation proof returned", "Validation/rollback proof is included when available", "Agent can answer now"];
+  }
+  if (nextActionRecommendation === "needs_user_confirmation") {
+    return ["Mutation requires user confirmation", "Do not apply additional changes before the user confirms"];
+  }
+  if (nextActionRecommendation === "validate_then_answer") {
+    return ["Mutation completed without final validation", "Run compact validation before final answer"];
+  }
+  return ["Mutation proof indicates issues or failure", "Fetch compact context preview before final answer"];
+}
+
+function mutationConfidence(payload: Record<string, unknown>, compactProof: { ok?: unknown; validation?: unknown }, nextActionRecommendation: CompactNextActionRecommendation): CompactConfidence {
+  if (nextActionRecommendation === "fetch_more_context" || payload.ok === false || compactProof.ok === false) {
+    return "low";
+  }
+  const validation = compactProof.validation as { ok?: boolean; issueCount?: number } | undefined;
+  if (validation?.ok === true && (validation.issueCount ?? 0) === 0) {
+    return "high";
+  }
+  return nextActionRecommendation === "answer_now" ? "medium" : "low";
+}
+
+function mutationConfidenceReasons(payload: Record<string, unknown>, compactProof: { ok?: unknown; validation?: unknown }, confidence: CompactConfidence): string[] {
+  const validation = compactProof.validation as { ok?: boolean; issueCount?: number } | undefined;
+  const reasons = [
+    payload.ok === false || compactProof.ok === false ? "Mutation result indicates failure" : "Mutation result indicates success",
+    validation === undefined ? "No validation summary was present" : validation.ok === false ? "Validation summary reported failure" : "Validation summary reported success"
+  ];
+  if (validation?.issueCount !== undefined) {
+    reasons.push(`${validation.issueCount} validation issue(s) reported`);
+  }
+  reasons.push(`Confidence is ${confidence}`);
+  return reasons;
 }
 
 function compactMutationPayload(payload: Record<string, unknown>): Record<string, unknown> {
@@ -9465,16 +10561,25 @@ function compactResourceKindForTool(toolName: string): CompactResourceKind {
 }
 
 function compactResultSummary(toolName: string, payload: Record<string, unknown>, payloadBytes: number, stored: CompactStoredResource) {
+  const responseBytes = Math.min(payloadBytes, COMPACT_LIMITS.maxToolResultChars);
   return {
     ok: payload.ok ?? true,
     toolName,
     detailLevel: "summary",
     budgetExceeded: true,
-    payloadBytes: Math.min(payloadBytes, COMPACT_DEFAULT_RESOURCE_THRESHOLD_BYTES),
-    estimatedTokens: Math.ceil(Math.min(payloadBytes, COMPACT_DEFAULT_RESOURCE_THRESHOLD_BYTES) / 4),
+    payloadBytes: responseBytes,
+    estimatedTokens: Math.ceil(responseBytes / 4),
     resourcePayloadBytes: stored.payloadBytes,
     resourceEstimatedTokens: stored.estimatedTokens,
+    estimatedTokensSaved: Math.max(0, stored.estimatedTokens - Math.ceil(responseBytes / 4)),
+    contextId: stored.resourceId,
     resourceUri: stored.uri,
+    responseMode: "brief",
+    nextActionRecommendation: payload.ok === false ? "fetch_more_context" : "answer_now",
+    reasoningHints: payload.ok === false ? ["Tool result was compacted after failure", "Fetch context preview before final answer"] : ["Tool result was compacted", "Full detail is stored behind contextId", "Agent can answer from this summary unless audit detail is required"],
+    confidence: payload.ok === false ? "low" : "medium",
+    confidenceReasons: payload.ok === false ? ["Tool result indicates failure"] : ["Tool result succeeded", "Large detail was stored locally"],
+    telemetry: compactTelemetrySummary(responseBytes, stored, false),
     summary: summarizePayloadForBudget(payload),
     warnings: [
       ...asWarningArray(payload.warnings),

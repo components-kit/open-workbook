@@ -309,6 +309,7 @@ export interface BatchRequest {
   mode: "validate" | "dry_run" | "apply";
   planId?: PlanId | undefined;
   confirmationToken?: string;
+  idempotencyKey?: string;
   expectedTargetFingerprints?: RangeFingerprint[];
   baseSnapshotId?: SnapshotId;
   agentId?: AgentId | undefined;
@@ -700,6 +701,16 @@ export interface TableReadRequest extends TableSelector {
 }
 
 export type CompactReadMode = "window" | "summary" | "sample";
+export type CompactResponseMode = "brief" | "standard" | "verbose";
+
+export interface CompactResponseBudget {
+  maxRows?: number;
+  maxCols?: number;
+  maxChars?: number;
+  maxIssues?: number;
+  maxExamples?: number;
+  maxWarnings?: number;
+}
 
 export interface CompactReadBudget {
   maxRows?: number;
@@ -707,6 +718,8 @@ export interface CompactReadBudget {
   maxCells?: number;
   maxPayloadBytes?: number;
   maxEstimatedTokens?: number;
+  responseMode?: CompactResponseMode;
+  budget?: CompactResponseBudget;
 }
 
 export interface RangeCompactReadRequest extends CompactReadBudget {
