@@ -23,15 +23,12 @@ Prefer `excel.workflow.prepare_session` as the first call. If capabilities are u
 - Focused candidate preview: `excel.lookup.inspect_match`
 - Compact bounded reads: `excel.range.read_compact`, `excel.table.read_compact`
 - Stored compact details: `excel.compact.get_resource`, `excel.compact.list_resources`
-- Values only: `excel.range.read_values`
-- Formulas only: `excel.range.read_formulas`
-- Display text for user-visible output: `excel.range.read_display_text`
-- Formatting: `excel.range.read_number_formats`, `excel.range.read_styles`
-- Full cell payload: `excel.range.read_full`
+- Values, formulas, display text, number formats, and styles: use `excel.range.read_compact` with the matching include flags
+- Full stored detail: use `excel.compact.get_resource` with the `resourceUri` returned by compact reads
 - Search and diagnostics: `excel.range.search`, `excel.range.find_blank_cells`, `excel.range.find_errors`
-- Table-shaped full data: `excel.table.read`; pass `columns`, `rowOffset`, `rowLimit`, and include flags for large tables
+- Table data: use `excel.table.read_compact` with `columns`, `rowOffset`, `maxRows`, and include flags
 
-Use lookup tools before reading when the target sheet, table, header, entity, or range is unknown. Use compact summaries or schemas before cell bodies once the target scope is known. Use explicit sheet/address ranges whenever possible. Use used-range or workbook-wide scans only for audits, validation, search, or discovery. For simple reads, use `excel.range.read_compact` or the facet-specific range tools instead of `excel.range.read_full`.
+Use lookup tools before reading when the target sheet, table, header, entity, or range is unknown. Use compact summaries or schemas before cell bodies once the target scope is known. Use explicit sheet/address ranges whenever possible. Use used-range or workbook-wide scans only for audits, validation, search, or discovery. For simple reads, use one projected `excel.range.read_compact` or `excel.table.read_compact` call instead of separate raw reads.
 
 ## Writing Data
 
@@ -66,13 +63,13 @@ When a noninteractive agent run cannot apply a mutation, create an `excel.plan.c
 - Append or update rows: `excel.table.append_rows`, `excel.table.update_rows`
 - Reorder columns: `excel.table.reorder_columns`
 - Resize or structure changes: `excel.table.resize`, `excel.table.copy_structure`
-- Filters: `excel.filter.get_filters`, `excel.filter.apply`, `excel.filter.clear`, `excel.filter.validate`
-- Sorts: `excel.sort.apply`, `excel.sort.clear`
+- Filters: inspect with `excel.table.get_info`; mutate with `excel.table.apply_filters`, `excel.table.clear_filters`, or `excel.table.preserve_filters`
+- Sorts: `excel.table.sort`
 
 Use table tools instead of range tools when the target is an Excel table. This preserves headers, totals rows, filters, structured references, and table styles.
-Before table reorder, filter, sort, append, or update operations, call `excel.table.get_info` or `excel.workbook.get_workbook_map`. For table filters, use `excel.table.apply_filters` rather than generic filter tools. After table structure or row mutations, call `excel.validate.tables`; after filter/sort changes, call `excel.validate.filters`.
+Before table reorder, filter, sort, append, or update operations, call `excel.table.get_info` or `excel.workbook.get_workbook_map`. For table filters, use `excel.table.apply_filters` rather than generic filter tools. After table or filter/sort changes, use `excel.validate.compact` for proof unless exact validation details are required.
 Do not clear and recreate a table to reorder columns; use `excel.table.reorder_columns`, or stop for confirmation before any destructive rebuild.
-For large tables, avoid full `excel.table.read` unless the user asks for all rows. Use `excel.table.get_schema` first, then `excel.table.read_compact` with `rowLimit`, `rowOffset`, and `columns` for targeted discovery before mutating with table-native tools.
+For large tables, use `excel.table.get_schema` first, then `excel.table.read_compact` with `maxRows`, `rowOffset`, and `columns` for targeted discovery before mutating with table-native tools.
 
 ## Templates, Styles, And Formulas
 

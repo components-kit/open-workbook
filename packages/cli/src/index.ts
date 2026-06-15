@@ -10,7 +10,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../../..");
 const packageRoot = resolve(__dirname, "..");
 const publicPackageName = "@components-kit/open-workbook";
-const currentVersion = readPackageVersion([join(packageRoot, "package.json"), join(repoRoot, "package.json")]) ?? "0.1.10";
+const currentVersion = readPackageVersion([join(packageRoot, "package.json"), join(repoRoot, "package.json")]) ?? "0.1.11";
 const instructionFileName = "open-workbook-excel.md";
 const developmentManifestId = "6f2d2ac1-69b0-4eb6-a256-0a1fcb00d3e1";
 const sourcePaths = {
@@ -47,27 +47,15 @@ program
   .description("Start the Open Workbook MCP adapter and local Excel add-in asset server")
   .option("--agent-name <name>", "Agent name shown in collaboration status")
   .option("--daemon-url <url>", "Daemon base URL", defaultDaemonUrl())
-  .option("--tool-profile <profile>", "MCP tool surface: full, compact, or read-only", "full")
-  .option("--tools <names>", "Comma-separated MCP tool allowlist")
-  .option("--disable-tools <names>", "Comma-separated MCP tools to hide")
   .option("--standalone", "Start a single-process MCP server with embedded backend")
   .option("--no-addin-server", "Do not start the companion local Excel add-in asset server")
-  .action(async (options: { agentName?: string; daemonUrl: string; toolProfile: string; tools?: string; disableTools?: string; standalone?: boolean; addinServer?: boolean }) => {
+  .action(async (options: { agentName?: string; daemonUrl: string; standalone?: boolean; addinServer?: boolean }) => {
     const args: string[] = [];
     if (options.agentName !== undefined) {
       args.push("--agent-name", options.agentName);
     }
     if (options.daemonUrl !== undefined) {
       args.push("--daemon-url", options.daemonUrl);
-    }
-    if (options.toolProfile !== undefined) {
-      args.push("--tool-profile", options.toolProfile);
-    }
-    if (options.tools !== undefined) {
-      args.push("--tools", options.tools);
-    }
-    if (options.disableTools !== undefined) {
-      args.push("--disable-tools", options.disableTools);
     }
     if (options.standalone) {
       args.push("--standalone");
@@ -341,14 +329,10 @@ opencode
   .option("--id <id>", "MCP server id in OpenCode config", "open-workbook")
   .option("--command <command>", "Command to run Open Workbook MCP", "owb")
   .option("--agent-name <name>", "Agent name passed to the MCP adapter")
-  .option("--tool-profile <profile>", "MCP tool surface for OpenCode", "compact")
-  .action((options: { id: string; command: string; agentName?: string; toolProfile: string }) => {
+  .action((options: { id: string; command: string; agentName?: string }) => {
     const command = [options.command, "mcp"];
     if (options.agentName !== undefined) {
       command.push("--agent-name", options.agentName);
-    }
-    if (options.toolProfile !== undefined) {
-      command.push("--tool-profile", options.toolProfile);
     }
     const config = {
       mcp: {

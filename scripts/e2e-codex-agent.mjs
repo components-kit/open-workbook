@@ -83,9 +83,9 @@ const scenarios = [
   {
     id: "large-table-filter-sort",
     title: "Filter and sort a large table",
-    task: "First inspect TransactionsLarge with excel.table.get_info or excel.workbook.get_workbook_map. Then use excel.table.apply_filters to filter Status = Open and use excel.table.sort or excel.sort.apply to sort Amount descending. Preserve existing table structure and avoid reading or rewriting the whole table. Validate the filter/table state afterward with excel.validate.filters, excel.validate.tables, excel.table.get_info, or excel.workbook.get_workbook_map.",
+    task: "First inspect TransactionsLarge with excel.table.get_info or excel.workbook.get_workbook_map. Then use excel.table.apply_filters to filter Status = Open and use excel.table.sort to sort Amount descending. Preserve existing table structure and avoid reading or rewriting the whole table. Validate the filter/table state afterward with excel.validate.filters, excel.validate.tables, excel.table.get_info, or excel.workbook.get_workbook_map.",
     requiredTools: ["excel.table.apply_filters"],
-    requiredAny: [["excel.table.sort", "excel.sort.apply"], ["excel.validate.filters", "excel.validate.tables", "excel.table.get_info", "excel.workbook.get_workbook_map", "excel.workbook.list_open_workbooks"]],
+    requiredAny: [["excel.table.sort"], ["excel.validate.filters", "excel.validate.tables", "excel.table.get_info", "excel.workbook.get_workbook_map", "excel.workbook.list_open_workbooks"]],
     forbidden: [
       { name: "whole table read for filter/sort", match: isLargeFullRead },
       { name: "range rewrite for filter/sort", match: (call) => call.name === "excel.range.write_values" }
@@ -94,7 +94,7 @@ const scenarios = [
   {
     id: "large-table-append",
     title: "Append rows to a structured table",
-    task: "Inspect TransactionsLarge with excel.table.get_info or excel.workbook.get_workbook_map, then append 25 new June transaction rows to TransactionsLarge. Keep the table style, filters, totals, and formulas intact. Do not manually paste into a guessed range. After append, you must call excel.validate.tables before finishing; this validation call is required.",
+    task: "Inspect TransactionsLarge with excel.table.get_info or excel.workbook.get_workbook_map, then append 25 new June transaction rows to TransactionsLarge using excel.table.append_rows. Generate rows with the existing columns: Date values from 2026-06-01 onward, Account values A-6001 through A-6025, Amount numeric values, Region values such as North/South/East/West, and Status Open. Keep the table style, filters, totals, and formulas intact. Do not manually paste into a guessed range. After append, you must call excel.validate.tables before finishing; this validation call is required.",
     requiredTools: ["excel.table.append_rows"],
     requiredAny: [["excel.validate.tables", "excel.table.get_info", "excel.workbook.get_workbook_map", "excel.workflow.prepare_session"]],
     forbidden: [
@@ -105,9 +105,9 @@ const scenarios = [
   {
     id: "large-table-update",
     title: "Update matching rows without rewriting the table",
-    task: "For TransactionsLarge, inspect the table with excel.table.get_info or excel.workbook.get_workbook_map, locate only accounts A-1010 through A-1020 with bounded excel.table.read or excel.range.search, and update those structured table rows to Status = Reviewed without rewriting the entire table. Validate afterward with excel.validate.tables, excel.table.get_info, or excel.workbook.get_workbook_map.",
+    task: "For TransactionsLarge, inspect the table with excel.table.get_info or excel.workbook.get_workbook_map, locate only accounts A-1010 through A-1020 with bounded excel.table.read_compact or excel.range.search, and update those structured table rows to Status = Reviewed without rewriting the entire table. Validate afterward with excel.validate.tables, excel.table.get_info, or excel.workbook.get_workbook_map.",
     requiredTools: ["excel.table.update_rows"],
-    requiredAny: [["excel.table.read", "excel.range.search"], ["excel.validate.tables", "excel.table.get_info", "excel.validate.filters", "excel.workbook.get_workbook_map", "excel.workflow.prepare_session"]],
+    requiredAny: [["excel.table.read_compact", "excel.range.search"], ["excel.validate.tables", "excel.table.get_info", "excel.validate.filters", "excel.workbook.get_workbook_map", "excel.workflow.prepare_session"]],
     forbidden: [
       { name: "whole table rewrite for row update", match: (call) => call.name === "excel.range.write_values" },
       { name: "whole table read for targeted update", match: isLargeFullRead }
@@ -165,7 +165,7 @@ const scenarios = [
     id: "snapshots-diffs-rollback",
     title: "Snapshots, diffs, backup, and rollback preview",
     task: "After the required discovery calls, use excel.workflow.preview_risky_edit with a non-empty scoped write operation for the risky edit to Report_Jan!B2:C12, or manually create a before snapshot or backup, make a small scoped value change, create an after snapshot, call a diff tool with the two snapshot IDs, then call a rollback preview tool. Do not set apply=false unless only a preview was requested. Do not stop after the write or plan. Do not actually roll back.",
-    requiredAny: [["excel.workflow.preview_risky_edit", "excel.snapshot.create", "excel.workbook.snapshot", "excel.workbook.create_backup", "excel.backup.create_file"], ["excel.workflow.preview_risky_edit", "excel.range.write_values", "excel.region.write_values", "excel.region.fill"], ["excel.workflow.preview_risky_edit", "excel.diff.create", "excel.diff.summarize", "excel.snapshot.compare"], ["excel.workflow.preview_risky_edit", "excel.transaction.preview_rollback", "excel.transaction.preview_rollback_chain"]],
+    requiredAny: [["excel.workflow.preview_risky_edit", "excel.snapshot.create", "excel.workbook.snapshot", "excel.workbook.create_backup", "excel.backup.create_file"], ["excel.workflow.preview_risky_edit", "excel.range.write_values", "excel.region.write_values", "excel.region.fill"], ["excel.workflow.preview_risky_edit", "excel.diff.create", "excel.diff.summarize", "excel.snapshot.compare_compact"], ["excel.workflow.preview_risky_edit", "excel.transaction.preview_rollback", "excel.transaction.preview_rollback_chain"]],
     forbidden: [
       { name: "actual rollback when only preview requested", match: (call) => ["excel.transaction.rollback", "excel.transaction.rollback_chain", "excel.workbook.restore_backup", "excel.backup.restore_file"].includes(call.name) }
     ]
@@ -354,7 +354,7 @@ function buildPrompt(scenario) {
     "Choose the fastest reliable Open Workbook MCP tool for the task. Prefer table, template, style, formula, region, workflow, clean, pivot, chart, snapshot, diff, permission, lock, and transaction tools over manual range rewrites when they match the task.",
     "For large tables, use structured table operations and bounded reads. Never loop cell by cell. Preserve formulas, filters, styles, templates, and rollback metadata.",
     "If a mutating MCP call is cancelled in this noninteractive run, do not retry by changing permissions. Instead create an excel.plan.create draft that contains the exact safe operations you intended to apply, then report that mutation was blocked.",
-    "Use the specific diagnostic tool when the task names one: formula error finding should use excel.formula.find_errors, excel.range.find_errors, or excel.repair.formula_errors; formula repair should use pattern/dependency tools; diff summaries should use an excel.diff.* or excel.snapshot.compare tool.",
+    "Use the specific diagnostic tool when the task names one: formula error finding should use excel.formula.find_errors, excel.range.find_errors, or excel.repair.formula_errors; formula repair should use pattern/dependency tools; diff summaries should use excel.diff.summarize, excel.diff.get_compact, or excel.snapshot.compare_compact.",
     "For snapshot/diff risky edits, after excel.workflow.prepare_session prefer excel.workflow.preview_risky_edit with one minimal scoped operation and default apply behavior because it combines scoped apply, before/after snapshots, diff, and rollback preview. Do not write a large null-padded matrix when one cell or a smaller rectangle is enough. If you do not use it, capture before and after states, then call a diff tool before rollback preview.",
     "For sheet/formula creation tasks, prefer excel.workflow.create_formula_sheet because it combines sheet creation, value writes, formula writes, number formats, and formula validation.",
     "For formula repair tasks, prefer excel.workflow.repair_formula_errors because it combines validation, pattern read, dependency graph inspection, scoped repair, and after validation.",
@@ -637,11 +637,14 @@ function hasSparseNullPaddedWrite(calls = []) {
 }
 
 function isLargeFullRead(call) {
-  if (!["excel.range.read_full", "excel.range.read_values", "excel.table.read"].includes(call.name)) {
+  if (!["excel.range.read_full", "excel.range.read_values", "excel.table.read", "excel.table.read_compact"].includes(call.name)) {
     return false;
   }
   const args = call.arguments ?? {};
   if (call.name === "excel.table.read" && args.tableName === "TransactionsLarge" && !args.rowLimit) {
+    return true;
+  }
+  if (call.name === "excel.table.read_compact" && args.tableName === "TransactionsLarge" && !args.maxRows && !args.budget?.maxRows) {
     return true;
   }
   return args.sheetName === "Large" && (!args.address || cellCountFromAddress(args.address) > 1000);

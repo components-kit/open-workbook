@@ -115,7 +115,7 @@ async function runCoreWorkbookWorkflow(client) {
   assert(context.ok && context.activeWorkbook?.workbookId === workbookId, "active context should return fixture workbook");
 
   const capabilities = await callTool(client, "excel.runtime.get_capabilities", {});
-  assert(capabilities.catalog.tools.length > 100, "capabilities should include full tool catalog");
+  assert(capabilities.catalog.tools.length > 100, "capabilities should include optimized tool catalog");
 
   const map = await callTool(client, "excel.workbook.get_workbook_map", {});
   assert(map.ok && map.map.sheets.some((sheet) => sheet.name === "Data"), "workbook map should include Data sheet");
@@ -142,14 +142,16 @@ async function runCoreWorkbookWorkflow(client) {
     ]
   });
   assertApplied(write, "range write values");
-  assert(write.telemetry.cellsWritten === 9, "range write should report cells written");
+  assert(writtenCellCount(write) === 9, "range write should report cells written");
 
-  const read = await callTool(client, "excel.range.read_values", {
+  const read = await callTool(client, "excel.range.read_compact", {
     workbookId,
     sheetName: "Scratch",
-    address: "A1:C3"
+    address: "A1:C3",
+    includeValues: true,
+    responseMode: "verbose"
   });
-  assert(read.ok && read.readData?.[0]?.snapshot?.values?.[1]?.[1] === 125, "range read should return written values");
+  assert(read.ok && read.values?.[1]?.[1] === 125, "range read should return written values");
 
   const formulas = await callTool(client, "excel.range.write_formulas", {
     workbookId,
@@ -205,7 +207,7 @@ async function runCoreWorkbookWorkflow(client) {
     ],
     validateAddress: "D2:D4"
   });
-  assert(formulaSheet.ok && formulaSheet.summary?.formulaValidationOk, "formula sheet workflow should validate formulas");
+  assert(formulaSheet.ok && hasTruthyKey(formulaSheet, "formulaValidationOk"), "formula sheet workflow should validate formulas");
 
   const formulaRepair = await callTool(client, "excel.workflow.repair_formula_errors", {
     workbookId,
@@ -216,7 +218,7 @@ async function runCoreWorkbookWorkflow(client) {
     targetAddress: "D2:D4",
     direction: "down"
   });
-  assert(formulaRepair.ok && formulaRepair.summary?.formulaValidationOk, "formula repair workflow should validate after repair");
+  assert(formulaRepair.ok && hasTruthyKey(formulaRepair, "formulaValidationOk"), "formula repair workflow should validate after repair");
 }
 
 async function runTableLargeWorkflow(client) {
@@ -232,13 +234,14 @@ async function runTableLargeWorkflow(client) {
   });
   assert(created.ok && created.transactionId && created.backup, "table create should transact and back up");
 
-  const page = await callTool(client, "excel.table.read", {
+  const page = await callTool(client, "excel.table.read_compact", {
     workbookId,
     tableName: "TransactionsLarge",
     includeValues: true,
     columns: ["Account", "Amount", "Status"],
     rowOffset: 100,
-    rowLimit: 25
+    maxRows: 25,
+    responseMode: "verbose"
   });
   assert(page.values.length === 25, "large table read should return requested row window");
   assert(page.truncated === true, "large table read should mark truncated page");
@@ -314,7 +317,7 @@ async function runSafetyAndRollbackWorkflow(client) {
   assert(workflow.ok && workflow.applied === true, "workflow risky edit should apply");
   assert(workflow.diff?.ok === true, "workflow risky edit should include snapshot diff");
   assert(workflow.rollbackPreview?.rollbackAvailable === true, "workflow risky edit should include rollback preview");
-  assert(workflow.summary?.rollback?.previewed === true, "workflow risky edit should include rollback summary");
+  assert(hasTruthyKey(workflow, "previewed"), "workflow risky edit should include rollback summary");
 
   const sparseBlocked = await callTool(client, "excel.workflow.preview_risky_edit", {
     workbookId,
@@ -488,7 +491,7 @@ async function runTemplateStyleFormulaSweep(client) {
       }
     ]
   });
-  assert(workflowReport.ok && workflowReport.summary?.styleCompared && workflowReport.summary?.validated, "template workflow should compare styles and validate");
+  assert(workflowReport.ok && hasTruthyKey(workflowReport, "styleCompared") && hasTruthyKey(workflowReport, "validated"), "template workflow should compare styles and validate");
 
   return { templateId };
 }
@@ -588,7 +591,7 @@ async function runPivotChartSweep(client) {
     chartType: "ColumnClustered",
     chartTitle: "Workflow Sales"
   });
-  assert(workflow.ok && workflow.summary?.refreshed && workflow.summary?.validated, "pivot/chart workflow should create, refresh, and validate");
+  assert(workflow.ok && hasTruthyKey(workflow, "refreshed") && hasTruthyKey(workflow, "validated"), "pivot/chart workflow should create, refresh, and validate");
 }
 
 async function runSnapshotsDiffsEventsPermissionsSweep(client) {
@@ -614,12 +617,11 @@ async function runSnapshotsDiffsEventsPermissionsSweep(client) {
   });
   assert(right.ok && right.snapshot?.snapshotId, "second snapshot create should pass");
 
-  assert((await callTool(client, "excel.snapshot.get", { snapshotId: left.snapshot.snapshotId })).ok, "snapshot get should pass");
+  assert((await callTool(client, "excel.snapshot.get_compact", { snapshotId: left.snapshot.snapshotId })).ok, "snapshot get should pass");
   assert((await callTool(client, "excel.snapshot.list", { workbookId })).ok, "snapshot list should pass");
-  assert((await callTool(client, "excel.snapshot.compare", { leftSnapshotId: left.snapshot.snapshotId, rightSnapshotId: right.snapshot.snapshotId })).ok, "snapshot compare should pass");
+  assert((await callTool(client, "excel.snapshot.compare_compact", { leftSnapshotId: left.snapshot.snapshotId, rightSnapshotId: right.snapshot.snapshotId })).ok, "snapshot compare should pass");
   assert((await callTool(client, "excel.diff.create", { leftSnapshotId: left.snapshot.snapshotId, rightSnapshotId: right.snapshot.snapshotId })).ok, "diff create should pass");
-  assert((await callTool(client, "excel.diff.export_json", { leftSnapshotId: left.snapshot.snapshotId, rightSnapshotId: right.snapshot.snapshotId })).ok, "diff export json should pass");
-  assert((await callTool(client, "excel.diff.export_html", { leftSnapshotId: left.snapshot.snapshotId, rightSnapshotId: right.snapshot.snapshotId })).ok, "diff export html should pass");
+  assert((await callTool(client, "excel.diff.get_compact", { leftSnapshotId: left.snapshot.snapshotId, rightSnapshotId: right.snapshot.snapshotId })).ok, "diff compact get should pass");
 
   assert((await callTool(client, "excel.events.subscribe", {})).ok, "events subscribe should pass");
   assert((await callTool(client, "excel.events.get_recent", { limit: 20 })).ok, "events get recent should pass");
@@ -1697,7 +1699,7 @@ function summarizeTranscript(entries) {
     current.calls += 1;
     current.elapsedMs += entry.elapsedMs;
     current.cellsRead += Number(entry.telemetry?.cellsRead ?? 0);
-    current.cellsWritten += Number(entry.telemetry?.cellsWritten ?? 0);
+    current.cellsWritten += writtenCellCount(entry.result ?? entry);
     current.chunkCount += Number(entry.telemetry?.chunkCount ?? 0);
     byTool.set(entry.tool, current);
   }
@@ -1713,7 +1715,7 @@ function inferHelperCandidates(entries) {
   const candidates = [];
   for (const entry of entries) {
     const cellsRead = Number(entry.telemetry?.cellsRead ?? 0);
-    const cellsWritten = Number(entry.telemetry?.cellsWritten ?? 0);
+    const cellsWritten = writtenCellCount(entry.result ?? entry);
     if (cellsRead > 10_000) {
       candidates.push({ tool: entry.tool, reason: `large read touched ${cellsRead} cells; prefer projected reads or a narrower helper` });
     }
@@ -1722,6 +1724,23 @@ function inferHelperCandidates(entries) {
     }
   }
   return candidates;
+}
+
+function writtenCellCount(result) {
+  return Number(result?.telemetry?.cellsWritten ?? result?.compactProof?.cellsChanged ?? 0);
+}
+
+function hasTruthyKey(value, key) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  if (value[key]) {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => hasTruthyKey(item, key));
+  }
+  return Object.values(value).some((item) => hasTruthyKey(item, key));
 }
 
 await main();

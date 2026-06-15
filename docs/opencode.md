@@ -19,14 +19,14 @@ Example output:
   "mcp": {
     "open-workbook": {
       "type": "local",
-      "command": ["owb", "mcp", "--agent-name", "finance-agent", "--tool-profile", "compact"],
+      "command": ["owb", "mcp", "--agent-name", "finance-agent"],
       "enabled": true
     }
   }
 }
 ```
 
-The generated OpenCode snippet uses `--tool-profile compact` by default. This keeps the MCP tool schema surface smaller for clients that send all available tool definitions with each generation. Use `--tool-profile full` when you need the entire Open Workbook tool surface in OpenCode.
+The generated OpenCode snippet uses the optimized compact-first MCP surface. There is no compact/full profile to configure.
 
 For `npx`-based OpenCode config, keep the command equivalent to:
 
@@ -35,7 +35,7 @@ For `npx`-based OpenCode config, keep the command equivalent to:
   "mcp": {
     "open-workbook": {
       "type": "local",
-      "command": ["npx", "-y", "@components-kit/open-workbook@latest", "mcp", "--tool-profile", "compact"],
+      "command": ["npx", "-y", "@components-kit/open-workbook@latest", "mcp"],
       "enabled": true
     }
   }

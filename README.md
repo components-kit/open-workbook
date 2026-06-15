@@ -79,10 +79,10 @@ Use the printed MCP launch command in your agent UI:
 npx -y @components-kit/open-workbook@latest mcp
 ```
 
-For MCP clients that include every available tool schema in each model request, use the smaller practical surface:
+Start the MCP adapter with the optimized compact-first tool surface:
 
 ```bash
-npx -y @components-kit/open-workbook@latest mcp --tool-profile compact
+npx -y @components-kit/open-workbook@latest mcp
 ```
 
 Start the agent UI before opening the Open Workbook add-in in Excel; the MCP command starts the local add-in asset server and backend for the simple flow.
@@ -146,9 +146,6 @@ Environment overrides:
 - `OPEN_WORKBOOK_PORT`
 - `OPEN_WORKBOOK_ADDIN_PATH`
 - `OPEN_WORKBOOK_ADDIN_RPC_TIMEOUT_MS`
-- `OPEN_WORKBOOK_TOOL_PROFILE`
-- `OPEN_WORKBOOK_TOOLS`
-- `OPEN_WORKBOOK_DISABLE_TOOLS`
 - `OPEN_WORKBOOK_BATCH_DIRECT_OPERATION_THRESHOLD`
 - `OPEN_WORKBOOK_BATCH_DIRECT_PAYLOAD_BYTES`
 - `OPEN_WORKBOOK_BATCH_DIRECT_CELL_THRESHOLD`
@@ -162,7 +159,7 @@ Environment overrides:
 
 ## Token-Saving Reads
 
-Open Workbook exposes compact discovery, lookup, and read tools so agents can inspect workbook structure before sending cell bodies to a model. When the target is unknown, start with `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range`, then inspect one candidate with `excel.lookup.inspect_match`. When the target is known, use `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, or `excel.range.get_summary`, then use `excel.table.read_compact` or `excel.range.read_compact` for bounded values-first pages. Compact responses include `payloadBytes`, rough `estimatedTokens`, `truncated`, and `nextPage`; existing full-read tools remain available for exact-data tasks.
+Open Workbook exposes compact discovery, lookup, and read tools so agents can inspect workbook structure before sending cell bodies to a model. When the target is unknown, start with `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range`, then inspect one candidate with `excel.lookup.inspect_match`. When the target is known, use `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, or `excel.range.get_summary`, then use `excel.table.read_compact` or `excel.range.read_compact` for bounded values-first pages. Compact responses include `payloadBytes`, rough `estimatedTokens`, `truncated`, `nextPage`, and a resource handle when exact full detail is needed.
 
 When details would exceed a caller's budget, compact tools can store the full payload locally and return an `excel://compact/{resource_id}` handle for later retrieval through `excel.compact.get_resource`. Compact summary/schema cache entries are invalidated after workbook mutations. Use `excel.validate.compact` for validation proof that returns counts and examples inline while keeping the full issue report behind a resource handle.
 

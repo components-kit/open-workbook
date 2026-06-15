@@ -29,30 +29,16 @@ describe("tool catalog", () => {
     expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.rollback_validate")).toBe(true);
   });
 
-  it("exposes only stable tools by default", () => {
+  it("exposes the optimized compact-first surface by default", () => {
     const exposed = getExposedToolCatalog();
+    const exposedNames = new Set(exposed.map((tool) => tool.name));
     expect(exposed.every((tool) => tool.status === "stable")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.runtime.get_status")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.template.validate_sheet_against_template")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.style.repair_consistency")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.style.compare_fingerprint")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.style.copy_fills")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.style.copy_number_formats")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.style.copy_data_validation")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.formula.repair_patterns")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.formula.read_patterns")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.formula.copy_patterns")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.formula.fill_down")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.formula.convert_to_values")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.formula.explain")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.table.reorder_columns")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.table.append_rows")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.filter.apply")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.sort.apply")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.range.read_data_validation")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.table.apply_filters")).toBe(true);
+    expect(exposed.some((tool) => tool.name === "excel.table.sort")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.range.find_errors")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.workbook.close")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.workbook.export_copy")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.workbook.get_summary")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.workbook.get_used_range_summary")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.sheet.get_summary")).toBe(true);
@@ -78,18 +64,7 @@ describe("tool catalog", () => {
     expect(exposed.some((tool) => tool.name === "excel.snapshot.get_compact")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.snapshot.compare_compact")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.diff.get_compact")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.validate.workbook")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.validate.no_unintended_changes")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.repair.style_from_template")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.repair.table_structure")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.names.create")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.region.fill")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.permissions.lock_regions")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.clean.trim_whitespace")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.clean.fuzzy_match")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.pivot.create")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.pivot.delete")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.chart.create")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.runtime.get_capabilities")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.runtime.get_selection")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.workflow.prepare_session")).toBe(true);
@@ -109,6 +84,24 @@ describe("tool catalog", () => {
     expect(exposed.some((tool) => tool.name === "excel.workflow.rollback_validate")).toBe(true);
     expect(exposed.find((tool) => tool.name === "excel.workflow.rollback_validate")?.requiresConfirmation).toBe(true);
     expect(exposed.find((tool) => tool.name === "excel.runtime.get_selection")?.status).toBe("stable");
+    for (const hidden of [
+      "excel.range.read_values",
+      "excel.range.read_formulas",
+      "excel.range.read_number_formats",
+      "excel.range.read_display_text",
+      "excel.range.read_styles",
+      "excel.range.read_full",
+      "excel.table.read",
+      "excel.snapshot.get",
+      "excel.snapshot.compare",
+      "excel.diff.get_details",
+      "excel.diff.export_json",
+      "excel.diff.export_html",
+      "excel.filter.apply",
+      "excel.sort.apply"
+    ]) {
+      expect(exposedNames.has(hidden)).toBe(false);
+    }
   });
 
   it("can include preview status without exposing planned or unsupported tools", () => {
@@ -117,8 +110,8 @@ describe("tool catalog", () => {
     expect(exposed.some((tool) => tool.name === "excel.runtime.connect_addin" && tool.status === "stable")).toBe(true);
     expect(exposed.every((tool) => tool.status === "stable" || tool.status === "preview")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.workbook.get_workbook_map" && tool.status === "stable")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.pivot.create" && tool.status === "stable")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.status === "planned")).toBe(false);
+    expect(exposed.some((tool) => tool.name === "excel.range.read_compact" && tool.status === "stable")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.status === "planned")).toBe(true);
   });
 
   it("tracks resources and prompts as catalog entries", () => {

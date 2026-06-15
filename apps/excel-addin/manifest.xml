@@ -5,7 +5,7 @@
   xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
   xsi:type="TaskPaneApp">
   <Id>6f2d2ac1-69b0-4eb6-a256-0a1fcb000001</Id>
-  <Version>0.1.10.0</Version>
+  <Version>0.1.11.0</Version>
   <ProviderName>ComponentsKit</ProviderName>
   <DefaultLocale>en-US</DefaultLocale>
   <DisplayName DefaultValue="OpenWorkbook" />

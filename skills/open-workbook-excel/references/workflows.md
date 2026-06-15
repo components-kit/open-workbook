@@ -8,7 +8,7 @@ These are default Open Workbook MCP workflows. Adjust scope and validation to th
 2. Call `excel.runtime.get_active_context`.
 3. Call `excel.runtime.get_capabilities`.
 4. Call `excel.workbook.get_workbook_map`.
-5. For a specific sheet, call `excel.sheet.get_used_range` and scoped `excel.range.read_*` tools.
+5. For a specific sheet, call `excel.sheet.get_used_range` and scoped `excel.range.read_compact`.
 
 Use `excel.workflow.prepare_session` when available to combine the first four calls plus collaboration state.
 
@@ -17,8 +17,8 @@ Use display text when reporting what a user sees. Use values/formulas/number for
 ## Read And Analyze Data
 
 1. Identify the smallest sheet, table, region, or range that answers the question.
-2. Use `excel.table.read` for Excel tables; otherwise use `excel.range.read_values` or `excel.range.read_full`.
-3. For formula-sensitive analysis, also call `excel.range.read_formulas` or `excel.formula.read_patterns`.
+2. Use `excel.table.read_compact` for Excel tables; otherwise use `excel.range.read_compact`.
+3. For formula-sensitive analysis, include formulas in the compact read or use a matched formula workflow.
 4. For data-quality work, use `excel.clean.detect_header_row`, `excel.range.find_blank_cells`, `excel.range.find_errors`, and relevant validators.
 
 Do not read the whole workbook when a named table, used range, or explicit range is enough.
@@ -74,13 +74,13 @@ Cleaning writes must stay within the requested sheet, range, table, or registere
 
 ## Update Tables, Filters, Or Sorts
 
-1. Inspect with `excel.table.get_info` and `excel.filter.get_filters`.
-2. Use projected `excel.table.read` options when only some columns or rows are needed.
+1. Inspect with `excel.table.get_info`.
+2. Use projected `excel.table.read_compact` options when only some columns or rows are needed.
 3. Use `excel.table.reorder_columns` for column order changes.
 4. Use `excel.table.append_rows` or `excel.table.update_rows` for data.
 5. Use `excel.table.resize` only when structure must change.
-6. Preserve or reapply filters with `excel.filter.apply`, `excel.filter.preserve_from_template`, or `excel.table.preserve_filters`.
-7. Validate with `excel.validate.tables` and `excel.validate.filters`.
+6. Preserve or reapply filters with `excel.table.apply_filters` or `excel.table.preserve_filters`.
+7. Validate with `excel.validate.compact`.
 
 Avoid raw range writes inside table bodies when table tools can express the intent.
 Avoid full-table rewrites for layout changes such as column reorder; they are slow on large tables and can break table identity or dependent objects.

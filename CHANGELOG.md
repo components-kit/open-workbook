@@ -4,6 +4,13 @@ All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
 
+## [0.1.11] - 2026-06-15
+
+### Changed
+
+- MCP now exposes one optimized compact-first tool surface by default, removing compact/full/read-only profile and allow/deny list configuration from the user-facing CLI.
+- Raw high-token range/table reads, full snapshot/diff detail tools, and duplicate filter/sort wrappers are hidden from the public MCP surface while compact reads and advanced workbook tools remain available.
+
 ## [0.1.10] - 2026-06-15
 
 ### Added

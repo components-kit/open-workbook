@@ -392,6 +392,29 @@ const STABLE_TOOLS = new Set([
 
 const PREVIEW_TOOLS = new Set<string>();
 
+const HIDDEN_PUBLIC_TOOLS = new Set([
+  "excel.range.read_values",
+  "excel.range.read_formulas",
+  "excel.range.read_number_formats",
+  "excel.range.read_display_text",
+  "excel.range.read_styles",
+  "excel.range.read_full",
+  "excel.table.read",
+  "excel.snapshot.get",
+  "excel.snapshot.compare",
+  "excel.diff.get_details",
+  "excel.diff.export_json",
+  "excel.diff.export_html",
+  "excel.filter.get_filters",
+  "excel.filter.apply",
+  "excel.filter.clear",
+  "excel.filter.preserve_from_template",
+  "excel.filter.validate",
+  "excel.sort.apply",
+  "excel.sort.clear",
+  "excel.sort.preserve_from_template"
+]);
+
 const TOOL_NAMES = [
   "excel.runtime.get_status",
   "excel.runtime.connect_addin",
@@ -788,7 +811,7 @@ function getNamespace(name: string): ToolNamespace {
 }
 
 function getToolStatus(name: string, namespace: ToolNamespace): CatalogStatus {
-  if (STABLE_TOOLS.has(name)) {
+  if (STABLE_TOOLS.has(name) && !HIDDEN_PUBLIC_TOOLS.has(name)) {
     return "stable";
   }
   if (PREVIEW_TOOLS.has(name)) {

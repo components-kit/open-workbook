@@ -23,7 +23,7 @@ If the add-in is disconnected, ask the user to start their agent UI so it launch
 
 - When the target is unknown, use lookup first: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range`, then inspect one candidate with `excel.lookup.inspect_match`.
 - Start with compact context tools for known large scopes: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, and `excel.range.get_summary`.
-- Prefer `excel.range.read_compact` and `excel.table.read_compact` for exploratory data reads. In compact profile, treat brief proof plus `contextId`/`resourceUri` as enough unless exact cell bodies are required.
+- Prefer `excel.range.read_compact` and `excel.table.read_compact` for exploratory data reads. Treat brief proof plus `contextId`/`resourceUri` as enough unless exact cell bodies are required.
 - Use `excel.validate.compact` for validation proof when counts/examples are enough. Fetch `excel://compact/{resource_id}` details only if the user or task needs the full report.
 - If a tool returns `nextActionRecommendation: "answer_now"`, answer from the compact proof instead of continuing to inspect or validate unless the user asked for exhaustive audit.
 - Treat high-confidence compact proofs with `reasoningHints` such as "Agent can answer now" as a stop signal. Fetch `contextId` details only for failures, warnings, low confidence, truncation, or explicit audit requests.

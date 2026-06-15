@@ -8,20 +8,14 @@ const callableTools = getExposedToolCatalog({ includePreview: true }).map((tool)
 const registeredTools = [...collectRegisteredToolNames(source)].sort();
 
 const missing = callableTools.filter((name) => !registeredTools.includes(name));
-const extra = registeredTools.filter((name) => !callableTools.includes(name));
 
-if (missing.length > 0 || extra.length > 0) {
+if (missing.length > 0) {
   console.error("MCP tool catalog drift detected.");
-  if (missing.length > 0) {
-    console.error(`Missing MCP registrations:\n${missing.map((name) => `- ${name}`).join("\n")}`);
-  }
-  if (extra.length > 0) {
-    console.error(`Unexpected MCP registrations:\n${extra.map((name) => `- ${name}`).join("\n")}`);
-  }
+  console.error(`Missing MCP registrations:\n${missing.map((name) => `- ${name}`).join("\n")}`);
   process.exit(1);
 }
 
-console.log(`MCP tool catalog check passed: ${callableTools.length} callable tools registered.`);
+console.log(`MCP tool catalog check passed: ${callableTools.length} exposed tools have registered handlers (${registeredTools.length} handlers present).`);
 
 function collectRegisteredToolNames(text) {
   const names = new Set();
