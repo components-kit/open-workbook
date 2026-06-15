@@ -11,6 +11,10 @@ Open Workbook treats speed as a correctness requirement because slow workbook au
 - Load only requested Office.js properties.
 - Group operations by workbook, sheet, and contiguous range.
 - Chunk large payloads before Office.js limits.
+- Use `excel.batch.preflight` before applying large generated batches. It tells the agent whether to apply directly, submit to the queue, or use `excel.batch.submit_chunked`.
+- Use `excel.range.write_styles_many` for grouped report styling instead of many parallel single-range style writes; large style entry lists are split into queued parent jobs.
+- Surface queued or long-running mutations through transaction progress instead of hiding them behind parallel write calls.
+- For chunked work, surface `excel.job.get`/`excel.job.wait` progress so the user sees one update with chunk progress.
 - Suspend calculation and screen updating only around large operations.
 
 ## Large Range Execution
@@ -22,6 +26,8 @@ Large matrix writes are split into row chunks before assignment to Office.js ran
 - number formats
 
 The chunker preserves whole rows and uses the configured cell limit to avoid sending very large matrices through a single Office.js range assignment. Structural operations such as row insertion, table resize, chart creation, and PivotTable creation remain native Office.js object calls because splitting them would change semantics.
+
+Style-only batches can be retried adaptively after an add-in timeout because reapplying the same range style is idempotent. Value, formula, and number-format matrices are split before execution when preflight can safely chunk by rows. Structural mutations do not auto-retry after a timeout because Excel may have applied part or all of the original request.
 
 ## Telemetry
 

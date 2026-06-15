@@ -85,9 +85,17 @@ Combined mutating workflows also include an internal read-only preflight before 
 
 Facet-specific range reads load only the requested cell payload. `excel.table.read` accepts optional column, row-window, and include flags so agents can inspect large tables without transferring the entire body.
 
+`excel.batch.preflight` estimates operation count, touched cells, payload bytes, destructive level, and whether a batch should run as synchronous apply, queued submit, or chunked submit. Agents should preflight large or generated batches before execution instead of discovering size problems through add-in timeouts.
+
+`excel.batch.submit` queues a batch mutation and returns transaction progress immediately. Use it when a mutation may take longer than an MCP client timeout, then follow with `excel.transaction.wait` or `excel.transaction.get`. `excel.batch.submit_chunked` preflights a large batch, splits safely chunkable style/value/formula/number-format work, queues child transactions, and returns one parent job. `excel.batch.apply` still waits when the writer is idle, but if another mutation is active or queued it returns queued transaction progress instead of blocking behind the queue.
+
+`excel.range.write_styles_many` applies multiple range/style entries through the reversible batch path. Agents should use it for grouped report formatting such as title bands, header rows, body ranges, zebra rows, and repeated status/type coloring instead of launching many parallel `excel.range.write_styles` calls. Large style entry lists are split into queued parent jobs; set `OPEN_WORKBOOK_STYLE_BATCH_CHUNK_SIZE` to override the default chunk size.
+
+`excel.job.list`, `excel.job.get`, `excel.job.wait`, and `excel.job.cancel` track parent jobs that split one user-visible update into multiple queued transactions. Jobs expose aggregate chunk progress and cancellation for queued child transactions. Applying chunks are not interrupted mid-Office.js call.
+
 `excel.plan.rollback` and `excel.workbook.restore_backup` restore captured range snapshots. Full file-copy restore is tracked separately because it requires file-level user or OS involvement.
 
-Multi-agent coordination runs through task, lock, and transaction records. The shared daemon serializes `excel.batch.apply` and `excel.plan.apply` through a transaction queue, attaches agent/task/transaction metadata to results, and exposes collaboration status for multiple MCP adapters.
+Multi-agent coordination runs through task, lock, transaction, and job records. The shared daemon serializes `excel.batch.apply` and `excel.plan.apply` through a transaction queue, attaches agent/task/transaction metadata to results, and exposes collaboration status for multiple MCP adapters. `excel.transaction.get` and `excel.transaction.list` include queue position and progress messages for queued work. `excel.transaction.wait` lets an agent wait for a queued or applying transaction with a bounded timeout, while `excel.transaction.cancel` cancels queued transactions before they start applying in Excel. For chunked work, prefer job tools so users see one parent progress object instead of many transaction IDs.
 
 Plan refresh is conservative. `excel.plan.refresh_preview` and `excel.plan.rebase` re-snapshot planned target ranges and only refresh stored fingerprints when those target ranges are unchanged since the previous preview. If a user or another agent changed a target range, refresh/rebase returns `TARGET_REGION_CHANGED` and leaves the plan blocked until the agent creates a new plan.
 

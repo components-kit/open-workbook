@@ -161,6 +161,12 @@ Environment overrides:
 - `OPEN_WORKBOOK_HOST`
 - `OPEN_WORKBOOK_PORT`
 - `OPEN_WORKBOOK_ADDIN_PATH`
+- `OPEN_WORKBOOK_ADDIN_RPC_TIMEOUT_MS`
+- `OPEN_WORKBOOK_BATCH_DIRECT_OPERATION_THRESHOLD`
+- `OPEN_WORKBOOK_BATCH_DIRECT_PAYLOAD_BYTES`
+- `OPEN_WORKBOOK_BATCH_DIRECT_CELL_THRESHOLD`
+- `OPEN_WORKBOOK_STYLE_BATCH_CHUNK_SIZE`
+- `OPEN_WORKBOOK_MATRIX_CHUNK_ROWS`
 - `OPEN_WORKBOOK_BACKUP_DIR`
 - `OPEN_WORKBOOK_EXPORT_DIR`
 - `OPEN_WORKBOOK_STATE_DIR`
@@ -263,6 +269,23 @@ Source: CHANGELOG.md
 All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
+
+## [0.1.6] - 2026-06-15
+
+### Added
+
+- Added transaction progress controls with `excel.transaction.wait` and `excel.transaction.cancel`, plus queued transaction progress metadata for agents coordinating long-running workbook mutations.
+- Added `excel.batch.preflight` and `excel.batch.submit_chunked` so agents can estimate batch size and choose synchronous apply, queued submit, or chunked parent-job submit before Excel receives writes.
+- Added parent job progress tools with `excel.job.list`, `excel.job.get`, `excel.job.wait`, and `excel.job.cancel` for large updates split across multiple queued transactions.
+- Added `excel.range.write_styles_many` for applying grouped report styles through one reversible batch transaction.
+- Added `excel.batch.submit` for queueing batch mutations and returning transaction progress immediately.
+
+### Changed
+
+- Made the backend-to-add-in RPC timeout configurable with `OPEN_WORKBOOK_ADDIN_RPC_TIMEOUT_MS`.
+- Large `excel.range.write_styles_many` payloads now split into queued chunks controlled by `OPEN_WORKBOOK_STYLE_BATCH_CHUNK_SIZE`.
+- Large style, value, formula, and number-format batches now preflight into safe chunk plans where possible instead of relying on parallel MCP calls or timeout recovery.
+- Style-only batches now retry add-in timeouts by queueing smaller chunks when safe.
 
 ## [0.1.5] - 2026-06-14
 
@@ -381,6 +404,7 @@ If the add-in is disconnected, ask the user to start their agent UI so it launch
 - Use `excel.table.*` for structured table rows, filters, sorts, totals, and table resizing.
 - Use `excel.template.*`, `excel.style.*`, and `excel.formula.*` when preserving or repairing templates matters.
 - Use `excel.plan.*` for previewable multi-step changes that need rollback and stale-target checks.
+- Use `excel.batch.preflight` before large generated writes, then choose direct apply, queued submit, or `excel.batch.submit_chunked` with job progress based on the recommendation.
 - Use `excel.batch.*` for compact, direct range mutations that still need backups, fingerprints, permissions, and transaction logging.
 - Use `excel.workflow.create_formula_sheet` for standard sheet creation with values, formulas, number formats, and formula validation in one response.
 - Use `excel.workflow.repair_formula_errors` for formula error repair when you have an error range plus a source formula range or exact formulas to write.
@@ -389,7 +413,7 @@ If the add-in is disconnected, ask the user to start their agent UI so it launch
 - Use `excel.workflow.create_pivot_chart_summary` for standard PivotTable plus chart summary tasks that need create, refresh, and validation in one response.
 Combined mutating workflows include a read-only preflight payload before mutation; still prefer `excel.workflow.prepare_session` first when possible.
 - Use `excel.validate.*` before and after risky changes.
-- Use `excel.backup.*`, `excel.snapshot.*`, and `excel.transaction.*` for recovery, audit, rollback previews, and rollback chains.
+- Use `excel.backup.*`, `excel.snapshot.*`, `excel.transaction.*`, and `excel.job.*` for recovery, audit, long-running progress, rollback previews, and rollback chains.
 - Use `excel.task.*`, `excel.lock.*`, `excel.collab.*`, and `excel.conflict.*` for multi-agent workbook work.
 
 For detailed routing, read `references/tool-selection.md`.
@@ -407,12 +431,12 @@ For detailed routing, read `references/tool-selection.md`.
 ## Critical Recipes
 
 - Sheet with formulas: prefer `excel.workflow.create_formula_sheet`; if using separate tools, create the sheet, write labels/constants with `excel.range.write_values`, write formulas with `excel.range.write_formulas`, write number formats with `excel.range.write_number_formats`, then validate with `excel.formula.validate` or `excel.validate.no_formula_errors`. Do not put formula strings into `write_values`.
-- Large table reorder/filter/sort/append/update: inspect with `excel.table.get_info` and bounded `excel.table.read` only when row data is needed, then use `excel.table.reorder_columns`, `excel.table.apply_filters`, `excel.table.sort`, `excel.table.append_rows`, or `excel.table.update_rows`. Never clear, recreate, or rewrite the whole table for these tasks.
+- Large table reorder/filter/sort/append/update: always inspect the table first with `excel.table.get_info` or `excel.workbook.get_workbook_map`. Use bounded `excel.table.read` only when row data is needed, then use `excel.table.reorder_columns`, `excel.table.apply_filters`, `excel.table.sort`, `excel.table.append_rows`, or `excel.table.update_rows`. For table filters, prefer `excel.table.apply_filters` over generic filter tools. After mutation, validate with `excel.validate.tables` for table changes and `excel.validate.filters` for filter/sort changes. Never clear, recreate, or rewrite the whole table for these tasks.
 - Formula repair: prefer `excel.workflow.repair_formula_errors` when the error range and source formula range are known. Otherwise find errors, read nearby formula patterns, inspect dependencies, repair with `excel.formula.repair_patterns`, `excel.formula.fill_down`, `excel.formula.fill_right`, or scoped `excel.range.write_formulas`, recalculate if needed, then validate. Never convert formulas to values unless explicitly requested.
 - Template report: prefer `excel.workflow.create_template_report`; if using separate tools, create the sheet from template, clear/fill declared regions, compare styles, repair style drift, and validate against the template.
 - Snapshot/diff/rollback preview: after discovery, prefer `excel.workflow.preview_risky_edit` for a scoped risky edit with a non-empty minimal operation list. If using separate tools, create a before snapshot, make the scoped change, create an after snapshot, call `excel.diff.summarize` or `excel.snapshot.compare` with both snapshot IDs, then use rollback preview tools without actually rolling back unless asked.
 - Pivot/chart summary: prefer `excel.workflow.create_pivot_chart_summary`; if using separate tools, check capability, create the PivotTable, refresh it, create/update the chart, refresh/update the chart source, and validate the PivotTable source before reporting success.
-- Multi-agent work: read collaboration status, create or inspect the task, acquire the narrowest lock, follow conflict guidance, perform or plan the scoped operation, then release locks.
+- Multi-agent work: start with `excel.collab.get_status`, create or inspect the task, acquire the narrowest lock, follow conflict guidance, perform or plan the scoped operation, then release locks.
 
 ## Workflow References
 
@@ -460,17 +484,24 @@ Use explicit sheet/address ranges whenever possible. Use used-range or workbook-
 - Simple formulas: `excel.range.write_formulas`
 - Number formats: `excel.range.write_number_formats`
 - Styles: `excel.range.write_styles`
+- Grouped styles: `excel.range.write_styles_many`
 - Combined formula sheet creation: `excel.workflow.create_formula_sheet`
 - Combined formula error repair: `excel.workflow.repair_formula_errors`
-- Multiple related range edits: `excel.batch.validate`, `excel.batch.dry_run`, `excel.batch.apply`
+- Multiple related range edits: `excel.batch.validate`, `excel.batch.preflight`, `excel.batch.dry_run`, `excel.batch.apply`
+- Long-running related range edits: `excel.batch.submit`
+- Preflighted chunked range edits: `excel.batch.submit_chunked`
+- Chunked long-running jobs: `excel.job.get`, `excel.job.wait`, `excel.job.cancel`
 - Scoped risky edit with diff and rollback preview: `excel.workflow.preview_risky_edit`
 - Previewable or user-reviewable edits: `excel.plan.create`, `excel.plan.preview`, `excel.plan.apply`
 - Stale plan handling: `excel.plan.refresh_preview`, `excel.plan.rebase`
+- Queued mutation status: `excel.transaction.get`, `excel.transaction.wait`, `excel.transaction.cancel`
 
-Prefer `excel.workflow.create_formula_sheet` for standard new sheets that need values, formulas, number formats, and validation. Prefer `excel.workflow.repair_formula_errors` for formula error repair when an error range and source formula range are known. Prefer `excel.workflow.preview_risky_edit` when a risky scoped edit should apply and return before/after snapshots, a diff, transaction id, and rollback preview in one response. Provide at least one minimal scoped operation and leave `apply` enabled unless the user asked for preview only. Prefer `excel.plan.*` when a user should review a diff before applying, when formulas/templates are at risk, or when rollback clarity matters. Prefer `excel.batch.*` for compact, well-scoped range mutations.
+Prefer `excel.workflow.create_formula_sheet` for standard new sheets that need values, formulas, number formats, and validation. Prefer `excel.workflow.repair_formula_errors` for formula error repair when an error range and source formula range are known. Prefer `excel.workflow.preview_risky_edit` when a risky scoped edit should apply and return before/after snapshots, a diff, transaction id, and rollback preview in one response. Provide at least one minimal scoped operation and leave `apply` enabled unless the user asked for preview only. Prefer `excel.plan.*` when a user should review a diff before applying, when formulas/templates are at risk, or when rollback clarity matters. Prefer `excel.batch.*` for compact, well-scoped range mutations. Preflight large generated batches before applying them.
 Combined mutating workflows include an internal read-only preflight payload before mutation; still prefer `excel.workflow.prepare_session` first when possible.
 Values, formulas, formats, and styles are separate workbook facets. Use `excel.range.write_values` for constants only, `excel.range.write_formulas` for formulas beginning with `=`, and `excel.range.write_number_formats` for display formats. Do not merge formulas into a values write just because the matrix is convenient.
 Do not pad a large range write with `null`, blank strings, or unchanged cells when only one cell or a smaller rectangle should change. Use the smallest changed target range, or use `excel.range.clear_values_keep_format` for intentional clearing.
+Use `excel.range.write_styles_many` for report styling that touches many ranges, such as title bands, headers, zebra rows, status colors, or type colors. Use single `excel.range.write_styles` only for one contiguous range. Large grouped style updates may return queued parent jobs; wait or poll their job IDs.
+If a mutation returns queued or applying transaction or job state, tell the user the workbook update is still running, then call `excel.job.wait`, `excel.job.get`, `excel.transaction.wait`, or `excel.transaction.get` instead of launching parallel writes. Use cancel tools only for queued work that should not start.
 
 When a noninteractive agent run cannot apply a mutation, create an `excel.plan.create` draft with operations that use actual MCP tool names and nested `args`. Example operations should look like `{ "tool": "excel.range.write_formulas", "args": { ... } }`, not vague prose or broad workbook rewrites.
 
@@ -484,6 +515,7 @@ When a noninteractive agent run cannot apply a mutation, create an `excel.plan.c
 - Sorts: `excel.sort.apply`, `excel.sort.clear`
 
 Use table tools instead of range tools when the target is an Excel table. This preserves headers, totals rows, filters, structured references, and table styles.
+Before table reorder, filter, sort, append, or update operations, call `excel.table.get_info` or `excel.workbook.get_workbook_map`. For table filters, use `excel.table.apply_filters` rather than generic filter tools. After table structure or row mutations, call `excel.validate.tables`; after filter/sort changes, call `excel.validate.filters`.
 Do not clear and recreate a table to reorder columns; use `excel.table.reorder_columns`, or stop for confirmation before any destructive rebuild.
 For large tables, avoid full `excel.table.read` unless the user asks for all rows. Pass `rowLimit`, `rowOffset`, and `columns` for targeted discovery, then mutate with table-native tools.
 
@@ -766,11 +798,15 @@ Avoid workbook-wide reads unless the task is search, validation, audit, or disco
 ## Writes
 
 - Use one batch or plan for related edits.
+- Preflight large generated batches before applying them.
 - Keep matrix shapes exact: rows and columns must match the target range.
-- Let Open Workbook chunk large values/formulas/number formats through its batch compiler.
+- Let Open Workbook chunk large values/formulas/number formats through safe row-based chunk plans.
 - Avoid alternating read/write/read/write loops. Read once, compute, apply once, validate once.
+- If work is queued or applying, report the progress message to the user and wait/poll the job or transaction rather than starting parallel mutations.
 
 For very large writes, consider a plan preview first so the agent can expose scope, chunk count, and rollback coverage before applying.
+
+Automatic timeout retry is limited to style-only batches because repeating the same style is safe. Values, formulas, and number formats should be chunked before execution when preflight recommends it. For tables, pivots, charts, and structure, inspect transaction status before retrying.
 
 ## Formulas
 
@@ -1235,9 +1271,17 @@ Combined mutating workflows also include an internal read-only preflight before 
 
 Facet-specific range reads load only the requested cell payload. `excel.table.read` accepts optional column, row-window, and include flags so agents can inspect large tables without transferring the entire body.
 
+`excel.batch.preflight` estimates operation count, touched cells, payload bytes, destructive level, and whether a batch should run as synchronous apply, queued submit, or chunked submit. Agents should preflight large or generated batches before execution instead of discovering size problems through add-in timeouts.
+
+`excel.batch.submit` queues a batch mutation and returns transaction progress immediately. Use it when a mutation may take longer than an MCP client timeout, then follow with `excel.transaction.wait` or `excel.transaction.get`. `excel.batch.submit_chunked` preflights a large batch, splits safely chunkable style/value/formula/number-format work, queues child transactions, and returns one parent job. `excel.batch.apply` still waits when the writer is idle, but if another mutation is active or queued it returns queued transaction progress instead of blocking behind the queue.
+
+`excel.range.write_styles_many` applies multiple range/style entries through the reversible batch path. Agents should use it for grouped report formatting such as title bands, header rows, body ranges, zebra rows, and repeated status/type coloring instead of launching many parallel `excel.range.write_styles` calls. Large style entry lists are split into queued parent jobs; set `OPEN_WORKBOOK_STYLE_BATCH_CHUNK_SIZE` to override the default chunk size.
+
+`excel.job.list`, `excel.job.get`, `excel.job.wait`, and `excel.job.cancel` track parent jobs that split one user-visible update into multiple queued transactions. Jobs expose aggregate chunk progress and cancellation for queued child transactions. Applying chunks are not interrupted mid-Office.js call.
+
 `excel.plan.rollback` and `excel.workbook.restore_backup` restore captured range snapshots. Full file-copy restore is tracked separately because it requires file-level user or OS involvement.
 
-Multi-agent coordination runs through task, lock, and transaction records. The shared daemon serializes `excel.batch.apply` and `excel.plan.apply` through a transaction queue, attaches agent/task/transaction metadata to results, and exposes collaboration status for multiple MCP adapters.
+Multi-agent coordination runs through task, lock, transaction, and job records. The shared daemon serializes `excel.batch.apply` and `excel.plan.apply` through a transaction queue, attaches agent/task/transaction metadata to results, and exposes collaboration status for multiple MCP adapters. `excel.transaction.get` and `excel.transaction.list` include queue position and progress messages for queued work. `excel.transaction.wait` lets an agent wait for a queued or applying transaction with a bounded timeout, while `excel.transaction.cancel` cancels queued transactions before they start applying in Excel. For chunked work, prefer job tools so users see one parent progress object instead of many transaction IDs.
 
 Plan refresh is conservative. `excel.plan.refresh_preview` and `excel.plan.rebase` re-snapshot planned target ranges and only refresh stored fingerprints when those target ranges are unchanged since the previous preview. If a user or another agent changed a target range, refresh/rebase returns `TARGET_REGION_CHANGED` and leaves the plan blocked until the agent creates a new plan.
 
@@ -1913,6 +1957,10 @@ Open Workbook treats speed as a correctness requirement because slow workbook au
 - Load only requested Office.js properties.
 - Group operations by workbook, sheet, and contiguous range.
 - Chunk large payloads before Office.js limits.
+- Use `excel.batch.preflight` before applying large generated batches. It tells the agent whether to apply directly, submit to the queue, or use `excel.batch.submit_chunked`.
+- Use `excel.range.write_styles_many` for grouped report styling instead of many parallel single-range style writes; large style entry lists are split into queued parent jobs.
+- Surface queued or long-running mutations through transaction progress instead of hiding them behind parallel write calls.
+- For chunked work, surface `excel.job.get`/`excel.job.wait` progress so the user sees one update with chunk progress.
 - Suspend calculation and screen updating only around large operations.
 
 ## Large Range Execution
@@ -1924,6 +1972,8 @@ Large matrix writes are split into row chunks before assignment to Office.js ran
 - number formats
 
 The chunker preserves whole rows and uses the configured cell limit to avoid sending very large matrices through a single Office.js range assignment. Structural operations such as row insertion, table resize, chart creation, and PivotTable creation remain native Office.js object calls because splitting them would change semantics.
+
+Style-only batches can be retried adaptively after an add-in timeout because reapplying the same range style is idempotent. Value, formula, and number-format matrices are split before execution when preflight can safely chunk by rows. Structural mutations do not auto-retry after a timeout because Excel may have applied part or all of the original request.
 
 ## Telemetry
 
@@ -2002,6 +2052,10 @@ single serialized Office.js writer
 
 The current implementation runs coordination primitives inside the daemon-owned `RuntimeService`. This makes all batch and plan applies transaction-recorded and serialized through one coordinator when MCP adapters attach to the daemon.
 
+Queued transaction progress is observable. Agents can call `excel.batch.preflight` before large generated writes, `excel.batch.submit` to enqueue mutating work without waiting for Excel execution, `excel.transaction.get` or `excel.transaction.list` for queue position and progress messages, `excel.transaction.wait` for a bounded wait until a terminal status, and `excel.transaction.cancel` to stop a queued transaction before it starts applying in Excel. When the writer is already busy, `excel.batch.apply` returns queued progress instead of waiting behind earlier mutations. Applying transactions are not interrupted mid-Office.js call.
+
+Chunked work has a parent job record. `excel.job.get`, `excel.job.wait`, and `excel.job.cancel` aggregate progress for updates split into multiple child transactions, such as large style updates or row-chunked value/formula/number-format writes. Job cancellation cancels queued child transactions; chunks already applying in Excel are allowed to finish.
+
 Runtime commands:
 
 ```bash
@@ -2018,7 +2072,7 @@ Daemon state is persisted by default under:
 .open-workbook/state/collaboration-state.json
 ```
 
-Set `OPEN_WORKBOOK_STATE_DIR` to move it. On restart, active agents are marked disconnected, active locks are expired, and queued/applying transactions are marked blocked so agents do not mistake interrupted work for committed workbook changes. Template registrations, region registrations, permission policy, plan records, and backup indexes are restored from the same state file.
+Set `OPEN_WORKBOOK_STATE_DIR` to move it. Set `OPEN_WORKBOOK_ADDIN_RPC_TIMEOUT_MS` to override the default 30000 ms backend-to-add-in request timeout. Set `OPEN_WORKBOOK_BATCH_DIRECT_OPERATION_THRESHOLD`, `OPEN_WORKBOOK_BATCH_DIRECT_PAYLOAD_BYTES`, and `OPEN_WORKBOOK_BATCH_DIRECT_CELL_THRESHOLD` to tune when preflight recommends queued work. Set `OPEN_WORKBOOK_STYLE_BATCH_CHUNK_SIZE` and `OPEN_WORKBOOK_MATRIX_CHUNK_ROWS` to control safe chunk sizes. On restart, active agents are marked disconnected, active locks are expired, and queued/applying transactions are marked blocked so agents do not mistake interrupted work for committed workbook changes. Job records, template registrations, region registrations, permission policy, plan records, and backup indexes are restored from the same state file.
 
 ## Conflict Model
 

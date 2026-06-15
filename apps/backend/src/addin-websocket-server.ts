@@ -61,7 +61,7 @@ export function startBackendServer(runtime: RuntimeService, options: BackendServ
 
   websocketServer.on("connection", (websocket) => {
     const session = runtime.sessions.createSession();
-    const rpcClient = new AddinRpcClient(websocket, { timeoutMs: 30_000 });
+    const rpcClient = new AddinRpcClient(websocket, { timeoutMs: addinRpcTimeoutMs() });
     runtime.attachAddinClient(session.connectionId, rpcClient);
 
     websocket.on("message", (raw) => {
@@ -105,6 +105,11 @@ export function startBackendServer(runtime: RuntimeService, options: BackendServ
       resolve(handle);
     });
   });
+}
+
+function addinRpcTimeoutMs(): number {
+  const value = Number(process.env.OPEN_WORKBOOK_ADDIN_RPC_TIMEOUT_MS ?? 30_000);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : 30_000;
 }
 
 function handleRuntimeRpc(runtime: RuntimeService, request: IncomingMessage, response: import("node:http").ServerResponse): void {

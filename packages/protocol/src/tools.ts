@@ -8,6 +8,7 @@ export type ToolNamespace =
   | "sheet"
   | "range"
   | "batch"
+  | "job"
   | "workflow"
   | "template"
   | "style"
@@ -121,6 +122,7 @@ const STABLE_TOOLS = new Set([
   "excel.range.write_formulas",
   "excel.range.write_number_formats",
   "excel.range.write_styles",
+  "excel.range.write_styles_many",
   "excel.range.clear",
   "excel.range.clear_values",
   "excel.range.clear_formats",
@@ -136,8 +138,15 @@ const STABLE_TOOLS = new Set([
   "excel.range.merge",
   "excel.range.unmerge",
   "excel.batch.validate",
+  "excel.batch.preflight",
   "excel.batch.dry_run",
   "excel.batch.apply",
+  "excel.batch.submit",
+  "excel.batch.submit_chunked",
+  "excel.job.list",
+  "excel.job.get",
+  "excel.job.wait",
+  "excel.job.cancel",
   "excel.workflow.prepare_session",
   "excel.workflow.create_formula_sheet",
   "excel.workflow.create_template_report",
@@ -181,6 +190,8 @@ const STABLE_TOOLS = new Set([
   "excel.conflict.clear_telemetry",
   "excel.transaction.get",
   "excel.transaction.list",
+  "excel.transaction.wait",
+  "excel.transaction.cancel",
   "excel.transaction.preview_rollback",
   "excel.transaction.rollback",
   "excel.transaction.preview_rollback_chain",
@@ -422,6 +433,7 @@ const TOOL_NAMES = [
   "excel.range.write_formulas",
   "excel.range.write_number_formats",
   "excel.range.write_styles",
+  "excel.range.write_styles_many",
   "excel.range.clear",
   "excel.range.clear_values",
   "excel.range.clear_formats",
@@ -437,6 +449,9 @@ const TOOL_NAMES = [
   "excel.range.merge",
   "excel.range.unmerge",
   "excel.batch.apply",
+  "excel.batch.submit",
+  "excel.batch.submit_chunked",
+  "excel.batch.preflight",
   "excel.batch.validate",
   "excel.batch.dry_run",
   "excel.workflow.prepare_session",
@@ -589,6 +604,12 @@ const TOOL_NAMES = [
   "excel.conflict.clear_telemetry",
   "excel.transaction.get",
   "excel.transaction.list",
+  "excel.transaction.wait",
+  "excel.transaction.cancel",
+  "excel.job.list",
+  "excel.job.get",
+  "excel.job.wait",
+  "excel.job.cancel",
   "excel.transaction.preview_rollback",
   "excel.transaction.rollback",
   "excel.transaction.preview_rollback_chain",

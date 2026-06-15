@@ -10,7 +10,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../../..");
 const packageRoot = resolve(__dirname, "..");
 const publicPackageName = "@components-kit/open-workbook";
-const currentVersion = readPackageVersion([join(packageRoot, "package.json"), join(repoRoot, "package.json")]) ?? "0.1.5";
+const currentVersion = readPackageVersion([join(packageRoot, "package.json"), join(repoRoot, "package.json")]) ?? "0.1.6";
 const instructionFileName = "open-workbook-excel.md";
 const sourcePaths = {
   mcpServer: resolve(repoRoot, "apps/mcp-server/dist/index.js"),

@@ -303,6 +303,10 @@ export interface BatchRequest {
   agentName?: string | undefined;
   taskId?: TaskId | undefined;
   role?: string | undefined;
+  progressMessage?: string | undefined;
+  retryStrategy?: string | undefined;
+  chunksTotal?: number | undefined;
+  chunksCompleted?: number | undefined;
 }
 
 export interface CompiledBatch {
@@ -312,6 +316,30 @@ export interface CompiledBatch {
   targetFingerprints: RangeFingerprint[];
   estimatedCellsTouched: number;
   destructiveLevel: DestructiveLevel;
+}
+
+export type BatchExecutionMode = "apply" | "submit" | "chunked_submit";
+
+export interface BatchChunkPlan {
+  strategy: "none" | "split_style_entries" | "split_matrix_rows" | "mixed";
+  chunksTotal: number;
+  chunkSize: number;
+  operationCount: number;
+  chunkedOperationKinds: string[];
+  safeToAutoChunk: boolean;
+}
+
+export interface BatchPreflightResult {
+  ok: boolean;
+  workbookId: WorkbookId;
+  operationCount: number;
+  estimatedCellsTouched: number;
+  estimatedPayloadBytes: number;
+  destructiveLevel: DestructiveLevel;
+  recommendedExecutionMode: BatchExecutionMode;
+  safeToAutoChunk: boolean;
+  chunkPlan?: BatchChunkPlan | undefined;
+  warnings: OperationWarning[];
 }
 
 export interface PlanCreateRequest {
@@ -361,6 +389,9 @@ export interface OperationResult {
   operationId?: OperationId | undefined;
   planId?: PlanId | undefined;
   transactionId?: TransactionId | undefined;
+  transactionStatus?: import("./collaboration.js").TransactionStatus | undefined;
+  queuePosition?: number | undefined;
+  progressMessage?: string | undefined;
   taskId?: TaskId | undefined;
   agentId?: AgentId | undefined;
   diffSummary?: DiffSummary;

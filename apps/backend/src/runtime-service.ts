@@ -31,6 +31,8 @@ import type {
   AgentId,
   AgentRecord,
   BackupId,
+  BatchChunkPlan,
+  BatchPreflightResult,
   BatchRequest,
   CellMatrix,
   CellValue,
@@ -51,6 +53,9 @@ import type {
   FormulaTraceResponse,
   FormulaCopyPatternsRequest,
   ConflictGuidanceResponse,
+  JobId,
+  JobRecord,
+  JobStatus,
   LockAcquireResponse,
   LockId,
   LockLeasePolicy,
@@ -155,7 +160,7 @@ import type { AddinRpcClient } from "./addin-rpc-client.js";
 import { NativeFileBridge } from "./native-file-bridge.js";
 import { RuntimeStateStore } from "./state-store.js";
 
-const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.5";
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.6";
 
 export interface RuntimeServiceOptions {
   stateDir?: string;
@@ -176,10 +181,14 @@ export class RuntimeService {
   private readonly addinClients = new Map<ConnectionId, AddinRpcClient>();
   private readonly regions = new Map<string, WorkbookRegion>();
   private readonly agents = new Map<AgentId, AgentRecord>();
+  private readonly jobs = new Map<JobId, JobRecord>();
   private readonly collabEvents: CollaborationEvent[] = [];
   private readonly conflicts: ConflictRecord[] = [];
   private readonly conflictTelemetry: ConflictTelemetryRecord[] = [];
   private transactionQueue: Promise<void> = Promise.resolve();
+  private runtimeMutationActive = false;
+  private runtimeMutationQueuedCount = 0;
+  private readonly cancelledQueuedTransactions = new Set<TransactionId>();
   private readonly defaultAgentId: AgentId = "agent_daemon" as AgentId;
   private readonly stateStore: RuntimeStateStore | undefined;
   private readonly fileBridge: NativeFileBridge;
@@ -565,14 +574,71 @@ export class RuntimeService {
   }
 
   listTransactions(workbookId?: WorkbookId) {
-    return { ok: true, transactions: this.transactions.list(workbookId) };
+    return {
+      ok: true,
+      transactions: this.transactions.list(workbookId).map((transaction) => this.transactions.withQueueMetadata(transaction))
+    };
   }
 
   getTransaction(transactionId: TransactionId) {
     const transaction = this.transactions.get(transactionId);
     return transaction
-      ? { ok: true, transaction }
+      ? { ok: true, transaction: this.transactions.withQueueMetadata(transaction) }
       : { ok: false, error: runtimeError("NOT_FOUND", `Transaction not found: ${transactionId}`, { retryable: false }) };
+  }
+
+  async waitTransaction(transactionId: TransactionId, timeoutMs = 30_000, pollMs = 250) {
+    const started = Date.now();
+    while (true) {
+      const transaction = this.transactions.get(transactionId);
+      if (!transaction) {
+        return { ok: false, completed: false, error: runtimeError("NOT_FOUND", `Transaction not found: ${transactionId}`, { retryable: false }) };
+      }
+      const withMetadata = this.transactions.withQueueMetadata(transaction);
+      if (isTerminalTransactionStatus(withMetadata.status)) {
+        return { ok: true, completed: true, transaction: withMetadata };
+      }
+      if (Date.now() - started >= timeoutMs) {
+        return {
+          ok: true,
+          completed: false,
+          transaction: withMetadata,
+          error: runtimeError("TIMEOUT", `Timed out waiting for transaction ${transactionId}.`, { retryable: true })
+        };
+      }
+      await sleep(Math.max(25, pollMs));
+    }
+  }
+
+  cancelTransaction(transactionId: TransactionId) {
+    const transaction = this.transactions.get(transactionId);
+    if (!transaction) {
+      return { ok: false, error: runtimeError("NOT_FOUND", `Transaction not found: ${transactionId}`, { retryable: false }) };
+    }
+    if (transaction.status !== "queued") {
+      return {
+        ok: false,
+        transaction: this.transactions.withQueueMetadata(transaction),
+        error: runtimeError("OPERATION_FAILED", `Only queued transactions can be cancelled. Current status: ${transaction.status}.`, { retryable: false })
+      };
+    }
+    this.cancelledQueuedTransactions.add(transactionId);
+    const cancelled = this.transactions.markCancelled(transactionId);
+    this.recordCollabEvent({
+      type: "transaction.cancelled",
+      workbookId: cancelled.workbookId,
+      agentId: cancelled.agentId,
+      taskId: cancelled.taskId,
+      transactionId,
+      message: cancelled.progressMessage ?? "Queued transaction cancelled.",
+      details: { transaction: cancelled }
+    });
+    if (cancelled.taskId !== undefined) {
+      this.updateTask(cancelled.taskId, { status: "cancelled", errorMessage: cancelled.errorMessage });
+    } else {
+      this.persistState();
+    }
+    return { ok: true, transaction: this.transactions.withQueueMetadata(cancelled) };
   }
 
   previewTransactionRollback(transactionId: TransactionId): TransactionRollbackPreview {
@@ -988,6 +1054,10 @@ export class RuntimeService {
       this.lockLeasePolicy = normalizeLockLeasePolicy(snapshot.lockLeasePolicy);
     }
     this.transactions.load(snapshot.transactions);
+    this.jobs.clear();
+    for (const job of snapshot.jobs ?? []) {
+      this.jobs.set(job.jobId, { ...job, transactionIds: [...job.transactionIds], warnings: [...job.warnings] });
+    }
     this.conflicts.splice(0, this.conflicts.length, ...snapshot.conflicts.slice(-250));
     this.conflictTelemetry.splice(0, this.conflictTelemetry.length, ...(snapshot.conflictTelemetry ?? []).slice(-1_000));
     this.collabEvents.splice(0, this.collabEvents.length, ...snapshot.collaborationEvents.slice(-1_000));
@@ -1055,6 +1125,7 @@ export class RuntimeService {
       locks: this.locks.dump(),
       lockLeasePolicy: this.lockLeasePolicy,
       transactions: this.transactions.dump(),
+      jobs: [...this.jobs.values()].map((job) => ({ ...job, transactionIds: [...job.transactionIds], warnings: [...job.warnings] })),
       conflicts: this.conflicts.slice(-250),
       conflictTelemetry: this.conflictTelemetry.slice(-1_000),
       collaborationEvents: this.collabEvents.slice(-1_000),
@@ -1372,6 +1443,249 @@ export class RuntimeService {
 
   compileBatch(request: BatchRequest) {
     return this.compiler.compile(request);
+  }
+
+  preflightBatch(request: BatchRequest): BatchPreflightResult {
+    const compiled = this.compiler.compile(request);
+    const estimatedPayloadBytes = Buffer.byteLength(JSON.stringify(request.operations), "utf8");
+    const chunkPlan = planBatchChunks(request.operations);
+    const warnings: OperationWarning[] = [];
+    const needsQueue =
+      request.operations.length > batchDirectOperationThreshold() ||
+      estimatedPayloadBytes > batchDirectPayloadThresholdBytes() ||
+      compiled.estimatedCellsTouched > batchDirectCellThreshold() ||
+      (chunkPlan.safeToAutoChunk && chunkPlan.chunksTotal > 1);
+    let recommendedExecutionMode: BatchPreflightResult["recommendedExecutionMode"] = needsQueue ? "submit" : "apply";
+    if (needsQueue && chunkPlan.safeToAutoChunk && chunkPlan.chunksTotal > 1) {
+      recommendedExecutionMode = "chunked_submit";
+      warnings.push({
+        code: "LARGE_BATCH_WILL_BE_CHUNKED",
+        message: `Batch is large and can be safely split into ${chunkPlan.chunksTotal} queued chunks.`,
+        details: { strategy: chunkPlan.strategy, chunkSize: chunkPlan.chunkSize }
+      });
+    } else if (needsQueue) {
+      warnings.push({
+        code: "LARGE_BATCH_SHOULD_BE_QUEUED",
+        message: "Batch is large enough that it should be submitted to the serialized queue instead of applied synchronously.",
+        details: {
+          operationThreshold: batchDirectOperationThreshold(),
+          payloadThresholdBytes: batchDirectPayloadThresholdBytes(),
+          cellThreshold: batchDirectCellThreshold()
+        }
+      });
+    }
+    return {
+      ok: true,
+      workbookId: request.workbookId,
+      operationCount: request.operations.length,
+      estimatedCellsTouched: compiled.estimatedCellsTouched,
+      estimatedPayloadBytes,
+      destructiveLevel: compiled.destructiveLevel,
+      recommendedExecutionMode,
+      safeToAutoChunk: chunkPlan.safeToAutoChunk,
+      chunkPlan: chunkPlan.strategy === "none" ? undefined : chunkPlan,
+      warnings
+    };
+  }
+
+  submitChunkedBatch(request: BatchRequest, input: { goal?: string | undefined; retryStrategy?: string | undefined } = {}) {
+    if (request.mode !== "apply") {
+      return {
+        ok: false,
+        error: runtimeError("INVALID_ARGUMENT", "Only apply-mode batches can be submitted as chunked jobs.", { retryable: false })
+      };
+    }
+    const preflight = this.preflightBatch(request);
+    if (!preflight.safeToAutoChunk || preflight.chunkPlan === undefined || preflight.chunkPlan.chunksTotal <= 1) {
+      const submitted = this.submitBatch(request);
+      return {
+        ok: submitted.ok,
+        status: "queued",
+        progressMessage: "Batch was not safely chunkable, so it was submitted as one queued transaction.",
+        preflight,
+        transactionIds: submitted.transactionId ? [submitted.transactionId] : [],
+        transactions: [submitted]
+      };
+    }
+    const chunks = chunkBatchOperations(request.operations);
+    const now = new Date().toISOString();
+    const compiled = this.compiler.compile(request);
+    const agentId = request.agentId ?? this.defaultAgentId;
+    const job: JobRecord = {
+      jobId: makeId<JobId>("job"),
+      workbookId: request.workbookId,
+      agentId,
+      kind: preflight.chunkPlan.strategy === "split_style_entries" ? "style_chunked" : preflight.chunkPlan.strategy === "split_matrix_rows" ? "matrix_chunked" : "batch_chunked",
+      status: "queued",
+      goal: input.goal ?? request.progressMessage ?? "Apply chunked Excel batch",
+      transactionIds: [],
+      chunksTotal: chunks.length,
+      chunksCompleted: 0,
+      progressMessage: `Queued ${chunks.length} workbook update chunks.`,
+      retryStrategy: input.retryStrategy ?? preflight.chunkPlan.strategy,
+      destructiveLevel: compiled.destructiveLevel,
+      warnings: preflight.warnings,
+      queuedAt: now
+    };
+    if (request.taskId !== undefined) {
+      job.taskId = request.taskId;
+    }
+    if (request.planId !== undefined) {
+      job.planId = request.planId;
+    }
+    this.jobs.set(job.jobId, job);
+    const transactions = chunks.map((chunk, index) =>
+      this.submitBatch({
+        ...request,
+        operations: chunk,
+        retryStrategy: job.retryStrategy,
+        chunksTotal: chunks.length,
+        chunksCompleted: index,
+        progressMessage: `Queued workbook update chunk ${index + 1} of ${chunks.length}.`
+      })
+    );
+    job.transactionIds = transactions.map((transaction: any) => transaction.transactionId).filter(Boolean);
+    this.refreshJob(job.jobId);
+    this.persistState();
+    return {
+      ok: true,
+      status: "queued",
+      job: this.getJobRecord(job.jobId),
+      jobId: job.jobId,
+      preflight,
+      retryStrategy: job.retryStrategy,
+      chunksTotal: chunks.length,
+      chunksCompleted: 0,
+      transactionIds: job.transactionIds,
+      transactions,
+      progressMessage: `Batch is large, so Open Workbook queued it as job ${job.jobId} with ${chunks.length} chunks. Use excel.job.wait or excel.job.get for progress.`
+    };
+  }
+
+  listJobs(workbookId?: WorkbookId) {
+    return {
+      ok: true,
+      jobs: [...this.jobs.values()]
+        .filter((job) => workbookId === undefined || job.workbookId === workbookId)
+        .map((job) => this.refreshJob(job.jobId))
+        .sort((a, b) => (b.finishedAt ?? b.startedAt ?? b.queuedAt).localeCompare(a.finishedAt ?? a.startedAt ?? a.queuedAt))
+    };
+  }
+
+  getJob(jobId: JobId) {
+    const job = this.getJobRecord(jobId);
+    return job
+      ? { ok: true, job }
+      : { ok: false, error: runtimeError("NOT_FOUND", `Job not found: ${jobId}`, { retryable: false }) };
+  }
+
+  async waitJob(jobId: JobId, timeoutMs = 30_000, pollMs = 250) {
+    const started = Date.now();
+    while (true) {
+      const job = this.getJobRecord(jobId);
+      if (!job) {
+        return { ok: false, completed: false, error: runtimeError("NOT_FOUND", `Job not found: ${jobId}`, { retryable: false }) };
+      }
+      if (isTerminalJobStatus(job.status)) {
+        return { ok: true, completed: true, job };
+      }
+      if (Date.now() - started >= timeoutMs) {
+        return {
+          ok: true,
+          completed: false,
+          job,
+          error: runtimeError("TIMEOUT", `Timed out waiting for job ${jobId}.`, { retryable: true })
+        };
+      }
+      await sleep(Math.max(25, pollMs));
+    }
+  }
+
+  cancelJob(jobId: JobId) {
+    const job = this.getJobRecord(jobId);
+    if (!job) {
+      return { ok: false, error: runtimeError("NOT_FOUND", `Job not found: ${jobId}`, { retryable: false }) };
+    }
+    const cancelled: TransactionRecord[] = [];
+    const skipped: TransactionRecord[] = [];
+    for (const transactionId of job.transactionIds) {
+      const transaction = this.transactions.get(transactionId);
+      if (!transaction) {
+        continue;
+      }
+      if (transaction.status === "queued") {
+        const result = this.cancelTransaction(transactionId);
+        if (result.ok && result.transaction) {
+          cancelled.push(result.transaction);
+        }
+      } else if (!isTerminalTransactionStatus(transaction.status)) {
+        skipped.push(this.transactions.withQueueMetadata(transaction));
+      }
+    }
+    const refreshed = this.refreshJob(jobId);
+    this.persistState();
+    return {
+      ok: skipped.length === 0,
+      job: refreshed,
+      cancelledTransactions: cancelled,
+      skippedTransactions: skipped,
+      progressMessage:
+        skipped.length === 0
+          ? `Cancelled queued work for job ${jobId}.`
+          : `Cancelled queued chunks for job ${jobId}; ${skipped.length} chunk(s) were already applying and could not be cancelled.`
+    };
+  }
+
+  private getJobRecord(jobId: JobId): JobRecord | undefined {
+    const job = this.jobs.get(jobId);
+    return job ? { ...this.refreshJob(jobId), transactionIds: [...job.transactionIds], warnings: [...job.warnings] } : undefined;
+  }
+
+  private refreshJob(jobId: JobId): JobRecord {
+    const job = this.jobs.get(jobId);
+    if (!job) {
+      throw new Error(`Job not found: ${jobId}`);
+    }
+    const transactions = job.transactionIds.map((transactionId) => this.transactions.get(transactionId)).filter((transaction): transaction is TransactionRecord => transaction !== undefined);
+    const appliedCount = transactions.filter((transaction) => transaction.status === "applied").length;
+    const terminalTransactions = transactions.filter((transaction) => isTerminalTransactionStatus(transaction.status));
+    const failed = transactions.find((transaction) => transaction.status === "failed" || transaction.status === "blocked");
+    const applying = transactions.some((transaction) => transaction.status === "applying");
+    const queued = transactions.some((transaction) => transaction.status === "queued");
+    const cancelledCount = transactions.filter((transaction) => transaction.status === "cancelled").length;
+    let status: JobStatus = job.status;
+    if (transactions.length === 0) {
+      status = "queued";
+    } else if (appliedCount === transactions.length) {
+      status = "applied";
+    } else if (cancelledCount === transactions.length) {
+      status = "cancelled";
+    } else if (terminalTransactions.length === transactions.length && appliedCount > 0) {
+      status = "partially_applied";
+    } else if (terminalTransactions.length === transactions.length) {
+      status = failed !== undefined ? "failed" : "cancelled";
+    } else if (failed !== undefined) {
+      status = appliedCount > 0 ? "partially_applied" : "failed";
+    } else if (appliedCount > 0 && terminalTransactions.length < transactions.length) {
+      status = "partially_applied";
+    } else if (applying) {
+      status = "applying";
+    } else if (queued) {
+      status = "queued";
+    }
+    const now = new Date().toISOString();
+    job.status = status;
+    job.chunksCompleted = appliedCount;
+    job.startedAt = job.startedAt ?? transactions.find((transaction) => transaction.startedAt !== undefined)?.startedAt;
+    if (isTerminalJobStatus(status)) {
+      job.finishedAt = job.finishedAt ?? now;
+    }
+    if (failed !== undefined) {
+      job.errorCode = failed.errorCode;
+      job.errorMessage = failed.errorMessage;
+    }
+    job.progressMessage = jobProgressMessage(job, transactions.length);
+    return job;
   }
 
   async previewPlan(planId: PlanId) {
@@ -4772,6 +5086,36 @@ export class RuntimeService {
     if (request.mode !== "apply") {
       return this.applyBatchDirect(request);
     }
+    const returnQueuedProgress = this.isRuntimeMutationBusy();
+    const scheduled = this.scheduleBatch(request);
+    if (returnQueuedProgress) {
+      void scheduled.promise.catch(() => undefined);
+      return queuedOperationResult(this.transactions.withQueueMetadata(scheduled.transaction));
+    }
+    return scheduled.promise;
+  }
+
+  submitBatch(request: BatchRequest) {
+    if (request.mode !== "apply") {
+      return {
+        ok: false,
+        error: runtimeError("INVALID_ARGUMENT", "Only apply-mode batches can be submitted to the mutation queue.", { retryable: false })
+      };
+    }
+    const scheduled = this.scheduleBatch(request);
+    void scheduled.promise.catch(() => undefined);
+    const transaction = this.transactions.withQueueMetadata(scheduled.transaction);
+    return {
+      ok: true,
+      transactionId: transaction.transactionId,
+      status: transaction.status,
+      queuePosition: transaction.queuePosition,
+      progressMessage: transaction.progressMessage,
+      transaction
+    };
+  }
+
+  private scheduleBatch(request: BatchRequest): { transaction: TransactionRecord; promise: Promise<OperationResult> } {
     const compiled = this.compiler.compile(request);
     const agentId = request.agentId ?? this.defaultAgentId;
     const scopes = scopesFromBatch(request.workbookId, request.operations);
@@ -4783,7 +5127,11 @@ export class RuntimeService {
       goal: request.operations.map((operation) => operation.reason || operation.kind).join("; ") || "Apply Excel batch",
       scopes,
       baseFingerprints: request.expectedTargetFingerprints ?? [],
-      destructiveLevel: compiled.destructiveLevel
+      destructiveLevel: compiled.destructiveLevel,
+      progressMessage: request.progressMessage,
+      retryStrategy: request.retryStrategy,
+      chunksTotal: request.chunksTotal,
+      chunksCompleted: request.chunksCompleted
     });
     if (request.taskId !== undefined) {
       this.tasks.attachTransaction(request.taskId, transaction.transactionId);
@@ -4798,7 +5146,7 @@ export class RuntimeService {
       message: `Transaction queued: ${transaction.goal}`
     });
 
-    return this.enqueueTransaction(async () => {
+    const promise = this.enqueueTransaction(transaction.transactionId, async () => {
       const lockResult = this.locks.acquire({
         workbookId: request.workbookId,
         ownerAgentId: agentId,
@@ -4831,6 +5179,8 @@ export class RuntimeService {
         return {
           ok: false,
           transactionId: transaction.transactionId,
+          transactionStatus: "blocked",
+          progressMessage: "Workbook mutation is blocked by an active lock.",
           taskId: request.taskId,
           agentId,
           rollbackAvailable: compiled.requiredBackups.length > 0,
@@ -4877,6 +5227,8 @@ export class RuntimeService {
         const enriched: OperationResult = {
           ...result,
           transactionId: transaction.transactionId,
+          transactionStatus: result.ok ? "applied" : "failed",
+          progressMessage: result.ok ? "Workbook mutation applied successfully." : (result.error?.message ?? "Workbook mutation failed."),
           agentId
         };
         if (request.taskId !== undefined) {
@@ -4921,6 +5273,83 @@ export class RuntimeService {
           });
         }
         return enriched;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const code = /timed out|timeout/i.test(message) ? "TIMEOUT" : "TRANSACTION_FAILED";
+        if (code === "TIMEOUT" && shouldRetryStyleBatch(request)) {
+          const chunks = chunkOperationsForRetry(request.operations);
+          const warnings: OperationWarning[] = [
+            {
+              code: "RETRYING_SMALLER_BATCH",
+              message: `Style batch timed out and was resubmitted as ${chunks.length} smaller queued chunks.`
+            }
+          ];
+          this.transactions.markFailed(transaction.transactionId, code, message, warnings);
+          if (request.taskId !== undefined) {
+            this.updateTask(request.taskId, { status: "queued", currentStep: "Retrying style update in smaller chunks" });
+          }
+          this.recordCollabEvent({
+            type: "transaction.failed",
+            workbookId: request.workbookId,
+            agentId,
+            taskId: request.taskId,
+            transactionId: transaction.transactionId,
+            message: `${message}; retrying style update in smaller chunks.`
+          });
+          const retryTransactions = chunks.map((chunk, index) =>
+            this.submitBatch({
+              ...request,
+              operations: chunk,
+              retryStrategy: "retry_timeout_split_style_entries",
+              chunksTotal: chunks.length,
+              chunksCompleted: index,
+              progressMessage: `Retrying style update chunk ${index + 1} of ${chunks.length}.`
+            })
+          );
+          return {
+            ok: true,
+            transactionId: transaction.transactionId,
+            transactionStatus: "failed",
+            progressMessage: `Style batch timed out, so Open Workbook queued ${chunks.length} smaller retry chunks.`,
+            taskId: request.taskId,
+            agentId,
+            rollbackAvailable: false,
+            backups: [],
+            warnings,
+            telemetry: { warningCount: warnings.length },
+            data: {
+              retryStrategy: "retry_timeout_split_style_entries",
+              chunksTotal: chunks.length,
+              retryTransactionIds: retryTransactions.map((retry: any) => retry.transactionId).filter(Boolean),
+              retryTransactions
+            }
+          };
+        }
+        this.transactions.markFailed(transaction.transactionId, code, message);
+        if (request.taskId !== undefined) {
+          this.updateTask(request.taskId, { status: "failed", errorMessage: message });
+        }
+        this.recordCollabEvent({
+          type: "transaction.failed",
+          workbookId: request.workbookId,
+          agentId,
+          taskId: request.taskId,
+          transactionId: transaction.transactionId,
+          message
+        });
+        return {
+          ok: false,
+          transactionId: transaction.transactionId,
+          transactionStatus: "failed",
+          progressMessage: message,
+          taskId: request.taskId,
+          agentId,
+          rollbackAvailable: compiled.requiredBackups.length > 0,
+          backups: [],
+          warnings: [],
+          telemetry: { warningCount: 0 },
+          error: runtimeError(code === "TIMEOUT" ? "TIMEOUT" : "OPERATION_FAILED", message, { retryable: code === "TIMEOUT" })
+        };
       } finally {
         const releasedLocks = this.locks.release(lockResult.locks.map((lock) => lock.lockId));
         this.markConflictTelemetryClearedByLock(releasedLocks.map((lock) => lock.lockId));
@@ -4941,19 +5370,44 @@ export class RuntimeService {
         }
       }
     });
+    return { transaction, promise };
   }
 
-  private enqueueTransaction(work: () => Promise<OperationResult>): Promise<OperationResult> {
-    return this.enqueueRuntimeMutation(work);
+  private enqueueTransaction(transactionId: TransactionId, work: () => Promise<OperationResult>): Promise<OperationResult> {
+    return this.enqueueRuntimeMutation(async () => {
+      const transaction = this.transactions.get(transactionId);
+      if (this.cancelledQueuedTransactions.delete(transactionId) || transaction?.status === "cancelled") {
+        return cancelledOperationResult(transactionId);
+      }
+      return work();
+    });
   }
 
   private enqueueRuntimeMutation<T>(work: () => Promise<T>): Promise<T> {
-    const run = this.transactionQueue.then(work, work);
+    this.runtimeMutationQueuedCount += 1;
+    const run = this.transactionQueue.then(
+      () => this.runQueuedRuntimeMutation(work),
+      () => this.runQueuedRuntimeMutation(work)
+    );
     this.transactionQueue = run.then(
       () => undefined,
       () => undefined
     );
     return run;
+  }
+
+  private async runQueuedRuntimeMutation<T>(work: () => Promise<T>): Promise<T> {
+    this.runtimeMutationQueuedCount = Math.max(0, this.runtimeMutationQueuedCount - 1);
+    this.runtimeMutationActive = true;
+    try {
+      return await work();
+    } finally {
+      this.runtimeMutationActive = false;
+    }
+  }
+
+  private isRuntimeMutationBusy(): boolean {
+    return this.runtimeMutationActive || this.runtimeMutationQueuedCount > 0;
   }
 
   private async applyDirectTransaction<T>(
@@ -7144,6 +7598,226 @@ function telemetryBuckets(records: ConflictTelemetryRecord[], keySelector: (reco
       codes: [...bucket.codes].sort()
     }))
     .sort((a, b) => b.count - a.count || b.lastSeenAt.localeCompare(a.lastSeenAt));
+}
+
+function isTerminalTransactionStatus(status: TransactionRecord["status"]): boolean {
+  return ["applied", "failed", "blocked", "rolled_back", "cancelled"].includes(status);
+}
+
+function isTerminalJobStatus(status: JobStatus): boolean {
+  return ["applied", "failed", "partially_applied", "cancelled"].includes(status);
+}
+
+function jobProgressMessage(job: JobRecord, knownTransactionCount: number): string {
+  switch (job.status) {
+    case "queued":
+      return `Workbook job is queued with ${knownTransactionCount || job.chunksTotal} chunk(s).`;
+    case "applying":
+      return `Workbook job is applying ${job.chunksCompleted} of ${job.chunksTotal} chunk(s).`;
+    case "partially_applied":
+      return job.errorMessage
+        ? `Workbook job partially applied ${job.chunksCompleted} of ${job.chunksTotal} chunk(s): ${job.errorMessage}`
+        : `Workbook job partially applied ${job.chunksCompleted} of ${job.chunksTotal} chunk(s).`;
+    case "applied":
+      return `Workbook job applied all ${job.chunksTotal} chunk(s).`;
+    case "failed":
+      return job.errorMessage ? `Workbook job failed: ${job.errorMessage}` : "Workbook job failed.";
+    case "cancelled":
+      return "Workbook job was cancelled before all chunks applied.";
+  }
+}
+
+function planBatchChunks(operations: ExcelOperation[]): BatchChunkPlan {
+  const chunkedOperations = chunkBatchOperations(operations);
+  if (chunkedOperations.length <= 1 || chunkedOperations.length === operations.length) {
+    return {
+      strategy: "none",
+      chunksTotal: 1,
+      chunkSize: operations.length,
+      operationCount: operations.length,
+      chunkedOperationKinds: [],
+      safeToAutoChunk: false
+    };
+  }
+  const allChunkable = operations.every((operation) => isStyleChunkableOperation(operation) || isMatrixChunkableOperation(operation));
+  if (!allChunkable) {
+    return {
+      strategy: "none",
+      chunksTotal: 1,
+      chunkSize: operations.length,
+      operationCount: operations.length,
+      chunkedOperationKinds: [],
+      safeToAutoChunk: false
+    };
+  }
+  const hasStyle = operations.some(isStyleChunkableOperation);
+  const hasMatrix = operations.some(isMatrixChunkableOperation);
+  const chunkSize = hasMatrix ? matrixChunkRowCount() : styleBatchChunkSize();
+  return {
+    strategy: hasStyle && hasMatrix ? "mixed" : hasMatrix ? "split_matrix_rows" : "split_style_entries",
+    chunksTotal: chunkedOperations.length,
+    chunkSize,
+    operationCount: operations.length,
+    chunkedOperationKinds: [...new Set(operations.map((operation) => operation.kind))],
+    safeToAutoChunk: true
+  };
+}
+
+function chunkBatchOperations(operations: ExcelOperation[]): ExcelOperation[][] {
+  if (operations.length === 0) {
+    return [];
+  }
+  if (operations.every(isStyleChunkableOperation)) {
+    return chunkArray(operations, styleBatchChunkSize());
+  }
+  if (!operations.every((operation) => isStyleChunkableOperation(operation) || isMatrixChunkableOperation(operation))) {
+    return [operations];
+  }
+  const chunks: ExcelOperation[][] = [];
+  for (const operation of operations) {
+    if (isMatrixChunkableOperation(operation)) {
+      chunks.push(...chunkMatrixOperation(operation));
+    } else {
+      chunks.push([operation]);
+    }
+  }
+  return chunks.length > 1 ? chunks : [operations];
+}
+
+function isStyleChunkableOperation(operation: ExcelOperation): boolean {
+  return operation.kind === "range.write_styles";
+}
+
+function isMatrixChunkableOperation(operation: ExcelOperation): operation is Extract<ExcelOperation, { kind: "range.write_values" | "range.write_formulas" | "range.write_number_formats" }> {
+  return operation.kind === "range.write_values" || operation.kind === "range.write_formulas" || operation.kind === "range.write_number_formats";
+}
+
+function chunkMatrixOperation(operation: Extract<ExcelOperation, { kind: "range.write_values" | "range.write_formulas" | "range.write_number_formats" }>): ExcelOperation[][] {
+  const matrix = matrixForOperation(operation);
+  const rowCount = matrix.length;
+  const chunkRows = matrixChunkRowCount();
+  if (rowCount <= chunkRows) {
+    return [[operation]];
+  }
+  const chunks: ExcelOperation[][] = [];
+  const parsed = parseA1Address(stripSheetName(operation.target.address));
+  for (let start = 0; start < rowCount; start += chunkRows) {
+    const rows = matrix.slice(start, start + chunkRows);
+    const address = formatA1Address({
+      ...parsed,
+      startRow: parsed.startRow + start,
+      endRow: parsed.startRow + start + rows.length - 1
+    });
+    chunks.push([cloneMatrixOperation(operation, rows, address)]);
+  }
+  return chunks;
+}
+
+function matrixForOperation(operation: Extract<ExcelOperation, { kind: "range.write_values" | "range.write_formulas" | "range.write_number_formats" }>): unknown[][] {
+  switch (operation.kind) {
+    case "range.write_values":
+      return operation.values;
+    case "range.write_formulas":
+      return operation.formulas;
+    case "range.write_number_formats":
+      return operation.numberFormat;
+  }
+}
+
+function cloneMatrixOperation(
+  operation: Extract<ExcelOperation, { kind: "range.write_values" | "range.write_formulas" | "range.write_number_formats" }>,
+  rows: unknown[][],
+  address: string
+): ExcelOperation {
+  const target = { ...operation.target, address };
+  switch (operation.kind) {
+    case "range.write_values":
+      return { ...operation, operationId: makeId<OperationId>("op"), target, values: rows as CellMatrix };
+    case "range.write_formulas":
+      return { ...operation, operationId: makeId<OperationId>("op"), target, formulas: rows as CellMatrix<string | null> };
+    case "range.write_number_formats":
+      return { ...operation, operationId: makeId<OperationId>("op"), target, numberFormat: rows as string[][] };
+  }
+}
+
+function batchDirectOperationThreshold(): number {
+  return positiveIntegerEnv("OPEN_WORKBOOK_BATCH_DIRECT_OPERATION_THRESHOLD", 25);
+}
+
+function batchDirectPayloadThresholdBytes(): number {
+  return positiveIntegerEnv("OPEN_WORKBOOK_BATCH_DIRECT_PAYLOAD_BYTES", 512_000);
+}
+
+function batchDirectCellThreshold(): number {
+  return positiveIntegerEnv("OPEN_WORKBOOK_BATCH_DIRECT_CELL_THRESHOLD", 50_000);
+}
+
+function styleBatchChunkSize(): number {
+  return positiveIntegerEnv("OPEN_WORKBOOK_STYLE_BATCH_CHUNK_SIZE", 25);
+}
+
+function matrixChunkRowCount(): number {
+  return positiveIntegerEnv("OPEN_WORKBOOK_MATRIX_CHUNK_ROWS", 500);
+}
+
+function positiveIntegerEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name] ?? fallback);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : fallback;
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function cancelledOperationResult(transactionId: TransactionId): OperationResult {
+  return {
+    ok: false,
+    transactionId,
+    transactionStatus: "cancelled",
+    progressMessage: "Queued workbook mutation was cancelled before it reached Excel.",
+    rollbackAvailable: false,
+    backups: [],
+    warnings: [],
+    telemetry: { warningCount: 0 },
+    error: runtimeError("TRANSACTION_CANCELLED", "Queued workbook mutation was cancelled before it reached Excel.", { retryable: false })
+  };
+}
+
+function queuedOperationResult(transaction: TransactionRecord): OperationResult {
+  return {
+    ok: true,
+    transactionId: transaction.transactionId,
+    transactionStatus: "queued",
+    queuePosition: transaction.queuePosition,
+    progressMessage: transaction.progressMessage ?? "Workbook mutation is queued and will apply when earlier workbook work finishes.",
+    rollbackAvailable: false,
+    backups: [],
+    warnings: [],
+    telemetry: { warningCount: 0 }
+  };
+}
+
+function shouldRetryStyleBatch(request: BatchRequest): boolean {
+  return request.retryStrategy !== "retry_timeout_split_style_entries"
+    && request.operations.length > 1
+    && request.operations.every((operation) => operation.kind === "range.write_styles");
+}
+
+function chunkOperationsForRetry(operations: ExcelOperation[]): ExcelOperation[][] {
+  const chunkSize = Math.max(1, Math.ceil(operations.length / 2));
+  const chunks: ExcelOperation[][] = [];
+  for (let index = 0; index < operations.length; index += chunkSize) {
+    chunks.push(operations.slice(index, index + chunkSize));
+  }
+  return chunks;
 }
 
 function scopeTelemetryKey(scope: WorkbookScope): string {

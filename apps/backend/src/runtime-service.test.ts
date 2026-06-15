@@ -364,6 +364,284 @@ describe("RuntimeService plan refresh", () => {
   });
 });
 
+describe("RuntimeService transaction progress", () => {
+  it("reports queued transaction metadata and cancels queued work before Excel execution", async () => {
+    const workbookId = "workbook_transaction_queue" as WorkbookId;
+    const runtime = new RuntimeService({ persistState: false });
+    const session = runtime.sessions.createSession();
+    let executeCount = 0;
+    let releaseFirstExecution!: () => void;
+    const firstExecutionStarted = new Promise<void>((resolve) => {
+      runtime.attachAddinClient(session.connectionId, {
+        request: async (method: string, params: any) => {
+          if (method === "workbook.snapshot_ranges") {
+            return snapshotResponse(workbookId, params.ranges);
+          }
+          if (method === "operation.execute_batch") {
+            executeCount += 1;
+            if (executeCount === 1) {
+              resolve();
+              await new Promise<void>((release) => {
+                releaseFirstExecution = release;
+              });
+            }
+            return operationOk();
+          }
+          throw new Error(`Unexpected method ${method}`);
+        }
+      } as any);
+    });
+
+    const first = runtime.applyBatch({ workbookId, mode: "apply", operations: [writeValuesOperation(workbookId)] });
+    await firstExecutionStarted;
+    const second = runtime.submitBatch({ workbookId, mode: "apply", operations: [writeFormulaOperation(workbookId)] });
+    await sleepForTest(10);
+    const queued = runtime.getTransaction(second.transactionId!).transaction;
+
+    expect(queued?.queuePosition).toBe(1);
+    expect(queued?.progressMessage).toContain("queued");
+    const cancelled = runtime.cancelTransaction(queued!.transactionId);
+    releaseFirstExecution();
+    const firstResult = await first;
+    const waited = await runtime.waitTransaction(queued!.transactionId, 500);
+
+    expect(cancelled.ok).toBe(true);
+    expect(firstResult.ok).toBe(true);
+    expect(waited.transaction?.status).toBe("cancelled");
+    expect(executeCount).toBe(1);
+  });
+
+  it("returns queued progress for apply requests when another mutation is active", async () => {
+    const workbookId = "workbook_transaction_busy_apply" as WorkbookId;
+    const runtime = new RuntimeService({ persistState: false });
+    const session = runtime.sessions.createSession();
+    let releaseFirstExecution!: () => void;
+    let executeCount = 0;
+    const firstExecutionStarted = new Promise<void>((resolve) => {
+      runtime.attachAddinClient(session.connectionId, {
+        request: async (method: string, params: any) => {
+          if (method === "workbook.snapshot_ranges") {
+            return snapshotResponse(workbookId, params.ranges);
+          }
+          if (method === "operation.execute_batch") {
+            executeCount += 1;
+            if (executeCount === 1) {
+              resolve();
+              await new Promise<void>((release) => {
+                releaseFirstExecution = release;
+              });
+            }
+            return operationOk();
+          }
+          throw new Error(`Unexpected method ${method}`);
+        }
+      } as any);
+    });
+
+    const first = runtime.applyBatch({ workbookId, mode: "apply", operations: [writeValuesOperation(workbookId)] });
+    await firstExecutionStarted;
+    const second = await runtime.applyBatch({ workbookId, mode: "apply", operations: [writeFormulaOperation(workbookId)] });
+
+    expect(second.ok).toBe(true);
+    expect(second.transactionStatus).toBe("queued");
+    expect(second.progressMessage).toContain("queued");
+    releaseFirstExecution();
+    await first;
+    const waited = await runtime.waitTransaction(second.transactionId!, 500);
+
+    expect(waited.completed).toBe(true);
+    expect(waited.transaction?.status).toBe("applied");
+  });
+
+  it("waits for a transaction to reach terminal status", async () => {
+    const workbookId = "workbook_transaction_wait" as WorkbookId;
+    const runtime = runtimeWithExecutingAddin(workbookId);
+    const applied = await runtime.applyBatch({ workbookId, mode: "apply", operations: [writeValuesOperation(workbookId)] });
+
+    const waited = await runtime.waitTransaction(applied.transactionId!, 100);
+
+    expect(waited.ok).toBe(true);
+    expect(waited.completed).toBe(true);
+    expect(waited.transaction?.status).toBe("applied");
+  });
+
+  it("submits a batch without waiting for Excel execution to finish", async () => {
+    const workbookId = "workbook_transaction_submit" as WorkbookId;
+    const runtime = new RuntimeService({ persistState: false });
+    const session = runtime.sessions.createSession();
+    let releaseExecution!: () => void;
+    const executionStarted = new Promise<void>((resolve) => {
+      runtime.attachAddinClient(session.connectionId, {
+        request: async (method: string, params: any) => {
+          if (method === "workbook.snapshot_ranges") {
+            return snapshotResponse(workbookId, params.ranges);
+          }
+          if (method === "operation.execute_batch") {
+            resolve();
+            await new Promise<void>((release) => {
+              releaseExecution = release;
+            });
+            return operationOk();
+          }
+          throw new Error(`Unexpected method ${method}`);
+        }
+      } as any);
+    });
+
+    const submitted = runtime.submitBatch({
+      workbookId,
+      mode: "apply",
+      operations: [writeValuesOperation(workbookId)],
+      retryStrategy: "split_style_entries",
+      chunksTotal: 3,
+      chunksCompleted: 1,
+      progressMessage: "Queued style update chunk 2 of 3."
+    });
+
+    expect(submitted.ok).toBe(true);
+    expect(submitted.status).toBe("queued");
+    expect(submitted.transactionId).toBeTruthy();
+    expect(submitted.transaction?.retryStrategy).toBe("split_style_entries");
+    expect(submitted.transaction?.chunksTotal).toBe(3);
+    expect(submitted.transaction?.chunksCompleted).toBe(1);
+    await executionStarted;
+    expect(runtime.getTransaction(submitted.transactionId!).transaction?.status).toBe("applying");
+    releaseExecution();
+    const waited = await runtime.waitTransaction(submitted.transactionId!, 500);
+
+    expect(waited.completed).toBe(true);
+    expect(waited.transaction?.status).toBe("applied");
+  });
+
+  it("preflights large style and matrix batches before execution", () => {
+    const workbookId = "workbook_batch_preflight" as WorkbookId;
+    const runtime = new RuntimeService({ persistState: false });
+    const styleOperations = Array.from({ length: 30 }, (_, index) => writeStyleOperation(workbookId, `A${index + 1}:A${index + 1}`));
+    const stylePreflight = runtime.preflightBatch({ workbookId, mode: "validate", operations: styleOperations });
+    const values = Array.from({ length: 600 }, (_, index) => [index]);
+    const matrixPreflight = runtime.preflightBatch({
+      workbookId,
+      mode: "validate",
+      operations: [{
+        kind: "range.write_values",
+        operationId: "op_large_values" as OperationId,
+        workbookId,
+        destructiveLevel: "values",
+        reason: "Write large values",
+        target: { workbookId, sheetName: "Sheet1", address: "A1:A600" },
+        values,
+        preserveFormats: true
+      }]
+    });
+
+    expect(stylePreflight.recommendedExecutionMode).toBe("chunked_submit");
+    expect(stylePreflight.chunkPlan?.strategy).toBe("split_style_entries");
+    expect(stylePreflight.chunkPlan?.chunksTotal).toBe(2);
+    expect(matrixPreflight.recommendedExecutionMode).toBe("chunked_submit");
+    expect(matrixPreflight.chunkPlan?.strategy).toBe("split_matrix_rows");
+    expect(matrixPreflight.chunkPlan?.chunksTotal).toBe(2);
+  });
+
+  it("tracks chunked batch work as a parent job", async () => {
+    const workbookId = "workbook_chunked_job" as WorkbookId;
+    const runtime = runtimeWithExecutingAddin(workbookId);
+    const operations = Array.from({ length: 30 }, (_, index) => writeStyleOperation(workbookId, `B${index + 1}:B${index + 1}`));
+
+    const submitted = runtime.submitChunkedBatch({ workbookId, mode: "apply", operations }, { goal: "Apply report styles" });
+    const waited = await runtime.waitJob(submitted.jobId, 1_000);
+
+    expect(submitted.ok).toBe(true);
+    expect(submitted.jobId).toBeTruthy();
+    expect(submitted.transactionIds).toHaveLength(2);
+    expect(waited.completed).toBe(true);
+    expect(waited.job?.status).toBe("applied");
+    expect(waited.job?.chunksCompleted).toBe(2);
+  });
+
+  it("cancels queued child transactions from a parent job", async () => {
+    const workbookId = "workbook_chunked_job_cancel" as WorkbookId;
+    const runtime = new RuntimeService({ persistState: false });
+    const session = runtime.sessions.createSession();
+    let releaseFirstExecution!: () => void;
+    let executeCount = 0;
+    const firstExecutionStarted = new Promise<void>((resolve) => {
+      runtime.attachAddinClient(session.connectionId, {
+        request: async (method: string, params: any) => {
+          if (method === "workbook.snapshot_ranges") {
+            return snapshotResponse(workbookId, params.ranges);
+          }
+          if (method === "operation.execute_batch") {
+            executeCount += 1;
+            if (executeCount === 1) {
+              resolve();
+              await new Promise<void>((release) => {
+                releaseFirstExecution = release;
+              });
+            }
+            return operationOk();
+          }
+          throw new Error(`Unexpected method ${method}`);
+        }
+      } as any);
+    });
+    const operations = Array.from({ length: 30 }, (_, index) => writeStyleOperation(workbookId, `C${index + 1}:C${index + 1}`));
+    const submitted = runtime.submitChunkedBatch({ workbookId, mode: "apply", operations }, { goal: "Apply report styles" });
+    await firstExecutionStarted;
+
+    const cancelled = runtime.cancelJob(submitted.jobId);
+    releaseFirstExecution();
+    const waited = await runtime.waitJob(submitted.jobId, 1_000);
+
+    expect(cancelled.ok).toBe(false);
+    expect(cancelled.cancelledTransactions).toHaveLength(1);
+    expect(waited.job?.status).toBe("partially_applied");
+    expect(waited.job?.chunksCompleted).toBe(1);
+    expect(executeCount).toBe(1);
+  });
+
+  it("retries timed-out style batches as smaller queued chunks", async () => {
+    const workbookId = "workbook_transaction_style_retry" as WorkbookId;
+    const runtime = new RuntimeService({ persistState: false });
+    const session = runtime.sessions.createSession();
+    let executeCount = 0;
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string, params: any) => {
+        if (method === "workbook.snapshot_ranges") {
+          return snapshotResponse(workbookId, params.ranges);
+        }
+        if (method === "operation.execute_batch") {
+          executeCount += 1;
+          if (executeCount === 1) {
+            throw new Error("Timed out waiting for add-in method: operation.execute_batch");
+          }
+          return operationOk();
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const result = await runtime.applyBatch({
+      workbookId,
+      mode: "apply",
+      operations: [
+        writeStyleOperation(workbookId, "A1:A1"),
+        writeStyleOperation(workbookId, "A2:A2"),
+        writeStyleOperation(workbookId, "A3:A3")
+      ]
+    });
+    const retryIds = (result.data as any).retryTransactionIds as string[];
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings.some((warning) => warning.code === "RETRYING_SMALLER_BATCH")).toBe(true);
+    expect(retryIds).toHaveLength(2);
+    for (const retryId of retryIds) {
+      const waited = await runtime.waitTransaction(retryId as any, 500);
+      expect(waited.transaction?.status).toBe("applied");
+    }
+    expect(executeCount).toBe(3);
+  });
+});
+
 describe("RuntimeService formula dependency graph", () => {
   it("resolves structured references with table metadata from the add-in", async () => {
     const workbookId = "workbook_runtime_formula_graph" as WorkbookId;
@@ -1845,6 +2123,58 @@ function runtimeWithPersistentAddin(stateDir: string, workbookId: WorkbookId): R
   return runtime;
 }
 
+function runtimeWithExecutingAddin(workbookId: WorkbookId): RuntimeService {
+  const runtime = new RuntimeService({ persistState: false });
+  const session = runtime.sessions.createSession();
+  runtime.attachAddinClient(session.connectionId, {
+    request: async (method: string, params: any) => {
+      if (method === "workbook.snapshot_ranges") {
+        return snapshotResponse(workbookId, params.ranges);
+      }
+      if (method === "operation.execute_batch") {
+        return operationOk();
+      }
+      throw new Error(`Unexpected method ${method}`);
+    }
+  } as any);
+  return runtime;
+}
+
+function snapshotResponse(workbookId: WorkbookId, ranges: any[]) {
+  return {
+    workbookFingerprint: {
+      workbookId,
+      workbookHash: "workbook_transaction_hash",
+      structureHash: "structure",
+      capturedAt: new Date().toISOString()
+    },
+    rangeSnapshots: ranges.map((range: any) => ({
+      range,
+      values: [["snapshot"]],
+      fingerprint: {
+        range,
+        hash: "range_transaction_hash",
+        cellCount: 1,
+        capturedAt: new Date().toISOString()
+      }
+    }))
+  };
+}
+
+function operationOk() {
+  return {
+    ok: true,
+    rollbackAvailable: false,
+    backups: [],
+    warnings: [],
+    telemetry: { warningCount: 0 }
+  };
+}
+
+function sleepForTest(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function runtimeWithFormulaGraph(workbookId: WorkbookId): RuntimeService {
   const runtime = new RuntimeService({ persistState: false });
   const session = runtime.sessions.createSession();
@@ -1905,6 +2235,19 @@ function writeValuesOperation(workbookId: WorkbookId): ExcelOperation {
     target: { workbookId, sheetName: "Sheet1", address: "A1" },
     values: [["ok"]],
     preserveFormats: true
+  };
+}
+
+function writeStyleOperation(workbookId: WorkbookId, address: string): ExcelOperation {
+  return {
+    kind: "range.write_styles",
+    operationId: `op_style_${address}` as OperationId,
+    workbookId,
+    destructiveLevel: "format",
+    reason: "Write style",
+    target: { workbookId, sheetName: "Sheet1", address },
+    style: { fillColor: "#E8EEF7" },
+    preserveValues: true
   };
 }
 

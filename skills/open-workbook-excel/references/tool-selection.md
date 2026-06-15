@@ -32,17 +32,24 @@ Use explicit sheet/address ranges whenever possible. Use used-range or workbook-
 - Simple formulas: `excel.range.write_formulas`
 - Number formats: `excel.range.write_number_formats`
 - Styles: `excel.range.write_styles`
+- Grouped styles: `excel.range.write_styles_many`
 - Combined formula sheet creation: `excel.workflow.create_formula_sheet`
 - Combined formula error repair: `excel.workflow.repair_formula_errors`
-- Multiple related range edits: `excel.batch.validate`, `excel.batch.dry_run`, `excel.batch.apply`
+- Multiple related range edits: `excel.batch.validate`, `excel.batch.preflight`, `excel.batch.dry_run`, `excel.batch.apply`
+- Long-running related range edits: `excel.batch.submit`
+- Preflighted chunked range edits: `excel.batch.submit_chunked`
+- Chunked long-running jobs: `excel.job.get`, `excel.job.wait`, `excel.job.cancel`
 - Scoped risky edit with diff and rollback preview: `excel.workflow.preview_risky_edit`
 - Previewable or user-reviewable edits: `excel.plan.create`, `excel.plan.preview`, `excel.plan.apply`
 - Stale plan handling: `excel.plan.refresh_preview`, `excel.plan.rebase`
+- Queued mutation status: `excel.transaction.get`, `excel.transaction.wait`, `excel.transaction.cancel`
 
-Prefer `excel.workflow.create_formula_sheet` for standard new sheets that need values, formulas, number formats, and validation. Prefer `excel.workflow.repair_formula_errors` for formula error repair when an error range and source formula range are known. Prefer `excel.workflow.preview_risky_edit` when a risky scoped edit should apply and return before/after snapshots, a diff, transaction id, and rollback preview in one response. Provide at least one minimal scoped operation and leave `apply` enabled unless the user asked for preview only. Prefer `excel.plan.*` when a user should review a diff before applying, when formulas/templates are at risk, or when rollback clarity matters. Prefer `excel.batch.*` for compact, well-scoped range mutations.
+Prefer `excel.workflow.create_formula_sheet` for standard new sheets that need values, formulas, number formats, and validation. Prefer `excel.workflow.repair_formula_errors` for formula error repair when an error range and source formula range are known. Prefer `excel.workflow.preview_risky_edit` when a risky scoped edit should apply and return before/after snapshots, a diff, transaction id, and rollback preview in one response. Provide at least one minimal scoped operation and leave `apply` enabled unless the user asked for preview only. Prefer `excel.plan.*` when a user should review a diff before applying, when formulas/templates are at risk, or when rollback clarity matters. Prefer `excel.batch.*` for compact, well-scoped range mutations. Preflight large generated batches before applying them.
 Combined mutating workflows include an internal read-only preflight payload before mutation; still prefer `excel.workflow.prepare_session` first when possible.
 Values, formulas, formats, and styles are separate workbook facets. Use `excel.range.write_values` for constants only, `excel.range.write_formulas` for formulas beginning with `=`, and `excel.range.write_number_formats` for display formats. Do not merge formulas into a values write just because the matrix is convenient.
 Do not pad a large range write with `null`, blank strings, or unchanged cells when only one cell or a smaller rectangle should change. Use the smallest changed target range, or use `excel.range.clear_values_keep_format` for intentional clearing.
+Use `excel.range.write_styles_many` for report styling that touches many ranges, such as title bands, headers, zebra rows, status colors, or type colors. Use single `excel.range.write_styles` only for one contiguous range. Large grouped style updates may return queued parent jobs; wait or poll their job IDs.
+If a mutation returns queued or applying transaction or job state, tell the user the workbook update is still running, then call `excel.job.wait`, `excel.job.get`, `excel.transaction.wait`, or `excel.transaction.get` instead of launching parallel writes. Use cancel tools only for queued work that should not start.
 
 When a noninteractive agent run cannot apply a mutation, create an `excel.plan.create` draft with operations that use actual MCP tool names and nested `args`. Example operations should look like `{ "tool": "excel.range.write_formulas", "args": { ... } }`, not vague prose or broad workbook rewrites.
 
@@ -56,6 +63,7 @@ When a noninteractive agent run cannot apply a mutation, create an `excel.plan.c
 - Sorts: `excel.sort.apply`, `excel.sort.clear`
 
 Use table tools instead of range tools when the target is an Excel table. This preserves headers, totals rows, filters, structured references, and table styles.
+Before table reorder, filter, sort, append, or update operations, call `excel.table.get_info` or `excel.workbook.get_workbook_map`. For table filters, use `excel.table.apply_filters` rather than generic filter tools. After table structure or row mutations, call `excel.validate.tables`; after filter/sort changes, call `excel.validate.filters`.
 Do not clear and recreate a table to reorder columns; use `excel.table.reorder_columns`, or stop for confirmation before any destructive rebuild.
 For large tables, avoid full `excel.table.read` unless the user asks for all rows. Pass `rowLimit`, `rowOffset`, and `columns` for targeted discovery, then mutate with table-native tools.
 

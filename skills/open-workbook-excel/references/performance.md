@@ -24,11 +24,15 @@ Avoid workbook-wide reads unless the task is search, validation, audit, or disco
 ## Writes
 
 - Use one batch or plan for related edits.
+- Preflight large generated batches before applying them.
 - Keep matrix shapes exact: rows and columns must match the target range.
-- Let Open Workbook chunk large values/formulas/number formats through its batch compiler.
+- Let Open Workbook chunk large values/formulas/number formats through safe row-based chunk plans.
 - Avoid alternating read/write/read/write loops. Read once, compute, apply once, validate once.
+- If work is queued or applying, report the progress message to the user and wait/poll the job or transaction rather than starting parallel mutations.
 
 For very large writes, consider a plan preview first so the agent can expose scope, chunk count, and rollback coverage before applying.
+
+Automatic timeout retry is limited to style-only batches because repeating the same style is safe. Values, formulas, and number formats should be chunked before execution when preflight recommends it. For tables, pivots, charts, and structure, inspect transaction status before retrying.
 
 ## Formulas
 

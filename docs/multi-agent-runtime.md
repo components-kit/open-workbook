@@ -38,6 +38,10 @@ single serialized Office.js writer
 
 The current implementation runs coordination primitives inside the daemon-owned `RuntimeService`. This makes all batch and plan applies transaction-recorded and serialized through one coordinator when MCP adapters attach to the daemon.
 
+Queued transaction progress is observable. Agents can call `excel.batch.preflight` before large generated writes, `excel.batch.submit` to enqueue mutating work without waiting for Excel execution, `excel.transaction.get` or `excel.transaction.list` for queue position and progress messages, `excel.transaction.wait` for a bounded wait until a terminal status, and `excel.transaction.cancel` to stop a queued transaction before it starts applying in Excel. When the writer is already busy, `excel.batch.apply` returns queued progress instead of waiting behind earlier mutations. Applying transactions are not interrupted mid-Office.js call.
+
+Chunked work has a parent job record. `excel.job.get`, `excel.job.wait`, and `excel.job.cancel` aggregate progress for updates split into multiple child transactions, such as large style updates or row-chunked value/formula/number-format writes. Job cancellation cancels queued child transactions; chunks already applying in Excel are allowed to finish.
+
 Runtime commands:
 
 ```bash
@@ -54,7 +58,7 @@ Daemon state is persisted by default under:
 .open-workbook/state/collaboration-state.json
 ```
 
-Set `OPEN_WORKBOOK_STATE_DIR` to move it. On restart, active agents are marked disconnected, active locks are expired, and queued/applying transactions are marked blocked so agents do not mistake interrupted work for committed workbook changes. Template registrations, region registrations, permission policy, plan records, and backup indexes are restored from the same state file.
+Set `OPEN_WORKBOOK_STATE_DIR` to move it. Set `OPEN_WORKBOOK_ADDIN_RPC_TIMEOUT_MS` to override the default 30000 ms backend-to-add-in request timeout. Set `OPEN_WORKBOOK_BATCH_DIRECT_OPERATION_THRESHOLD`, `OPEN_WORKBOOK_BATCH_DIRECT_PAYLOAD_BYTES`, and `OPEN_WORKBOOK_BATCH_DIRECT_CELL_THRESHOLD` to tune when preflight recommends queued work. Set `OPEN_WORKBOOK_STYLE_BATCH_CHUNK_SIZE` and `OPEN_WORKBOOK_MATRIX_CHUNK_ROWS` to control safe chunk sizes. On restart, active agents are marked disconnected, active locks are expired, and queued/applying transactions are marked blocked so agents do not mistake interrupted work for committed workbook changes. Job records, template registrations, region registrations, permission policy, plan records, and backup indexes are restored from the same state file.
 
 ## Conflict Model
 

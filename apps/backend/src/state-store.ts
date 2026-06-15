@@ -6,6 +6,7 @@ import type {
   CollaborationEvent,
   ConflictRecord,
   ConflictTelemetryRecord,
+  JobRecord,
   LockLeasePolicy,
   LockRecord,
   PermissionState,
@@ -22,6 +23,7 @@ export interface RuntimeStateSnapshot {
   locks: LockRecord[];
   lockLeasePolicy?: LockLeasePolicy | undefined;
   transactions: TransactionRecord[];
+  jobs?: JobRecord[] | undefined;
   conflicts: ConflictRecord[];
   conflictTelemetry?: ConflictTelemetryRecord[] | undefined;
   collaborationEvents: CollaborationEvent[];
@@ -55,6 +57,7 @@ export class RuntimeStateStore {
       locks: parsed.locks ?? [],
       lockLeasePolicy: parsed.lockLeasePolicy,
       transactions: parsed.transactions ?? [],
+      jobs: parsed.jobs ?? [],
       conflicts: parsed.conflicts ?? [],
       conflictTelemetry: parsed.conflictTelemetry ?? [],
       collaborationEvents: parsed.collaborationEvents ?? [],

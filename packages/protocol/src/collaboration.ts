@@ -1,10 +1,12 @@
-import type { AgentId, BackupId, LockId, PlanId, TaskId, TransactionId, WorkbookId } from "./ids.js";
+import type { AgentId, BackupId, JobId, LockId, PlanId, TaskId, TransactionId, WorkbookId } from "./ids.js";
 import type { DestructiveLevel, DiffSummary, OperationTelemetry, OperationWarning } from "./operations.js";
 import type { A1Range, RangeFingerprint } from "./workbook.js";
 
 export type AgentStatus = "active" | "idle" | "disconnected";
 export type TaskStatus = "open" | "claimed" | "planning" | "queued" | "applying" | "blocked" | "completed" | "failed" | "cancelled";
-export type TransactionStatus = "queued" | "applying" | "applied" | "failed" | "rolled_back" | "blocked";
+export type TransactionStatus = "queued" | "applying" | "applied" | "failed" | "rolled_back" | "blocked" | "cancelled";
+export type JobStatus = "queued" | "applying" | "partially_applied" | "applied" | "failed" | "cancelled";
+export type JobKind = "batch_chunked" | "style_chunked" | "matrix_chunked";
 export type LockStatus = "active" | "released" | "expired";
 export type TaskBlockerStatus = "open" | "resolved";
 export type TaskBlockerSeverity = "info" | "warning" | "blocked";
@@ -234,6 +236,36 @@ export interface TransactionRecord {
   telemetry?: OperationTelemetry | undefined;
   destructiveLevel: DestructiveLevel;
   queuedAt: string;
+  queuePosition?: number | undefined;
+  progressMessage?: string | undefined;
+  queueWaitMs?: number | undefined;
+  executionMs?: number | undefined;
+  retryStrategy?: string | undefined;
+  chunksTotal?: number | undefined;
+  chunksCompleted?: number | undefined;
+  startedAt?: string | undefined;
+  finishedAt?: string | undefined;
+  errorCode?: string | undefined;
+  errorMessage?: string | undefined;
+}
+
+export interface JobRecord {
+  jobId: JobId;
+  workbookId: WorkbookId;
+  agentId?: AgentId | undefined;
+  taskId?: TaskId | undefined;
+  planId?: PlanId | undefined;
+  kind: JobKind;
+  status: JobStatus;
+  goal: string;
+  transactionIds: TransactionId[];
+  chunksTotal: number;
+  chunksCompleted: number;
+  progressMessage?: string | undefined;
+  retryStrategy?: string | undefined;
+  destructiveLevel: DestructiveLevel;
+  warnings: OperationWarning[];
+  queuedAt: string;
   startedAt?: string | undefined;
   finishedAt?: string | undefined;
   errorCode?: string | undefined;
@@ -256,6 +288,7 @@ export interface CollaborationEvent {
     | "transaction.applying"
     | "transaction.applied"
     | "transaction.failed"
+    | "transaction.cancelled"
     | "transaction.rollback_previewed"
     | "transaction.rolled_back"
     | "backup.created"

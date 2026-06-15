@@ -10,6 +10,7 @@ export type AgentId = string & { readonly __brand: "AgentId" };
 export type TaskId = string & { readonly __brand: "TaskId" };
 export type LockId = string & { readonly __brand: "LockId" };
 export type TransactionId = string & { readonly __brand: "TransactionId" };
+export type JobId = string & { readonly __brand: "JobId" };
 
 export function makeId<T extends string>(prefix: string): T {
   const random =

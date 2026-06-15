@@ -26,6 +26,10 @@ export interface CreateTransactionInput {
   scopes: WorkbookScope[];
   baseFingerprints?: RangeFingerprint[];
   destructiveLevel: DestructiveLevel;
+  progressMessage?: string | undefined;
+  retryStrategy?: string | undefined;
+  chunksTotal?: number | undefined;
+  chunksCompleted?: number | undefined;
 }
 
 export class TransactionManager {
@@ -45,6 +49,18 @@ export class TransactionManager {
       destructiveLevel: input.destructiveLevel,
       queuedAt: new Date().toISOString()
     };
+    if (input.progressMessage !== undefined) {
+      transaction.progressMessage = input.progressMessage;
+    }
+    if (input.retryStrategy !== undefined) {
+      transaction.retryStrategy = input.retryStrategy;
+    }
+    if (input.chunksTotal !== undefined) {
+      transaction.chunksTotal = input.chunksTotal;
+    }
+    if (input.chunksCompleted !== undefined) {
+      transaction.chunksCompleted = input.chunksCompleted;
+    }
     if (input.agentId !== undefined) {
       transaction.agentId = input.agentId;
     }
@@ -59,10 +75,15 @@ export class TransactionManager {
   }
 
   markApplying(transactionId: TransactionId, locks: LockId[]): TransactionRecord {
+    const transaction = this.transactions.get(transactionId);
+    const now = new Date().toISOString();
     return this.update(transactionId, {
       status: "applying",
       locks,
-      startedAt: new Date().toISOString()
+      startedAt: now,
+      queuePosition: undefined,
+      queueWaitMs: transaction ? Date.parse(now) - Date.parse(transaction.queuedAt) : undefined,
+      progressMessage: applyingProgressMessage(transaction)
     });
   }
 
@@ -75,11 +96,13 @@ export class TransactionManager {
       telemetry?: OperationTelemetry | undefined;
     }
   ): TransactionRecord {
+    const transaction = this.transactions.get(transactionId);
     const patch: Partial<TransactionRecord> = {
       status: "applied",
       backups: result.backups,
       warnings: result.warnings,
-      finishedAt: new Date().toISOString()
+      finishedAt: new Date().toISOString(),
+      progressMessage: appliedProgressMessage(transaction)
     };
     if (result.diffSummary !== undefined) {
       patch.diffSummary = result.diffSummary;
@@ -87,16 +110,23 @@ export class TransactionManager {
     if (result.telemetry !== undefined) {
       patch.telemetry = result.telemetry;
     }
+    if (transaction?.startedAt !== undefined) {
+      patch.executionMs = Date.parse(patch.finishedAt!) - Date.parse(transaction.startedAt);
+    }
     return this.update(transactionId, patch);
   }
 
   markFailed(transactionId: TransactionId, errorCode: string, errorMessage: string, warnings: OperationWarning[] = []): TransactionRecord {
+    const finishedAt = new Date().toISOString();
+    const transaction = this.transactions.get(transactionId);
     return this.update(transactionId, {
       status: "failed",
       errorCode,
       errorMessage,
       warnings,
-      finishedAt: new Date().toISOString()
+      finishedAt,
+      executionMs: transaction?.startedAt !== undefined ? Date.parse(finishedAt) - Date.parse(transaction.startedAt) : undefined,
+      progressMessage: `Workbook mutation failed: ${errorMessage}`
     });
   }
 
@@ -106,12 +136,27 @@ export class TransactionManager {
       errorCode,
       errorMessage,
       warnings,
-      finishedAt: new Date().toISOString()
+      finishedAt: new Date().toISOString(),
+      progressMessage: `Workbook mutation is blocked: ${errorMessage}`
     });
   }
 
   markRolledBack(transactionId: TransactionId): TransactionRecord {
-    return this.update(transactionId, { status: "rolled_back", finishedAt: new Date().toISOString() });
+    return this.update(transactionId, {
+      status: "rolled_back",
+      finishedAt: new Date().toISOString(),
+      progressMessage: "Workbook mutation was rolled back."
+    });
+  }
+
+  markCancelled(transactionId: TransactionId, message = "Queued workbook mutation was cancelled."): TransactionRecord {
+    return this.update(transactionId, {
+      status: "cancelled",
+      errorCode: "TRANSACTION_CANCELLED",
+      errorMessage: message,
+      finishedAt: new Date().toISOString(),
+      progressMessage: message
+    });
   }
 
   get(transactionId: TransactionId): TransactionRecord | undefined {
@@ -129,6 +174,22 @@ export class TransactionManager {
     return [...this.transactions.values()]
       .filter((transaction) => workbookId === undefined || transaction.workbookId === workbookId)
       .sort((a, b) => (b.finishedAt ?? b.startedAt ?? b.queuedAt).localeCompare(a.finishedAt ?? a.startedAt ?? a.queuedAt));
+  }
+
+  queuePosition(transactionId: TransactionId): number | undefined {
+    const queued = [...this.transactions.values()]
+      .filter((transaction) => transaction.status === "queued")
+      .sort((a, b) => a.queuedAt.localeCompare(b.queuedAt));
+    const index = queued.findIndex((transaction) => transaction.transactionId === transactionId);
+    return index >= 0 ? index + 1 : undefined;
+  }
+
+  withQueueMetadata(transaction: TransactionRecord): TransactionRecord {
+    return {
+      ...transaction,
+      queuePosition: transaction.status === "queued" ? this.queuePosition(transaction.transactionId) : undefined,
+      progressMessage: transaction.progressMessage ?? progressMessageForStatus(transaction)
+    };
   }
 
   load(records: TransactionRecord[]): void {
@@ -150,6 +211,7 @@ export class TransactionManager {
         transaction.errorCode = "DAEMON_RESTARTED";
         transaction.errorMessage = message;
         transaction.finishedAt = new Date().toISOString();
+        transaction.progressMessage = message;
         interrupted.push(transaction);
       }
     }
@@ -164,4 +226,37 @@ export class TransactionManager {
     Object.assign(transaction, patch);
     return transaction;
   }
+}
+
+function progressMessageForStatus(transaction: TransactionRecord): string {
+  switch (transaction.status) {
+    case "queued":
+      return "Workbook mutation is queued and will apply when earlier workbook work finishes.";
+    case "applying":
+      return "Workbook mutation is applying in Excel.";
+    case "applied":
+      return "Workbook mutation applied successfully.";
+    case "failed":
+      return transaction.errorMessage ? `Workbook mutation failed: ${transaction.errorMessage}` : "Workbook mutation failed.";
+    case "blocked":
+      return transaction.errorMessage ? `Workbook mutation is blocked: ${transaction.errorMessage}` : "Workbook mutation is blocked.";
+    case "rolled_back":
+      return "Workbook mutation was rolled back.";
+    case "cancelled":
+      return transaction.errorMessage ?? "Workbook mutation was cancelled.";
+  }
+}
+
+function applyingProgressMessage(transaction: TransactionRecord | undefined): string {
+  if (transaction?.chunksTotal !== undefined && transaction.chunksCompleted !== undefined) {
+    return `Workbook mutation is applying chunk ${transaction.chunksCompleted + 1} of ${transaction.chunksTotal}.`;
+  }
+  return "Workbook mutation is applying in Excel.";
+}
+
+function appliedProgressMessage(transaction: TransactionRecord | undefined): string {
+  if (transaction?.chunksTotal !== undefined && transaction.chunksCompleted !== undefined) {
+    return `Workbook mutation chunk ${transaction.chunksCompleted + 1} of ${transaction.chunksTotal} applied successfully.`;
+  }
+  return "Workbook mutation applied successfully.";
 }

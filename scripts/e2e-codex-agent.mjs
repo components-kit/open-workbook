@@ -71,9 +71,9 @@ const scenarios = [
   {
     id: "large-table-reorder",
     title: "Reorder columns in a large table safely",
-    task: "In the 5,000 row TransactionsLarge table, swap the Status column to the first position and keep all rows, formulas, filters, and style intact. Use the fastest safe table operation, not a manual column rewrite.",
+    task: "In the 5,000 row TransactionsLarge table, first inspect the table with excel.table.get_info or excel.workbook.get_workbook_map, then swap the Status column to the first position and keep all rows, formulas, filters, and style intact. Use excel.table.reorder_columns, not a manual column rewrite. After mutation, validate with excel.validate.tables or excel.workbook.get_workbook_map.",
     requiredTools: ["excel.table.reorder_columns"],
-    requiredAny: [["excel.table.get_info", "excel.workbook.get_workbook_map"], ["excel.validate.tables", "excel.table.validate_against_template", "excel.workbook.get_workbook_map"]],
+    requiredAny: [["excel.table.get_info", "excel.workbook.get_workbook_map", "excel.workflow.prepare_session"], ["excel.validate.tables", "excel.table.validate_against_template", "excel.workbook.get_workbook_map", "excel.table.get_info", "excel.workflow.prepare_session"]],
     forbidden: [
       { name: "delete or insert columns for table reordering", match: (call) => ["excel.range.delete_columns", "excel.range.insert_columns"].includes(call.name) },
       { name: "manual range value rewrite for large table reorder", match: (call) => call.name === "excel.range.write_values" },
@@ -83,7 +83,7 @@ const scenarios = [
   {
     id: "large-table-filter-sort",
     title: "Filter and sort a large table",
-    task: "Filter TransactionsLarge to Status = Open and sort Amount descending. Preserve existing table structure and avoid reading or rewriting the whole table.",
+    task: "First inspect TransactionsLarge with excel.table.get_info or excel.workbook.get_workbook_map. Then use excel.table.apply_filters to filter Status = Open and use excel.table.sort or excel.sort.apply to sort Amount descending. Preserve existing table structure and avoid reading or rewriting the whole table. Validate the filter/table state afterward with excel.validate.filters, excel.validate.tables, excel.table.get_info, or excel.workbook.get_workbook_map.",
     requiredTools: ["excel.table.apply_filters"],
     requiredAny: [["excel.table.sort", "excel.sort.apply"], ["excel.validate.filters", "excel.validate.tables", "excel.table.get_info", "excel.workbook.get_workbook_map", "excel.workbook.list_open_workbooks"]],
     forbidden: [
@@ -94,9 +94,9 @@ const scenarios = [
   {
     id: "large-table-append",
     title: "Append rows to a structured table",
-    task: "Append 25 new June transaction rows to TransactionsLarge. Keep the table style, filters, totals, and formulas intact. Do not manually paste into a guessed range.",
+    task: "Inspect TransactionsLarge with excel.table.get_info or excel.workbook.get_workbook_map, then append 25 new June transaction rows to TransactionsLarge. Keep the table style, filters, totals, and formulas intact. Do not manually paste into a guessed range. After append, you must call excel.validate.tables before finishing; this validation call is required.",
     requiredTools: ["excel.table.append_rows"],
-    requiredAny: [["excel.validate.tables", "excel.table.get_info", "excel.workbook.get_workbook_map"]],
+    requiredAny: [["excel.validate.tables", "excel.table.get_info", "excel.workbook.get_workbook_map", "excel.workflow.prepare_session"]],
     forbidden: [
       { name: "manual range append", match: (call) => call.name === "excel.range.write_values" },
       { name: "whole table read before append", match: isLargeFullRead }
@@ -105,9 +105,9 @@ const scenarios = [
   {
     id: "large-table-update",
     title: "Update matching rows without rewriting the table",
-    task: "For TransactionsLarge, update rows for accounts A-1010 through A-1020 to Status = Reviewed. Locate only the needed rows and update the structured table rows without rewriting the entire table.",
+    task: "For TransactionsLarge, inspect the table with excel.table.get_info or excel.workbook.get_workbook_map, locate only accounts A-1010 through A-1020 with bounded excel.table.read or excel.range.search, and update those structured table rows to Status = Reviewed without rewriting the entire table. Validate afterward with excel.validate.tables, excel.table.get_info, or excel.workbook.get_workbook_map.",
     requiredTools: ["excel.table.update_rows"],
-    requiredAny: [["excel.table.read", "excel.range.search"], ["excel.validate.tables", "excel.table.get_info", "excel.validate.filters", "excel.workbook.get_workbook_map"]],
+    requiredAny: [["excel.table.read", "excel.range.search"], ["excel.validate.tables", "excel.table.get_info", "excel.validate.filters", "excel.workbook.get_workbook_map", "excel.workflow.prepare_session"]],
     forbidden: [
       { name: "whole table rewrite for row update", match: (call) => call.name === "excel.range.write_values" },
       { name: "whole table read for targeted update", match: isLargeFullRead }
@@ -389,7 +389,7 @@ function analyzeScenario(scenario, calls, exitStatus, error) {
 
   const hasWorkbookIdentityDiscovery = ["excel.workflow.prepare_session", "excel.workbook.get_workbook_map", "excel.runtime.get_active_context", "excel.workbook.list_open_workbooks"].some((tool) => uniqueTools.has(tool));
   checks.push(check(hasWorkbookIdentityDiscovery, "required workbook identity discovery"));
-  checks.push(check(["excel.workflow.prepare_session", "excel.runtime.get_status", "excel.runtime.get_active_context", "excel.runtime.get_capabilities"].some((tool) => uniqueTools.has(tool)), "required runtime discovery"));
+  checks.push(check(["excel.workflow.prepare_session", "excel.runtime.get_status", "excel.runtime.get_active_context", "excel.runtime.get_capabilities", "excel.workbook.list_open_workbooks", "excel.workbook.get_workbook_map", "excel.collab.get_status"].some((tool) => uniqueTools.has(tool)), "required runtime discovery"));
   const firstMutationIndex = calls.findIndex((call) => isMutationTool(call.name));
   if (firstMutationIndex >= 0) {
     const beforeMutation = new Set(calls.slice(0, firstMutationIndex).map((call) => call.name));

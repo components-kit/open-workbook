@@ -17,7 +17,9 @@ export const ExcelErrorCode = {
   NotFound: "NOT_FOUND",
   InvalidArgument: "INVALID_ARGUMENT",
   PayloadTooLarge: "PAYLOAD_TOO_LARGE",
-  OperationFailed: "OPERATION_FAILED"
+  OperationFailed: "OPERATION_FAILED",
+  TransactionCancelled: "TRANSACTION_CANCELLED",
+  Timeout: "TIMEOUT"
 } as const;
 
 export type ExcelErrorCode = (typeof ExcelErrorCode)[keyof typeof ExcelErrorCode];

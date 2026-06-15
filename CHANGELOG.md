@@ -4,6 +4,23 @@ All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
 
+## [0.1.6] - 2026-06-15
+
+### Added
+
+- Added transaction progress controls with `excel.transaction.wait` and `excel.transaction.cancel`, plus queued transaction progress metadata for agents coordinating long-running workbook mutations.
+- Added `excel.batch.preflight` and `excel.batch.submit_chunked` so agents can estimate batch size and choose synchronous apply, queued submit, or chunked parent-job submit before Excel receives writes.
+- Added parent job progress tools with `excel.job.list`, `excel.job.get`, `excel.job.wait`, and `excel.job.cancel` for large updates split across multiple queued transactions.
+- Added `excel.range.write_styles_many` for applying grouped report styles through one reversible batch transaction.
+- Added `excel.batch.submit` for queueing batch mutations and returning transaction progress immediately.
+
+### Changed
+
+- Made the backend-to-add-in RPC timeout configurable with `OPEN_WORKBOOK_ADDIN_RPC_TIMEOUT_MS`.
+- Large `excel.range.write_styles_many` payloads now split into queued chunks controlled by `OPEN_WORKBOOK_STYLE_BATCH_CHUNK_SIZE`.
+- Large style, value, formula, and number-format batches now preflight into safe chunk plans where possible instead of relying on parallel MCP calls or timeout recovery.
+- Style-only batches now retry add-in timeouts by queueing smaller chunks when safe.
+
 ## [0.1.5] - 2026-06-14
 
 ### Added

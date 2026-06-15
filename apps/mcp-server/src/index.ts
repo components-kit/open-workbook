@@ -17,6 +17,7 @@ import type {
   FormulaCopyPatternsRequest,
   FormulaFillRequest,
   FormulaPatternRequest,
+  JobId,
   LockId,
   LockMode,
   NameCreateRequest,
@@ -107,7 +108,7 @@ const STYLE_COPY_TOOL_DIMENSIONS: Record<string, StyleDimension> = {
 };
 
 const runtime = await createRuntimeFacade();
-const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.5";
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.6";
 
 const server = new McpServer({
   name: "open-workbook",
@@ -137,6 +138,7 @@ registerCollaborationTools(server);
 registerLockTools(server);
 registerConflictTools(server);
 registerTransactionTools(server);
+registerJobTools(server);
 registerPermissionsTools(server);
 registerCleanTools(server);
 registerValidateTools(server);
@@ -1671,6 +1673,44 @@ function registerRangeTools(mcp: McpServer): void {
     reason: "MCP range write styles"
   }));
 
+  registerMcpTool(
+    mcp,
+    "excel.range.write_styles_many",
+    {
+      title: "Write many Excel range styles",
+      description: "Apply styles to multiple ranges through one reversible batch transaction. Use this for grouped report styling instead of many parallel write_styles calls.",
+      inputSchema: {
+        workbookId: z.string(),
+        reason: z.string().optional(),
+        entries: z.array(z.object({
+          sheetName: z.string(),
+          address: z.string(),
+          style: z.record(z.string(), z.any()),
+          reason: z.string().optional()
+        })).min(1)
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    async ({ workbookId, reason, entries }: { workbookId: string; reason?: string; entries: Array<{ sheetName: string; address: string; style: Record<string, unknown>; reason?: string }> }) => {
+      const typedWorkbookId = workbookId as WorkbookId;
+      const operations = styleEntriesToOperations(typedWorkbookId, entries, reason);
+      const chunkSize = styleBatchChunkSize();
+      if (operations.length > chunkSize) {
+        return jsonResult(runtime.submitChunkedBatch(
+          {
+            workbookId: typedWorkbookId,
+            mode: "apply",
+            operations,
+            retryStrategy: "split_style_entries",
+            progressMessage: reason ?? "Apply bulk range styles"
+          },
+          { goal: reason ?? "Apply bulk range styles", retryStrategy: "split_style_entries" }
+        ));
+      }
+      return jsonResult(await runtime.applyBatch({ workbookId: typedWorkbookId, mode: "apply", operations }));
+    }
+  );
+
   for (const name of ["excel.range.clear", "excel.range.clear_values", "excel.range.clear_formats", "excel.range.clear_values_keep_format"] as const) {
     registerRangeOperation(mcp, name, {
       workbookId: z.string(),
@@ -1769,6 +1809,32 @@ function registerBatchTools(mcp: McpServer): void {
 
   registerMcpTool(
     mcp,
+    "excel.batch.preflight",
+    {
+      title: "Preflight Excel batch",
+      description: "Estimate batch size and recommend apply, submit, or chunked submit before sending work to Excel.",
+      inputSchema: {
+        workbookId: z.string(),
+        operations: z.array(z.any())
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        openWorldHint: false
+      }
+    },
+    async ({ workbookId, operations }: { workbookId: string; operations: unknown[] }) => {
+      const request: BatchRequest = {
+        workbookId: workbookId as WorkbookId,
+        mode: "validate",
+        operations: operations as ExcelOperation[]
+      };
+      return jsonResult(runtime.preflightBatch(request));
+    }
+  );
+
+  registerMcpTool(
+    mcp,
     "excel.batch.dry_run",
     {
       title: "Dry-run Excel batch",
@@ -1860,6 +1926,152 @@ function registerBatchTools(mcp: McpServer): void {
         request.role = role;
       }
       return jsonResult(await runtime.applyBatch(request));
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.batch.submit",
+    {
+      title: "Submit Excel batch",
+      description: "Queue a batch mutation and return transaction progress immediately instead of waiting for Excel execution to finish.",
+      inputSchema: {
+        workbookId: z.string(),
+        operations: z.array(z.any()),
+        confirmationToken: z.string().optional(),
+        expectedTargetFingerprints: z.array(z.any()).optional(),
+        agentId: z.string().optional(),
+        agentName: z.string().optional(),
+        taskId: z.string().optional(),
+        role: z.string().optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({
+      workbookId,
+      operations,
+      confirmationToken,
+      expectedTargetFingerprints,
+      agentId,
+      agentName,
+      taskId,
+      role
+    }: {
+      workbookId: string;
+      operations: unknown[];
+      confirmationToken?: string;
+      expectedTargetFingerprints?: unknown[];
+      agentId?: string;
+      agentName?: string;
+      taskId?: string;
+      role?: string;
+    }) => {
+      const request: BatchRequest = {
+        workbookId: workbookId as WorkbookId,
+        mode: "apply",
+        operations: operations as ExcelOperation[]
+      };
+      if (confirmationToken !== undefined) {
+        request.confirmationToken = confirmationToken;
+      }
+      if (expectedTargetFingerprints !== undefined) {
+        request.expectedTargetFingerprints = expectedTargetFingerprints as NonNullable<
+          BatchRequest["expectedTargetFingerprints"]
+        >;
+      }
+      if (agentId !== undefined) {
+        request.agentId = agentId as AgentId;
+      }
+      if (agentName !== undefined) {
+        request.agentName = agentName;
+      }
+      if (taskId !== undefined) {
+        request.taskId = taskId as TaskId;
+      }
+      if (role !== undefined) {
+        request.role = role;
+      }
+      return jsonResult(runtime.submitBatch(request));
+    }
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.batch.submit_chunked",
+    {
+      title: "Submit chunked Excel batch",
+      description: "Preflight a large batch, split safely chunkable operations, queue child transactions, and return one parent job.",
+      inputSchema: {
+        workbookId: z.string(),
+        operations: z.array(z.any()),
+        goal: z.string().optional(),
+        confirmationToken: z.string().optional(),
+        expectedTargetFingerprints: z.array(z.any()).optional(),
+        agentId: z.string().optional(),
+        agentName: z.string().optional(),
+        taskId: z.string().optional(),
+        role: z.string().optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false
+      }
+    },
+    async ({
+      workbookId,
+      operations,
+      goal,
+      confirmationToken,
+      expectedTargetFingerprints,
+      agentId,
+      agentName,
+      taskId,
+      role
+    }: {
+      workbookId: string;
+      operations: unknown[];
+      goal?: string;
+      confirmationToken?: string;
+      expectedTargetFingerprints?: unknown[];
+      agentId?: string;
+      agentName?: string;
+      taskId?: string;
+      role?: string;
+    }) => {
+      const request: BatchRequest = {
+        workbookId: workbookId as WorkbookId,
+        mode: "apply",
+        operations: operations as ExcelOperation[]
+      };
+      if (goal !== undefined) {
+        request.progressMessage = goal;
+      }
+      if (confirmationToken !== undefined) {
+        request.confirmationToken = confirmationToken;
+      }
+      if (expectedTargetFingerprints !== undefined) {
+        request.expectedTargetFingerprints = expectedTargetFingerprints as NonNullable<
+          BatchRequest["expectedTargetFingerprints"]
+        >;
+      }
+      if (agentId !== undefined) {
+        request.agentId = agentId as AgentId;
+      }
+      if (agentName !== undefined) {
+        request.agentName = agentName;
+      }
+      if (taskId !== undefined) {
+        request.taskId = taskId as TaskId;
+      }
+      if (role !== undefined) {
+        request.role = role;
+      }
+      return jsonResult(runtime.submitChunkedBatch(request, { goal }));
     }
   );
 }
@@ -4798,6 +5010,35 @@ function registerTransactionTools(mcp: McpServer): void {
 
   registerMcpTool(
     mcp,
+    "excel.transaction.wait",
+    {
+      title: "Wait for Excel transaction",
+      description: "Wait for a queued or applying workbook transaction to reach a terminal status.",
+      inputSchema: {
+        transactionId: z.string(),
+        timeoutMs: z.number().int().positive().optional(),
+        pollMs: z.number().int().positive().optional()
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ transactionId, timeoutMs, pollMs }: { transactionId: string; timeoutMs?: number; pollMs?: number }) =>
+      jsonResult(await runtime.waitTransaction(transactionId as TransactionId, timeoutMs, pollMs))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.transaction.cancel",
+    {
+      title: "Cancel Excel transaction",
+      description: "Cancel a queued workbook transaction before it starts applying in Excel.",
+      inputSchema: { transactionId: z.string() },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    async ({ transactionId }: { transactionId: string }) => jsonResult(runtime.cancelTransaction(transactionId as TransactionId))
+  );
+
+  registerMcpTool(
+    mcp,
     "excel.transaction.preview_rollback",
     {
       title: "Preview transaction rollback",
@@ -4844,6 +5085,61 @@ function registerTransactionTools(mcp: McpServer): void {
     },
     async ({ transactionId, confirmationToken }: { transactionId: string; confirmationToken?: string }) =>
       jsonResult(await runtime.rollbackTransactionChain(transactionId as TransactionId, confirmationToken))
+  );
+}
+
+function registerJobTools(mcp: McpServer): void {
+  registerMcpTool(
+    mcp,
+    "excel.job.list",
+    {
+      title: "List Excel jobs",
+      description: "List parent jobs that group multiple queued workbook transactions.",
+      inputSchema: { workbookId: z.string().optional() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ workbookId }: { workbookId?: string }) => jsonResult(runtime.listJobs(workbookId as WorkbookId | undefined))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.job.get",
+    {
+      title: "Get Excel job",
+      description: "Return one parent workbook job with aggregate progress across child transactions.",
+      inputSchema: { jobId: z.string() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ jobId }: { jobId: string }) => jsonResult(runtime.getJob(jobId as JobId))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.job.wait",
+    {
+      title: "Wait for Excel job",
+      description: "Wait for a parent workbook job to reach a terminal status.",
+      inputSchema: {
+        jobId: z.string(),
+        timeoutMs: z.number().int().positive().optional(),
+        pollMs: z.number().int().positive().optional()
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+    },
+    async ({ jobId, timeoutMs, pollMs }: { jobId: string; timeoutMs?: number; pollMs?: number }) =>
+      jsonResult(await runtime.waitJob(jobId as JobId, timeoutMs, pollMs))
+  );
+
+  registerMcpTool(
+    mcp,
+    "excel.job.cancel",
+    {
+      title: "Cancel Excel job",
+      description: "Cancel queued child transactions for a parent workbook job.",
+      inputSchema: { jobId: z.string() },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
+    },
+    async ({ jobId }: { jobId: string }) => jsonResult(runtime.cancelJob(jobId as JobId))
   );
 }
 
@@ -6353,6 +6649,32 @@ function workflowDestructiveLevel(kind: string) {
     return "values";
   }
   return "workbook";
+}
+
+function styleEntriesToOperations(
+  workbookId: WorkbookId,
+  entries: Array<{ sheetName: string; address: string; style: Record<string, unknown>; reason?: string }>,
+  reason?: string
+): ExcelOperation[] {
+  return entries.map((entry) => ({
+    kind: "range.write_styles",
+    operationId: makeId<OperationId>("op"),
+    workbookId,
+    target: {
+      workbookId,
+      sheetName: entry.sheetName,
+      address: entry.address
+    },
+    style: entry.style,
+    preserveValues: true,
+    destructiveLevel: "format",
+    reason: entry.reason ?? reason ?? "MCP bulk range write styles"
+  }));
+}
+
+function styleBatchChunkSize(): number {
+  const value = Number(process.env.OPEN_WORKBOOK_STYLE_BATCH_CHUNK_SIZE ?? 25);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : 25;
 }
 
 function targetFromArgs(args: { workbookId: string; sheetName: string; address: string }): A1Range {
