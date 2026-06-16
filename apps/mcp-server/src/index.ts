@@ -164,7 +164,7 @@ const STYLE_COPY_TOOL_DIMENSIONS: Record<string, StyleDimension> = {
 };
 
 const runtime = await createRuntimeFacade();
-const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.11";
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.12";
 const COMPACT_RESOURCE_LIMIT = 100;
 const COMPACT_DEFAULT_RESOURCE_THRESHOLD_BYTES = 24_000;
 const COMPACT_LIMITS = {

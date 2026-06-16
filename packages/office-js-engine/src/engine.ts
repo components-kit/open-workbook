@@ -28,7 +28,7 @@ export const DefaultOfficeJsEngineOptions: OfficeJsEngineOptions = {
 
 export class OfficeJsEngine implements ExcelEngine {
   readonly name = "office-js";
-  readonly version = "0.1.11";
+  readonly version = "0.1.12";
 
   constructor(private readonly options: OfficeJsEngineOptions = DefaultOfficeJsEngineOptions) {}
 

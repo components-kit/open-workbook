@@ -297,6 +297,21 @@ All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
 
+## [0.1.12] - 2026-06-16
+
+### Added
+
+- Added the default `excel.agent.run` MCP workflow surface so normal agents can use one compact intent interface while the backend orchestrates workbook discovery, cached metadata, target resolution, preview/apply, validation, rollback, and proof generation internally.
+- Added server-side `workbookContextId` reuse for agent prepare/find/answer/update flows, plus context-aware advanced compact routes for workbook summary, sheet summary, range compact reads, table compact reads, and compact resource fetches.
+- Added natural-language target resolution across sheets, tables, headers, named ranges, regions, summary blocks, and formula regions with structured ambiguity candidates instead of guessing.
+- Added safe `auto` mode application for clearly scoped low-risk value edits after preview checks, while formula-sensitive, broad, sparse, structural, destructive, stale, or ambiguous edits stop before mutation.
+- Added agent surface and workflow E2E coverage for default tool exposure, metadata cache reuse, compact target reads, preview/apply confirmation, safe auto-apply, formula-sensitive blocking, and context-aware compact routes.
+
+### Changed
+
+- Default MCP `tools/list` now exposes only `excel.agent.run`; set `OPEN_WORKBOOK_MCP_SURFACE=advanced` to expose the previous optimized primitive surface for debugging and compatibility.
+- Updated Open Workbook agent skill guidance, tool-surface docs, release E2E report, and generated `llms-full.txt` for the agent workflow and context ID routing model.
+
 ## [0.1.11] - 2026-06-15
 
 ### Changed
