@@ -116,6 +116,8 @@ Mutating MCP tools accept `idempotencyKey` for retry safety. A repeated call wit
 
 `excel.workflow.prepare_session` is the preferred first call for agent workflows. It returns runtime status, active context, capabilities, workbook map, and collaboration state in one read-only result so agents can establish workbook identity before mutation.
 
+`excel.agent.run` `mode: "prepare"` returns a server-side `workbookContextId`. In advanced/debug mode, `excel.workbook.get_summary`, `excel.sheet.get_summary`, `excel.range.read_compact`, `excel.table.read_compact`, and `excel.compact.get_resource` can reuse that ID to avoid repeated workbook discovery; missing or ambiguous sheet/table targets return structured candidates.
+
 Lookup and compact context tools reduce token use by exposing target candidates and workbook structure before cell data. Use `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range` when the target sheet, table, column, entity, or range is unknown. Use `excel.lookup.inspect_match` to read one bounded candidate preview instead of probing whole sheets.
 
 `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, and `excel.range.get_summary` return dimensions, table/schema metadata, truncation status, `payloadBytes`, and rough `estimatedTokens` without full cell matrices. Use them before broad reads when the target scope is already known.

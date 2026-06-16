@@ -75,6 +75,51 @@ type RuntimeFacade = RuntimeService & {
   compileBatch(request: BatchRequest): unknown;
 };
 
+type ContextRangeCompactReadRequest = Omit<RangeCompactReadRequest, "workbookId" | "sheetName"> & {
+  workbookId?: WorkbookId | string;
+  workbookContextId?: string;
+  sheetName?: string;
+};
+
+type ContextTableCompactReadRequest = Omit<TableCompactReadRequest, "workbookId" | "tableName"> & {
+  workbookId?: WorkbookId | string;
+  workbookContextId?: string;
+  tableName?: string;
+};
+
+interface AgentWorkbookContextResource {
+  ok: true;
+  workbookContextId: string;
+  workbook: {
+    workbookId?: WorkbookId | string;
+    name: string;
+    activeSheet?: string;
+    sheetCount: number;
+  };
+  sheets: Array<{
+    name: string;
+    kind?: string;
+    usedRange?: string;
+    rowCount?: number;
+    columnCount?: number;
+    headers?: unknown[];
+    tableIds?: string[];
+  }>;
+  tables: Array<{
+    name?: string;
+    sheetName: string;
+    range: string;
+    columns?: unknown[];
+  }>;
+  namedRanges?: unknown[];
+  summaryBlocks?: unknown[];
+  formulaRegions?: unknown[];
+}
+
+type AgentContextResolution<T> =
+  | { ok: true; context: AgentWorkbookContextResource; value: T }
+  | { ok: false; response: Record<string, unknown> };
+
 const host = process.env.OPEN_WORKBOOK_HOST ?? "127.0.0.1";
 const port = Number(process.env.OPEN_WORKBOOK_PORT ?? 37845);
 const addinPath = process.env.OPEN_WORKBOOK_ADDIN_PATH ?? "/addin";
@@ -966,14 +1011,14 @@ function registerWorkbookTools(mcp: McpServer): void {
     {
       title: "Get compact workbook summary",
       description: "Return compact workbook structure, sheet counts, table names, used-range dimensions, and token telemetry without cell bodies.",
-      inputSchema: { workbookId: z.string().optional() },
+      inputSchema: { workbookId: z.string().optional(), workbookContextId: z.string().optional() },
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
         openWorldHint: false
       }
     },
-    async ({ workbookId }: { workbookId?: string }) => jsonResult(await workbookSummary(workbookId as WorkbookId | undefined))
+    async ({ workbookId, workbookContextId }: { workbookId?: string; workbookContextId?: string }) => jsonResult(await workbookSummary(workbookId as WorkbookId | undefined, workbookContextId))
   );
 
   registerMcpTool(
@@ -1617,11 +1662,11 @@ function registerSheetTools(mcp: McpServer): void {
     {
       title: "Get compact worksheet summary",
       description: "Return one worksheet's used-range dimensions, table names, and token telemetry without cell bodies.",
-      inputSchema: { workbookId: z.string().optional(), sheetName: z.string() },
+      inputSchema: { workbookId: z.string().optional(), workbookContextId: z.string().optional(), sheetName: z.string().optional() },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
-    async ({ workbookId, sheetName }: { workbookId?: string; sheetName: string }) =>
-      jsonResult(await sheetSummary(sheetName, workbookId as WorkbookId | undefined))
+    async ({ workbookId, workbookContextId, sheetName }: { workbookId?: string; workbookContextId?: string; sheetName?: string }) =>
+      jsonResult(await sheetSummary(sheetName, workbookId as WorkbookId | undefined, workbookContextId))
   );
 
   registerMcpTool(
@@ -1751,7 +1796,10 @@ function registerRangeTools(mcp: McpServer): void {
   }
 
   const compactReadSchema = {
-    ...readSchema,
+    workbookId: z.string().optional(),
+    workbookContextId: z.string().optional(),
+    sheetName: z.string().optional(),
+    address: z.string(),
     mode: z.enum(["window", "summary", "sample"]).optional(),
     rowOffset: z.number().int().min(0).optional(),
     columnOffset: z.number().int().min(0).optional(),
@@ -1782,7 +1830,7 @@ function registerRangeTools(mcp: McpServer): void {
         openWorldHint: false
       }
     },
-    async (args: RangeCompactReadRequest) => jsonResult(await compactRangeRead(args))
+    async (args: ContextRangeCompactReadRequest) => jsonResult(await compactRangeRead(args))
   );
 
   registerMcpTool(
@@ -4572,7 +4620,9 @@ function registerTableTools(mcp: McpServer): void {
       title: "Read compact Excel table",
       description: "Read a bounded values-first table page with projection, opt-in facets, truncation metadata, and token telemetry.",
       inputSchema: {
-        ...tableSelectorSchema(),
+        workbookId: z.string().optional(),
+        workbookContextId: z.string().optional(),
+        tableName: z.string().optional(),
         mode: z.enum(["window", "summary", "sample"]).optional(),
         includeValues: z.boolean().optional(),
         includeFormulas: z.boolean().optional(),
@@ -4590,7 +4640,7 @@ function registerTableTools(mcp: McpServer): void {
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
-    async (args: TableCompactReadRequest) => jsonResult(await compactTableRead(args))
+    async (args: ContextTableCompactReadRequest) => jsonResult(await compactTableRead(args))
   );
 
   registerMcpTool(
@@ -6938,6 +6988,7 @@ function registerCompactTools(mcp: McpServer): void {
       inputSchema: {
         resourceId: z.string().optional(),
         resourceUri: z.string().optional(),
+        workbookContextId: z.string().optional(),
         mode: z.enum(["metadata", "preview", "page", "full"]).optional(),
         includePayload: z.boolean().optional(),
         maxPayloadBytes: z.number().int().min(0).optional(),
@@ -6947,8 +6998,19 @@ function registerCompactTools(mcp: McpServer): void {
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
-    ({ resourceId, resourceUri, mode, includePayload, maxPayloadBytes, maxEstimatedTokens, offset, limit }: { resourceId?: string; resourceUri?: string; mode?: "metadata" | "preview" | "page" | "full"; includePayload?: boolean; maxPayloadBytes?: number; maxEstimatedTokens?: number; offset?: number; limit?: number }) =>
-      jsonResult(getCompactResource(resourceId ?? compactResourceIdFromUri(resourceUri ?? ""), compactResourceReadOptions({ mode, includePayload, maxPayloadBytes, maxEstimatedTokens, offset, limit })))
+    async ({ resourceId, resourceUri, workbookContextId, mode, includePayload, maxPayloadBytes, maxEstimatedTokens, offset, limit }: { resourceId?: string; resourceUri?: string; workbookContextId?: string; mode?: "metadata" | "preview" | "page" | "full"; includePayload?: boolean; maxPayloadBytes?: number; maxEstimatedTokens?: number; offset?: number; limit?: number }) => {
+      const request: Parameters<typeof compactResourceResult>[0] = {};
+      if (resourceId !== undefined) request.resourceId = resourceId;
+      if (resourceUri !== undefined) request.resourceUri = resourceUri;
+      if (workbookContextId !== undefined) request.workbookContextId = workbookContextId;
+      if (mode !== undefined) request.mode = mode;
+      if (includePayload !== undefined) request.includePayload = includePayload;
+      if (maxPayloadBytes !== undefined) request.maxPayloadBytes = maxPayloadBytes;
+      if (maxEstimatedTokens !== undefined) request.maxEstimatedTokens = maxEstimatedTokens;
+      if (offset !== undefined) request.offset = offset;
+      if (limit !== undefined) request.limit = limit;
+      return jsonResult(await compactResourceResult(request));
+    }
   );
 
   registerMcpTool(
@@ -7756,7 +7818,334 @@ function clearCompactCache(reason: string) {
   return { ok: true, cleared, reason, invalidationCount: compactCacheInvalidationCount, invalidatedAt: compactCacheLastInvalidatedAt };
 }
 
-async function workbookSummary(workbookId?: WorkbookId) {
+async function resolveAgentWorkbookContext(workbookContextId: string): Promise<{ ok: true; context: AgentWorkbookContextResource } | { ok: false; response: Record<string, unknown> }> {
+  const current = runtime.getAgentContextResource(workbookContextId) as AgentWorkbookContextResource | { ok: false; error?: unknown };
+  if (!current.ok) {
+    return {
+      ok: false,
+      response: {
+        ok: false,
+        status: "NOT_FOUND",
+        workbookContextId,
+        summary: "Workbook context was not found or has expired.",
+        nextAction: "call_prepare"
+      }
+    };
+  }
+  const refreshed = await runtime.runAgent({ request: "Refresh workbook context", mode: "prepare", workbookContextId });
+  const refreshedId = refreshed.workbookContextId ? String(refreshed.workbookContextId) : workbookContextId;
+  const resource = runtime.getAgentContextResource(refreshedId) as AgentWorkbookContextResource | { ok: false; error?: unknown };
+  if (!resource.ok) {
+    return {
+      ok: false,
+      response: {
+        ok: false,
+        status: refreshed.status === "ERROR" ? "STALE_CONTEXT" : "NOT_FOUND",
+        workbookContextId,
+        summary: refreshed.summary,
+        nextAction: refreshed.nextAction,
+        warnings: refreshed.warnings
+      }
+    };
+  }
+  return { ok: true, context: resource };
+}
+
+async function resolveContextSheet(workbookContextId: string, sheetName?: string): Promise<AgentContextResolution<AgentWorkbookContextResource["sheets"][number]>> {
+  const context = await resolveAgentWorkbookContext(workbookContextId);
+  if (!context.ok) {
+    return context;
+  }
+  const sheets = context.context.sheets;
+  if (sheetName) {
+    const exact = sheets.find((sheet) => sheet.name === sheetName);
+    if (exact) {
+      return { ok: true, context: context.context, value: exact };
+    }
+    const normalized = normalizeContextLookup(sheetName);
+    const candidates = sheets
+      .map((sheet) => ({ sheet, score: contextLookupScore(normalized, sheet.name) }))
+      .filter((candidate) => candidate.score > 0)
+      .sort((left, right) => right.score - left.score);
+    const best = candidates[0];
+    if (best && (candidates.length === 1 || (best.score >= 0.86 && best.score - (candidates[1]?.score ?? 0) >= 0.12))) {
+      return { ok: true, context: context.context, value: best.sheet };
+    }
+    return {
+      ok: false,
+      response: {
+        ok: false,
+        status: candidates.length > 0 ? "AMBIGUOUS_TARGET" : "NOT_FOUND",
+        workbookContextId,
+        summary: candidates.length > 0 ? "Multiple sheets match the requested sheet name." : "Requested sheet was not found in workbook context.",
+        candidates: (candidates.length > 0 ? candidates.map((candidate) => candidate.sheet) : sheets).slice(0, 10).map((sheet) => ({
+          name: sheet.name,
+          kind: sheet.kind,
+          usedRange: contextUsedRange(sheet)
+        })),
+        nextAction: "call_with_target"
+      }
+    };
+  }
+  const activeSheet = context.context.workbook.activeSheet ? sheets.find((sheet) => sheet.name === context.context.workbook.activeSheet) : undefined;
+  if (activeSheet) {
+    return { ok: true, context: context.context, value: activeSheet };
+  }
+  if (sheets.length === 1 && sheets[0]) {
+    return { ok: true, context: context.context, value: sheets[0] };
+  }
+  return {
+    ok: false,
+    response: {
+      ok: false,
+      status: "NEEDS_SHEET",
+      workbookContextId,
+      summary: "A sheet is required because the workbook context has multiple sheets and no active sheet.",
+      candidates: sheets.slice(0, 10).map((sheet) => ({ name: sheet.name, kind: sheet.kind, usedRange: contextUsedRange(sheet) })),
+      nextAction: "call_with_target"
+    }
+  };
+}
+
+async function normalizeContextRangeReadArgs(args: ContextRangeCompactReadRequest): Promise<AgentContextResolution<RangeCompactReadRequest>> {
+  if (!args.workbookContextId) {
+    if (!args.workbookId || !args.sheetName) {
+      return {
+        ok: false,
+        response: {
+          ok: false,
+          status: "NEEDS_INPUT",
+          summary: "Range compact read requires workbookId and sheetName unless workbookContextId is supplied.",
+          nextAction: "call_with_target"
+        }
+      };
+    }
+    return {
+      ok: true,
+      context: undefined as never,
+      value: {
+        ...args,
+        workbookId: args.workbookId as WorkbookId,
+        sheetName: args.sheetName
+      } as RangeCompactReadRequest
+    };
+  }
+  const resolved = await resolveContextSheet(args.workbookContextId, args.sheetName);
+  if (!resolved.ok) {
+    return resolved;
+  }
+  const workbookId = resolved.context.workbook.workbookId;
+  if (!workbookId) {
+    return {
+      ok: false,
+      response: {
+        ok: false,
+        status: "NEEDS_INPUT",
+        workbookContextId: args.workbookContextId,
+        summary: "Workbook context does not include a workbookId for range reads.",
+        nextAction: "call_prepare"
+      }
+    };
+  }
+  return {
+    ok: true,
+    context: resolved.context,
+    value: {
+      ...args,
+      workbookId: workbookId as WorkbookId,
+      sheetName: resolved.value.name
+    } as RangeCompactReadRequest
+  };
+}
+
+async function normalizeContextTableReadArgs(args: ContextTableCompactReadRequest): Promise<AgentContextResolution<TableCompactReadRequest>> {
+  if (!args.workbookContextId) {
+    if (!args.workbookId || !args.tableName) {
+      return {
+        ok: false,
+        response: {
+          ok: false,
+          status: "NEEDS_INPUT",
+          summary: "Table compact read requires workbookId and tableName unless workbookContextId is supplied.",
+          nextAction: "call_with_target"
+        }
+      };
+    }
+    return {
+      ok: true,
+      context: undefined as never,
+      value: {
+        ...args,
+        workbookId: args.workbookId as WorkbookId,
+        tableName: args.tableName
+      } as TableCompactReadRequest
+    };
+  }
+  const context = await resolveAgentWorkbookContext(args.workbookContextId);
+  if (!context.ok) {
+    return context;
+  }
+  const workbookId = context.context.workbook.workbookId;
+  if (!workbookId) {
+    return {
+      ok: false,
+      response: {
+        ok: false,
+        status: "NEEDS_INPUT",
+        workbookContextId: args.workbookContextId,
+        summary: "Workbook context does not include a workbookId for table reads.",
+        nextAction: "call_prepare"
+      }
+    };
+  }
+  const table = resolveContextTable(context.context, args.tableName);
+  if (!table.ok) {
+    return { ok: false, response: table.response };
+  }
+  return {
+    ok: true,
+    context: context.context,
+    value: {
+      ...args,
+      workbookId: workbookId as WorkbookId,
+      tableName: table.table.name ?? table.table.range
+    } as TableCompactReadRequest
+  };
+}
+
+function resolveContextTable(context: AgentWorkbookContextResource, tableName?: string): { ok: true; table: AgentWorkbookContextResource["tables"][number] } | { ok: false; response: Record<string, unknown> } {
+  if (!tableName && context.tables.length === 1 && context.tables[0]) {
+    return { ok: true, table: context.tables[0] };
+  }
+  if (tableName) {
+    const exact = context.tables.find((table) => table.name === tableName);
+    if (exact) {
+      return { ok: true, table: exact };
+    }
+    const normalized = normalizeContextLookup(tableName);
+    const candidates = context.tables
+      .map((table) => ({ table, score: Math.max(contextLookupScore(normalized, table.name ?? ""), contextLookupScore(normalized, table.sheetName)) }))
+      .filter((candidate) => candidate.score > 0)
+      .sort((left, right) => right.score - left.score);
+    const best = candidates[0];
+    if (best && (candidates.length === 1 || (best.score >= 0.86 && best.score - (candidates[1]?.score ?? 0) >= 0.12))) {
+      return { ok: true, table: best.table };
+    }
+    return {
+      ok: false,
+      response: {
+        ok: false,
+        status: candidates.length > 0 ? "AMBIGUOUS_TARGET" : "NOT_FOUND",
+        workbookContextId: context.workbookContextId,
+        summary: candidates.length > 0 ? "Multiple tables match the requested table name." : "Requested table was not found in workbook context.",
+        candidates: (candidates.length > 0 ? candidates.map((candidate) => candidate.table) : context.tables).slice(0, 10).map(contextTableCandidate),
+        nextAction: "call_with_target"
+      }
+    };
+  }
+  return {
+    ok: false,
+    response: {
+      ok: false,
+      status: "NEEDS_INPUT",
+      workbookContextId: context.workbookContextId,
+      summary: "A table name is required because the workbook context has multiple or no tables.",
+      candidates: context.tables.slice(0, 10).map(contextTableCandidate),
+      nextAction: "call_with_target"
+    }
+  };
+}
+
+async function compactResourceResult(args: {
+  resourceId?: string;
+  resourceUri?: string;
+  workbookContextId?: string;
+  mode?: CompactResourceReadMode;
+  includePayload?: boolean;
+  maxPayloadBytes?: number;
+  maxEstimatedTokens?: number;
+  offset?: number;
+  limit?: number;
+}) {
+  if (args.workbookContextId) {
+    const context = await resolveAgentWorkbookContext(args.workbookContextId);
+    if (!context.ok) {
+      return context.response;
+    }
+  }
+  return {
+    ...getCompactResource(args.resourceId ?? compactResourceIdFromUri(args.resourceUri ?? ""), compactResourceReadOptions(args)),
+    ...(args.workbookContextId ? { workbookContextId: args.workbookContextId } : {})
+  };
+}
+
+function contextTableCandidate(table: AgentWorkbookContextResource["tables"][number]) {
+  return { name: table.name, sheetName: table.sheetName, range: table.range };
+}
+
+function contextUsedRange(sheet: AgentWorkbookContextResource["sheets"][number]) {
+  if (!sheet.usedRange) {
+    return undefined;
+  }
+  return {
+    address: sheet.usedRange,
+    ...(sheet.rowCount !== undefined ? { rowCount: sheet.rowCount } : {}),
+    ...(sheet.columnCount !== undefined ? { columnCount: sheet.columnCount } : {})
+  };
+}
+
+function normalizeContextLookup(value: string): string[] {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
+}
+
+function contextLookupScore(queryTokens: string[], value: string): number {
+  const tokens = normalizeContextLookup(value);
+  if (queryTokens.length === 0 || tokens.length === 0) {
+    return 0;
+  }
+  const query = queryTokens.join(" ");
+  const candidate = tokens.join(" ");
+  if (query === candidate) {
+    return 1;
+  }
+  if (query.includes(candidate) || candidate.includes(query)) {
+    return 0.86;
+  }
+  const overlap = tokens.filter((token) => queryTokens.includes(token)).length;
+  return overlap === 0 ? 0 : 0.25 + (overlap / tokens.length) * 0.45 + (overlap / queryTokens.length) * 0.25;
+}
+
+async function workbookSummary(workbookId?: WorkbookId, workbookContextId?: string) {
+  if (workbookContextId) {
+    const context = await resolveAgentWorkbookContext(workbookContextId);
+    if (!context.ok) {
+      return context.response;
+    }
+    const metadata = context.context;
+    const tableNames = metadata.tables.map((table) => table.name ?? `${table.sheetName}!${table.range}`);
+    const usedRangeCells = metadata.sheets.reduce((sum, sheet) => sum + usedRangeCellCount(contextUsedRange(sheet)), 0);
+    return withCompactTelemetry(
+      {
+        ok: true,
+        workbookContextId: metadata.workbookContextId,
+        workbook: metadata.workbook,
+        workbookId: metadata.workbook.workbookId,
+        sheetCount: metadata.sheets.length,
+        tableCount: tableNames.length,
+        usedRangeCells,
+        sheets: metadata.sheets.map((sheet) => ({
+          name: sheet.name,
+          kind: sheet.kind,
+          usedRange: contextUsedRange(sheet),
+          rowCount: sheet.rowCount,
+          columnCount: sheet.columnCount,
+          headerCount: Array.isArray(sheet.headers) ? sheet.headers.length : 0,
+          tables: metadata.tables.filter((table) => table.sheetName === sheet.name).map((table) => table.name ?? `${table.sheetName}!${table.range}`)
+        }))
+      },
+      { detailLevel: "summary" }
+    );
+  }
   return compactCacheValue(`workbookSummary:${workbookId ?? "active"}`, async () => {
   const result = await runtime.getWorkbookMap();
   const map = "map" in result ? result.map as { workbook?: any; sheets?: any[] } : undefined;
@@ -7812,7 +8201,36 @@ async function workbookUsedRangeSummary(workbookId?: WorkbookId) {
   });
 }
 
-async function sheetSummary(sheetName: string, workbookId?: WorkbookId) {
+async function sheetSummary(sheetName?: string, workbookId?: WorkbookId, workbookContextId?: string) {
+  if (workbookContextId) {
+    const resolved = await resolveContextSheet(workbookContextId, sheetName);
+    if (!resolved.ok) {
+      return resolved.response;
+    }
+    const { context, value: sheet } = resolved;
+    const usedRange = contextUsedRange(sheet);
+    return withCompactTelemetry(
+      {
+        ok: true,
+        workbookContextId: context.workbookContextId,
+        workbookId: context.workbook.workbookId,
+        sheetName: sheet.name,
+        kind: sheet.kind,
+        usedRange,
+        rowCount: sheet.rowCount,
+        columnCount: sheet.columnCount,
+        cellCount: usedRangeCellCount(usedRange),
+        headerCount: Array.isArray(sheet.headers) ? sheet.headers.length : 0,
+        tableCount: context.tables.filter((table) => table.sheetName === sheet.name).length,
+        tables: context.tables.filter((table) => table.sheetName === sheet.name).map((table) => table.name ?? `${table.sheetName}!${table.range}`),
+        sheet
+      },
+      { detailLevel: "summary" }
+    );
+  }
+  if (!sheetName) {
+    return withCompactTelemetry({ ok: false, status: "NEEDS_SHEET", summary: "sheetName is required when workbookContextId is not supplied." }, { detailLevel: "summary" });
+  }
   return compactCacheValue(`sheetSummary:${workbookId ?? "active"}:${sheetName}`, async () => {
   const info = await selectSheetInfo(sheetName);
   const workbook = (info.result as { map?: { workbook?: any } }).map?.workbook;
@@ -7858,30 +8276,35 @@ function rangeSummary(workbookId: WorkbookId, sheetName: string, address: string
   );
 }
 
-async function compactRangeRead(args: RangeCompactReadRequest) {
-  const mode = args.mode ?? "window";
-  const responseMode = compactResponseMode(args.responseMode);
-  const budget = compactRequestedBudget(args as RangeCompactReadRequest & { budget?: Record<string, unknown> });
-  const parsed = parseCompactA1Address(args.address);
+async function compactRangeRead(args: ContextRangeCompactReadRequest) {
+  const normalized = await normalizeContextRangeReadArgs(args);
+  if (!normalized.ok) {
+    return normalized.response;
+  }
+  const request = normalized.value;
+  const mode = request.mode ?? "window";
+  const responseMode = compactResponseMode(request.responseMode);
+  const budget = compactRequestedBudget(request as RangeCompactReadRequest & { budget?: Record<string, unknown> });
+  const parsed = parseCompactA1Address(request.address);
   const sourceRowCount = parsed.endRow - parsed.startRow + 1;
   const sourceColumnCount = parsed.endColumn - parsed.startColumn + 1;
-  const rowOffset = Math.min(args.rowOffset ?? 0, sourceRowCount);
-  const columnOffset = Math.min(args.columnOffset ?? 0, sourceColumnCount);
+  const rowOffset = Math.min(request.rowOffset ?? 0, sourceRowCount);
+  const columnOffset = Math.min(request.columnOffset ?? 0, sourceColumnCount);
   const maxRows = budget.maxRows;
   const maxColumns = budget.maxColumns;
   const availableRows = Math.max(0, sourceRowCount - rowOffset);
   const availableColumns = Math.max(0, sourceColumnCount - columnOffset);
   const columnLimit = Math.min(maxColumns, availableColumns);
-  const maxRowsByCells = args.maxCells !== undefined && columnLimit > 0 ? Math.floor(args.maxCells / columnLimit) : maxRows;
+  const maxRowsByCells = request.maxCells !== undefined && columnLimit > 0 ? Math.floor(request.maxCells / columnLimit) : maxRows;
   const rowLimit = Math.min(maxRows, maxRowsByCells, availableRows);
   const windowAddress = rowLimit > 0 && columnLimit > 0
-    ? compactWindowAddress(args.address, rowOffset, columnOffset, rowLimit, columnLimit)
-    : compactWindowAddress(args.address, rowOffset, columnOffset, 1, 1);
+    ? compactWindowAddress(request.address, rowOffset, columnOffset, rowLimit, columnLimit)
+    : compactWindowAddress(request.address, rowOffset, columnOffset, 1, 1);
   const truncated = rowOffset + rowLimit < sourceRowCount || columnOffset + columnLimit < sourceColumnCount;
   const summary = {
-    workbookId: args.workbookId,
-    sheetName: args.sheetName,
-    address: args.address,
+    workbookId: request.workbookId,
+    sheetName: request.sheetName,
+    address: request.address,
     mode,
     source: {
       rowCount: sourceRowCount,
@@ -7900,17 +8323,17 @@ async function compactRangeRead(args: RangeCompactReadRequest) {
   };
   const nextPage = truncated ? { rowOffset: rowOffset + rowLimit, columnOffset } : undefined;
   if (mode === "summary" || rowLimit === 0 || columnLimit === 0) {
-    return withCompactTelemetry({ ok: true, ...summary, budgetSummary: budget.applied }, { detailLevel: "summary", responseMode, truncated, nextPage, maxPayloadBytes: budget.maxChars, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range summary" });
+    return withCompactTelemetry({ ok: true, ...summary, budgetSummary: budget.applied }, { detailLevel: "summary", responseMode, truncated, nextPage, maxPayloadBytes: budget.maxChars, maxEstimatedTokens: request.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range summary" });
   }
 
-  const facets = compactRangeFacets(args);
+  const facets = compactRangeFacets(request);
   if (facets.length === 0) {
-    return withCompactTelemetry({ ok: true, ...summary, budgetSummary: budget.applied }, { detailLevel: "compact", responseMode, truncated, nextPage, maxPayloadBytes: budget.maxChars, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range read" });
+    return withCompactTelemetry({ ok: true, ...summary, budgetSummary: budget.applied }, { detailLevel: "compact", responseMode, truncated, nextPage, maxPayloadBytes: budget.maxChars, maxEstimatedTokens: request.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range read" });
   }
   if (mode === "sample" && sourceRowCount > rowLimit) {
     const samples = await Promise.all(compactSampleWindows(sourceRowCount, rowLimit).map(async (sample) => {
-      const sampleAddress = compactWindowAddress(args.address, sample.rowOffset, columnOffset, sample.rowCount, columnLimit);
-      const sampleResult = await readRangeSnapshot(args.workbookId, args.sheetName, sampleAddress, facets);
+      const sampleAddress = compactWindowAddress(request.address, sample.rowOffset, columnOffset, sample.rowCount, columnLimit);
+      const sampleResult = await readRangeSnapshot(request.workbookId, request.sheetName, sampleAddress, facets);
       const sampleSnapshot = compactReadSnapshots(sampleResult)[0]?.snapshot;
       const compactSnapshot = compactRangeSnapshotPayload(sampleSnapshot, facets);
       return {
@@ -7932,20 +8355,20 @@ async function compactRangeRead(args: RangeCompactReadRequest) {
         responseMode,
         truncated,
         maxPayloadBytes: budget.maxChars,
-        maxEstimatedTokens: args.maxEstimatedTokens,
+        maxEstimatedTokens: request.maxEstimatedTokens,
         resourceKind: "read",
         resourceTitle: "Compact range sample",
         resourcePayload: payload,
-        resourceScope: compactReadScope({ workbookId: args.workbookId, sheetName: args.sheetName, address: args.address, mode, rowOffset, columnOffset }),
+        resourceScope: compactReadScope({ workbookId: request.workbookId, sheetName: request.sheetName, address: request.address, mode, rowOffset, columnOffset }),
         sourceHash,
         budgetSummary: { ok: true, ...summary, sampleCount: samples.length, sourceHash, budgetSummary: budget.applied }
       }
     );
   }
-  const result = await readRangeSnapshot(args.workbookId, args.sheetName, windowAddress, facets);
+  const result = await readRangeSnapshot(request.workbookId, request.sheetName, windowAddress, facets);
   if (!(result as { ok?: boolean }).ok) {
     const payload = { ok: false, ...summary, source: result };
-    return withCompactTelemetry(payload, { detailLevel: "compact", responseMode, truncated, nextPage, maxPayloadBytes: budget.maxChars, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range read error", resourcePayload: payload, resourceScope: compactReadScope({ workbookId: args.workbookId, sheetName: args.sheetName, address: args.address, mode, rowOffset, columnOffset }), sourceHash: compactSourceHash(payload), budgetSummary: { ok: false, ...summary, budgetSummary: budget.applied } });
+    return withCompactTelemetry(payload, { detailLevel: "compact", responseMode, truncated, nextPage, maxPayloadBytes: budget.maxChars, maxEstimatedTokens: request.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range read error", resourcePayload: payload, resourceScope: compactReadScope({ workbookId: request.workbookId, sheetName: request.sheetName, address: request.address, mode, rowOffset, columnOffset }), sourceHash: compactSourceHash(payload), budgetSummary: { ok: false, ...summary, budgetSummary: budget.applied } });
   }
   const snapshot = compactReadSnapshots(result)[0]?.snapshot;
   const compactSnapshot = compactRangeSnapshotPayload(snapshot, facets);
@@ -7965,11 +8388,11 @@ async function compactRangeRead(args: RangeCompactReadRequest) {
       truncated,
       nextPage,
       maxPayloadBytes: budget.maxChars,
-      maxEstimatedTokens: args.maxEstimatedTokens,
+      maxEstimatedTokens: request.maxEstimatedTokens,
       resourceKind: "read",
       resourceTitle: "Compact range read",
       resourcePayload: payload,
-      resourceScope: compactReadScope({ workbookId: args.workbookId, sheetName: args.sheetName, address: args.address, windowAddress, mode, rowOffset, columnOffset }),
+      resourceScope: compactReadScope({ workbookId: request.workbookId, sheetName: request.sheetName, address: request.address, windowAddress, mode, rowOffset, columnOffset }),
       sourceHash,
       nextActionRecommendation: "answer_now",
       reasoningHints: ["Compact range proof returned", "Full detail is stored behind contextId", "No additional read is required unless the user asks for exact rows"],
@@ -8162,24 +8585,29 @@ function compactTableRowBounds(matrices: unknown[][][]): { sourceRows: number; r
   return { sourceRows, rows: lastRow + 1 };
 }
 
-async function compactTableRead(args: TableCompactReadRequest) {
-  const mode = args.mode ?? "window";
-  const responseMode = compactResponseMode(args.responseMode);
-  const budget = compactRequestedBudget(args as TableCompactReadRequest & { budget?: Record<string, unknown> });
-  const schemaResult = await runtime.getTableInfo(tableSelector(args));
+async function compactTableRead(args: ContextTableCompactReadRequest) {
+  const normalized = await normalizeContextTableReadArgs(args);
+  if (!normalized.ok) {
+    return normalized.response;
+  }
+  const request = normalized.value;
+  const mode = request.mode ?? "window";
+  const responseMode = compactResponseMode(request.responseMode);
+  const budget = compactRequestedBudget(request as TableCompactReadRequest & { budget?: Record<string, unknown> });
+  const schemaResult = await runtime.getTableInfo(tableSelector(request));
   const info = (schemaResult as { info?: any }).info;
   if (!(schemaResult as { ok?: boolean }).ok || !info) {
-    return withCompactTelemetry({ ok: false, workbookId: args.workbookId, tableName: args.tableName, source: schemaResult }, { detailLevel: "summary" });
+    return withCompactTelemetry({ ok: false, workbookId: request.workbookId, tableName: request.tableName, source: schemaResult }, { detailLevel: "summary" });
   }
-  const selectedColumns = compactTableColumns(info, args.columns, budget.maxColumns);
-  const rowOffset = Math.min(args.rowOffset ?? 0, info.rowCount);
+  const selectedColumns = compactTableColumns(info, request.columns, budget.maxColumns);
+  const rowOffset = Math.min(request.rowOffset ?? 0, info.rowCount);
   const maxRows = budget.maxRows;
-  const maxRowsByCells = args.maxCells !== undefined && selectedColumns.length > 0 ? Math.floor(args.maxCells / selectedColumns.length) : maxRows;
+  const maxRowsByCells = request.maxCells !== undefined && selectedColumns.length > 0 ? Math.floor(request.maxCells / selectedColumns.length) : maxRows;
   const rowLimit = Math.min(maxRows, maxRowsByCells, Math.max(0, info.rowCount - rowOffset));
   const truncated = rowOffset + rowLimit < info.rowCount || selectedColumns.length < info.columnCount;
   const summary = {
-    workbookId: args.workbookId,
-    tableName: args.tableName,
+    workbookId: request.workbookId,
+    tableName: request.tableName,
     mode,
     schema: tableInfoSchema(info),
     rowOffset,
@@ -8189,16 +8617,16 @@ async function compactTableRead(args: TableCompactReadRequest) {
   };
   const nextPage = truncated && rowOffset + rowLimit < info.rowCount ? { rowOffset: rowOffset + rowLimit } : undefined;
   if (mode === "summary" || rowLimit === 0 || selectedColumns.length === 0) {
-    return withCompactTelemetry({ ok: true, ...summary, budgetSummary: budget.applied }, { detailLevel: "summary", responseMode, truncated, nextPage, maxPayloadBytes: budget.maxChars, maxEstimatedTokens: args.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact table summary" });
+    return withCompactTelemetry({ ok: true, ...summary, budgetSummary: budget.applied }, { detailLevel: "summary", responseMode, truncated, nextPage, maxPayloadBytes: budget.maxChars, maxEstimatedTokens: request.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact table summary" });
   }
   if (mode === "sample" && info.rowCount > rowLimit) {
     const samples = await Promise.all(compactSampleWindows(info.rowCount, rowLimit).map(async (sample) => {
       const sampleResult = await runtime.readTable({
-        ...tableSelector(args),
-        includeValues: args.includeValues ?? true,
-        includeFormulas: args.includeFormulas === true,
-        includeText: args.includeText === true,
-        includeNumberFormats: args.includeNumberFormats === true,
+        ...tableSelector(request),
+        includeValues: request.includeValues ?? true,
+        includeFormulas: request.includeFormulas === true,
+        includeText: request.includeText === true,
+        includeNumberFormats: request.includeNumberFormats === true,
         columns: selectedColumns.map((column: { name: string }) => column.name),
         rowOffset: sample.rowOffset,
         rowLimit: sample.rowCount
@@ -8222,22 +8650,22 @@ async function compactTableRead(args: TableCompactReadRequest) {
         responseMode,
         truncated,
         maxPayloadBytes: budget.maxChars,
-        maxEstimatedTokens: args.maxEstimatedTokens,
+        maxEstimatedTokens: request.maxEstimatedTokens,
         resourceKind: "read",
         resourceTitle: "Compact table sample",
         resourcePayload: payload,
-        resourceScope: compactReadScope({ workbookId: args.workbookId, tableName: args.tableName, mode, rowOffset }),
+        resourceScope: compactReadScope({ workbookId: request.workbookId, tableName: request.tableName, mode, rowOffset }),
         sourceHash,
         budgetSummary: { ok: true, ...summary, sampleCount: samples.length, sourceHash, budgetSummary: budget.applied }
       }
     );
   }
   const result = await runtime.readTable({
-    ...tableSelector(args),
-    includeValues: args.includeValues ?? true,
-    includeFormulas: args.includeFormulas === true,
-    includeText: args.includeText === true,
-    includeNumberFormats: args.includeNumberFormats === true,
+    ...tableSelector(request),
+    includeValues: request.includeValues ?? true,
+    includeFormulas: request.includeFormulas === true,
+    includeText: request.includeText === true,
+    includeNumberFormats: request.includeNumberFormats === true,
     columns: selectedColumns.map((column: { name: string }) => column.name),
     rowOffset,
     rowLimit
@@ -8251,7 +8679,7 @@ async function compactTableRead(args: TableCompactReadRequest) {
     ...compactTable,
     source: ok ? undefined : result
   };
-  const sourceHash = compactSourceHash({ type: "table", tableName: args.tableName, rowOffset, rowLimit, selectedColumns, headers: compactTable.headers, values: compactTable.values, formulas: compactTable.formulas, text: compactTable.text, numberFormat: compactTable.numberFormat });
+  const sourceHash = compactSourceHash({ type: "table", tableName: request.tableName, rowOffset, rowLimit, selectedColumns, headers: compactTable.headers, values: compactTable.values, formulas: compactTable.formulas, text: compactTable.text, numberFormat: compactTable.numberFormat });
   return withCompactTelemetry(
     payload,
     {
@@ -8260,11 +8688,11 @@ async function compactTableRead(args: TableCompactReadRequest) {
       truncated,
       nextPage,
       maxPayloadBytes: budget.maxChars,
-      maxEstimatedTokens: args.maxEstimatedTokens,
+      maxEstimatedTokens: request.maxEstimatedTokens,
       resourceKind: "read",
       resourceTitle: "Compact table read",
       resourcePayload: payload,
-      resourceScope: compactReadScope({ workbookId: args.workbookId, tableName: args.tableName, mode, rowOffset }),
+      resourceScope: compactReadScope({ workbookId: request.workbookId, tableName: request.tableName, mode, rowOffset }),
       sourceHash,
       nextActionRecommendation: "answer_now",
       budgetSummary: { ok, ...summary, sourceHash, budgetSummary: budget.applied }

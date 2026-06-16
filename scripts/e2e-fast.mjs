@@ -129,6 +129,8 @@ async function runCoreWorkbookWorkflow(client) {
   });
   assert(permissions.ok, "E2E permissions should allow scoped mutations");
 
+  await runContextIdWorkflow(client);
+
   const created = await callTool(client, "excel.sheet.create", { workbookId, sheetName: "Scratch" });
   assertApplied(created, "sheet create");
 
@@ -220,6 +222,38 @@ async function runCoreWorkbookWorkflow(client) {
     direction: "down"
   });
   assert(formulaRepair.ok && hasTruthyKey(formulaRepair, "formulaValidationOk"), "formula repair workflow should validate after repair");
+}
+
+async function runContextIdWorkflow(client) {
+  const prepared = await callTool(client, "excel.agent.run", { request: "Prepare workbook context", mode: "prepare" });
+  const workbookContextId = prepared.workbookContextId;
+  assert(prepared.status === "SUCCESS" && workbookContextId, "agent prepare should return workbookContextId");
+
+  const workbook = await callTool(client, "excel.workbook.get_summary", { workbookContextId });
+  assert(workbook.ok && workbook.workbookContextId === workbookContextId, "workbook summary should accept workbookContextId");
+  assert(workbook.sheetCount >= 1 && workbook.sheets.some((sheet) => sheet.name === "Data"), "context workbook summary should include Data sheet");
+
+  const sheet = await callTool(client, "excel.sheet.get_summary", { workbookContextId, sheetName: "Data" });
+  assert(sheet.ok && sheet.workbookContextId === workbookContextId && sheet.sheetName === "Data", "sheet summary should resolve from workbookContextId");
+
+  const range = await callTool(client, "excel.range.read_compact", {
+    workbookContextId,
+    sheetName: "Data",
+    address: "A1:B2",
+    maxRows: 2,
+    maxColumns: 2
+  });
+  assert(range.ok && range.workbookId === workbookId && range.sheetName === "Data", "range read_compact should resolve workbookId from context");
+
+  const table = await callTool(client, "excel.table.read_compact", {
+    workbookContextId,
+    tableName: "Transactions",
+    maxRows: 2
+  });
+  assert(table.ok && table.workbookId === workbookId && table.tableName === "Transactions", "table read_compact should resolve workbookId from context");
+
+  const missingSheet = await callTool(client, "excel.sheet.get_summary", { workbookContextId, sheetName: "Missing" });
+  assert(missingSheet.status === "NOT_FOUND" && Array.isArray(missingSheet.candidates), "missing context sheet should return structured candidates");
 }
 
 async function runTableLargeWorkflow(client) {

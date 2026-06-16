@@ -88,6 +88,7 @@ const report = {
       coverage: [
         "MCP initialize/tools/resources/prompts protocol sweep",
         "Runtime status, active context, capabilities, workbook map",
+        "Context-aware advanced compact routes reuse workbookContextId after agent prepare",
         "Sheet create",
         "Range values/formulas/number formats/copy/clear/read",
         "Large table create/read window/reorder/filter/sort",
@@ -108,6 +109,7 @@ const report = {
       ],
       reliabilityAssertions: [
         "Every mutating range path returns transaction metadata",
+        "Context-aware workbook/sheet/range/table compact routes resolve workbook and targets without rediscovery",
         "Table mutation paths create backup metadata",
         "Large table reads use row windows",
         "Overlapping write is blocked while a manual lock is active",

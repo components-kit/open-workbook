@@ -32,6 +32,7 @@ export class WorkbookMetadataBuilder {
 
   async getOrBuild(input: { workbookContextId?: string; workbookId?: WorkbookId | string; workbookName?: string }): Promise<MetadataBuildResult> {
     const existingByContext = input.workbookContextId ? this.cache.getByContextId(input.workbookContextId) : undefined;
+    const reusableContextId = existingByContext?.workbookContextId;
     const activeContext = await this.runtime.getActiveContext();
     const activeWorkbook = (activeContext as { activeWorkbook?: WorkbookRef }).activeWorkbook ?? this.runtime.sessions.getActive()?.activeWorkbook;
     if (!activeWorkbook) {
@@ -88,7 +89,7 @@ export class WorkbookMetadataBuilder {
     const formulaIdsBySheet = groupBy(formulaRegions, (region) => region.sheetName);
     const now = Date.now();
     const metadata: WorkbookMetadata = {
-      workbookContextId: makeId("wbctx"),
+      workbookContextId: reusableContextId ?? makeId("wbctx"),
       workbookKey: key,
       workbook: {
         workbookId: activeWorkbook.workbookId,

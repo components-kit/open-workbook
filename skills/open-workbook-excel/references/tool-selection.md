@@ -29,6 +29,8 @@ The primitive tools below are the advanced compatibility/debug surface. Use them
 
 Prefer `excel.workflow.prepare_session` as the first call. If capabilities are unknown because the add-in is disconnected, stop and ask for runtime setup instead of guessing.
 
+When `excel.agent.run` prepare has returned a `workbookContextId`, reuse it with context-aware compact tools in advanced/debug mode: `excel.workbook.get_summary`, `excel.sheet.get_summary`, `excel.range.read_compact`, `excel.table.read_compact`, and `excel.compact.get_resource`.
+
 ## Reading Data
 
 - Compact range/table discovery: `excel.range.get_summary`, `excel.table.get_schema`

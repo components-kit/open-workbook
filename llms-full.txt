@@ -193,7 +193,7 @@ Environment overrides:
 
 ## Token-Saving Reads
 
-Open Workbook exposes `excel.agent.run` by default so agents can send workbook intent without manually choosing discovery, lookup, read, write, validation, and rollback primitives. The backend builds a workbook metadata cache, resolves natural-language targets across sheets, tables, headers, named ranges, regions, summaries, and formulas, performs targeted compact reads internally, and returns compact structured answers, previews, proof ranges, telemetry, and resource links. `auto` can apply clearly scoped low-risk value edits after preview checks, while ambiguous, broad, formula-sensitive, structural, or destructive edits stop for review. Close matches return candidates instead of guessing. In advanced mode, the compact discovery and read tools remain available for direct use.
+Open Workbook exposes `excel.agent.run` by default so agents can send workbook intent without manually choosing discovery, lookup, read, write, validation, and rollback primitives. The backend builds a workbook metadata cache, resolves natural-language targets across sheets, tables, headers, named ranges, regions, summaries, and formulas, performs targeted compact reads internally, and returns compact structured answers, previews, proof ranges, telemetry, and resource links. `auto` can apply clearly scoped low-risk value edits after preview checks, while ambiguous, broad, formula-sensitive, structural, or destructive edits stop for review. Close matches return candidates instead of guessing. In advanced mode, selected compact discovery/read tools can reuse `workbookContextId` so agents can route multiple calls without repeating workbook discovery.
 
 When details would exceed a caller's budget, compact tools can store the full payload locally and return an `excel://compact/{resource_id}` handle for later retrieval through `excel.compact.get_resource`. Compact summary/schema cache entries are invalidated after workbook mutations. Use `excel.validate.compact` for validation proof that returns counts and examples inline while keeping the full issue report behind a resource handle.
 
@@ -495,6 +495,7 @@ If the add-in is disconnected, ask the user to start their agent UI so it launch
 - When the target is unknown, use lookup first: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range`, then inspect one candidate with `excel.lookup.inspect_match`.
 - Start with compact context tools for known large scopes: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, and `excel.range.get_summary`.
 - Prefer `excel.range.read_compact` and `excel.table.read_compact` for exploratory data reads. Treat brief proof plus `contextId`/`resourceUri` as enough unless exact cell bodies are required.
+- In advanced/debug mode, reuse `workbookContextId` from `excel.agent.run` prepare with context-aware compact tools instead of repeating workbook discovery.
 - Use `excel.validate.compact` for validation proof when counts/examples are enough. Fetch `excel://compact/{resource_id}` details only if the user or task needs the full report.
 - If a tool returns `nextActionRecommendation: "answer_now"`, answer from the compact proof instead of continuing to inspect or validate unless the user asked for exhaustive audit.
 - Treat high-confidence compact proofs with `reasoningHints` such as "Agent can answer now" as a stop signal. Fetch `contextId` details only for failures, warnings, low confidence, truncation, or explicit audit requests.
@@ -582,6 +583,8 @@ The primitive tools below are the advanced compatibility/debug surface. Use them
 - Sheets: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.get_summary`, `excel.sheet.get_used_range`
 
 Prefer `excel.workflow.prepare_session` as the first call. If capabilities are unknown because the add-in is disconnected, stop and ask for runtime setup instead of guessing.
+
+When `excel.agent.run` prepare has returned a `workbookContextId`, reuse it with context-aware compact tools in advanced/debug mode: `excel.workbook.get_summary`, `excel.sheet.get_summary`, `excel.range.read_compact`, `excel.table.read_compact`, and `excel.compact.get_resource`.
 
 ## Reading Data
 
@@ -1432,6 +1435,8 @@ No mutating tool should bypass the backend safety lifecycle. It must validate pe
 Mutating MCP tools accept `idempotencyKey` for retry safety. A repeated call with the same key and same payload returns the previous compact proof with `idempotentReplay: true` and does not execute the workbook mutation again. Reusing the same key with a different payload returns an idempotency conflict and `nextActionRecommendation: "needs_user_confirmation"`.
 
 `excel.workflow.prepare_session` is the preferred first call for agent workflows. It returns runtime status, active context, capabilities, workbook map, and collaboration state in one read-only result so agents can establish workbook identity before mutation.
+
+`excel.agent.run` `mode: "prepare"` returns a server-side `workbookContextId`. In advanced/debug mode, `excel.workbook.get_summary`, `excel.sheet.get_summary`, `excel.range.read_compact`, `excel.table.read_compact`, and `excel.compact.get_resource` can reuse that ID to avoid repeated workbook discovery; missing or ambiguous sheet/table targets return structured candidates.
 
 Lookup and compact context tools reduce token use by exposing target candidates and workbook structure before cell data. Use `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range` when the target sheet, table, column, entity, or range is unknown. Use `excel.lookup.inspect_match` to read one bounded candidate preview instead of probing whole sheets.
 
