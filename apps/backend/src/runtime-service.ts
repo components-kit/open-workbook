@@ -29,6 +29,8 @@ import type {
   AddinExecuteBatchRequest,
   A1Range,
   AgentId,
+  AgentRunInput,
+  AgentRunOutput,
   AgentRecord,
   BackupId,
   BatchChunkPlan,
@@ -159,6 +161,7 @@ import { SessionRegistry } from "./session-registry.js";
 import type { AddinRpcClient } from "./addin-rpc-client.js";
 import { NativeFileBridge } from "./native-file-bridge.js";
 import { RuntimeStateStore } from "./state-store.js";
+import { AgentOrchestrator } from "./agent-orchestrator.js";
 
 const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.11";
 
@@ -178,6 +181,7 @@ export class RuntimeService {
   readonly tasks = new TaskRegistry();
   readonly locks = new LockManager();
   readonly transactions = new TransactionManager();
+  readonly agent = new AgentOrchestrator(this);
   private readonly addinClients = new Map<ConnectionId, AddinRpcClient>();
   private readonly regions = new Map<string, WorkbookRegion>();
   private readonly agents = new Map<AgentId, AgentRecord>();
@@ -1241,6 +1245,18 @@ export class RuntimeService {
       sessions: this.sessions.list(),
       activeWorkbook: activeSession?.activeWorkbook
     };
+  }
+
+  async runAgent(input: AgentRunInput): Promise<AgentRunOutput> {
+    return this.agent.run(input);
+  }
+
+  getAgentContextResource(workbookContextId: string) {
+    return this.agent.getContextResource(workbookContextId);
+  }
+
+  getAgentOperationResource(operationId: string) {
+    return this.agent.getOperationResource(operationId);
   }
 
   async getStatusWithFileBridgeProbe() {
@@ -5087,6 +5103,11 @@ export class RuntimeService {
     }
     const returnQueuedProgress = this.isRuntimeMutationBusy();
     const scheduled = this.scheduleBatch(request);
+    void scheduled.promise.then((result) => {
+      if (result.ok && batchInvalidatesWorkbookMetadata(request)) {
+        this.agent.invalidateWorkbook(request.workbookId);
+      }
+    }, () => undefined);
     if (returnQueuedProgress) {
       void scheduled.promise.catch(() => undefined);
       return queuedOperationResult(this.transactions.withQueueMetadata(scheduled.transaction));
@@ -5538,6 +5559,9 @@ export class RuntimeService {
             transactionId: transaction.transactionId,
             message: `Transaction applied: ${transaction.goal}`
           });
+        }
+        if (resultRecord.ok !== false && transactionInvalidatesWorkbookMetadata(input)) {
+          this.agent.invalidateWorkbook(input.workbookId);
         }
         if (typeof result === "object" && result !== null && !Array.isArray(result)) {
           return { ...result, transactionId: transaction.transactionId } as T;
@@ -7820,6 +7844,42 @@ function chunkOperationsForRetry(operations: ExcelOperation[]): ExcelOperation[]
     chunks.push(operations.slice(index, index + chunkSize));
   }
   return chunks;
+}
+
+function batchInvalidatesWorkbookMetadata(request: BatchRequest): boolean {
+  return operationsInvalidateWorkbookMetadata(request.operations);
+}
+
+function operationsInvalidateWorkbookMetadata(operations: ExcelOperation[]): boolean {
+  return operations.some((operation) => operationInvalidatesWorkbookMetadata(operation));
+}
+
+function operationInvalidatesWorkbookMetadata(operation: ExcelOperation): boolean {
+  if (operation.destructiveLevel === "structure" || operation.destructiveLevel === "workbook") {
+    return true;
+  }
+  if (operation.destructiveLevel === "values") {
+    return false;
+  }
+  const kind = operation.kind as string;
+  return /^(table|sheet|name|formula|pivot|chart|template)\./.test(kind)
+    || operation.kind === "range.clear"
+    || operation.kind === "range.merge";
+}
+
+function transactionInvalidatesWorkbookMetadata(input: { destructiveLevel: DestructiveLevel; scopes: WorkbookScope[] }): boolean {
+  if (input.destructiveLevel === "structure" || input.destructiveLevel === "workbook") {
+    return true;
+  }
+  return input.scopes.some((scope) =>
+    scope.type === "sheet"
+    || scope.type === "formula"
+    || scope.type === "table"
+    || scope.type === "named_range"
+    || scope.type === "chart"
+    || scope.type === "pivot"
+    || scope.type === "template"
+  );
 }
 
 function scopeTelemetryKey(scope: WorkbookScope): string {

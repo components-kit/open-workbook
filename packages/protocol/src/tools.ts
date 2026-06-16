@@ -2,6 +2,7 @@ import type { DestructiveLevel } from "./operations.js";
 
 export type CatalogStatus = "stable" | "preview" | "planned" | "unsupported";
 export type ToolNamespace =
+  | "agent"
   | "runtime"
   | "workbook"
   | "backup"
@@ -55,6 +56,7 @@ export interface ToolCatalogOptions {
 }
 
 const STABLE_TOOLS = new Set([
+  "excel.agent.run",
   "excel.runtime.get_status",
   "excel.runtime.get_capabilities",
   "excel.runtime.get_active_context",
@@ -416,6 +418,7 @@ const HIDDEN_PUBLIC_TOOLS = new Set([
 ]);
 
 const TOOL_NAMES = [
+  "excel.agent.run",
   "excel.runtime.get_status",
   "excel.runtime.connect_addin",
   "excel.runtime.disconnect_addin",
@@ -821,6 +824,9 @@ function getToolStatus(name: string, namespace: ToolNamespace): CatalogStatus {
 }
 
 function isMutatingTool(name: string): boolean {
+  if (name === "excel.agent.run") {
+    return true;
+  }
   if (name.startsWith("excel.compact.")) {
     return false;
   }
@@ -835,6 +841,9 @@ function isMutatingTool(name: string): boolean {
 function getDestructiveLevel(name: string, namespace: ToolNamespace): DestructiveLevel {
   if (!isMutatingTool(name)) {
     return "none";
+  }
+  if (namespace === "agent") {
+    return "workbook";
   }
   if (namespace === "workbook" || name.includes(".close") || name.includes(".save_as") || name.includes(".restore_backup")) {
     return "workbook";
@@ -854,6 +863,9 @@ function getDestructiveLevel(name: string, namespace: ToolNamespace): Destructiv
 function getRequiredCapabilities(name: string, namespace: ToolNamespace): string[] {
   if (namespace === "runtime") {
     return ["runtime.session"];
+  }
+  if (namespace === "agent") {
+    return ["runtime.session", "workbook.context"];
   }
   if (namespace === "workbook") {
     return ["workbook.context"];

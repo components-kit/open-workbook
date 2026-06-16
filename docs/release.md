@@ -29,6 +29,8 @@ corepack pnpm verify
 
 ```bash
 corepack pnpm test:e2e
+corepack pnpm test:e2e:agent-surface
+corepack pnpm test:e2e:agent-workflow
 corepack pnpm test:e2e:agent:quality
 corepack pnpm test:e2e:agent:quality:compare
 corepack pnpm test:e2e:agent:quality:gate

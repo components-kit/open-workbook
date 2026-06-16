@@ -26,7 +26,7 @@ Example output:
 }
 ```
 
-The generated OpenCode snippet uses the optimized compact-first MCP surface. There is no compact/full profile to configure.
+The generated OpenCode snippet uses the default `excel.agent.run` workflow surface. Set `OPEN_WORKBOOK_MCP_SURFACE=advanced` only when you need the previous optimized primitive MCP surface for debugging or compatibility.
 
 For `npx`-based OpenCode config, keep the command equivalent to:
 

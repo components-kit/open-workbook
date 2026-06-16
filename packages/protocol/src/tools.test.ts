@@ -6,6 +6,7 @@ import { ResourceCatalog } from "./resources.js";
 describe("tool catalog", () => {
   it("contains the full requested tool skeleton", () => {
     expect(ToolCatalog.length).toBeGreaterThan(200);
+    expect(ToolCatalog.some((tool) => tool.name === "excel.agent.run")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.name === "excel.runtime.get_capabilities")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.name === "excel.workbook.get_workbook_map")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.name === "excel.workbook.get_summary")).toBe(true);

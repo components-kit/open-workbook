@@ -18,7 +18,9 @@ export const ResourceCatalog: ResourceContract[] = [
   resource("excel://workbooks/{workbook_id}/templates", "stable"),
   resource("excel://workbooks/{workbook_id}/snapshots/{snapshot_id}", "stable"),
   resource("excel://workbooks/{workbook_id}/plans/{plan_id}/diff", "stable"),
-  resource("excel://compact/{resource_id}", "stable")
+  resource("excel://compact/{resource_id}", "stable"),
+  resource("excel://agent/contexts/{workbook_context_id}", "stable"),
+  resource("excel://agent/operations/{operation_id}", "stable")
 ];
 
 export const ResourceTemplates = ResourceCatalog.map((resourceContract) => resourceContract.uriTemplate);

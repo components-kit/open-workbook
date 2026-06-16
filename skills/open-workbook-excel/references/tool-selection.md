@@ -2,6 +2,19 @@
 
 Choose the narrowest Open Workbook MCP interface that preserves workbook intent.
 
+Default MCP clients should use `excel.agent.run` as the public interface. Use its request modes instead of choosing primitive tools directly:
+
+- `prepare`: cache workbook metadata for sheets, tables, headers, named ranges, regions, summaries, formulas, and sheet kind.
+- `find`: search cached metadata for candidate sheets, tables, headers, named ranges, regions, summary blocks, and formula regions.
+- `answer`: perform targeted compact reads and deterministic calculations.
+- `auto`: handle normal user requests and apply only clearly scoped low-risk value edits after preview checks.
+- `preview_update`: resolve the target, read before values, block unsafe broad/formula edits, and return an operation plus confirmation token.
+- `apply_update`: apply a previewed update only with the returned confirmation token.
+- `rollback`: map transaction or backup identifiers to the rollback lifecycle.
+- `validate`: validate the current workbook after risky changes.
+
+The primitive tools below are the advanced compatibility/debug surface. Use them only when that surface is explicitly exposed.
+
 ## Session And Discovery
 
 - Runtime health: `excel.runtime.get_status`

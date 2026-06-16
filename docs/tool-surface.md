@@ -9,12 +9,39 @@ The full namespace is represented in the protocol catalog, but MCP only exposes 
 - `planned`: intentionally omitted from the production MCP surface until the contract and implementation are ready.
 - `unsupported`: listed by capabilities only when a host or adapter cannot provide a deterministic implementation.
 
-`owb mcp` exposes one optimized compact-first tool surface. Users do not choose compact, full, allowlist, denylist, or read-only modes. The exposed surface keeps discovery, compact reads, direct efficient sheet/range/table mutations, batch/plan/workflow mutation paths, validation proof, diff/snapshot summaries, jobs, and rollback tools while hiding raw high-token reads and duplicate wrappers. It intentionally hides raw range facet reads such as `excel.range.read_values` so agents use `excel.range.read_compact` for bounded, projected reads instead of dumping large sparse ranges full of blank cells. `excel.runtime.get_capabilities` reports this exposed surface by default.
+`owb mcp` now defaults to the agent workflow surface. Normal agents see one public tool, `excel.agent.run`, while Open Workbook keeps the compact discovery, range, table, batch, plan, workflow, validation, diff, snapshot, job, and rollback tools as internal backend capabilities. This keeps `tools/list` small and lets the backend own workbook discovery, metadata reuse, target resolution, preview/apply, validation, rollback, and compact proof generation.
+
+Set `OPEN_WORKBOOK_MCP_SURFACE=advanced` to expose the previous optimized compact-first primitive surface for debugging, compatibility, or power-user clients. Advanced mode still hides raw high-token reads and duplicate wrappers such as `excel.range.read_values`, so agents use compact reads instead of dumping large sparse ranges. `excel.runtime.get_capabilities` reports the active MCP surface.
+
+## Agent Surface
+
+Default public tool:
+
+- `excel.agent.run`: send workbook intent through `request` and optional `mode`, `workbookContextId`, `target`, `values`, `operationId`, and `confirmationToken`. The backend performs deterministic orchestration over internal Excel capabilities and returns structured compact output. Natural-language targets are resolved against cached sheets, tables, headers, named ranges, registered regions, summary blocks, and formula regions; close matches return `AMBIGUOUS_TARGET` with candidates instead of guessing.
+
+Supported modes:
+
+- `auto`: answer/find/prepare, and apply only clearly scoped low-risk value edits after the same preview checks; risky edits return `PREVIEW_READY`, `NEEDS_INPUT`, or `AMBIGUOUS_TARGET`.
+- `status`: return runtime/add-in status.
+- `prepare`: build or refresh the workbook metadata cache and return `workbookContextId`.
+- `find`: locate sheets, tables, columns, ranges, regions, and summary blocks from cached metadata.
+- `answer`: answer when deterministic cached metadata and targeted reads are enough; otherwise return candidates and `NEEDS_INPUT`.
+- `preview_update`: prepare a scoped workbook change and return `operationId` plus `confirmationToken`.
+- `apply_update`: apply a previously previewed operation.
+- `validate`: run compact validation.
+- `rollback`: reserved for conservative rollback orchestration; advanced rollback tools remain available in advanced mode.
+
+Mutation rule: `preview_update` never applies workbook edits. `auto` may preview and apply a clearly authorized, scoped value edit when safety checks pass; formula-sensitive, structural, destructive, broad, sparse, stale, or ambiguous edits stop before mutation and return `nextAction`. Manual applying requires a second `excel.agent.run` call with `mode: "apply_update"`, the previewed `operationId`, and the matching `confirmationToken`.
+
+Agent results include `structuredContent`, a text fallback, compact proof ranges, resource links such as `excel://agent/contexts/{workbook_context_id}` and `excel://agent/operations/{operation_id}`, and telemetry for payload bytes, estimated tokens, elapsed time, cache reuse, metadata cache status, auto-apply decisions, internal read count, full-read cell count, candidate count, resource-link count, and estimated token savings. `budget.maxPayloadBytes`, `budget.maxEstimatedTokens`, and `budget.maxExamples` bound inline agent output; larger context is summarized or moved behind resource links.
 
 `excel.runtime.get_capabilities` is the source of truth for the complete catalog, resources, prompts, runtime connection status, and active Excel host capability status. When an add-in is connected, it includes the host platform, Office version when available, Office API-set support such as `ExcelApi` versions, and derived feature statuses for ranges, tables, pivots, charts, and known host-limited paths. Without a connected add-in, it returns a daemon fallback that marks Excel host capabilities as `unknown`.
 
 ## Stable Tool Groups
 
+The groups below describe the advanced/internal capability surface. They are exposed to MCP only when `OPEN_WORKBOOK_MCP_SURFACE=advanced`.
+
+- Agent: `excel.agent.run`
 - Runtime: `excel.runtime.get_status`, `excel.runtime.connect_addin`, `excel.runtime.disconnect_addin`, `excel.runtime.ping_addin`, `excel.runtime.get_capabilities`, `excel.runtime.get_active_context`, `excel.runtime.get_selection`, `excel.runtime.set_active_workbook`, `excel.runtime.set_active_sheet`
 - Workbook: `excel.workbook.list_open_workbooks`, `excel.workbook.get_workbook_info`, `excel.workbook.get_workbook_map`, `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.workbook.snapshot`, `excel.workbook.refresh_snapshot`, `excel.workbook.get_snapshot`, `excel.workbook.detect_external_changes`, `excel.workbook.calculate`, `excel.workbook.save`, `excel.workbook.save_as`, `excel.workbook.create_backup`, `excel.workbook.restore_backup`, `excel.workbook.export_copy`, `excel.workbook.export_local_config`, `excel.workbook.import_local_config`, `excel.workbook.embed_local_config`, `excel.workbook.read_embedded_local_config`, `excel.workbook.import_embedded_local_config`, `excel.workbook.close`
 - File backups: `excel.backup.create_file`, `excel.backup.list`, `excel.backup.get`, `excel.backup.verify`, `excel.backup.restore_file`, `excel.backup.delete`, `excel.backup.prune`, `excel.backup.pin`, `excel.backup.unpin`
@@ -61,6 +88,8 @@ The full namespace is represented in the protocol catalog, but MCP only exposes 
 - `excel://workbooks/{workbook_id}/snapshots/{snapshot_id}`
 - `excel://workbooks/{workbook_id}/plans/{plan_id}/diff`
 - `excel://compact/{resource_id}`
+- `excel://agent/contexts/{workbook_context_id}`
+- `excel://agent/operations/{operation_id}`
 
 Resources return JSON and are registered through the MCP server. Workbook/sheet resources that need live workbook state return explicit add-in disconnected or range unavailable errors when Excel is not connected instead of fabricating stale data.
 

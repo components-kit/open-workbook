@@ -35,6 +35,52 @@ const report = {
   ],
   lanes: [
     {
+      name: "test:e2e:agent-surface",
+      command: "pnpm run test:e2e:agent-surface",
+      status: scriptExists("scripts/e2e-agent-surface.mjs") ? "implemented" : "missing",
+      startsServices: ["Open Workbook MCP stdio server"],
+      coverage: [
+        "Default MCP tools/list exposes only excel.agent.run",
+        "excel.agent.run accepts the public request schema",
+        "Status mode returns a structured status, nextAction, and telemetry without requiring Excel",
+        "Default resources/list remains available"
+      ],
+      reliabilityAssertions: [
+        "Primitive optimized tools stay hidden from the default surface",
+        "Agent output includes payload and estimated token telemetry"
+      ],
+      gaps: [
+        "Workbook prepare/find/update agent behavior is covered by unit and fake-host tests; this lane only guards default MCP exposure."
+      ]
+    },
+    {
+      name: "test:e2e:agent-workflow",
+      command: "pnpm run test:e2e:agent-workflow",
+      status: scriptExists("scripts/e2e-agent-workflow.mjs") ? "implemented" : "missing",
+      startsServices: ["Open Workbook MCP stdio server", "Fake Excel add-in WebSocket client"],
+      coverage: [
+        "Default MCP tools/list exposes only excel.agent.run while connected to a workbook",
+        "Agent prepare builds workbook metadata and repeated prepare reuses the cache",
+        "Agent find obeys maxExamples and compact payload budgets",
+        "Agent answer uses one targeted internal read and avoids broad workbook reads",
+        "Agent preview/apply requires confirmationToken before mutation",
+        "Agent auto mode applies clearly scoped low-risk value edits after preview checks",
+        "Agent auto mode blocks formula-sensitive requests from plain value writes",
+        "Agent validate succeeds after an applied value-only update"
+      ],
+      reliabilityAssertions: [
+        "Repeated prepare reports metadataCacheStatus=hit",
+        "Answer reports internalReadCount=1 and bounded fullReadCellCount",
+        "Find payload stays under the deterministic fixture budget",
+        "Apply without confirmationToken does not mutate",
+        "Auto-applied edits report telemetry.autoApplied and safetyDecision",
+        "Formula-sensitive auto requests return manual-review safety telemetry"
+      ],
+      gaps: [
+        "This lane uses a deterministic fake host; live Excel fidelity remains covered by live gates."
+      ]
+    },
+    {
       name: "test:e2e:fast",
       command: "pnpm run test:e2e:fast",
       status: scriptExists("scripts/e2e-fast.mjs") ? "implemented" : "missing",
@@ -173,6 +219,8 @@ const report = {
   recommendedRunOrder: [
     "pnpm run build",
     "pnpm run test:e2e:report",
+    "pnpm run test:e2e:agent-surface",
+    "pnpm run test:e2e:agent-workflow",
     "pnpm run test:e2e:fast",
     "pnpm run test:e2e:agent:core",
     "pnpm run test:e2e:agent:quality",

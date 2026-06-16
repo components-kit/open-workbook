@@ -18,7 +18,7 @@ The project is being prepared for npm distribution as `@components-kit/open-work
 
 Stable areas include runtime connection, workbook/sheet/range operations, compact workbook/table/range discovery, workbook-wide lookup/search, compact paged reads with token telemetry, reversible batches, combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
 
-The simple flow is MCP-owned: `npx ... mcp` starts the MCP adapter, the local add-in taskpane server, and an embedded backend when no shared daemon is running. The shared `owb daemon` remains available for advanced multi-client coordination.
+The simple flow is MCP-owned: `npx ... mcp` starts the MCP adapter, the local add-in taskpane server, and an embedded backend when no shared daemon is running. By default, agents see the compact `excel.agent.run` workflow interface instead of hundreds of Excel primitives; Open Workbook handles workbook discovery, cached metadata, target resolution, preview/apply, validation, rollback, and compact proof internally. The shared `owb daemon` remains available for advanced multi-client coordination.
 
 ## Architecture
 
@@ -79,10 +79,16 @@ Use the printed MCP launch command in your agent UI:
 npx -y @components-kit/open-workbook@latest mcp
 ```
 
-Start the MCP adapter with the optimized compact-first tool surface:
+Start the MCP adapter with the default agent workflow surface:
 
 ```bash
 npx -y @components-kit/open-workbook@latest mcp
+```
+
+For debugging or compatibility with clients that need the previous primitive MCP surface, set:
+
+```bash
+OPEN_WORKBOOK_MCP_SURFACE=advanced npx -y @components-kit/open-workbook@latest mcp
 ```
 
 Start the agent UI before opening the Open Workbook add-in in Excel; the MCP command starts the local add-in asset server and backend for the simple flow.
@@ -159,7 +165,7 @@ Environment overrides:
 
 ## Token-Saving Reads
 
-Open Workbook exposes compact discovery, lookup, and read tools so agents can inspect workbook structure before sending cell bodies to a model. When the target is unknown, start with `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range`, then inspect one candidate with `excel.lookup.inspect_match`. When the target is known, use `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, or `excel.range.get_summary`, then use `excel.table.read_compact` or `excel.range.read_compact` for bounded values-first pages. Compact responses include `payloadBytes`, rough `estimatedTokens`, `truncated`, `nextPage`, and a resource handle when exact full detail is needed.
+Open Workbook exposes `excel.agent.run` by default so agents can send workbook intent without manually choosing discovery, lookup, read, write, validation, and rollback primitives. The backend builds a workbook metadata cache, resolves natural-language targets across sheets, tables, headers, named ranges, regions, summaries, and formulas, performs targeted compact reads internally, and returns compact structured answers, previews, proof ranges, telemetry, and resource links. `auto` can apply clearly scoped low-risk value edits after preview checks, while ambiguous, broad, formula-sensitive, structural, or destructive edits stop for review. Close matches return candidates instead of guessing. In advanced mode, the compact discovery and read tools remain available for direct use.
 
 When details would exceed a caller's budget, compact tools can store the full payload locally and return an `excel://compact/{resource_id}` handle for later retrieval through `excel.compact.get_resource`. Compact summary/schema cache entries are invalidated after workbook mutations. Use `excel.validate.compact` for validation proof that returns counts and examples inline while keeping the full issue report behind a resource handle.
 
@@ -168,6 +174,8 @@ When details would exceed a caller's budget, compact tools can store the full pa
 ```bash
 corepack pnpm check
 corepack pnpm test
+corepack pnpm test:e2e:agent-surface
+corepack pnpm test:e2e:agent-workflow
 corepack pnpm test:e2e:fast
 corepack pnpm test:e2e:agent:quality:compare
 corepack pnpm test:e2e:agent:quality:gate

@@ -9,6 +9,20 @@ Use Open Workbook MCP for live desktop Excel work. Prefer it over manual UI auto
 
 ## First Calls
 
+On the default MCP surface, call only:
+
+```text
+excel.agent.run
+```
+
+Use `mode: "prepare"` to cache workbook metadata, `mode: "find"` to locate sheets/tables/headers/named ranges/regions, `mode: "answer"` for targeted compact reads and deterministic summaries, `mode: "auto"` for normal user requests, `mode: "preview_update"` when a manual review step is wanted before a write, `mode: "apply_update"` only with the returned `confirmationToken`, `mode: "rollback"` for recovery, and `mode: "validate"` after risky changes. Treat `resourceLinks`, `nextAction`, `proof`, and `telemetry` as the primary contract.
+
+`auto` may apply clearly scoped low-risk value edits after preview checks. Respect `nextAction` when `auto` returns `PREVIEW_READY`, `NEEDS_INPUT`, `AMBIGUOUS_TARGET`, `VALIDATION_FAILED`, or `manual_review`; do not force formula, structural, broad, sparse, stale, or ambiguous edits through a value write.
+
+Pass natural-language targets directly when the user speaks casually, such as "June financial sheet" or "amount column in transactions". The backend resolves them against cached workbook metadata and returns `AMBIGUOUS_TARGET` with candidates when the request is too broad.
+
+The tools below are the advanced compatibility/debug surface. Use them only when `OPEN_WORKBOOK_MCP_SURFACE=advanced` exposes them or when the user explicitly asks for primitive tool control.
+
 Start every workbook session with:
 
 ```text

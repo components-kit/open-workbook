@@ -8,6 +8,7 @@ import { startBackendServer } from "@components-kit/open-workbook-backend/server
 import type {
   A1Range,
   AgentId,
+  AgentRunInput,
   BackupId,
   BatchRequest,
   ChartCreateRequest,
@@ -80,6 +81,7 @@ const addinPath = process.env.OPEN_WORKBOOK_ADDIN_PATH ?? "/addin";
 const daemonUrl = trimTrailingSlash(readArg("--daemon-url") ?? process.env.OPEN_WORKBOOK_DAEMON_URL ?? `http://${host}:${port}`);
 const agentName = readArg("--agent-name") ?? process.env.OPEN_WORKBOOK_AGENT_NAME;
 const standalone = hasArg("--standalone") || process.env.OPEN_WORKBOOK_MCP_STANDALONE === "1";
+const mcpSurface = process.env.OPEN_WORKBOOK_MCP_SURFACE ?? "agent";
 const catalogOptions = {
   includePreview: process.env.OPEN_WORKBOOK_PREVIEW_TOOLS === "1"
 };
@@ -185,6 +187,7 @@ const server = new McpServer({
   version: runtimeVersion
 });
 
+registerAgentTools(server);
 registerRuntimeTools(server);
 registerWorkbookTools(server);
 registerBackupTools(server);
@@ -276,6 +279,78 @@ function createDaemonRuntimeProxy(baseUrl: string): unknown {
         return (...args: unknown[]) => call(property, args);
       }
     }
+  );
+}
+
+function registerAgentTools(mcp: McpServer): void {
+  registerMcpTool(
+    mcp,
+    "excel.agent.run",
+    {
+      title: "Run Open Workbook agent workflow",
+      description:
+        "Single default Open Workbook interface. Send workbook intent; the backend handles discovery, cached metadata, target resolution, preview/apply, validation, rollback, and compact proof without exposing low-level Excel tools.",
+      inputSchema: {
+        request: z.string(),
+        mode: z.enum(["auto", "status", "prepare", "find", "answer", "preview_update", "apply_update", "validate", "rollback"]).optional(),
+        workbookContextId: z.string().optional(),
+        operationId: z.string().optional(),
+        confirmationToken: z.string().optional(),
+        target: z.object({
+          workbookId: z.string().optional(),
+          workbookName: z.string().optional(),
+          sheetName: z.string().optional(),
+          tableName: z.string().optional(),
+          range: z.string().optional(),
+          row: z.number().int().optional(),
+          column: z.string().optional(),
+          entity: z.string().optional()
+        }).optional(),
+        values: z.record(z.string(), z.any()).optional(),
+        responseMode: z.enum(["brief", "standard", "verbose"]).optional(),
+        budget: z.object({
+          maxPayloadBytes: z.number().int().positive().optional(),
+          maxEstimatedTokens: z.number().int().positive().optional(),
+          maxExamples: z.number().int().positive().optional()
+        }).optional()
+      },
+      outputSchema: {
+        status: z.enum(["SUCCESS", "PREVIEW_READY", "NEEDS_INPUT", "AMBIGUOUS_TARGET", "NOT_FOUND", "STALE_CONTEXT", "VALIDATION_FAILED", "CONFLICT", "ERROR"]),
+        mode: z.string(),
+        workbookContextId: z.string().optional(),
+        operationId: z.string().optional(),
+        confirmationToken: z.string().optional(),
+        summary: z.string(),
+        answer: z.any().optional(),
+        metrics: z.record(z.string(), z.any()).optional(),
+        changes: z.array(z.any()).optional(),
+        candidates: z.array(z.any()).optional(),
+        proof: z.array(z.any()),
+        resourceLinks: z.array(z.any()),
+        nextAction: z.string(),
+        warnings: z.array(z.string()),
+        telemetry: z.object({
+          internalCallCount: z.number(),
+          payloadBytes: z.number(),
+          estimatedTokens: z.number(),
+          elapsedMs: z.number(),
+          cacheHit: z.boolean(),
+          metadataCacheStatus: z.enum(["hit", "miss", "not_applicable"]).optional(),
+          internalReadCount: z.number().optional(),
+          fullReadCellCount: z.number().optional(),
+          candidateCount: z.number().optional(),
+          resourceLinkCount: z.number().optional(),
+          estimatedTokensSaved: z.number().optional()
+        })
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false
+      }
+    },
+    async (args: AgentRunInput) => agentJsonResult(await runtime.runAgent(args))
   );
 }
 
@@ -427,6 +502,22 @@ function registerResources(mcp: McpServer): void {
     "excel://compact/{resource_id}",
     "Stored compact-context detail payload returned by token-saving Open Workbook tools.",
     async (_uri, variables) => getCompactResource(resourceVariable(variables, "resource_id"))
+  );
+
+  registerJsonTemplateResource(
+    mcp,
+    "agent workbook context",
+    "excel://agent/contexts/{workbook_context_id}",
+    "Cached workbook metadata used by the Open Workbook agent workflow.",
+    async (_uri, variables) => runtime.getAgentContextResource(resourceVariable(variables, "workbook_context_id"))
+  );
+
+  registerJsonTemplateResource(
+    mcp,
+    "agent pending operation",
+    "excel://agent/operations/{operation_id}",
+    "Pending previewed workbook operation awaiting apply confirmation.",
+    async (_uri, variables) => runtime.getAgentOperationResource(resourceVariable(variables, "operation_id"))
   );
 }
 
@@ -809,6 +900,9 @@ function runtimeCapabilities(includePreview?: boolean) {
 }
 
 function exposedProfileToolNames(): string[] {
+  if (mcpSurface === "agent") {
+    return ["excel.agent.run"];
+  }
   return getExposedToolCatalog(catalogOptions).map((tool) => tool.name).filter((name) => shouldExposeMcpTool(name)).sort();
 }
 
@@ -10079,8 +10173,9 @@ function registerMcpTool(
       return idempotencyReplay;
     }
     const result = await callback(args, extra);
-    const decorated = isWorkbookMutatingMcpTool(name) ? addCompactMutationProof(result) : result;
-    if (isWorkbookMutatingMcpTool(name)) {
+    const shouldDecorateMutation = name !== "excel.agent.run" && isWorkbookMutatingMcpTool(name);
+    const decorated = shouldDecorateMutation ? addCompactMutationProof(result) : result;
+    if (shouldDecorateMutation) {
       clearCompactCache(`mutation:${name}`);
     }
     const finalResult = enforceCompactResultBudget(name, decorated);
@@ -10211,6 +10306,7 @@ function enforceCompactResultBudget(toolName: string, result: unknown) {
     return result;
   }
   if (
+    toolName === "excel.agent.run" ||
     toolName === "excel.compact.get_resource" ||
     toolName === "excel.runtime.get_capabilities" ||
     toolName === "excel.range.read_compact" ||
@@ -10261,6 +10357,9 @@ function enforceCompactResultBudget(toolName: string, result: unknown) {
 }
 
 function shouldExposeMcpTool(name: string): boolean {
+  if (mcpSurface === "agent") {
+    return name === "excel.agent.run";
+  }
   return isToolExposed(name, catalogOptions);
 }
 
@@ -10271,6 +10370,31 @@ function jsonResult(value: unknown) {
         type: "text" as const,
         text: JSON.stringify(value, null, 2)
       }
+    ]
+  };
+}
+
+function agentJsonResult(value: unknown) {
+  const jsonSafeValue = JSON.parse(JSON.stringify(value)) as unknown;
+  const resourceLinks = Array.isArray((jsonSafeValue as { resourceLinks?: unknown[] })?.resourceLinks)
+    ? ((jsonSafeValue as { resourceLinks: Array<{ uri?: unknown; name?: unknown; description?: unknown; mimeType?: unknown }> }).resourceLinks)
+    : [];
+  return {
+    structuredContent: jsonSafeValue,
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(jsonSafeValue, null, 2)
+      },
+      ...resourceLinks
+        .filter((link) => typeof link.uri === "string")
+        .map((link) => ({
+          type: "resource_link" as const,
+          uri: link.uri as string,
+          name: typeof link.name === "string" ? link.name : link.uri as string,
+          description: typeof link.description === "string" ? link.description : undefined,
+          mimeType: typeof link.mimeType === "string" ? link.mimeType : "application/json"
+        }))
     ]
   };
 }
