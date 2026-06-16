@@ -297,6 +297,16 @@ All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
 
+## [0.1.13] - 2026-06-16
+
+### Fixed
+
+- Fixed strict MCP clients rejecting `excel.agent.run` structured results when agent telemetry included auto-apply, safety-decision, preview-operation, or validation-status fields not declared in the published output schema.
+
+### Added
+
+- Added agent E2E coverage that checks `structuredContent` mirrors text JSON and emitted telemetry keys are declared by `tools/list.outputSchema`.
+
 ## [0.1.12] - 2026-06-16
 
 ### Added

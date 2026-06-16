@@ -163,7 +163,7 @@ import { NativeFileBridge } from "./native-file-bridge.js";
 import { RuntimeStateStore } from "./state-store.js";
 import { AgentOrchestrator } from "./agent-orchestrator.js";
 
-const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.12";
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.13";
 
 export interface RuntimeServiceOptions {
   stateDir?: string;

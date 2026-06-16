@@ -45,6 +45,7 @@ async function main() {
     const toolNames = listed.tools.map((tool) => tool.name);
     assert(toolNames.length === 1 && toolNames[0] === "excel.agent.run", `default surface should expose only excel.agent.run, got ${toolNames.join(", ")}`);
     assert(listed.tools[0].inputSchema?.properties?.mode, "excel.agent.run should publish its request schema");
+    assertAgentTelemetrySchema(listed.tools[0].outputSchema);
 
     const status = await callTool(mcp, "excel.agent.run", { request: "Check Open Workbook status", mode: "status" });
     assert(status.status === "SUCCESS", `agent status should succeed: ${JSON.stringify(status)}`);
@@ -67,6 +68,30 @@ async function main() {
   } finally {
     mcp.close();
     server.kill();
+  }
+}
+
+function assertAgentTelemetrySchema(outputSchema) {
+  const telemetryProperties = outputSchema?.properties?.telemetry?.properties;
+  assert(telemetryProperties, "excel.agent.run should publish telemetry output schema");
+  for (const field of [
+    "internalCallCount",
+    "payloadBytes",
+    "estimatedTokens",
+    "elapsedMs",
+    "cacheHit",
+    "autoApplied",
+    "safetyDecision",
+    "previewOperationId",
+    "validationStatus",
+    "metadataCacheStatus",
+    "internalReadCount",
+    "fullReadCellCount",
+    "candidateCount",
+    "resourceLinkCount",
+    "estimatedTokensSaved"
+  ]) {
+    assert(field in telemetryProperties, `excel.agent.run telemetry schema should declare ${field}`);
   }
 }
 

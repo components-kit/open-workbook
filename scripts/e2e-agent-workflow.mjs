@@ -52,31 +52,32 @@ async function main() {
     const listed = await mcp.request("tools/list", {});
     const toolNames = listed.tools.map((tool) => tool.name);
     assert(toolNames.length === 1 && toolNames[0] === "excel.agent.run", `default surface should expose only excel.agent.run, got ${toolNames.join(", ")}`);
+    const agentOutputSchema = listed.tools[0].outputSchema;
 
-    const prepared = await agentRun(mcp, { request: "Prepare workbook", mode: "prepare" });
+    const prepared = await agentRun(mcp, { request: "Prepare workbook", mode: "prepare" }, agentOutputSchema);
     assert(prepared.status === "SUCCESS", "prepare should succeed");
     assert(prepared.workbookContextId, "prepare should return workbookContextId");
     assert(prepared.telemetry.metadataCacheStatus === "miss", "first prepare should miss metadata cache");
 
-    const preparedAgain = await agentRun(mcp, { request: "Prepare workbook again", mode: "prepare", workbookContextId: prepared.workbookContextId });
+    const preparedAgain = await agentRun(mcp, { request: "Prepare workbook again", mode: "prepare", workbookContextId: prepared.workbookContextId }, agentOutputSchema);
     assert(preparedAgain.telemetry.cacheHit === true, "second prepare should hit metadata cache");
     assert(preparedAgain.telemetry.metadataCacheStatus === "hit", "second prepare should report cache hit status");
 
-    const found = await agentRun(mcp, { request: "Find Transactions amount status", mode: "find", workbookContextId: prepared.workbookContextId, budget: { maxExamples: 3, maxPayloadBytes: 1200 } });
+    const found = await agentRun(mcp, { request: "Find Transactions amount status", mode: "find", workbookContextId: prepared.workbookContextId, budget: { maxExamples: 3, maxPayloadBytes: 1200 } }, agentOutputSchema);
     assert(found.status === "SUCCESS", "find should locate workbook candidates");
     assert((found.candidates?.length ?? 0) <= 3, "find should obey maxExamples");
     assert(found.telemetry.payloadBytes <= 1400, `find payload should stay compact, got ${found.telemetry.payloadBytes}`);
 
-    const answered = await agentRun(mcp, { request: "Answer amount from Transactions table", mode: "answer", workbookContextId: prepared.workbookContextId });
+    const answered = await agentRun(mcp, { request: "Answer amount from Transactions table", mode: "answer", workbookContextId: prepared.workbookContextId }, agentOutputSchema);
     assert(answered.status === "SUCCESS", "answer should succeed");
     assert(answered.telemetry.internalReadCount === 1, "answer should use one targeted internal read");
     assert(answered.telemetry.fullReadCellCount <= 16, `answer should avoid broad reads, read ${answered.telemetry.fullReadCellCount} cells`);
 
-    const naturalSheet = await agentRun(mcp, { request: "Analyze the June financial sheet", mode: "answer", workbookContextId: prepared.workbookContextId });
+    const naturalSheet = await agentRun(mcp, { request: "Analyze the June financial sheet", mode: "answer", workbookContextId: prepared.workbookContextId }, agentOutputSchema);
     assert(naturalSheet.status === "SUCCESS", "natural language sheet request should resolve");
     assert(naturalSheet.proof?.[0]?.sheetName === "Financials - June 2026", `natural language sheet request should use June financial sheet, got ${naturalSheet.proof?.[0]?.sheetName}`);
 
-    const ambiguous = await agentRun(mcp, { request: "Analyze financial 2026", mode: "answer", workbookContextId: prepared.workbookContextId });
+    const ambiguous = await agentRun(mcp, { request: "Analyze financial 2026", mode: "answer", workbookContextId: prepared.workbookContextId }, agentOutputSchema);
     assert(ambiguous.status === "AMBIGUOUS_TARGET", "ambiguous financial request should return candidates instead of guessing");
 
     const preview = await agentRun(mcp, {
@@ -85,11 +86,11 @@ async function main() {
       workbookContextId: prepared.workbookContextId,
       target: { sheetName: "Data", range: "B2" },
       values: { values: [[999]] }
-    });
+    }, agentOutputSchema);
     assert(preview.status === "PREVIEW_READY", "preview_update should return a pending operation");
     assert(preview.operationId && preview.confirmationToken, "preview_update should return operationId and confirmationToken");
 
-    const missingToken = await agentRun(mcp, { request: "Apply update without token", mode: "apply_update", operationId: preview.operationId });
+    const missingToken = await agentRun(mcp, { request: "Apply update without token", mode: "apply_update", operationId: preview.operationId }, agentOutputSchema);
     assert(missingToken.status === "NEEDS_INPUT", "apply_update without confirmationToken should be blocked");
 
     const applied = await agentRun(mcp, {
@@ -97,7 +98,7 @@ async function main() {
       mode: "apply_update",
       operationId: preview.operationId,
       confirmationToken: preview.confirmationToken
-    });
+    }, agentOutputSchema);
     assert(applied.status === "SUCCESS", "apply_update with confirmationToken should succeed");
 
     const autoApplied = await agentRun(mcp, {
@@ -105,7 +106,7 @@ async function main() {
       workbookContextId: prepared.workbookContextId,
       target: { sheetName: "Data", range: "C2" },
       values: { values: [[321]] }
-    });
+    }, agentOutputSchema);
     assert(autoApplied.status === "SUCCESS", "auto mode should apply clear scoped value edits");
     assert(autoApplied.mode === "auto", "auto-applied result should preserve auto mode");
     assert(autoApplied.confirmationToken === undefined, "auto-applied result should not expose a confirmation token");
@@ -117,11 +118,11 @@ async function main() {
       workbookContextId: prepared.workbookContextId,
       target: { sheetName: "Report", range: "A10" },
       values: { values: [[100]] }
-    });
+    }, agentOutputSchema);
     assert(formulaBlocked.status === "NEEDS_INPUT", "auto mode should not treat formula repair as a value write");
     assert(formulaBlocked.telemetry?.safetyDecision === "manual_review:advanced_workflow", "formula-sensitive auto request should report manual review decision");
 
-    const validated = await agentRun(mcp, { request: "Validate workbook", mode: "validate" });
+    const validated = await agentRun(mcp, { request: "Validate workbook", mode: "validate" }, agentOutputSchema);
     assert(validated.status === "SUCCESS", "validate should succeed after apply");
 
     writeArtifact("e2e-agent-workflow-transcript.json", { transcript, fakeAddin: addin.summary() });
@@ -142,20 +143,31 @@ async function main() {
   }
 }
 
-async function agentRun(client, args) {
-  return callTool(client, "excel.agent.run", args);
+async function agentRun(client, args, outputSchema) {
+  return callTool(client, "excel.agent.run", args, outputSchema);
 }
 
-async function callTool(client, name, args) {
+async function callTool(client, name, args, outputSchema) {
   const result = await client.request("tools/call", { name, arguments: args });
   if (result.isError) {
     throw new Error(`${name} returned MCP error: ${JSON.stringify(result)}`);
   }
+  assert(result.structuredContent, `${name} should return structuredContent for strict MCP clients`);
+  assertTelemetryKeysDeclared(result.structuredContent, outputSchema);
   const text = result.content?.find((item) => item.type === "text")?.text;
   assert(text, `${name} returned no text content`);
   const parsed = JSON.parse(text);
+  assert(JSON.stringify(parsed) === JSON.stringify(result.structuredContent), `${name} text content should mirror structuredContent`);
   transcript.push({ tool: name, args, telemetry: parsed.telemetry, result: parsed });
   return parsed;
+}
+
+function assertTelemetryKeysDeclared(structuredContent, outputSchema) {
+  const telemetryProperties = outputSchema?.properties?.telemetry?.properties;
+  assert(telemetryProperties, "excel.agent.run should publish telemetry output schema");
+  for (const key of Object.keys(structuredContent.telemetry ?? {})) {
+    assert(key in telemetryProperties, `structured telemetry key ${key} must be declared in outputSchema`);
+  }
 }
 
 class McpClient {

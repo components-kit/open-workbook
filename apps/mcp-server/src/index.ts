@@ -164,7 +164,7 @@ const STYLE_COPY_TOOL_DIMENSIONS: Record<string, StyleDimension> = {
 };
 
 const runtime = await createRuntimeFacade();
-const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.12";
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.13";
 const COMPACT_RESOURCE_LIMIT = 100;
 const COMPACT_DEFAULT_RESOURCE_THRESHOLD_BYTES = 24_000;
 const COMPACT_LIMITS = {
@@ -359,35 +359,7 @@ function registerAgentTools(mcp: McpServer): void {
           maxExamples: z.number().int().positive().optional()
         }).optional()
       },
-      outputSchema: {
-        status: z.enum(["SUCCESS", "PREVIEW_READY", "NEEDS_INPUT", "AMBIGUOUS_TARGET", "NOT_FOUND", "STALE_CONTEXT", "VALIDATION_FAILED", "CONFLICT", "ERROR"]),
-        mode: z.string(),
-        workbookContextId: z.string().optional(),
-        operationId: z.string().optional(),
-        confirmationToken: z.string().optional(),
-        summary: z.string(),
-        answer: z.any().optional(),
-        metrics: z.record(z.string(), z.any()).optional(),
-        changes: z.array(z.any()).optional(),
-        candidates: z.array(z.any()).optional(),
-        proof: z.array(z.any()),
-        resourceLinks: z.array(z.any()),
-        nextAction: z.string(),
-        warnings: z.array(z.string()),
-        telemetry: z.object({
-          internalCallCount: z.number(),
-          payloadBytes: z.number(),
-          estimatedTokens: z.number(),
-          elapsedMs: z.number(),
-          cacheHit: z.boolean(),
-          metadataCacheStatus: z.enum(["hit", "miss", "not_applicable"]).optional(),
-          internalReadCount: z.number().optional(),
-          fullReadCellCount: z.number().optional(),
-          candidateCount: z.number().optional(),
-          resourceLinkCount: z.number().optional(),
-          estimatedTokensSaved: z.number().optional()
-        })
-      },
+      outputSchema: agentRunOutputSchema(),
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -397,6 +369,42 @@ function registerAgentTools(mcp: McpServer): void {
     },
     async (args: AgentRunInput) => agentJsonResult(await runtime.runAgent(args))
   );
+}
+
+function agentRunOutputSchema() {
+  return {
+    status: z.enum(["SUCCESS", "PREVIEW_READY", "NEEDS_INPUT", "AMBIGUOUS_TARGET", "NOT_FOUND", "STALE_CONTEXT", "VALIDATION_FAILED", "CONFLICT", "ERROR"]),
+    mode: z.string(),
+    workbookContextId: z.string().optional(),
+    operationId: z.string().optional(),
+    confirmationToken: z.string().optional(),
+    summary: z.string(),
+    answer: z.any().optional(),
+    metrics: z.record(z.string(), z.any()).optional(),
+    changes: z.array(z.any()).optional(),
+    candidates: z.array(z.any()).optional(),
+    proof: z.array(z.any()),
+    resourceLinks: z.array(z.any()),
+    nextAction: z.string(),
+    warnings: z.array(z.string()),
+    telemetry: z.object({
+      internalCallCount: z.number(),
+      payloadBytes: z.number(),
+      estimatedTokens: z.number(),
+      elapsedMs: z.number(),
+      cacheHit: z.boolean(),
+      autoApplied: z.boolean().optional(),
+      safetyDecision: z.string().optional(),
+      previewOperationId: z.string().optional(),
+      validationStatus: z.enum(["passed", "failed", "not_run"]).optional(),
+      metadataCacheStatus: z.enum(["hit", "miss", "not_applicable"]).optional(),
+      internalReadCount: z.number().optional(),
+      fullReadCellCount: z.number().optional(),
+      candidateCount: z.number().optional(),
+      resourceLinkCount: z.number().optional(),
+      estimatedTokensSaved: z.number().optional()
+    })
+  };
 }
 
 function registerResources(mcp: McpServer): void {

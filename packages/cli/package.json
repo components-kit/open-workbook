@@ -1,6 +1,6 @@
 {
   "name": "@components-kit/open-workbook",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "CLI for installing, sideloading, and running Open Workbook locally.",
   "license": "MIT",
   "type": "module",
