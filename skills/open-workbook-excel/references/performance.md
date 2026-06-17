@@ -4,13 +4,14 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 
 ## Defaults
 
+- On the public surface, use `excel.agent.run`; the backend owns compact reads, summaries, proof, resource handles, and response budgeting.
 - Prefer bulk Office.js operations over per-cell actions.
 - Use 2D matrices for values, formulas, and number formats.
 - Use table APIs for table-shaped work.
 - Group writes by workbook, sheet, and contiguous range.
 - Read only requested properties.
-- Start unknown targets with lookup tools, then inspect one candidate.
-- Start known large scopes with compact summaries and schemas.
+- Backend routing should start unknown targets with lookup capabilities, then inspect one candidate.
+- Backend routing should start known large scopes with compact summaries and schemas.
 - Use `excel.runtime.get_capabilities` before trying expensive or host-limited features.
 
 ## Reads
@@ -20,8 +21,8 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 - For formula review, read formulas or formula patterns.
 - For formatting review, read number formats or styles only for the relevant range.
 - For table analysis, read the table instead of a sheet-sized range.
-- For unknown sheet/table/header/entity targets, use `excel.lookup.*` before reading cells.
-- For exploratory reads, use `excel.range.read_compact` or `excel.table.read_compact` before full reads.
+- On the public surface, use `excel.agent.run` `mode: "find"` or `mode: "answer"` for unknown targets and exploratory reads.
+- Internally, use lookup before reading cells and use compact range/table reads before full reads.
 
 Avoid workbook-wide reads unless the task is search, validation, audit, or discovery.
 
@@ -31,6 +32,7 @@ When a compact response includes `resourceUri`, fetch it only if the full detail
 ## Writes
 
 - Use one batch or plan for related edits.
+- On the public agent surface, group related range value edits with `values.patches` in one `preview_update`, then call `apply_update` once for the returned operation.
 - Preflight large generated batches before applying them.
 - Keep matrix shapes exact: rows and columns must match the target range.
 - Let Open Workbook chunk large values/formulas/number formats through safe row-based chunk plans.

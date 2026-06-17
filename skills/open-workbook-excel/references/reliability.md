@@ -2,6 +2,8 @@
 
 Open Workbook treats Excel as a transaction target. Preserve that contract.
 
+For live workbook tasks, Open Workbook MCP is the source of truth. Do not switch to shell scripts, Python, openpyxl, pandas, manual UI automation, or offline `.xlsx` parsing unless the user explicitly asked for offline file analysis, or MCP is unavailable and the user approves a non-live fallback. Saved-file parsing can be stale because it does not include unsaved Excel state.
+
 ## Mutation Contract
 
 Every mutation should go through:
@@ -66,11 +68,13 @@ Choose a supported tool path or ask for user/host setup. Do not claim that unsup
 
 ## Disconnected Add-In
 
-If Excel is not connected:
+If Excel is not connected or `excel.agent.run mode=status` reports `connectionState: "stale"`:
 
 1. Ask the user to start the agent UI that has the Open Workbook MCP config.
 2. If troubleshooting manually, ask the user to run `npx -y @components-kit/open-workbook@latest mcp`.
-3. Ask the user to open Excel and load the Open Workbook add-in.
-4. Retry `excel.runtime.get_status`.
+3. Ask the user to open Excel and load or reload the OpenWorkbook Local taskpane.
+4. Retry `excel.agent.run mode=status`.
+
+`activeAddinConnected` is not enough for live workbook work. Prefer `connectionState: "ready"` plus `activeWorkbookAvailable: true`; stale sessions should fail fast with reload guidance instead of triggering offline parsing or repeated tool calls.
 
 Do not use stale snapshots as the source of truth for current workbook state.

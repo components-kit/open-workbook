@@ -1,0 +1,4511 @@
+[
+  {
+    "id": "status-active-workbook",
+    "category": "connection",
+    "difficulty": "tiny",
+    "intent": "status",
+    "prompt": "Can you connect to Excel and tell me what workbook is active?",
+    "input": {
+      "request": "Can you connect to Excel and tell me what workbook is active?",
+      "mode": "status"
+    },
+    "expected": {
+      "resultType": "status",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "workbookName",
+        "activeSheet"
+      ],
+      "mustMentionAny": [
+        "Office Agent Behavior.xlsx",
+        "active workbook"
+      ]
+    },
+    "budgets": {
+      "maxToolCalls": 1,
+      "maxInputTokens": 1200,
+      "maxOutputTokens": 500,
+      "maxPayloadBytes": 8000,
+      "maxLatencyMs": 2500
+    },
+    "tags": [
+      "fast",
+      "status",
+      "no-read"
+    ]
+  },
+  {
+    "id": "prepare-session-compact-map",
+    "category": "connection",
+    "difficulty": "simple",
+    "intent": "prepare",
+    "prompt": "Prepare this Excel workbook for analysis.",
+    "input": {
+      "request": "Prepare this Excel workbook for analysis.",
+      "mode": "prepare"
+    },
+    "expected": {
+      "resultType": "prepare",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "workbookName",
+        "sheetCount",
+        "sheets"
+      ],
+      "shouldReturnAny": [
+        "contextId",
+        "resourceUri"
+      ],
+      "mustNotReturnCellGrid": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "compact",
+      "session",
+      "cache"
+    ]
+  },
+  {
+    "id": "workbook-about-compact",
+    "category": "workbook overview",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "Can you look into Office Agent Behavior.xlsx file, what is it about?",
+    "input": {
+      "request": "Can you look into Office Agent Behavior.xlsx file, what is it about?"
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustMentionAny": [
+        "Sales",
+        "January",
+        "February",
+        "FormulaSheet",
+        "workbook"
+      ],
+      "mustSummarizePurpose": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "overview",
+      "compact"
+    ]
+  },
+  {
+    "id": "workbook-sheet-count",
+    "category": "workbook overview",
+    "difficulty": "tiny",
+    "intent": "answer",
+    "prompt": "How many sheets are in this Excel file?",
+    "input": {
+      "request": "How many sheets are in this Excel file?"
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "sheetCount"
+      ],
+      "mustNotReadSheetValues": true
+    },
+    "budgets": {
+      "maxToolCalls": 1,
+      "maxInputTokens": 1200,
+      "maxOutputTokens": 500,
+      "maxPayloadBytes": 8000,
+      "maxLatencyMs": 2500
+    },
+    "tags": [
+      "overview",
+      "fast",
+      "metadata-only"
+    ]
+  },
+  {
+    "id": "workbook-list-sheet-purpose",
+    "category": "workbook overview",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "List each sheet and what it seems to contain.",
+    "input": {
+      "request": "List each sheet and what it seems to contain."
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "sheets"
+      ],
+      "mustMentionAny": [
+        "Sales",
+        "January",
+        "February",
+        "Blank",
+        "FormulaSheet"
+      ],
+      "mustUseWorkbookMapBeforeReads": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "overview",
+      "sheet-map"
+    ]
+  },
+  {
+    "id": "workbook-visible-hidden-sheets",
+    "category": "workbook overview",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "Which sheets are visible, hidden, or very hidden?",
+    "input": {
+      "request": "Which sheets are visible, hidden, or very hidden?",
+      "mode": "find"
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "visibilityBySheet"
+      ],
+      "mustNotReadSheetValues": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "metadata-only",
+      "reliability"
+    ]
+  },
+  {
+    "id": "workbook-find-blank-sheets",
+    "category": "workbook overview",
+    "difficulty": "simple",
+    "intent": "find",
+    "prompt": "Which sheets are blank or mostly empty?",
+    "input": {
+      "request": "Which sheets are blank or mostly empty?",
+      "mode": "find"
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "blankOrMostlyEmptySheets"
+      ],
+      "mustMentionAny": [
+        "Blank"
+      ],
+      "mustUseUsedRangeMetadata": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "find",
+      "used-range",
+      "compact"
+    ]
+  },
+  {
+    "id": "workbook-list-tables",
+    "category": "workbook overview",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "Which tables are in this workbook?",
+    "input": {
+      "request": "Which tables are in this workbook?"
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "tables"
+      ],
+      "mustMentionAny": [
+        "Transactions"
+      ],
+      "mustNotReadFullTable": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "metadata-only",
+      "tables"
+    ]
+  },
+  {
+    "id": "workbook-list-named-ranges",
+    "category": "workbook overview",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "Are there named ranges in this workbook?",
+    "input": {
+      "request": "Are there named ranges in this workbook?"
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "namedRanges"
+      ]
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "metadata-only",
+      "names"
+    ]
+  },
+  {
+    "id": "workbook-find-month-sheets",
+    "category": "targeting",
+    "difficulty": "simple",
+    "intent": "find",
+    "prompt": "Find the sheets that look like monthly reports.",
+    "input": {
+      "request": "Find the sheets that look like monthly reports.",
+      "mode": "find"
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "candidateSheets"
+      ],
+      "mustIncludeCandidates": [
+        "January",
+        "February"
+      ],
+      "mustNotReadAllCells": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "target-resolution",
+      "compact"
+    ]
+  },
+  {
+    "id": "workbook-latest-month-sheet-candidate",
+    "category": "targeting",
+    "difficulty": "medium",
+    "intent": "find",
+    "prompt": "Which sheet looks like the latest monthly report?",
+    "input": {
+      "request": "Which sheet looks like the latest monthly report?",
+      "mode": "find"
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "candidateSheets",
+        "confidence"
+      ],
+      "shouldMentionUncertaintyWhenNeeded": true,
+      "mustNotMutateWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "target-resolution",
+      "uncertainty"
+    ]
+  },
+  {
+    "id": "active-sheet-analysis-sales",
+    "category": "sheet reading",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Analyze the active sheet.",
+    "input": {
+      "request": "Analyze the active sheet."
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "Sales"
+      },
+      "mustReturn": [
+        "summary",
+        "columns"
+      ],
+      "mustUseActiveSheetMetadata": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "active-sheet",
+      "compact"
+    ],
+    "fixture": {
+      "activeSheet": "Sales"
+    }
+  },
+  {
+    "id": "selected-cell-analysis",
+    "category": "sheet reading",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Analyze the selected cell.",
+    "selection": {
+      "sheetName": "Sales",
+      "address": "D3"
+    },
+    "input": {
+      "request": "Analyze the selected cell."
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "Sales",
+        "range": "D3"
+      },
+      "mustUseSelection": true
+    },
+    "budgets": {
+      "maxToolCalls": 1,
+      "maxInputTokens": 3000,
+      "maxOutputTokens": 1000,
+      "maxPayloadBytes": 20000,
+      "maxLatencyMs": 5000
+    },
+    "tags": [
+      "selection",
+      "active-cell",
+      "compact"
+    ]
+  },
+  {
+    "id": "selected-column-analysis",
+    "category": "sheet reading",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Analyze this column.",
+    "selection": {
+      "sheetName": "Sales",
+      "address": "D3"
+    },
+    "input": {
+      "request": "Analyze this column."
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "Sales",
+        "range": "D1:D6"
+      },
+      "mustUseSelection": true
+    },
+    "budgets": {
+      "maxToolCalls": 1,
+      "maxInputTokens": 3000,
+      "maxOutputTokens": 1000,
+      "maxPayloadBytes": 20000,
+      "maxLatencyMs": 5000
+    },
+    "tags": [
+      "selection",
+      "selected-column",
+      "compact"
+    ]
+  },
+  {
+    "id": "sales-sheet-summary",
+    "category": "sheet reading",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "Can you look into Sales sheet, what is it about?",
+    "input": {
+      "request": "Can you look into Sales sheet, what is it about?",
+      "target": {
+        "sheetName": "Sales"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "Sales"
+      },
+      "mustMentionAny": [
+        "sales",
+        "amount",
+        "status",
+        "customer"
+      ]
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "sheet-summary"
+    ]
+  },
+  {
+    "id": "sales-columns",
+    "category": "sheet reading",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "What columns are in the Sales sheet?",
+    "input": {
+      "request": "What columns are in the Sales sheet?",
+      "target": {
+        "sheetName": "Sales"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "Sales"
+      },
+      "mustReturn": [
+        "columns"
+      ],
+      "mustNotReadMoreThanSampleRows": 3
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "schema",
+      "compact"
+    ]
+  },
+  {
+    "id": "sales-example-rows-compact",
+    "category": "sheet reading",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "Show me a few example rows from the Sales sheet.",
+    "input": {
+      "request": "Show me a few example rows from Sales",
+      "target": {
+        "sheetName": "Sales",
+        "range": "A1:E6"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "Sales",
+        "range": "A1:E6"
+      },
+      "mustReturn": [
+        "sampleRows"
+      ],
+      "maxRowsReturned": 6
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "range-read",
+      "bounded"
+    ]
+  },
+  {
+    "id": "sales-total-amount",
+    "category": "sheet reading",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "What is the total amount in the Sales sheet sample?",
+    "input": {
+      "request": "What is the total amount in the Sales sheet sample?",
+      "target": {
+        "sheetName": "Sales",
+        "range": "A1:E6"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "total"
+      ],
+      "resolvedTarget": {
+        "sheetName": "Sales",
+        "range": "A1:E6"
+      },
+      "mustOnlySumAmountColumn": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "calculation",
+      "bounded"
+    ]
+  },
+  {
+    "id": "sales-open-items",
+    "category": "sheet reading",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "Which Sales rows are still open?",
+    "input": {
+      "request": "Which Sales rows are still open?",
+      "target": {
+        "sheetName": "Sales",
+        "range": "A1:E6"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "matchingRows"
+      ],
+      "mustFilterBy": {
+        "column": "Status",
+        "value": "Open"
+      },
+      "maxRowsReturned": 10
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "filter",
+      "bounded"
+    ]
+  },
+  {
+    "id": "sales-status-breakdown",
+    "category": "sheet reading",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Show a quick status breakdown for Sales.",
+    "input": {
+      "request": "Show a quick status breakdown for Sales.",
+      "target": {
+        "sheetName": "Sales",
+        "range": "A1:E6"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "statusBreakdown"
+      ],
+      "mustGroupBy": "Status"
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "aggregation",
+      "compact"
+    ]
+  },
+  {
+    "id": "sales-outlier-amount",
+    "category": "sheet reading",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Are there any unusually high Amount values in Sales?",
+    "input": {
+      "request": "Are there any unusually high Amount values in Sales?",
+      "target": {
+        "sheetName": "Sales",
+        "range": "A1:E6"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "amountSummary",
+        "possibleOutliers"
+      ],
+      "shouldMentionMethod": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "analysis",
+      "compact"
+    ]
+  },
+  {
+    "id": "sales-data-types-check",
+    "category": "sheet reading",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Check whether Sales dates and amounts look valid.",
+    "input": {
+      "request": "Check whether Sales dates and amounts look valid.",
+      "target": {
+        "sheetName": "Sales",
+        "range": "A1:E6"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "validationSummary"
+      ],
+      "mustCheckColumns": [
+        "Date",
+        "Amount"
+      ],
+      "mustNotMutateWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "validation",
+      "data-quality"
+    ]
+  },
+  {
+    "id": "sales-specific-cell-d3",
+    "category": "sheet reading",
+    "difficulty": "tiny",
+    "intent": "answer",
+    "prompt": "What value is in Sales D3?",
+    "input": {
+      "request": "What value is in Sales D3?",
+      "target": {
+        "sheetName": "Sales",
+        "range": "D3"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "Sales",
+        "range": "D3"
+      },
+      "mustReturn": [
+        "cellValue"
+      ],
+      "mustNotReadNeighborCells": true
+    },
+    "budgets": {
+      "maxToolCalls": 1,
+      "maxInputTokens": 1200,
+      "maxOutputTokens": 500,
+      "maxPayloadBytes": 8000,
+      "maxLatencyMs": 2500
+    },
+    "tags": [
+      "cell-read",
+      "fast"
+    ]
+  },
+  {
+    "id": "sales-row-four",
+    "category": "sheet reading",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "What is row 4 in Sales?",
+    "input": {
+      "request": "What is row 4 in Sales?",
+      "target": {
+        "sheetName": "Sales",
+        "range": "A4:E4"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "Sales",
+        "range": "A4:E4"
+      },
+      "mustReturn": [
+        "rowValues"
+      ],
+      "maxRowsReturned": 1
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "range-read",
+      "bounded"
+    ]
+  },
+  {
+    "id": "transactions-table-columns",
+    "category": "table reading",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "What columns does the Transactions table have?",
+    "input": {
+      "request": "What columns does the Transactions table have?",
+      "target": {
+        "tableName": "Transactions"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "tableName": "Transactions"
+      },
+      "mustReturn": [
+        "columns"
+      ],
+      "mustNotReadFullTable": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "table-schema",
+      "metadata-only"
+    ]
+  },
+  {
+    "id": "transactions-table-sample",
+    "category": "table reading",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "Show a compact sample from the Transactions table.",
+    "input": {
+      "request": "Show a compact sample from the Transactions table.",
+      "target": {
+        "tableName": "Transactions"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "tableName": "Transactions"
+      },
+      "mustReturn": [
+        "sampleRows"
+      ],
+      "maxRowsReturned": 5
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "table-read",
+      "bounded"
+    ]
+  },
+  {
+    "id": "transactions-table-row-count",
+    "category": "table reading",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "How many data rows are in the Transactions table?",
+    "input": {
+      "request": "How many data rows are in the Transactions table?",
+      "target": {
+        "tableName": "Transactions"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "rowCount"
+      ],
+      "mustPreferTableMetadata": true,
+      "mustNotReadFullTable": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "table-metadata",
+      "fast"
+    ]
+  },
+  {
+    "id": "summary-sheet-purpose",
+    "category": "sheet reading",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "What is the Summary sheet for?",
+    "input": {
+      "request": "What is the Summary sheet for?",
+      "target": {
+        "sheetName": "Summary"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "Summary"
+      },
+      "mustSummarizePurpose": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "sheet-summary"
+    ]
+  },
+  {
+    "id": "blank-sheet-confirm-empty",
+    "category": "sheet reading",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "Is the Blank sheet actually empty?",
+    "input": {
+      "request": "Is the Blank sheet actually empty?",
+      "target": {
+        "sheetName": "Blank"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "Blank"
+      },
+      "mustReturn": [
+        "usedRange",
+        "isBlankOrMostlyEmpty"
+      ],
+      "mustNotHallucinateData": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "blank-sheet",
+      "reliability"
+    ]
+  },
+  {
+    "id": "sales-report-compact",
+    "category": "sheet report",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Can you analyze sheet Sales and show me a report?",
+    "input": {
+      "request": "Can you analyze sheet Sales and show me a report?",
+      "target": {
+        "sheetName": "Sales",
+        "range": "A1:E6"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "executiveSummary",
+        "keyMetrics",
+        "notableRows"
+      ],
+      "mustUseBoundedRange": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "report",
+      "compact"
+    ]
+  },
+  {
+    "id": "january-summary",
+    "category": "sheet report",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Summarize the January sheet.",
+    "input": {
+      "request": "Summarize the January sheet.",
+      "target": {
+        "sheetName": "January",
+        "range": "A1:C5"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "January"
+      },
+      "mustReturn": [
+        "summary",
+        "keyMetrics"
+      ],
+      "mustUseCompactRead": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "monthly",
+      "compact"
+    ]
+  },
+  {
+    "id": "february-summary",
+    "category": "sheet report",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Summarize the February sheet.",
+    "input": {
+      "request": "Summarize the February sheet.",
+      "target": {
+        "sheetName": "February",
+        "range": "A1:C5"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "February"
+      },
+      "mustReturn": [
+        "summary",
+        "keyMetrics"
+      ],
+      "mustUseCompactRead": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "monthly",
+      "compact"
+    ]
+  },
+  {
+    "id": "compare-mar-apr-performance-sections",
+    "category": "sheet comparison",
+    "difficulty": "complex",
+    "intent": "answer",
+    "prompt": "Can you compare Mar and Apr, how our company perform",
+    "input": {
+      "request": "Can you compare Mar and Apr, how our company perform"
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustCompareSheets": [
+        "Mar 2026",
+        "Apr 2026"
+      ],
+      "mustReturn": [
+        "kpiRows",
+        "alignedMetrics"
+      ],
+      "mustUseOnlyRelevantRanges": true
+    },
+    "budgets": {
+      "maxToolCalls": 1,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1500,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "comparison",
+      "multi-section",
+      "monthly",
+      "compact"
+    ]
+  },
+  {
+    "id": "compare-jan-feb-overall",
+    "category": "sheet comparison",
+    "difficulty": "complex",
+    "intent": "answer",
+    "prompt": "Can you compare both sheets, January and February, how is it going?",
+    "input": {
+      "request": "Can you compare both sheets, January and February, how is it going?"
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustCompareSheets": [
+        "January",
+        "February"
+      ],
+      "mustReturn": [
+        "comparisonSummary",
+        "directionalChange"
+      ],
+      "mustUseOnlyRelevantRanges": true
+    },
+    "budgets": {
+      "maxToolCalls": 5,
+      "maxInputTokens": 6500,
+      "maxOutputTokens": 1800,
+      "maxPayloadBytes": 50000,
+      "maxLatencyMs": 10000
+    },
+    "tags": [
+      "comparison",
+      "multi-sheet"
+    ]
+  },
+  {
+    "id": "compare-jan-feb-revenue",
+    "category": "sheet comparison",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Which month has higher total revenue, January or February?",
+    "input": {
+      "request": "Which month has higher total revenue, January or February?"
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustCompareSheets": [
+        "January",
+        "February"
+      ],
+      "mustReturn": [
+        "winner",
+        "revenueByMonth"
+      ],
+      "mustCiteSourceRanges": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "comparison",
+      "metric"
+    ]
+  },
+  {
+    "id": "compare-jan-feb-expenses",
+    "category": "sheet comparison",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Compare January and February expenses.",
+    "input": {
+      "request": "Compare January and February expenses."
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustCompareSheets": [
+        "January",
+        "February"
+      ],
+      "mustReturn": [
+        "expenseByMonth",
+        "difference"
+      ],
+      "mustCiteSourceRanges": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "comparison",
+      "metric"
+    ]
+  },
+  {
+    "id": "compare-jan-feb-profit",
+    "category": "sheet comparison",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Compare January and February profit.",
+    "input": {
+      "request": "Compare January and February profit."
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustCompareSheets": [
+        "January",
+        "February"
+      ],
+      "mustReturn": [
+        "profitByMonth",
+        "difference"
+      ],
+      "mustCiteSourceRanges": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "comparison",
+      "metric"
+    ]
+  },
+  {
+    "id": "compare-jan-feb-open-deals",
+    "category": "sheet comparison",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Which month has more open deals, January or February?",
+    "input": {
+      "request": "Which month has more open deals, January or February?"
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustCompareSheets": [
+        "January",
+        "February"
+      ],
+      "mustReturn": [
+        "openDealsByMonth",
+        "winner"
+      ],
+      "mustNotGuessMissingColumns": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "comparison",
+      "filter"
+    ]
+  },
+  {
+    "id": "compare-month-movement-report",
+    "category": "sheet comparison",
+    "difficulty": "complex",
+    "intent": "answer",
+    "prompt": "Create a compact month-over-month report for January and February.",
+    "input": {
+      "request": "Create a compact month-over-month report for January and February."
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustCompareSheets": [
+        "January",
+        "February"
+      ],
+      "mustReturn": [
+        "revenue",
+        "expense",
+        "profit",
+        "trendSummary"
+      ],
+      "mustNotMutateWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 5,
+      "maxInputTokens": 6500,
+      "maxOutputTokens": 1800,
+      "maxPayloadBytes": 50000,
+      "maxLatencyMs": 10000
+    },
+    "tags": [
+      "comparison",
+      "report",
+      "compact"
+    ]
+  },
+  {
+    "id": "active-sheet-report-sales",
+    "category": "sheet report",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Can you analyze this sheet and show me report?",
+    "input": {
+      "request": "Can you analyze this sheet and show me report?"
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "Sales"
+      },
+      "mustReturn": [
+        "executiveSummary",
+        "keyMetrics"
+      ],
+      "mustUseActiveSheetMetadata": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "active-sheet",
+      "report"
+    ],
+    "fixture": {
+      "activeSheet": "Sales"
+    }
+  },
+  {
+    "id": "sales-section-count",
+    "category": "sheet structure",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "How many sections do we have in the Sales sheet?",
+    "input": {
+      "request": "How many sections do we have in the Sales sheet?",
+      "target": {
+        "sheetName": "Sales"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "Sales"
+      },
+      "mustReturn": [
+        "sections"
+      ],
+      "shouldUseBlankRowsAndTables": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "structure",
+      "compact"
+    ]
+  },
+  {
+    "id": "formula-sheet-section-count",
+    "category": "sheet structure",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "How many sections do we have in FormulaSheet?",
+    "input": {
+      "request": "How many sections do we have in FormulaSheet?",
+      "target": {
+        "sheetName": "FormulaSheet"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "FormulaSheet"
+      },
+      "mustReturn": [
+        "sections"
+      ],
+      "shouldMentionFormulaArea": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "structure",
+      "formula"
+    ]
+  },
+  {
+    "id": "operations-section-inventory",
+    "category": "sheet structure",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "What sections are on the Operations sheet?",
+    "input": {
+      "request": "What sections are on the Operations sheet?",
+      "target": {
+        "sheetName": "Operations"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "Operations"
+      },
+      "mustReturn": [
+        "sections"
+      ],
+      "mustMentionAny": [
+        "KPI",
+        "invoice",
+        "notes",
+        "reconciliation"
+      ]
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "structure",
+      "unstructured-sheet",
+      "compact"
+    ]
+  },
+  {
+    "id": "operations-invoice-section-read",
+    "category": "sheet reading",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Show example rows from the invoice section on Operations.",
+    "input": {
+      "request": "Show example rows from the invoice section on Operations"
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "Operations"
+      },
+      "mustMentionAny": [
+        "INV-100",
+        "invoice",
+        "Operations"
+      ]
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "unstructured-sheet",
+      "targeted-read"
+    ]
+  },
+  {
+    "id": "grouped-multi-range-preview",
+    "category": "simple edit",
+    "difficulty": "medium",
+    "intent": "preview_update",
+    "prompt": "Update two related Operations status blocks as one grouped preview.",
+    "input": {
+      "request": "Update related Operations status blocks in one grouped preview.",
+      "mode": "preview_update",
+      "values": {
+        "patches": [
+          {
+            "target": {
+              "sheetName": "Operations",
+              "range": "H5:J5"
+            },
+            "values": [
+              [
+                "A. Chen",
+                "Review complete",
+                "2026-06-20"
+              ]
+            ],
+            "reason": "Owner action row"
+          },
+          {
+            "target": {
+              "sheetName": "Operations",
+              "range": "H6:J6"
+            },
+            "values": [
+              [
+                "M. Lee",
+                "Check variance",
+                "2026-06-21"
+              ]
+            ],
+            "reason": "Variance action row"
+          }
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "requiresPreview": true,
+      "resolvedTarget": {
+        "sheetName": "Operations"
+      }
+    },
+    "budgets": {
+      "maxToolCalls": 1,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "grouped-update",
+      "preview",
+      "scoped-edit"
+    ]
+  },
+  {
+    "id": "operations-status-section-preview",
+    "category": "simple edit",
+    "difficulty": "medium",
+    "intent": "preview_update",
+    "prompt": "Update the status section owner note on Operations.",
+    "input": {
+      "request": "Update the notes/status section on Operations.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Operations",
+        "range": "H5:J5"
+      },
+      "values": {
+        "values": [
+          [
+            "A. Chen",
+            "Review complete",
+            "2026-06-20"
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "requiresPreview": true,
+      "resolvedTarget": {
+        "sheetName": "Operations",
+        "range": "H5:J5"
+      }
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "unstructured-sheet",
+      "preview",
+      "scoped-edit"
+    ]
+  },
+  {
+    "id": "formula-find-formulas",
+    "category": "formula basics",
+    "difficulty": "simple",
+    "intent": "find",
+    "prompt": "Find formulas in the FormulaSheet sheet.",
+    "input": {
+      "request": "Find formulas in the FormulaSheet sheet.",
+      "mode": "find",
+      "target": {
+        "sheetName": "FormulaSheet"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "FormulaSheet"
+      },
+      "mustReturn": [
+        "formulaCells"
+      ],
+      "mustNotReturnUnrelatedCellValues": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "formula",
+      "find"
+    ]
+  },
+  {
+    "id": "formula-read-specific",
+    "category": "formula basics",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "Can you look into FormulaSheet D2:D5 and explain the formulas?",
+    "input": {
+      "request": "Can you look into FormulaSheet D2:D5 and explain the formulas?",
+      "target": {
+        "sheetName": "FormulaSheet",
+        "range": "D2:D5"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "FormulaSheet",
+        "range": "D2:D5"
+      },
+      "mustReturn": [
+        "formulas",
+        "plainEnglishExplanation"
+      ],
+      "maxRowsReturned": 4
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "formula",
+      "bounded"
+    ]
+  },
+  {
+    "id": "formula-area-explain",
+    "category": "formula basics",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Explain what the formula area is doing.",
+    "input": {
+      "request": "Explain what the formula area is doing.",
+      "target": {
+        "sheetName": "FormulaSheet",
+        "range": "A1:D10"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "FormulaSheet",
+        "range": "A1:D10"
+      },
+      "mustReturn": [
+        "formulaPattern",
+        "sourceColumns",
+        "outputColumn"
+      ]
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "formula",
+      "explain"
+    ]
+  },
+  {
+    "id": "formula-check-errors",
+    "category": "formula basics",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Check whether formulas look broken.",
+    "input": {
+      "request": "Check whether formulas look broken.",
+      "target": {
+        "sheetName": "FormulaSheet",
+        "range": "A1:D10"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "formulaHealth"
+      ],
+      "mustCheckFor": [
+        "errorValues",
+        "inconsistentFormulas",
+        "blankFormulaCells"
+      ],
+      "mustNotMutateWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "formula",
+      "validation"
+    ]
+  },
+  {
+    "id": "formula-dependency-summary",
+    "category": "formula basics",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Which input columns feed the formula results in FormulaSheet?",
+    "input": {
+      "request": "Which input columns feed the formula results in FormulaSheet?",
+      "target": {
+        "sheetName": "FormulaSheet",
+        "range": "A1:D10"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturn": [
+        "dependencies"
+      ],
+      "mustMentionAny": [
+        "B",
+        "C",
+        "D"
+      ],
+      "mustUseFormulasNotOnlyValues": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "formula",
+      "dependencies"
+    ]
+  },
+  {
+    "id": "formula-duplicate-down-preview",
+    "category": "formula edit",
+    "difficulty": "medium",
+    "intent": "mutation-preview",
+    "prompt": "Duplicate the formula from D2 down to D10.",
+    "input": {
+      "request": "Duplicate the formula from D2 down to D10.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "FormulaSheet",
+        "range": "D3:D10"
+      },
+      "values": {
+        "values": [
+          [
+            "=B3+C3"
+          ],
+          [
+            "=B4+C4"
+          ],
+          [
+            "=B5+C5"
+          ],
+          [
+            "=B6+C6"
+          ],
+          [
+            "=B7+C7"
+          ],
+          [
+            "=B8+C8"
+          ],
+          [
+            "=B9+C9"
+          ],
+          [
+            "=B10+C10"
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "changedRanges": [
+        "FormulaSheet!D3:D10"
+      ],
+      "mustValidateFormulaShape": true,
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "formula",
+      "mutation",
+      "preview"
+    ]
+  },
+  {
+    "id": "formula-add-total-row-preview",
+    "category": "formula edit",
+    "difficulty": "medium",
+    "intent": "mutation-preview",
+    "prompt": "Add a total row under the formula table.",
+    "input": {
+      "request": "Add a total row under the formula table.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "FormulaSheet",
+        "range": "A11:D11"
+      },
+      "values": {
+        "values": [
+          [
+            "Total",
+            "=SUM(B2:B10)",
+            "=SUM(C2:C10)",
+            "=SUM(D2:D10)"
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "changedRanges": [
+        "FormulaSheet!A11:D11"
+      ],
+      "mustRecalculateAfterApply": true,
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "formula",
+      "summary",
+      "preview"
+    ]
+  },
+  {
+    "id": "formula-edit-label-preserve-formulas",
+    "category": "formula safety",
+    "difficulty": "medium",
+    "intent": "mutation-preview",
+    "prompt": "Update the label in FormulaSheet A2 but do not change formulas.",
+    "input": {
+      "request": "Update the label in FormulaSheet A2 but do not change formulas.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "FormulaSheet",
+        "range": "A2"
+      },
+      "values": {
+        "values": [
+          [
+            "Updated Item"
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "changedRanges": [
+        "FormulaSheet!A2"
+      ],
+      "formulasUnchangedOutsideTarget": true,
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "formula",
+      "safety",
+      "preview"
+    ]
+  },
+  {
+    "id": "formula-shape-mismatch-error",
+    "category": "formula safety",
+    "difficulty": "negative",
+    "intent": "error",
+    "prompt": "Copy one formula into a two-column range.",
+    "input": {
+      "request": "Copy this one formula into a two-column range.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "FormulaSheet",
+        "range": "D3:E10"
+      },
+      "values": {
+        "values": [
+          [
+            "=B3+C3"
+          ],
+          [
+            "=B4+C4"
+          ],
+          [
+            "=B5+C5"
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "error",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldFailGracefully": true,
+      "mustReturn": [
+        "shapeMismatch"
+      ],
+      "shouldNotApplyDirectly": true,
+      "mustNotMutateWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "negative",
+      "shape-validation",
+      "formula"
+    ]
+  },
+  {
+    "id": "blank-add-mock-sales-preview",
+    "category": "simple edit",
+    "difficulty": "medium",
+    "intent": "mutation-preview",
+    "prompt": "Can you add mock data into the Blank sheet?",
+    "input": {
+      "request": "Add mock sales data to the blank sheet.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Blank",
+        "range": "A1:E6"
+      },
+      "values": {
+        "values": [
+          [
+            "Date",
+            "Customer",
+            "Product",
+            "Amount",
+            "Status"
+          ],
+          [
+            "2026-06-01",
+            "Acme Co",
+            "Consulting",
+            1200,
+            "Open"
+          ],
+          [
+            "2026-06-02",
+            "Northwind",
+            "Support",
+            450,
+            "Closed"
+          ],
+          [
+            "2026-06-03",
+            "Contoso",
+            "Implementation",
+            3200,
+            "Open"
+          ],
+          [
+            "2026-06-04",
+            "Fabrikam",
+            "Training",
+            800,
+            "Open"
+          ],
+          [
+            "2026-06-05",
+            "Tailspin",
+            "Support",
+            650,
+            "Closed"
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "changedRanges": [
+        "Blank!A1:E6"
+      ],
+      "shouldApplyDirectly": false,
+      "mustPreserveExistingContentOutsideTarget": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "mutation",
+      "preview",
+      "blank-sheet"
+    ]
+  },
+  {
+    "id": "blank-create-expense-tracker-preview",
+    "category": "simple edit",
+    "difficulty": "medium",
+    "intent": "mutation-preview",
+    "prompt": "Create a small office expense tracker on the blank sheet.",
+    "input": {
+      "request": "Create a small office expense tracker on the blank sheet.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Blank",
+        "range": "A8:D13"
+      },
+      "values": {
+        "values": [
+          [
+            "Date",
+            "Category",
+            "Vendor",
+            "Amount"
+          ],
+          [
+            "2026-06-01",
+            "Meals",
+            "Cafe One",
+            42.5
+          ],
+          [
+            "2026-06-02",
+            "Travel",
+            "Metro",
+            16
+          ],
+          [
+            "2026-06-03",
+            "Software",
+            "SaaS Co",
+            99
+          ],
+          [
+            "2026-06-04",
+            "Office",
+            "Supply Store",
+            61.25
+          ],
+          [
+            "Total",
+            "",
+            "",
+            218.75
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "changedRanges": [
+        "Blank!A8:D13"
+      ],
+      "shouldApplyDirectly": false,
+      "shouldFlagHardcodedTotal": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "mutation",
+      "preview",
+      "office"
+    ]
+  },
+  {
+    "id": "sales-header-format-preview",
+    "category": "formatting",
+    "difficulty": "medium",
+    "intent": "mutation-preview",
+    "prompt": "Format the header row on the Sales sheet.",
+    "input": {
+      "request": "Format the header row on the Sales sheet.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Sales",
+        "range": "A1:E1"
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "changedRanges": [
+        "Sales!A1:E1"
+      ],
+      "formattingOnly": true,
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "formatting",
+      "preview"
+    ]
+  },
+  {
+    "id": "sales-update-status-preview",
+    "category": "simple edit",
+    "difficulty": "simple",
+    "intent": "mutation-preview",
+    "prompt": "Can you update the Status column, row 2, according to my input: Reviewed?",
+    "input": {
+      "request": "Change the first Sales status to Reviewed.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Sales",
+        "range": "E2"
+      },
+      "values": {
+        "values": [
+          [
+            "Reviewed"
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "changedRanges": [
+        "Sales!E2"
+      ],
+      "oldValueShouldBeReported": true,
+      "newValueShouldBeReported": true,
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "mutation",
+      "cell",
+      "preview"
+    ]
+  },
+  {
+    "id": "sales-update-amount-preview",
+    "category": "simple edit",
+    "difficulty": "simple",
+    "intent": "mutation-preview",
+    "prompt": "Can you update Amount column, row 3, according to my input: 525?",
+    "input": {
+      "request": "Can you update Amount column, row 3, according to my input: 525?",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Sales",
+        "range": "D3"
+      },
+      "values": {
+        "values": [
+          [
+            525
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "changedRanges": [
+        "Sales!D3"
+      ],
+      "mustPreserveNumberFormat": true,
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "mutation",
+      "cell",
+      "preview"
+    ]
+  },
+  {
+    "id": "sales-update-row-preview",
+    "category": "simple edit",
+    "difficulty": "medium",
+    "intent": "mutation-preview",
+    "prompt": "Can you update row 4 according to my input?",
+    "input": {
+      "request": "Can you update row 4 according to my input?",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Sales",
+        "range": "A4:E4"
+      },
+      "values": {
+        "values": [
+          [
+            "2026-01-08",
+            "Contoso",
+            "Implementation",
+            3500,
+            "Reviewed"
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "changedRanges": [
+        "Sales!A4:E4"
+      ],
+      "mustPreserveRowFormatting": true,
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "mutation",
+      "row",
+      "preview"
+    ]
+  },
+  {
+    "id": "summary-add-notes-block-preview",
+    "category": "simple edit",
+    "difficulty": "medium",
+    "intent": "mutation-preview",
+    "prompt": "Add a small notes block to Summary.",
+    "input": {
+      "request": "Add a small notes block to Summary.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Summary",
+        "range": "E1:F4"
+      },
+      "values": {
+        "values": [
+          [
+            "Notes",
+            "Owner"
+          ],
+          [
+            "Review sales",
+            "Finance"
+          ],
+          [
+            "Check formulas",
+            "Ops"
+          ],
+          [
+            "Send update",
+            "Admin"
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "changedRanges": [
+        "Summary!E1:F4"
+      ],
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "mutation",
+      "block",
+      "preview"
+    ]
+  },
+  {
+    "id": "summary-create-basic-preview",
+    "category": "normal office workflow",
+    "difficulty": "complex",
+    "intent": "mutation-preview",
+    "prompt": "Create a simple summary sheet for this workbook.",
+    "input": {
+      "request": "Create a simple summary sheet for this workbook.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Summary",
+        "range": "A1:C6"
+      },
+      "values": {
+        "values": [
+          [
+            "Metric",
+            "Value",
+            "Notes"
+          ],
+          [
+            "Sheet count",
+            6,
+            "From workbook map"
+          ],
+          [
+            "Sales rows",
+            5,
+            "Sales sample"
+          ],
+          [
+            "Transactions table",
+            "Yes",
+            "From table metadata"
+          ],
+          [
+            "Formula sheet",
+            "Yes",
+            "Contains totals"
+          ],
+          [
+            "Next review",
+            "2026-06-30",
+            "Mock office workflow"
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "changedRanges": [
+        "Summary!A1:C6"
+      ],
+      "shouldValidateDerivedFactsBeforePreview": true,
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 5,
+      "maxInputTokens": 6500,
+      "maxOutputTokens": 1800,
+      "maxPayloadBytes": 50000,
+      "maxLatencyMs": 10000
+    },
+    "tags": [
+      "mutation",
+      "summary",
+      "preview",
+      "workflow"
+    ]
+  },
+  {
+    "id": "transactions-append-row-preview",
+    "category": "table edit",
+    "difficulty": "medium",
+    "intent": "mutation-preview",
+    "prompt": "Can you add one new row according to my input?",
+    "input": {
+      "request": "Append one new sales row to the Transactions table.",
+      "mode": "preview_update",
+      "target": {
+        "tableName": "Transactions"
+      },
+      "values": {
+        "rows": [
+          [
+            "2026-01-15",
+            "Globex",
+            "Support",
+            975,
+            "Open"
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "changedTables": [
+        "Transactions"
+      ],
+      "shouldAppendInsideTable": true,
+      "shouldPreserveTableStyle": true,
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "table",
+      "append",
+      "preview"
+    ]
+  },
+  {
+    "id": "transactions-append-missing-column-error",
+    "category": "table edit",
+    "difficulty": "negative",
+    "intent": "error",
+    "prompt": "Append a row to Transactions with one missing value.",
+    "input": {
+      "request": "Append a row to Transactions with one missing value.",
+      "mode": "preview_update",
+      "target": {
+        "tableName": "Transactions"
+      },
+      "values": {
+        "rows": [
+          [
+            "2026-01-15",
+            "Globex",
+            "Support",
+            975
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "error",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldFailGracefully": true,
+      "mustReturn": [
+        "columnCountMismatch"
+      ],
+      "mustNotMutateWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "negative",
+      "table",
+      "validation"
+    ]
+  },
+  {
+    "id": "sales-first-open-to-reviewed-preview",
+    "category": "smart edit",
+    "difficulty": "complex",
+    "intent": "mutation-preview",
+    "prompt": "Change the first open Sales item to Reviewed.",
+    "input": {
+      "request": "Change the first open Sales item to Reviewed.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Sales"
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "mustResolveRowByFilter": {
+        "column": "Status",
+        "value": "Open"
+      },
+      "changedRangesMustBeWithin": "Sales!E:E",
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 5,
+      "maxInputTokens": 6500,
+      "maxOutputTokens": 1800,
+      "maxPayloadBytes": 50000,
+      "maxLatencyMs": 10000
+    },
+    "tags": [
+      "smart-edit",
+      "target-resolution",
+      "preview"
+    ]
+  },
+  {
+    "id": "sales-add-filter-preview",
+    "category": "formatting",
+    "difficulty": "medium",
+    "intent": "mutation-preview",
+    "prompt": "Add filters to the Sales header row.",
+    "input": {
+      "request": "Add filters to the Sales header row.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Sales",
+        "range": "A1:E1"
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "changedRanges": [
+        "Sales!A1:E1"
+      ],
+      "operation": "addFilter",
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "formatting",
+      "filter",
+      "preview"
+    ]
+  },
+  {
+    "id": "sales-sort-by-amount-preview",
+    "category": "table edit",
+    "difficulty": "complex",
+    "intent": "mutation-preview",
+    "prompt": "Sort Sales by Amount from highest to lowest.",
+    "input": {
+      "request": "Sort Sales by Amount from highest to lowest.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Sales",
+        "range": "A1:E6"
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "operation": "sort",
+      "mustPreviewRowReorder": true,
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 5,
+      "maxInputTokens": 6500,
+      "maxOutputTokens": 1800,
+      "maxPayloadBytes": 50000,
+      "maxLatencyMs": 10000
+    },
+    "tags": [
+      "sort",
+      "preview",
+      "destructive-risk"
+    ]
+  },
+  {
+    "id": "sales-autofit-columns-preview",
+    "category": "formatting",
+    "difficulty": "medium",
+    "intent": "mutation-preview",
+    "prompt": "Autofit the Sales columns.",
+    "input": {
+      "request": "Autofit the Sales columns.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Sales",
+        "range": "A:E"
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "formattingOnly": true,
+      "operation": "autofit",
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "formatting",
+      "preview"
+    ]
+  },
+  {
+    "id": "blank-clear-used-area-preview",
+    "category": "cleanup",
+    "difficulty": "medium",
+    "intent": "mutation-preview",
+    "prompt": "Clear the test data from Blank A1:E20.",
+    "input": {
+      "request": "Clear the test data from Blank A1:E20.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Blank",
+        "range": "A1:E20"
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "changedRanges": [
+        "Blank!A1:E20"
+      ],
+      "mustWarnDestructive": true,
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "cleanup",
+      "destructive-risk",
+      "preview"
+    ]
+  },
+  {
+    "id": "duplicate-february-template-preview",
+    "category": "template cleanup",
+    "difficulty": "complex",
+    "intent": "mutation-preview",
+    "prompt": "Can you duplicate February sheet, remove data and keep only template?",
+    "input": {
+      "request": "Can you duplicate February sheet, remove data and keep only template?",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "February"
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "sourceSheet": "February",
+      "operation": "duplicateAndClearData",
+      "mustPreserve": [
+        "formatting",
+        "formulas",
+        "columnWidths"
+      ],
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 5,
+      "maxInputTokens": 6500,
+      "maxOutputTokens": 1800,
+      "maxPayloadBytes": 50000,
+      "maxLatencyMs": 10000
+    },
+    "tags": [
+      "template",
+      "preview",
+      "style-fidelity"
+    ]
+  },
+  {
+    "id": "duplicate-latest-template-clarify",
+    "category": "template cleanup",
+    "difficulty": "medium",
+    "intent": "clarification",
+    "prompt": "Can you duplicate latest sheet, remove data and keep only template?",
+    "input": {
+      "request": "Can you duplicate latest sheet, remove data and keep only template?",
+      "mode": "preview_update"
+    },
+    "expected": {
+      "resultType": "clarification",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldAskClarification": true,
+      "mustOfferCandidateSheets": [
+        "January",
+        "February"
+      ],
+      "shouldNotGuessIfNoMetadata": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "template",
+      "ambiguity",
+      "safe-targeting"
+    ]
+  },
+  {
+    "id": "february-clear-data-keep-formulas-preview",
+    "category": "template cleanup",
+    "difficulty": "complex",
+    "intent": "mutation-preview",
+    "prompt": "Remove input data from February but keep the template and formulas.",
+    "input": {
+      "request": "Remove input data from February but keep the template and formulas.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "February"
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "mustPreserve": [
+        "formulas",
+        "formatting",
+        "tables"
+      ],
+      "mustClearOnlyInputCells": true,
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 5,
+      "maxInputTokens": 6500,
+      "maxOutputTokens": 1800,
+      "maxPayloadBytes": 50000,
+      "maxLatencyMs": 10000
+    },
+    "tags": [
+      "template",
+      "formula-safety",
+      "preview"
+    ]
+  },
+  {
+    "id": "workflow-sales-report-then-summary-preview",
+    "category": "normal office workflow",
+    "difficulty": "workflow",
+    "intent": "workflow",
+    "prompt": "Analyze Sales and write a compact summary block.",
+    "input": {},
+    "expected": {
+      "resultType": "workflow",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "stepsMustPassInOrder": true,
+      "finalStepResultType": "preview",
+      "shouldReuseContextBetweenSteps": true
+    },
+    "budgets": {
+      "maxToolCalls": 7,
+      "maxInputTokens": 8500,
+      "maxOutputTokens": 2200,
+      "maxPayloadBytes": 70000,
+      "maxLatencyMs": 14000
+    },
+    "tags": [
+      "workflow",
+      "cache",
+      "preview"
+    ],
+    "notes": "Runner should send each step input to excel.agent.run. Use previous step contextId if returned.",
+    "steps": [
+      {
+        "label": "inspect-sales",
+        "input": {
+          "request": "Show me a few example rows from Sales",
+          "target": {
+            "sheetName": "Sales",
+            "range": "A1:E6"
+          }
+        },
+        "expected": {
+          "resultType": "answer",
+          "shouldReturnAny": [
+            "contextId",
+            "resourceUri"
+          ]
+        }
+      },
+      {
+        "label": "write-summary-preview",
+        "input": {
+          "request": "Create a basic summary block from the Sales inspection.",
+          "mode": "preview_update",
+          "target": {
+            "sheetName": "Summary",
+            "range": "A8:C11"
+          },
+          "values": {
+            "values": [
+              [
+                "Summary",
+                "Value",
+                "Source"
+              ],
+              [
+                "Sales rows",
+                5,
+                "Sales"
+              ],
+              [
+                "Open items",
+                3,
+                "Sales"
+              ],
+              [
+                "Formula rows",
+                9,
+                "FormulaSheet"
+              ]
+            ]
+          }
+        },
+        "expected": {
+          "resultType": "preview",
+          "changedRanges": [
+            "Summary!A8:C11"
+          ],
+          "shouldApplyDirectly": false
+        }
+      }
+    ]
+  },
+  {
+    "id": "workflow-preview-then-apply-cell",
+    "category": "safety",
+    "difficulty": "workflow",
+    "intent": "workflow",
+    "prompt": "Preview and then apply a single-cell update.",
+    "input": {},
+    "expected": {
+      "resultType": "workflow",
+      "shouldMutateWorkbook": true,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "stepsMustPassInOrder": true,
+      "finalStepShouldMutateWorkbook": true,
+      "mustUsePreviewId": true
+    },
+    "budgets": {
+      "maxToolCalls": 7,
+      "maxInputTokens": 8500,
+      "maxOutputTokens": 2200,
+      "maxPayloadBytes": 70000,
+      "maxLatencyMs": 14000
+    },
+    "tags": [
+      "safety",
+      "apply",
+      "preview"
+    ],
+    "steps": [
+      {
+        "label": "preview",
+        "input": {
+          "request": "Change Sales D3 to 525.",
+          "mode": "preview_update",
+          "target": {
+            "sheetName": "Sales",
+            "range": "D3"
+          },
+          "values": {
+            "values": [
+              [
+                525
+              ]
+            ]
+          }
+        },
+        "expected": {
+          "resultType": "preview",
+          "changedRanges": [
+            "Sales!D3"
+          ],
+          "shouldApplyDirectly": false
+        }
+      },
+      {
+        "label": "apply",
+        "input": {
+          "request": "Apply the previous preview.",
+          "mode": "apply",
+          "previewId": "$steps.preview.previewId"
+        },
+        "expected": {
+          "resultType": "apply",
+          "shouldMutateWorkbook": true,
+          "changedRanges": [
+            "Sales!D3"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "workflow-preview-apply-rollback-row",
+    "category": "safety",
+    "difficulty": "workflow",
+    "intent": "workflow",
+    "prompt": "Preview, apply, and rollback a row update.",
+    "input": {},
+    "expected": {
+      "resultType": "workflow",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "stepsMustPassInOrder": true,
+      "mustRollbackToOriginalValues": true
+    },
+    "budgets": {
+      "maxToolCalls": 7,
+      "maxInputTokens": 8500,
+      "maxOutputTokens": 2200,
+      "maxPayloadBytes": 70000,
+      "maxLatencyMs": 14000
+    },
+    "tags": [
+      "safety",
+      "rollback",
+      "preview"
+    ],
+    "steps": [
+      {
+        "label": "preview",
+        "input": {
+          "request": "Update Sales row 4.",
+          "mode": "preview_update",
+          "target": {
+            "sheetName": "Sales",
+            "range": "A4:E4"
+          },
+          "values": {
+            "values": [
+              [
+                "2026-01-08",
+                "Contoso",
+                "Implementation",
+                3500,
+                "Reviewed"
+              ]
+            ]
+          }
+        },
+        "expected": {
+          "resultType": "preview",
+          "changedRanges": [
+            "Sales!A4:E4"
+          ]
+        }
+      },
+      {
+        "label": "apply",
+        "input": {
+          "request": "Apply the previous preview.",
+          "mode": "apply",
+          "previewId": "$steps.preview.previewId"
+        },
+        "expected": {
+          "resultType": "apply",
+          "shouldMutateWorkbook": true
+        }
+      },
+      {
+        "label": "rollback",
+        "input": {
+          "request": "Rollback the last workbook change.",
+          "mode": "rollback",
+          "changeId": "$steps.apply.changeId"
+        },
+        "expected": {
+          "resultType": "rollback",
+          "shouldRestoreWorkbook": true
+        }
+      }
+    ]
+  },
+  {
+    "id": "direct-mutation-auto-upgrades-to-preview",
+    "category": "safety",
+    "difficulty": "medium",
+    "intent": "mutation-preview",
+    "prompt": "Change Sales E2 to Reviewed.",
+    "input": {
+      "request": "Change Sales E2 to Reviewed.",
+      "target": {
+        "sheetName": "Sales",
+        "range": "E2"
+      },
+      "values": {
+        "values": [
+          [
+            "Reviewed"
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "shouldApplyDirectly": false,
+      "mustExplainPreviewRequired": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "safety",
+      "preview-required"
+    ]
+  },
+  {
+    "id": "apply-without-preview-error",
+    "category": "safety",
+    "difficulty": "negative",
+    "intent": "error",
+    "prompt": "Apply the change now.",
+    "input": {
+      "request": "Apply the change now.",
+      "mode": "apply"
+    },
+    "expected": {
+      "resultType": "error",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldFailGracefully": true,
+      "mustReturn": [
+        "missingPreviewId"
+      ],
+      "mustNotMutateWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "negative",
+      "safety"
+    ]
+  },
+  {
+    "id": "rollback-without-change-error",
+    "category": "safety",
+    "difficulty": "negative",
+    "intent": "error",
+    "prompt": "Rollback the last change.",
+    "input": {
+      "request": "Rollback the last change.",
+      "mode": "rollback"
+    },
+    "expected": {
+      "resultType": "error",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldFailGracefully": true,
+      "mustReturn": [
+        "noRollbackTarget"
+      ],
+      "mustNotMutateWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "negative",
+      "rollback"
+    ]
+  },
+  {
+    "id": "mutation-on-formula-cell-warning",
+    "category": "formula safety",
+    "difficulty": "medium",
+    "intent": "mutation-preview",
+    "prompt": "Replace FormulaSheet D2 with 999.",
+    "input": {
+      "request": "Replace FormulaSheet D2 with 999.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "FormulaSheet",
+        "range": "D2"
+      },
+      "values": {
+        "values": [
+          [
+            999
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "changedRanges": [
+        "FormulaSheet!D2"
+      ],
+      "mustWarnFormulaWillBeReplaced": true,
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "formula",
+      "safety",
+      "preview"
+    ]
+  },
+  {
+    "id": "ambiguous-month-sheet-clarify",
+    "category": "targeting",
+    "difficulty": "simple",
+    "intent": "clarification",
+    "prompt": "Analyze the month sheet.",
+    "input": {
+      "request": "Analyze the month sheet."
+    },
+    "expected": {
+      "resultType": "clarification",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldAskClarification": true,
+      "mustOfferCandidateSheets": [
+        "January",
+        "February"
+      ],
+      "mustNotGuessSingleTarget": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "ambiguity",
+      "safe-targeting"
+    ]
+  },
+  {
+    "id": "broad-then-narrow-month-analysis",
+    "category": "targeting",
+    "difficulty": "workflow",
+    "intent": "workflow",
+    "prompt": "Analyze January after a broad monthly request.",
+    "input": {},
+    "expected": {
+      "resultType": "workflow",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "firstStepShouldClarify": true,
+      "secondStepShouldResolveTarget": "January",
+      "shouldReuseCandidates": true
+    },
+    "budgets": {
+      "maxToolCalls": 7,
+      "maxInputTokens": 8500,
+      "maxOutputTokens": 2200,
+      "maxPayloadBytes": 70000,
+      "maxLatencyMs": 14000
+    },
+    "tags": [
+      "ambiguity",
+      "workflow",
+      "target-resolution"
+    ],
+    "steps": [
+      {
+        "label": "broad",
+        "input": {
+          "request": "Analyze the month sheet."
+        },
+        "expected": {
+          "resultType": "clarification",
+          "candidateSheets": [
+            "January",
+            "February"
+          ]
+        }
+      },
+      {
+        "label": "narrow",
+        "input": {
+          "request": "Analyze January",
+          "target": {
+            "sheetName": "January"
+          }
+        },
+        "expected": {
+          "resultType": "answer",
+          "resolvedTarget": {
+            "sheetName": "January"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "explicit-range-january",
+    "category": "targeting",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "Can you look into January!A1:C5?",
+    "input": {
+      "request": "Can you look into January!A1:C5 actual values"
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "January",
+        "range": "A1:C5"
+      },
+      "mustReturn": [
+        "rangeValues"
+      ],
+      "maxRowsReturned": 5
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "target-resolution",
+      "explicit-range"
+    ]
+  },
+  {
+    "id": "conflicting-request-and-target",
+    "category": "targeting",
+    "difficulty": "negative",
+    "intent": "clarification",
+    "prompt": "Analyze Sales, but target points to February.",
+    "input": {
+      "request": "Analyze Sales.",
+      "target": {
+        "sheetName": "February"
+      }
+    },
+    "expected": {
+      "resultType": "clarification",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldDetectTargetConflict": true,
+      "conflict": {
+        "requestSheet": "Sales",
+        "targetSheet": "February"
+      },
+      "mustNotReadBothWithoutReason": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "negative",
+      "target-conflict"
+    ]
+  },
+  {
+    "id": "unknown-sheet-error",
+    "category": "error handling",
+    "difficulty": "negative",
+    "intent": "error",
+    "prompt": "Analyze the Revenue sheet.",
+    "input": {
+      "request": "Analyze the Revenue sheet.",
+      "target": {
+        "sheetName": "Revenue"
+      }
+    },
+    "expected": {
+      "resultType": "error",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldFailGracefully": true,
+      "mustReturn": [
+        "sheetNotFound"
+      ],
+      "shouldSuggestSimilarSheets": [
+        "Sales",
+        "January",
+        "February"
+      ],
+      "mustNotMutateWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "negative",
+      "sheet-not-found"
+    ]
+  },
+  {
+    "id": "misspelled-sheet-suggest",
+    "category": "error handling",
+    "difficulty": "negative",
+    "intent": "clarification",
+    "prompt": "Analyze the Sale sheet.",
+    "input": {
+      "request": "Analyze the Sale sheet.",
+      "target": {
+        "sheetName": "Sale"
+      }
+    },
+    "expected": {
+      "resultType": "clarification",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldSuggestSimilarSheets": [
+        "Sales"
+      ],
+      "mustNotGuessWithoutConfirmation": true,
+      "mustNotMutateWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "negative",
+      "fuzzy-match"
+    ]
+  },
+  {
+    "id": "unknown-table-error",
+    "category": "error handling",
+    "difficulty": "negative",
+    "intent": "error",
+    "prompt": "What columns does the RevenueTable table have?",
+    "input": {
+      "request": "What columns does the RevenueTable table have?",
+      "target": {
+        "tableName": "RevenueTable"
+      }
+    },
+    "expected": {
+      "resultType": "error",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldFailGracefully": true,
+      "mustReturn": [
+        "tableNotFound"
+      ],
+      "shouldListAvailableTables": true,
+      "mustNotMutateWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "negative",
+      "table-not-found"
+    ]
+  },
+  {
+    "id": "invalid-range-error",
+    "category": "error handling",
+    "difficulty": "negative",
+    "intent": "error",
+    "prompt": "Read Sales!NotARange.",
+    "input": {
+      "request": "Read Sales!NotARange.",
+      "target": {
+        "sheetName": "Sales",
+        "range": "NotARange"
+      }
+    },
+    "expected": {
+      "resultType": "error",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldFailGracefully": true,
+      "mustReturn": [
+        "invalidRange"
+      ],
+      "mustNotMutateWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "negative",
+      "invalid-range"
+    ]
+  },
+  {
+    "id": "sparse-range-token-saver",
+    "category": "token efficiency",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Read the sparse planning area without sending empty cells.",
+    "input": {
+      "request": "Read the sparse planning area without sending empty cells.",
+      "target": {
+        "sheetName": "Sparse",
+        "range": "A1:J10"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "resolvedTarget": {
+        "sheetName": "Sparse",
+        "range": "A1:J10"
+      },
+      "mustReturnSparseRows": true,
+      "mustReturnEmptySummary": true,
+      "mustNotReturnDenseRows": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 12000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "token-saver",
+      "sparse-range"
+    ]
+  },
+  {
+    "id": "range-too-large-guard",
+    "category": "token efficiency",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Read Sales!A1:XFD1048576.",
+    "input": {
+      "request": "Read Sales!A1:XFD1048576.",
+      "target": {
+        "sheetName": "Sales",
+        "range": "A1:XFD1048576"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldRefuseFullGridDump": true,
+      "mustReturnCompactSummaryInstead": true,
+      "shouldReturnAny": [
+        "contextId",
+        "resourceUri"
+      ],
+      "maxRowsReturned": 20
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "token-saver",
+      "guardrail",
+      "large-range"
+    ]
+  },
+  {
+    "id": "entire-workbook-dump-guard",
+    "category": "token efficiency",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Show me the entire workbook.",
+    "input": {
+      "request": "Show me the entire workbook."
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldRefuseFullWorkbookDump": true,
+      "mustReturnCompactWorkbookSummary": true,
+      "shouldReturnAny": [
+        "contextId",
+        "resourceUri"
+      ]
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "token-saver",
+      "guardrail"
+    ]
+  },
+  {
+    "id": "full-cell-dump-ask-narrow",
+    "category": "token efficiency",
+    "difficulty": "medium",
+    "intent": "clarification",
+    "prompt": "Print every cell in every sheet.",
+    "input": {
+      "request": "Print every cell in every sheet."
+    },
+    "expected": {
+      "resultType": "clarification",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldAskToNarrowScope": true,
+      "mustOfferAlternatives": [
+        "summary",
+        "specific sheet",
+        "specific range"
+      ],
+      "mustNotReturnFullCellDump": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "token-saver",
+      "clarification"
+    ]
+  },
+  {
+    "id": "summary-resource-for-truncated-detail",
+    "category": "token efficiency",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Analyze Sales but keep the response short.",
+    "input": {
+      "request": "Analyze Sales but keep the response short.",
+      "target": {
+        "sheetName": "Sales"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturnCompactSummary": true,
+      "shouldReturnAny": [
+        "contextId",
+        "resourceUri"
+      ],
+      "maxOutputParagraphs": 4
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "token-saver",
+      "resource-uri"
+    ]
+  },
+  {
+    "id": "prepare-then-reuse-context-sheet-count",
+    "category": "token efficiency",
+    "difficulty": "workflow",
+    "intent": "workflow",
+    "prompt": "Prepare workbook, then answer sheet count using cached map.",
+    "input": {},
+    "expected": {
+      "resultType": "workflow",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReuseContextBetweenSteps": true,
+      "secondStepMaxToolCalls": 1,
+      "mustNotRepeatFullDiscovery": true
+    },
+    "budgets": {
+      "maxToolCalls": 7,
+      "maxInputTokens": 8500,
+      "maxOutputTokens": 2200,
+      "maxPayloadBytes": 70000,
+      "maxLatencyMs": 14000
+    },
+    "tags": [
+      "token-saver",
+      "cache",
+      "workflow"
+    ],
+    "steps": [
+      {
+        "label": "prepare",
+        "input": {
+          "request": "Prepare workbook context.",
+          "mode": "prepare"
+        },
+        "expected": {
+          "resultType": "prepare",
+          "shouldReturnAny": [
+            "contextId",
+            "resourceUri"
+          ]
+        }
+      },
+      {
+        "label": "sheet-count",
+        "input": {
+          "request": "How many sheets are in this workbook?",
+          "contextId": "$steps.prepare.contextId"
+        },
+        "expected": {
+          "resultType": "answer",
+          "mustReturn": [
+            "sheetCount"
+          ],
+          "maxToolCalls": 1
+        }
+      }
+    ]
+  },
+  {
+    "id": "thai-sales-summary",
+    "category": "multilingual",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "ช่วยสรุปชีต Sales ให้หน่อย",
+    "input": {
+      "request": "ช่วยสรุปชีต Sales ให้หน่อย",
+      "target": {
+        "sheetName": "Sales",
+        "range": "A1:E6"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "sheetName": "Sales"
+      },
+      "mustAnswerInLanguage": "th",
+      "mustReturn": [
+        "summary",
+        "keyMetrics"
+      ]
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "thai",
+      "i18n",
+      "compact"
+    ]
+  },
+  {
+    "id": "thai-update-status-preview",
+    "category": "multilingual",
+    "difficulty": "medium",
+    "intent": "mutation-preview",
+    "prompt": "ช่วยเปลี่ยนสถานะ Sales แถว 2 เป็น Reviewed",
+    "input": {
+      "request": "ช่วยเปลี่ยนสถานะ Sales แถว 2 เป็น Reviewed",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Sales",
+        "range": "E2"
+      },
+      "values": {
+        "values": [
+          [
+            "Reviewed"
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreview": true,
+      "changedRanges": [
+        "Sales!E2"
+      ],
+      "mustAnswerInLanguage": "th",
+      "shouldApplyDirectly": false
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "thai",
+      "i18n",
+      "preview"
+    ]
+  },
+  {
+    "id": "values-shape-mismatch-error",
+    "category": "error handling",
+    "difficulty": "negative",
+    "intent": "error",
+    "prompt": "Write a 2x2 block into Sales D3.",
+    "input": {
+      "request": "Write these values into Sales D3.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Sales",
+        "range": "D3"
+      },
+      "values": {
+        "values": [
+          [
+            1,
+            2
+          ],
+          [
+            3,
+            4
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "error",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldFailGracefully": true,
+      "mustReturn": [
+        "shapeMismatch"
+      ],
+      "mustNotMutateWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "negative",
+      "shape-validation"
+    ]
+  },
+  {
+    "id": "mode-status-must-not-edit",
+    "category": "safety",
+    "difficulty": "negative",
+    "intent": "error",
+    "prompt": "Status mode should not perform mutation.",
+    "input": {
+      "request": "Change Sales E2 to Reviewed.",
+      "mode": "status",
+      "target": {
+        "sheetName": "Sales",
+        "range": "E2"
+      },
+      "values": {
+        "values": [
+          [
+            "Reviewed"
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "error",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldRejectModeIntentMismatch": true,
+      "mustNotMutateWorkbook": true,
+      "mustReturn": [
+        "modeIntentMismatch"
+      ]
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "negative",
+      "safety",
+      "mode"
+    ]
+  },
+  {
+    "id": "formula-output-protected-by-default",
+    "category": "formula safety",
+    "difficulty": "medium",
+    "intent": "clarification",
+    "prompt": "Update all totals in FormulaSheet manually.",
+    "input": {
+      "request": "Update all totals in FormulaSheet manually.",
+      "target": {
+        "sheetName": "FormulaSheet"
+      }
+    },
+    "expected": {
+      "resultType": "clarification",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldWarnAgainstOverwritingFormulas": true,
+      "shouldSuggestRecalculateInstead": true,
+      "mustNotMutateWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "formula",
+      "safety"
+    ]
+  },
+  {
+    "id": "recalculate-workbook-preview-or-action",
+    "category": "calculation",
+    "difficulty": "medium",
+    "intent": "action",
+    "prompt": "Recalculate the workbook.",
+    "input": {
+      "request": "Recalculate the workbook.",
+      "mode": "preview_update"
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreviewOrSafeAction": true,
+      "operation": "recalculate",
+      "shouldNotChangeCellValuesDirectly": true
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "calculation",
+      "safety"
+    ]
+  },
+  {
+    "id": "save-workbook-safe-action",
+    "category": "save",
+    "difficulty": "simple",
+    "intent": "action",
+    "prompt": "Save the active workbook.",
+    "input": {
+      "request": "Save the active workbook.",
+      "mode": "preview_update"
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "requiresPreviewOrConfirmation": true,
+      "operation": "save",
+      "mustNotInlineBackup": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "save",
+      "safety"
+    ]
+  },
+  {
+    "id": "closed-workbook-status-error",
+    "category": "connection",
+    "difficulty": "negative",
+    "intent": "error",
+    "prompt": "Tell me the active workbook when Excel has no active workbook.",
+    "input": {
+      "request": "Can you connect to Excel and tell me what workbook is active?",
+      "mode": "status"
+    },
+    "expected": {
+      "resultType": "error",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldFailGracefully": true,
+      "mustReturn": [
+        "noActiveWorkbook"
+      ],
+      "mustSuggestOpeningWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "negative",
+      "connection"
+    ],
+    "fixture": {
+      "excelState": "noActiveWorkbook"
+    }
+  },
+  {
+    "id": "workbook-name-target-resolution",
+    "category": "targeting",
+    "difficulty": "simple",
+    "intent": "answer",
+    "prompt": "OpenWorkbook should prefer the requested workbook name if multiple workbooks are open.",
+    "input": {
+      "request": "Can you look into Office Agent Behavior.xlsx and summarize Sales?",
+      "target": {
+        "workbookName": "Office Agent Behavior.xlsx",
+        "sheetName": "Sales"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "resolvedTarget": {
+        "workbookName": "Office Agent Behavior.xlsx",
+        "sheetName": "Sales"
+      },
+      "mustNotUseWrongWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "target-resolution",
+      "multi-workbook"
+    ]
+  },
+  {
+    "id": "multiple-workbooks-ambiguous",
+    "category": "targeting",
+    "difficulty": "negative",
+    "intent": "clarification",
+    "prompt": "Analyze Sales when multiple workbooks have a Sales sheet.",
+    "input": {
+      "request": "Analyze Sales."
+    },
+    "expected": {
+      "resultType": "clarification",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldAskWorkbookClarification": true,
+      "mustListCandidateWorkbooks": true,
+      "mustNotGuessWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 2,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 800,
+      "maxPayloadBytes": 16000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "negative",
+      "multi-workbook",
+      "safe-targeting"
+    ],
+    "fixture": {
+      "excelState": "multipleWorkbooksWithSalesSheet"
+    }
+  },
+  {
+    "id": "compact-answer-no-heavy-proof-inline",
+    "category": "token efficiency",
+    "difficulty": "medium",
+    "intent": "answer",
+    "prompt": "Give me a quick answer about Sales without detailed proof.",
+    "input": {
+      "request": "Give me a quick answer about Sales without detailed proof.",
+      "target": {
+        "sheetName": "Sales",
+        "range": "A1:E6"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustReturnCompactProof": true,
+      "mustNotInlineFullValidationTrace": true,
+      "shouldReturnAny": [
+        "resourceUri",
+        "contextId"
+      ]
+    },
+    "budgets": {
+      "maxToolCalls": 3,
+      "maxInputTokens": 4000,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 30000,
+      "maxLatencyMs": 6500
+    },
+    "tags": [
+      "token-saver",
+      "proof"
+    ]
+  },
+  {
+    "id": "complex-office-report-read-only",
+    "category": "normal office workflow",
+    "difficulty": "complex",
+    "intent": "answer",
+    "prompt": "Analyze the workbook and tell me the most important thing to look at, but do not edit anything.",
+    "input": {
+      "request": "Analyze the workbook and tell me the most important thing to look at, but do not edit anything."
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustNotMutateWorkbook": true,
+      "mustUseWorkbookSummaryBeforeFocusedReads": true,
+      "maxSheetsDeepRead": 2,
+      "mustReturn": [
+        "topInsight",
+        "sourceRanges"
+      ]
+    },
+    "budgets": {
+      "maxToolCalls": 5,
+      "maxInputTokens": 6500,
+      "maxOutputTokens": 1800,
+      "maxPayloadBytes": 50000,
+      "maxLatencyMs": 10000
+    },
+    "tags": [
+      "complex",
+      "read-only",
+      "token-saver"
+    ]
+  },
+  {
+    "id": "complex-office-report-with-summary-preview",
+    "category": "normal office workflow",
+    "difficulty": "workflow",
+    "intent": "workflow",
+    "prompt": "Analyze the workbook, then create a summary block without applying it.",
+    "input": {},
+    "expected": {
+      "resultType": "workflow",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "stepsMustPassInOrder": true,
+      "finalStepResultType": "preview",
+      "mustNotApplyDirectly": true,
+      "shouldReuseContextBetweenSteps": true
+    },
+    "budgets": {
+      "maxToolCalls": 7,
+      "maxInputTokens": 8500,
+      "maxOutputTokens": 2200,
+      "maxPayloadBytes": 70000,
+      "maxLatencyMs": 14000
+    },
+    "tags": [
+      "complex",
+      "workflow",
+      "preview",
+      "token-saver"
+    ],
+    "steps": [
+      {
+        "label": "analyze",
+        "input": {
+          "request": "Analyze this workbook and identify the key summary metrics."
+        },
+        "expected": {
+          "resultType": "answer",
+          "shouldReturnAny": [
+            "contextId",
+            "resourceUri"
+          ],
+          "mustNotMutateWorkbook": true
+        }
+      },
+      {
+        "label": "preview-summary",
+        "input": {
+          "request": "Create a summary block with the key metrics.",
+          "mode": "preview_update",
+          "target": {
+            "sheetName": "Summary",
+            "range": "A14:C18"
+          },
+          "values": {
+            "values": [
+              [
+                "Metric",
+                "Value",
+                "Source"
+              ],
+              [
+                "Top insight",
+                "Review",
+                "Workbook"
+              ],
+              [
+                "Revenue trend",
+                "Check",
+                "January/February"
+              ],
+              [
+                "Open items",
+                "Check",
+                "Sales"
+              ],
+              [
+                "Formula health",
+                "Check",
+                "FormulaSheet"
+              ]
+            ]
+          },
+          "contextId": "$steps.analyze.contextId"
+        },
+        "expected": {
+          "resultType": "preview",
+          "changedRanges": [
+            "Summary!A14:C18"
+          ],
+          "shouldApplyDirectly": false
+        }
+      }
+    ]
+  }
+]

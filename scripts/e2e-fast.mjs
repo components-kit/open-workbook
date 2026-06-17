@@ -31,7 +31,7 @@ async function main() {
       OPEN_WORKBOOK_ADDIN_PATH: "/addin",
       OPEN_WORKBOOK_STATE_DIR: path.join(tempRoot, "state"),
       OPEN_WORKBOOK_BACKUP_DIR: path.join(tempRoot, "backups"),
-      OPEN_WORKBOOK_MCP_SURFACE: "advanced",
+      OPEN_WORKBOOK_INTERNAL_TOOL_SURFACE: "1",
       OPEN_WORKBOOK_DISABLE_UPDATE_CHECK: "1"
     }
   });

@@ -2,6 +2,8 @@ export type ErrorSeverity = "info" | "warning" | "error" | "fatal";
 
 export const ExcelErrorCode = {
   AddinDisconnected: "ADDIN_DISCONNECTED",
+  AddinStale: "ADDIN_STALE",
+  NoActiveWorkbook: "NO_ACTIVE_WORKBOOK",
   WorkbookNotFound: "WORKBOOK_NOT_FOUND",
   SheetNotFound: "SHEET_NOT_FOUND",
   RangeInvalid: "RANGE_INVALID",

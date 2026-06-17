@@ -90,13 +90,8 @@ export class AddinConnection {
     this.options.onStatus?.(`Connecting to ${this.options.backendUrl}...`);
     this.socket = new WebSocket(this.options.backendUrl);
     this.socket.addEventListener("open", () => {
-      this.options.onStatus?.("Connected to local Open Workbook runtime.");
-      this.sendNotification("addin.hello", {
-        host: "excel",
-        runtime: "office-js",
-        capabilities: getRuntimeCapabilities(),
-        connectedAt: new Date().toISOString()
-      });
+      this.options.onStatus?.("Connected to local Open Workbook runtime. Checking active workbook...");
+      void this.sendHello();
       this.startHeartbeat();
     });
     this.socket.addEventListener("message", (event) => this.handleMessage(JSON.parse(String(event.data))));
@@ -389,6 +384,23 @@ export class AddinConnection {
         }
       });
     }
+  }
+
+  private async sendHello(): Promise<void> {
+    let activeWorkbook;
+    try {
+      activeWorkbook = await getActiveWorkbookContext();
+    } catch {
+      activeWorkbook = undefined;
+    }
+    this.sendNotification("addin.hello", {
+      host: "excel",
+      runtime: "office-js",
+      capabilities: getRuntimeCapabilities(),
+      ...(activeWorkbook ? { activeWorkbook } : {}),
+      connectedAt: new Date().toISOString()
+    });
+    this.options.onStatus?.(activeWorkbook ? "Workbook ready for local Open Workbook runtime." : "Connected to local Open Workbook runtime. Open a workbook to continue.");
   }
 
   private sendNotification(method: string, params: unknown): void {

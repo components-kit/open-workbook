@@ -11,6 +11,7 @@ function App() {
 
   const statusTone = useMemo(() => {
     const normalized = status.toLowerCase();
+    if (normalized.includes("workbook ready")) return "success";
     if (normalized.includes("connected to local")) return "success";
     if (normalized.includes("could not") || normalized.includes("did not load")) return "error";
     if (normalized.includes("disconnected") || normalized.includes("retrying") || normalized.includes("waiting") || normalized.includes("connecting")) return "warning";
@@ -91,6 +92,7 @@ function StatusBadge({ status, statusTone }: { status: string; statusTone: strin
 
 function formatStatus(status: string) {
   const normalized = status.toLowerCase();
+  if (normalized.includes("workbook ready")) return "Workbook ready";
   if (normalized.includes("connected to local")) return "Connected to local runtime";
   if (normalized.includes("office.js did not load")) return "Office.js did not load";
   if (normalized.includes("could not")) return "Could not connect";

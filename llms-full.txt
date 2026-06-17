@@ -44,9 +44,9 @@ Daily spreadsheet work usually does not need the largest model available, but it
 
 The project is being prepared for npm distribution as `@components-kit/open-workbook`. It is not a Microsoft AppSource add-in and does not attempt to install itself into Excel without user or admin trust approval.
 
-Stable areas include runtime connection, workbook/sheet/range operations, compact workbook/table/range discovery, workbook-wide lookup/search, compact paged reads with token telemetry, reversible batches, combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
+Stable areas include runtime connection, workbook/sheet/range operations, compact workbook/table/range discovery, workbook-wide lookup/search, compact paged reads with token telemetry, reversible batches, combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Host-limited paths return explicit capability-unavailable results instead of pretending to work.
 
-The simple flow is MCP-owned: `npx ... mcp` starts the MCP adapter, the local add-in taskpane server, and an embedded backend when no shared daemon is running. By default, agents see the compact `excel.agent.run` workflow interface instead of hundreds of Excel primitives; Open Workbook handles workbook discovery, cached metadata, target resolution, preview/apply, validation, rollback, and compact proof internally. The shared `owb daemon` remains available for advanced multi-client coordination.
+The simple flow is MCP-owned: `npx ... mcp` starts the MCP adapter, the local add-in taskpane server, and an embedded backend when no shared daemon is running. Agents see one public workflow tool, `excel.agent.run`, instead of hundreds of Excel primitives; Open Workbook handles workbook discovery, cached metadata, target resolution, preview/apply, validation, rollback, and compact proof internally. The full operation catalog remains backend capability for deterministic orchestration and test coverage. The shared `owb daemon` remains available for multi-client coordination.
 
 ## Architecture
 
@@ -107,16 +107,10 @@ Use the printed MCP launch command in your agent UI:
 npx -y @components-kit/open-workbook@latest mcp
 ```
 
-Start the MCP adapter with the default agent workflow surface:
+Start the MCP adapter with the public agent workflow surface:
 
 ```bash
 npx -y @components-kit/open-workbook@latest mcp
-```
-
-For debugging or compatibility with clients that need the previous primitive MCP surface, set:
-
-```bash
-OPEN_WORKBOOK_MCP_SURFACE=advanced npx -y @components-kit/open-workbook@latest mcp
 ```
 
 Start the agent UI before opening the Open Workbook add-in in Excel; the MCP command starts the local add-in asset server and backend for the simple flow.
@@ -193,7 +187,7 @@ Environment overrides:
 
 ## Token-Saving Reads
 
-Open Workbook exposes `excel.agent.run` by default so agents can send workbook intent without manually choosing discovery, lookup, read, write, validation, and rollback primitives. The backend builds a workbook metadata cache, resolves natural-language targets across sheets, tables, headers, named ranges, regions, summaries, and formulas, performs targeted compact reads internally, and returns compact structured answers, previews, proof ranges, telemetry, and resource links. `auto` can apply clearly scoped low-risk value edits after preview checks, while ambiguous, broad, formula-sensitive, structural, or destructive edits stop for review. Close matches return candidates instead of guessing. In advanced mode, selected compact discovery/read tools can reuse `workbookContextId` so agents can route multiple calls without repeating workbook discovery.
+Open Workbook exposes `excel.agent.run` so agents can send workbook intent without manually choosing discovery, lookup, read, write, validation, and rollback primitives. The backend builds a workbook metadata cache, resolves natural-language targets across sheets, tables, headers, named ranges, regions, summaries, and formulas, performs targeted compact reads internally, and returns compact structured answers, previews, proof ranges, telemetry, and resource links. Use explicit modes for deterministic workflows: `prepare`, `find`, `answer`, `preview_update`, `apply_update`, `validate`, and `rollback`. Omitted mode or `auto` remains compatible for casual prompts and can apply clearly scoped low-risk value edits after preview checks, while ambiguous, broad, formula-sensitive, structural, or destructive edits stop for review. Close matches return candidates instead of guessing; retry with `target.candidateId` from the chosen candidate to continue on the one-tool surface. Schema/header-only requests return cached table or range metadata when possible; requests for rows, samples, explicit A1 ranges, raw monthly sheets, or actual values perform a live read. Raw monthly transaction/invoice sections can resolve from detected header blocks even when no Excel Table exists. Table append requests preview/apply through the same agent tool while preserving the table mutation path internally.
 
 When details would exceed a caller's budget, compact tools can store the full payload locally and return an `excel://compact/{resource_id}` handle for later retrieval through `excel.compact.get_resource`. Compact summary/schema cache entries are invalidated after workbook mutations. Use `excel.validate.compact` for validation proof that returns counts and examples inline while keeping the full issue report behind a resource handle.
 
@@ -204,6 +198,7 @@ corepack pnpm check
 corepack pnpm test
 corepack pnpm test:e2e:agent-surface
 corepack pnpm test:e2e:agent-workflow
+corepack pnpm test:e2e:office-agent:behavior
 corepack pnpm test:e2e:fast
 corepack pnpm test:e2e:agent:quality:compare
 corepack pnpm test:e2e:agent:quality:gate
@@ -297,6 +292,29 @@ All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
 
+## [Unreleased]
+
+## [0.1.14] - 2026-06-18
+
+### Added
+
+- Added faster default `excel.agent.run` paths for workbook overviews, active/current sheet prompts, explicit two-sheet comparisons, style previews, formula previews, and template cleanup previews.
+- Added `target.candidateId` recovery for `excel.agent.run` so default-surface agents can retry an ambiguous workbook target without switching to primitive tools.
+- Added cached schema/header answers for `excel.agent.run` schema-style requests to avoid broad reads when table or range metadata is already available.
+- Added live-read routing and table-append previews for `excel.agent.run` so default-surface agents can read actual rows or append table data without using primitive tools.
+- Added raw monthly sheet range resolution for `excel.agent.run`, including exact sheet/range parsing and transaction/invoice header-block reads when no Excel Table exists.
+- Added a logging-first office-agent behavior harness for normal workbook overview, sheet reading, comparison, simple edit, and formula prompts without making the run a deploy gate.
+- Added the production office-agent scenario fixture to the behavior harness, expanding coverage to connection, targeting, table reads/edits, formula safety, token guards, multilingual prompts, save/recalc actions, and multi-step workflows.
+
+### Changed
+
+- Made vague workbook-level `.xlsx` review prompts return a complete lightweight workbook overview before target-specific reads, avoiding cold broad sheet sampling and misleading narrow-sheet summaries.
+- Reframed compact read/resource tools as backend-owned internals while keeping normal agent guidance centered on the backend-composed `excel.agent.run` workflow.
+- Removed the public advanced MCP surface path; primitive operation exposure is now reserved for internal test/development harnesses while packaged MCP clients see one public tool.
+- Reduced normal office-agent behavior call count and payload size by auto-applying small explicit value edits, compacting apply results, and updating the behavior harness to avoid unnecessary prepare/read chains.
+- Updated Open Workbook Excel skill guidance so default-surface clients start with `excel.agent.run` `mode: "prepare"` instead of unavailable advanced workflow tools.
+- Clarified OpenCode guidance so default-surface clients call `excel.agent.run` instead of runtime/workbook primitives.
+
 ## [0.1.13] - 2026-06-16
 
 ### Fixed
@@ -312,14 +330,14 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 ### Added
 
 - Added the default `excel.agent.run` MCP workflow surface so normal agents can use one compact intent interface while the backend orchestrates workbook discovery, cached metadata, target resolution, preview/apply, validation, rollback, and proof generation internally.
-- Added server-side `workbookContextId` reuse for agent prepare/find/answer/update flows, plus context-aware advanced compact routes for workbook summary, sheet summary, range compact reads, table compact reads, and compact resource fetches.
+- Added server-side `workbookContextId` reuse for agent prepare/find/answer/update flows, plus context-aware internal compact routes for workbook summary, sheet summary, range compact reads, table compact reads, and compact resource fetches.
 - Added natural-language target resolution across sheets, tables, headers, named ranges, regions, summary blocks, and formula regions with structured ambiguity candidates instead of guessing.
 - Added safe `auto` mode application for clearly scoped low-risk value edits after preview checks, while formula-sensitive, broad, sparse, structural, destructive, stale, or ambiguous edits stop before mutation.
 - Added agent surface and workflow E2E coverage for default tool exposure, metadata cache reuse, compact target reads, preview/apply confirmation, safe auto-apply, formula-sensitive blocking, and context-aware compact routes.
 
 ### Changed
 
-- Default MCP `tools/list` now exposes only `excel.agent.run`; set `OPEN_WORKBOOK_MCP_SURFACE=advanced` to expose the previous optimized primitive surface for debugging and compatibility.
+- Default MCP `tools/list` now exposes only `excel.agent.run`; primitive operation exposure is no longer documented as a public MCP client mode.
 - Updated Open Workbook agent skill guidance, tool-surface docs, release E2E report, and generated `llms-full.txt` for the agent workflow and context ID routing model.
 
 ## [0.1.11] - 2026-06-15
@@ -487,7 +505,9 @@ description: "Use when an agent needs to automate live Microsoft Excel workbooks
 
 # Open Workbook Excel
 
-Use Open Workbook MCP for live desktop Excel work. Prefer it over manual UI automation, per-cell scripts, or offline `.xlsx` rewrites when the workbook is open in Excel and the user expects formatting, formulas, filters, tables, pivots, charts, backups, and rollback safety to survive.
+Use Open Workbook MCP for live desktop Excel work. It is the required first path when the workbook is open in Excel and the user expects current cell values, unsaved edits, formatting, formulas, filters, tables, pivots, charts, backups, and rollback safety to survive.
+
+Do not inspect or modify an open workbook with shell scripts, Python, openpyxl, pandas, manual UI automation, or offline `.xlsx` parsing unless the user explicitly asks for offline file analysis or the MCP path is unavailable and you first ask permission to use a non-live fallback. If Open Workbook MCP is connected but cannot return the needed data, report that MCP limitation instead of silently bypassing it.
 
 ## First Calls
 
@@ -497,62 +517,47 @@ On the default MCP surface, call only:
 excel.agent.run
 ```
 
-Use `mode: "prepare"` to cache workbook metadata, `mode: "find"` to locate sheets/tables/headers/named ranges/regions, `mode: "answer"` for targeted compact reads and deterministic summaries, `mode: "auto"` for normal user requests, `mode: "preview_update"` when a manual review step is wanted before a write, `mode: "apply_update"` only with the returned `confirmationToken`, `mode: "rollback"` for recovery, and `mode: "validate"` after risky changes. Treat `resourceLinks`, `nextAction`, `proof`, and `telemetry` as the primary contract.
+Use `mode: "prepare"` to cache lightweight workbook structure metadata, `mode: "find"` to locate sheets/tables/headers/named ranges/regions, `mode: "answer"` for targeted compact reads and deterministic summaries, `mode: "preview_update"` when a manual review step is wanted before a write or table append, `mode: "apply_update"` only with the returned `confirmationToken`, `mode: "rollback"` for recovery, and `mode: "validate"` after risky changes. Omitted mode or `mode: "auto"` remains compatible for casual prompts, but explicit modes are more predictable for agent UIs. Treat `resourceLinks`, `nextAction`, `proof`, and `telemetry` as the primary contract.
 
-`auto` may apply clearly scoped low-risk value edits after preview checks. Respect `nextAction` when `auto` returns `PREVIEW_READY`, `NEEDS_INPUT`, `AMBIGUOUS_TARGET`, `VALIDATION_FAILED`, or `manual_review`; do not force formula, structural, broad, sparse, stale, or ambiguous edits through a value write.
+`auto` may answer vague `.xlsx` review, workbook overview, current sheet, and table-list questions from lightweight cached metadata, compare two explicitly named sheets in one call, and apply clearly scoped low-risk value edits after preview checks. Targeted row/value/formula/comparison requests upgrade the context with sheet samples only when needed. Respect `nextAction` when `auto` returns `PREVIEW_READY`, `NEEDS_INPUT`, `AMBIGUOUS_TARGET`, `VALIDATION_FAILED`, or `manual_review`; do not force formula, style, template, structural, broad, sparse, stale, or ambiguous edits through a value write.
 
 Pass natural-language targets directly when the user speaks casually, such as "June financial sheet" or "amount column in transactions". The backend resolves them against cached workbook metadata and returns `AMBIGUOUS_TARGET` with candidates when the request is too broad.
 
-The tools below are the advanced compatibility/debug surface. Use them only when `OPEN_WORKBOOK_MCP_SURFACE=advanced` exposes them or when the user explicitly asks for primitive tool control.
+If `excel.agent.run` returns `AMBIGUOUS_TARGET`, choose one returned candidate and retry with the same `workbookContextId` plus `target.candidateId`. For exact value reads, call `mode: "answer"` with `target.sheetName` and `target.range` when available, or put the sheet name and A1 range clearly in the request. Requests for rows, samples, actual values, raw monthly sheets, or explicit A1 ranges should return live read proof; schema/columns/headers-only questions can return cached metadata. For raw month sheets without Excel Tables, ask for the exact sheet/range or the transaction/invoice section by month, such as `Apr 2026 invoice rows`. For small direct value edits with explicit range and values, use `auto` and let the backend apply safely in one call. For related edits across multiple ranges, send one `mode: "preview_update"` call with `values.patches`, where each patch has `target.sheetName`, `target.range`, and a 2D `values` matrix; then call `mode: "apply_update"` once with the returned `operationId` and `confirmationToken`. To add rows to an Excel table on the default surface, call `mode: "preview_update"` with `target.candidateId` or `target.tableName` and `values.rows`, then call `mode: "apply_update"` with the returned `operationId` and `confirmationToken`.
 
-Start every workbook session with:
-
-```text
-excel.workflow.prepare_session
-```
-
-If `excel.workflow.prepare_session` is unavailable, call `excel.runtime.get_status`, `excel.runtime.get_active_context`, `excel.runtime.get_capabilities`, `excel.workbook.get_workbook_map`, and `excel.collab.get_status`.
+Open Workbook's primitive operation catalog, compact reads, batch/plan/workflow tools, validation, backup, snapshot, transaction, job, lock, and collaboration capabilities are backend-owned for normal agents. Do not ask for or assume a separate primitive MCP surface in user workflows.
 
 If the add-in is disconnected, ask the user to start their agent UI so it launches the configured Open Workbook MCP command, then open Excel and load the Open Workbook add-in. For manual troubleshooting, run `npx -y @components-kit/open-workbook@latest mcp` and retry. Do not fake workbook state from stale assumptions.
 
 ## Tool Selection
 
-- When the target is unknown, use lookup first: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range`, then inspect one candidate with `excel.lookup.inspect_match`.
-- Start with compact context tools for known large scopes: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, and `excel.range.get_summary`.
-- Prefer `excel.range.read_compact` and `excel.table.read_compact` for exploratory data reads. Treat brief proof plus `contextId`/`resourceUri` as enough unless exact cell bodies are required.
-- In advanced/debug mode, reuse `workbookContextId` from `excel.agent.run` prepare with context-aware compact tools instead of repeating workbook discovery.
-- Use `excel.validate.compact` for validation proof when counts/examples are enough. Fetch `excel://compact/{resource_id}` details only if the user or task needs the full report.
-- If a tool returns `nextActionRecommendation: "answer_now"`, answer from the compact proof instead of continuing to inspect or validate unless the user asked for exhaustive audit.
-- Treat high-confidence compact proofs with `reasoningHints` such as "Agent can answer now" as a stop signal. Fetch `contextId` details only for failures, warnings, low confidence, truncation, or explicit audit requests.
-- For long sessions or token debugging, call `excel.compact.context_stats` instead of listing or fetching full resources.
-- Use `excel.range.read_*` for scoped cell data and metadata.
-- Use `excel.table.*` for structured table rows, filters, sorts, totals, and table resizing.
-- Use `excel.template.*`, `excel.style.*`, and `excel.formula.*` when preserving or repairing templates matters.
-- Use `excel.plan.*` for previewable multi-step changes that need rollback and stale-target checks.
-- Use `excel.batch.preflight` before large generated writes, then choose direct apply, queued submit, or `excel.batch.submit_chunked` with job progress based on the recommendation.
-- Use `excel.batch.*` for compact, direct range mutations that still need backups, fingerprints, permissions, and transaction logging. Provide `idempotencyKey` on mutating tools when retrying or when the agent may be interrupted.
-- Use `excel.workflow.create_formula_sheet` for standard sheet creation with values, formulas, number formats, and formula validation in one response.
-- Use `excel.workflow.repair_formula_errors` for formula error repair when you have an error range plus a source formula range or exact formulas to write.
-- Use `excel.workflow.preview_risky_edit` for scoped risky edits that need before/after snapshots, a diff, and rollback preview in one response. Provide at least one minimal scoped operation and leave `apply` enabled unless the user asked for preview only.
-- Use `excel.workflow.create_template_report` for standard template report creation that needs region clear/fill, style comparison/repair, and validation in one response.
-- Use `excel.workflow.create_pivot_chart_summary` for standard PivotTable plus chart summary tasks that need create, refresh, and validation in one response.
-- Use `excel.workflow.inspect_analyze` for deterministic analysis such as missing values, duplicates, type profiling, and basic numeric summaries instead of asking the model to calculate from raw rows.
-- Use `excel.workflow.rollback_validate` when a recovery task should rollback or restore, recalculate, validate, and return proof in one call.
-Combined mutating workflows include a read-only preflight payload before mutation; still prefer `excel.workflow.prepare_session` first when possible.
-- After a mutation returns `invalidatedContextIds`, do not reuse those old compact resources; read fresh compact context only if the next step truly needs it.
-- Use `excel.validate.*` before and after risky changes.
-- Use `excel.backup.*`, `excel.snapshot.*`, `excel.transaction.*`, and `excel.job.*` for recovery, audit, long-running progress, rollback previews, and rollback chains.
-- Use `excel.task.*`, `excel.lock.*`, `excel.collab.*`, and `excel.conflict.*` for multi-agent workbook work.
+On the default surface, keep the interaction in `excel.agent.run` instead of composing primitive reads, compact resources, validation, and mutation tools yourself:
+
+- Use `mode: "prepare"` for workbook identity and lightweight structure context.
+- Use `mode: "find"` when the target is unknown.
+- Use `mode: "answer"` for targeted reads, deterministic summaries, schemas, raw monthly sections, and comparisons.
+- Use `mode: "preview_update"` and then `mode: "apply_update"` for user-reviewable changes.
+- Use `mode: "validate"` or `mode: "rollback"` for post-change checks and recovery.
+
+The backend owns compacting, cached metadata, target resolution, live reads, proof, validation, rollback metadata, and resource links for normal agents. Treat returned `resourceLinks`, `compactProof`, `invalidatedContextIds`, `nextAction`, and telemetry as evidence, not as mandatory follow-up calls.
+
+The primitive capabilities below are internal/backend routing concepts, not normal agent calls:
+
+- Lookup, compact summaries, `excel.range.read_compact`, `excel.table.read_compact`, `excel.validate.compact`, and `excel.compact.get_resource` are composed by the backend to keep `agent.run` responses bounded.
+- Runtime and workbook diagnostics such as `excel.runtime.get_status`, `excel.runtime.get_capabilities`, and `excel.workbook.get_workbook_map` are backend capability concepts; normal agents should request status, prepare, find, or answer through `excel.agent.run`.
+- Range/table/template/style/formula/plan/batch/workflow/validation/backup/snapshot/transaction/job/task/lock/collaboration capabilities remain part of the backend operation catalog, including `excel.plan.*` and `excel.batch.*`.
+- If `agent.run` returns compact proof or `nextAction: "answer_now"`, answer from that proof instead of fetching stored detail unless the user requested an audit.
 
 For detailed routing, read `references/tool-selection.md`.
 
 ## Reliability Rules
 
 - Never bypass Open Workbook's safety lifecycle for mutations: permissions, scoped locks, snapshots, backups, fingerprints, Office.js execution, validation, transaction records, and rollback metadata.
-- Never write cell-by-cell loops. Batch values, formulas, number formats, and styles as 2D matrices over contiguous ranges.
+- Never write cell-by-cell loops. Batch values, formulas, number formats, and styles as 2D matrices over contiguous ranges. For repeated zone/range edits, use `values.patches` in one grouped preview instead of issuing one tool call per range.
 - Never pad a broad range write with `null` or blanks when only a smaller range is intended. Write the smallest changed rectangle or use explicit clear tools.
 - Read only the workbook properties needed for the task. Avoid broad workbook scans unless the task is audit, validation, search, or repair.
 - Do not use full range/table reads when compact summaries, schemas, samples, or projected pages are enough. Full reads are for explicit user requests, audits, exports, or exact-data tasks.
+- Do not use shell commands, Python, openpyxl, pandas, or offline `.xlsx` parsing when the workbook is already open and connected through Open Workbook MCP. If the default MCP answer path cannot return the needed live values, report the MCP limitation and ask before using a non-live fallback.
 - Treat `CAPABILITY_UNAVAILABLE`, partial capability warnings, and Office.js host limits as real results. Explain them and choose a supported path.
 - Preserve existing template conventions over generic formatting rules.
 - After mutation, validate the affected area and surface backups, transaction IDs, warnings, diffs, and rollback options.
@@ -560,9 +565,10 @@ For detailed routing, read `references/tool-selection.md`.
 
 ## Critical Recipes
 
-- Sheet/formula, template-report, pivot/chart, risky-edit, and formula-repair tasks: prefer the matching `excel.workflow.*` tool, then validate compactly.
-- Large table work: inspect schema first, read compact pages only when row data is needed, mutate with table-native tools, then validate tables/filters.
-- Unknown target work: resolve the sheet/table/column/range with lookup tools before reading data.
+- Sheet/formula, template-report, pivot/chart, risky-edit, and formula-repair tasks: use `excel.agent.run` modes and let the backend select the matching workflow.
+- Large table work: use `prepare`, `find`, `answer`, `preview_update`, and `apply_update`; the backend should inspect schema, read compact pages only when row data is needed, mutate with table-native capabilities, then validate.
+- Multi-range value updates: use one grouped `preview_update` with `values.patches`, then one `apply_update`. Do not split related patches unless apply returns a hard failure with actionable issue details.
+- Unknown target work: use `mode: "find"` or retry with a returned `target.candidateId`.
 - Snapshot/diff/rollback proof: prefer compact diff or risky-edit workflow results; fetch full compact resources only for detailed review.
 - Multi-agent work: use collaboration/task/lock tools before mutation.
 
@@ -584,22 +590,26 @@ Choose the narrowest Open Workbook MCP interface that preserves workbook intent.
 
 Default MCP clients should use `excel.agent.run` as the public interface. Use its request modes instead of choosing primitive tools directly:
 
-- `prepare`: cache workbook metadata for sheets, tables, headers, named ranges, regions, summaries, formulas, and sheet kind.
+- `prepare`: cache lightweight workbook structure metadata for sheets, tables, named ranges, regions, and sheet kind.
 - `find`: search cached metadata for candidate sheets, tables, headers, named ranges, regions, summary blocks, and formula regions.
-- `answer`: perform targeted compact reads and deterministic calculations.
-- `auto`: handle normal user requests and apply only clearly scoped low-risk value edits after preview checks.
-- `preview_update`: resolve the target, read before values, block unsafe broad/formula edits, and return an operation plus confirmation token.
+- `answer`: perform targeted live reads and deterministic calculations for row/value/sample/A1-range/raw-monthly-section requests; use cached metadata for schema-only requests.
+- `auto`: compatibility route for casual prompts; explicit modes are preferred when the agent knows the workflow step.
+- `preview_update`: resolve the target, read before values for range writes, preview table-row appends, block unsafe broad/formula edits, and return an operation plus confirmation token.
 - `apply_update`: apply a previewed update only with the returned confirmation token.
 - `rollback`: map transaction or backup identifiers to the rollback lifecycle.
 - `validate`: validate the current workbook after risky changes.
 
-The primitive tools below are the advanced compatibility/debug surface. Use them only when that surface is explicitly exposed.
+If an `excel.agent.run` result returns `AMBIGUOUS_TARGET`, select one returned candidate and retry with `target.candidateId` plus the same `workbookContextId`. For table appends, pass `target.candidateId` or `target.tableName` with `values.rows`, preview first, then apply with the returned confirmation token. Do not switch to shell/Python/offline `.xlsx` parsing for live Excel workbooks.
+
+The primitive tools below describe backend capabilities and test coverage. Normal agents should not chain compact primitive calls when an `excel.agent.run` mode can perform the task.
+`excel.agent.run` receives the active Excel selection as ambient context, so prompts such as "selected cell", "active cell", "selected range", and "this column" should be handled through the agent surface without a separate selection tool call.
 
 ## Session And Discovery
 
 - Runtime health: `excel.runtime.get_status`
-- Full workflow setup: `excel.workflow.prepare_session`
-- Active workbook and selection context: `excel.runtime.get_active_context`
+- Full backend workflow setup capability: `excel.workflow.prepare_session`
+- Active workbook context: `excel.runtime.get_active_context`
+- Active selection diagnostic: `excel.runtime.get_selection`
 - Host/tool capability matrix: `excel.runtime.get_capabilities`
 - Workbook structure: `excel.workbook.get_workbook_map`
 - Compact workbook structure: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`
@@ -607,9 +617,9 @@ The primitive tools below are the advanced compatibility/debug surface. Use them
 - Open workbooks: `excel.workbook.list_open_workbooks`
 - Sheets: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.get_summary`, `excel.sheet.get_used_range`
 
-Prefer `excel.workflow.prepare_session` as the first call. If capabilities are unknown because the add-in is disconnected, stop and ask for runtime setup instead of guessing.
+On the public surface, prefer `excel.agent.run` with `mode: "prepare"` as the first call. If capabilities are unknown because the add-in is disconnected, stop and ask for runtime setup instead of guessing.
 
-When `excel.agent.run` prepare has returned a `workbookContextId`, reuse it with context-aware compact tools in advanced/debug mode: `excel.workbook.get_summary`, `excel.sheet.get_summary`, `excel.range.read_compact`, `excel.table.read_compact`, and `excel.compact.get_resource`.
+When `excel.agent.run` prepare has returned a `workbookContextId`, pass that same id back to later `agent.run` calls. The backend may reuse context-aware compact capabilities such as workbook/sheet summaries, compact range/table reads, and compact resources without exposing them to the agent.
 
 ## Reading Data
 
@@ -623,7 +633,7 @@ When `excel.agent.run` prepare has returned a `workbookContextId`, reuse it with
 - Search and diagnostics: `excel.range.search`, `excel.range.find_blank_cells`, `excel.range.find_errors`
 - Table data: use `excel.table.read_compact` with `columns`, `rowOffset`, `maxRows`, and include flags
 
-Use lookup tools before reading when the target sheet, table, header, entity, or range is unknown. Use compact summaries or schemas before cell bodies once the target scope is known. Use explicit sheet/address ranges whenever possible. Use used-range or workbook-wide scans only for audits, validation, search, or discovery. For simple reads, use one projected `excel.range.read_compact` or `excel.table.read_compact` call instead of separate raw reads.
+Backend routing should use lookup capabilities before reading when the target sheet, table, header, entity, or range is unknown. It should use compact summaries or schemas before cell bodies once the target scope is known. Agents should express explicit sheet/address ranges whenever possible and avoid prompts that require used-range or workbook-wide scans unless the task is audit, validation, search, or discovery.
 
 ## Writing Data
 
@@ -644,7 +654,7 @@ Use lookup tools before reading when the target sheet, table, header, entity, or
 - Queued mutation status: `excel.transaction.get`, `excel.transaction.wait`, `excel.transaction.cancel`
 
 Prefer `excel.workflow.create_formula_sheet` for standard new sheets that need values, formulas, number formats, and validation. Prefer `excel.workflow.repair_formula_errors` for formula error repair when an error range and source formula range are known. Prefer `excel.workflow.preview_risky_edit` when a risky scoped edit should apply and return before/after snapshots, a diff, transaction id, and rollback preview in one response. Provide at least one minimal scoped operation and leave `apply` enabled unless the user asked for preview only. Prefer `excel.plan.*` when a user should review a diff before applying, when formulas/templates are at risk, or when rollback clarity matters. Prefer `excel.batch.*` for compact, well-scoped range mutations. Preflight large generated batches before applying them.
-Combined mutating workflows include an internal read-only preflight payload before mutation; still prefer `excel.workflow.prepare_session` first when possible.
+Combined mutating workflows include an internal read-only preflight payload before mutation. On the public surface use `excel.agent.run` preview/apply modes; backend tests may exercise primitive workflow capabilities directly.
 Values, formulas, formats, and styles are separate workbook facets. Use `excel.range.write_values` for constants only, `excel.range.write_formulas` for formulas beginning with `=`, and `excel.range.write_number_formats` for display formats. Do not merge formulas into a values write just because the matrix is convenient.
 Do not pad a large range write with `null`, blank strings, or unchanged cells when only one cell or a smaller rectangle should change. Use the smallest changed target range, or use `excel.range.clear_values_keep_format` for intentional clearing.
 Use `excel.range.write_styles_many` for report styling that touches many ranges, such as title bands, headers, zebra rows, status colors, or type colors. Use single `excel.range.write_styles` only for one contiguous range. Large grouped style updates may return queued parent jobs; wait or poll their job IDs.
@@ -718,26 +728,25 @@ These are default Open Workbook MCP workflows. Adjust scope and validation to th
 
 ## Inspect A Workbook
 
-1. Call `excel.runtime.get_status`.
-2. Call `excel.runtime.get_active_context`.
-3. Call `excel.runtime.get_capabilities`.
-4. Call `excel.workbook.get_workbook_map`.
-5. For a specific sheet, call `excel.sheet.get_used_range` and scoped `excel.range.read_compact`.
+On the public surface, call `excel.agent.run` with `mode: "prepare"` first. Then use `mode: "find"` for discovery and `mode: "answer"` for targeted reads.
 
-Use `excel.workflow.prepare_session` when available to combine the first four calls plus collaboration state.
+The backend can combine runtime status, active context, capabilities, workbook map, and collaboration state before a workflow mutates. It should use scoped compact range/table reads only after the target is known.
 
 Use display text when reporting what a user sees. Use values/formulas/number formats when making calculations or edits.
 
 ## Read And Analyze Data
 
 1. Identify the smallest sheet, table, region, or range that answers the question.
-2. Use `excel.table.read_compact` for Excel tables; otherwise use `excel.range.read_compact`.
-3. For formula-sensitive analysis, include formulas in the compact read or use a matched formula workflow.
-4. For data-quality work, use `excel.clean.detect_header_row`, `excel.range.find_blank_cells`, `excel.range.find_errors`, and relevant validators.
+2. On the default surface, use `excel.agent.run` with `mode: "answer"` and a clear target or `target.candidateId`; include the sheet/range, raw monthly transaction/invoice section, or row/sample/value wording when actual cell data is needed.
+3. Let the backend use table-native compact reads for Excel tables and range compact reads for normal ranges.
+4. For formula-sensitive analysis, include formulas in the compact read or use a matched formula workflow.
+5. For data-quality work, ask through `agent.run`; the backend can use header detection, blank/error scans, and relevant validators.
 
 Do not read the whole workbook when a named table, used range, or explicit range is enough.
 
 ## Write Values Safely
+
+On the public surface, use `excel.agent.run` with `mode: "preview_update"` and then `mode: "apply_update"` for scoped value edits. The primitive steps below describe backend behavior.
 
 1. Resolve workbook, sheet, and target address.
 2. Use `excel.batch.validate` or `excel.plan.preview` for non-trivial changes.
@@ -749,7 +758,7 @@ For a one-range value update, direct `excel.range.write_values` is acceptable be
 
 For new sheets with formulas and number formats, prefer `excel.workflow.create_formula_sheet`.
 
-Combined mutating workflows return an internal `preflight` payload with runtime status, active context, capabilities, workbook map, and collaboration state before they mutate. Still prefer `excel.workflow.prepare_session` first when possible; use the matched combined workflow directly when the task is standard and speed/model reliability matters.
+Combined mutating workflows return an internal `preflight` payload with runtime status, active context, capabilities, workbook map, and collaboration state before they mutate. On the public surface, use `excel.agent.run` preview/apply modes and let the backend select the matched workflow.
 
 ## Create A New Period Sheet From Template
 
@@ -787,6 +796,10 @@ Do not convert formulas to values unless the user explicitly asks or the workflo
 Cleaning writes must stay within the requested sheet, range, table, or registered region.
 
 ## Update Tables, Filters, Or Sorts
+
+On the default surface, append table rows with `excel.agent.run` `mode: "preview_update"` plus `target.candidateId` or `target.tableName` and `values.rows`, then apply with the returned `confirmationToken`.
+
+Backend table workflow:
 
 1. Inspect with `excel.table.get_info`.
 2. Use projected `excel.table.read_compact` options when only some columns or rows are needed.
@@ -844,6 +857,8 @@ Source: skills/open-workbook-excel/references/reliability.md
 ## Reliability
 
 Open Workbook treats Excel as a transaction target. Preserve that contract.
+
+For live workbook tasks, Open Workbook MCP is the source of truth. Do not switch to shell scripts, Python, openpyxl, pandas, manual UI automation, or offline `.xlsx` parsing unless the user explicitly asked for offline file analysis, or MCP is unavailable and the user approves a non-live fallback. Saved-file parsing can be stale because it does not include unsaved Excel state.
 
 ## Mutation Contract
 
@@ -909,12 +924,14 @@ Choose a supported tool path or ask for user/host setup. Do not claim that unsup
 
 ## Disconnected Add-In
 
-If Excel is not connected:
+If Excel is not connected or `excel.agent.run mode=status` reports `connectionState: "stale"`:
 
 1. Ask the user to start the agent UI that has the Open Workbook MCP config.
 2. If troubleshooting manually, ask the user to run `npx -y @components-kit/open-workbook@latest mcp`.
-3. Ask the user to open Excel and load the Open Workbook add-in.
-4. Retry `excel.runtime.get_status`.
+3. Ask the user to open Excel and load or reload the OpenWorkbook Local taskpane.
+4. Retry `excel.agent.run mode=status`.
+
+`activeAddinConnected` is not enough for live workbook work. Prefer `connectionState: "ready"` plus `activeWorkbookAvailable: true`; stale sessions should fail fast with reload guidance instead of triggering offline parsing or repeated tool calls.
 
 Do not use stale snapshots as the source of truth for current workbook state.
 
@@ -928,13 +945,14 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 
 ## Defaults
 
+- On the public surface, use `excel.agent.run`; the backend owns compact reads, summaries, proof, resource handles, and response budgeting.
 - Prefer bulk Office.js operations over per-cell actions.
 - Use 2D matrices for values, formulas, and number formats.
 - Use table APIs for table-shaped work.
 - Group writes by workbook, sheet, and contiguous range.
 - Read only requested properties.
-- Start unknown targets with lookup tools, then inspect one candidate.
-- Start known large scopes with compact summaries and schemas.
+- Backend routing should start unknown targets with lookup capabilities, then inspect one candidate.
+- Backend routing should start known large scopes with compact summaries and schemas.
 - Use `excel.runtime.get_capabilities` before trying expensive or host-limited features.
 
 ## Reads
@@ -944,8 +962,8 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 - For formula review, read formulas or formula patterns.
 - For formatting review, read number formats or styles only for the relevant range.
 - For table analysis, read the table instead of a sheet-sized range.
-- For unknown sheet/table/header/entity targets, use `excel.lookup.*` before reading cells.
-- For exploratory reads, use `excel.range.read_compact` or `excel.table.read_compact` before full reads.
+- On the public surface, use `excel.agent.run` `mode: "find"` or `mode: "answer"` for unknown targets and exploratory reads.
+- Internally, use lookup before reading cells and use compact range/table reads before full reads.
 
 Avoid workbook-wide reads unless the task is search, validation, audit, or discovery.
 
@@ -955,6 +973,7 @@ When a compact response includes `resourceUri`, fetch it only if the full detail
 ## Writes
 
 - Use one batch or plan for related edits.
+- On the public agent surface, group related range value edits with `values.patches` in one `preview_update`, then call `apply_update` once for the returned operation.
 - Preflight large generated batches before applying them.
 - Keep matrix shapes exact: rows and columns must match the target range.
 - Let Open Workbook chunk large values/formulas/number formats through safe row-based chunk plans.
@@ -1334,7 +1353,7 @@ The protocol package owns the full tool, resource, and prompt catalog. MCP regis
 
 - stable tools are registered by default
 - preview tools, when present, require `OPEN_WORKBOOK_PREVIEW_TOOLS=1`
-- planned tools are omitted from production catalogs until their contract and implementation are ready
+- unfinished tools are omitted from catalogs until their contract and implementation are ready
 - unsupported host-specific capabilities are reported honestly by the relevant stable tools
 
 This keeps agents from calling incomplete tools while still letting stable tools report host limitations explicitly.
@@ -1349,42 +1368,42 @@ The full namespace is represented in the protocol catalog, but MCP only exposes 
 
 ## Status Model
 
-- `stable`: exposed by default.
+- `stable`: implemented catalog capability; only `excel.agent.run` is public in normal MCP `tools/list`.
 - `preview`: exposed only with `OPEN_WORKBOOK_PREVIEW_TOOLS=1`.
-- `planned`: intentionally omitted from the production MCP surface until the contract and implementation are ready.
+- `planned`: not shipped in the current catalog; unfinished names stay out of the tool surface until their contract and implementation are ready.
 - `unsupported`: listed by capabilities only when a host or adapter cannot provide a deterministic implementation.
 
-`owb mcp` now defaults to the agent workflow surface. Normal agents see one public tool, `excel.agent.run`, while Open Workbook keeps the compact discovery, range, table, batch, plan, workflow, validation, diff, snapshot, job, and rollback tools as internal backend capabilities. This keeps `tools/list` small and lets the backend own workbook discovery, metadata reuse, target resolution, preview/apply, validation, rollback, and compact proof generation.
+`owb mcp` exposes the agent workflow surface. Normal agents see one public tool, `excel.agent.run`, while Open Workbook keeps the compact discovery, range, table, batch, plan, workflow, validation, diff, snapshot, job, and rollback tools as internal backend capabilities. This keeps `tools/list` small and lets the backend own workbook discovery, metadata reuse, target resolution, preview/apply, validation, rollback, and compact proof generation.
 
-Set `OPEN_WORKBOOK_MCP_SURFACE=advanced` to expose the previous optimized compact-first primitive surface for debugging, compatibility, or power-user clients. Advanced mode still hides raw high-token reads and duplicate wrappers such as `excel.range.read_values`, so agents use compact reads instead of dumping large sparse ranges. `excel.runtime.get_capabilities` reports the active MCP surface.
+The full protocol catalog remains available to backend/runtime tests and internal orchestration. It is not a normal MCP client surface; agents should not manually compose primitive compact reads or mutation tools.
 
 ## Agent Surface
 
 Default public tool:
 
-- `excel.agent.run`: send workbook intent through `request` and optional `mode`, `workbookContextId`, `target`, `values`, `operationId`, and `confirmationToken`. The backend performs deterministic orchestration over internal Excel capabilities and returns structured compact output. Natural-language targets are resolved against cached sheets, tables, headers, named ranges, registered regions, summary blocks, and formula regions; close matches return `AMBIGUOUS_TARGET` with candidates instead of guessing.
+- `excel.agent.run`: send workbook intent through `request` and optional `mode`, `workbookContextId`, `target`, `values`, `operationId`, and `confirmationToken`. The backend performs deterministic orchestration over internal Excel capabilities and returns structured compact output. Natural-language targets are resolved against cached sheets, tables, headers, named ranges, registered regions, summary blocks, and formula regions; close matches return `AMBIGUOUS_TARGET` with candidates instead of guessing. Retry with `target.candidateId` from a returned candidate to force that target in a follow-up call. Workbook overview, sheet-count, table-list, named-range, and vague `.xlsx` review questions answer from lightweight structure metadata before deeper reads. Schema/header-only requests can answer from cached metadata; row/value/sample/A1-range requests perform live targeted reads. Explicit two-sheet comparison requests read both targets in one agent call. Raw monthly sheets without Excel Tables can resolve exact sheet/range references and transaction/invoice header blocks. Related range value edits can be grouped with `values.patches`, where each patch has `target.sheetName`, `target.range`, and a 2D `values` matrix; the backend returns one preview operation that should be applied once.
 
 Supported modes:
 
-- `auto`: answer/find/prepare, and apply only clearly scoped low-risk value edits after the same preview checks; risky edits return `PREVIEW_READY`, `NEEDS_INPUT`, or `AMBIGUOUS_TARGET`.
+- `auto`: compatibility route for casual prompts; answer/find/prepare, and apply only clearly scoped low-risk value edits after the same preview checks. Risky edits return `PREVIEW_READY`, `NEEDS_INPUT`, or `AMBIGUOUS_TARGET`. Common style, formula, and template-copy intents route to dedicated previews instead of generic value writes.
 - `status`: return runtime/add-in status.
 - `prepare`: build or refresh the workbook metadata cache and return `workbookContextId`.
 - `find`: locate sheets, tables, columns, ranges, regions, and summary blocks from cached metadata.
-- `answer`: answer when deterministic cached metadata and targeted reads are enough; otherwise return candidates and `NEEDS_INPUT`.
+- `answer`: answer when deterministic cached metadata and targeted reads are enough; otherwise return candidates and `NEEDS_INPUT`. Schema/header/column-only requests return cached table or range metadata when possible; requests for actual rows, values, samples, raw monthly sections, or explicit A1 ranges perform live targeted reads.
 - `preview_update`: prepare a scoped workbook change and return `operationId` plus `confirmationToken`.
 - `apply_update`: apply a previously previewed operation.
 - `validate`: run compact validation.
-- `rollback`: reserved for conservative rollback orchestration; advanced rollback tools remain available in advanced mode.
+- `rollback`: reserved for conservative rollback orchestration.
 
-Mutation rule: `preview_update` never applies workbook edits. `auto` may preview and apply a clearly authorized, scoped value edit when safety checks pass; formula-sensitive, structural, destructive, broad, sparse, stale, or ambiguous edits stop before mutation and return `nextAction`. Manual applying requires a second `excel.agent.run` call with `mode: "apply_update"`, the previewed `operationId`, and the matching `confirmationToken`.
+Mutation rule: `preview_update` never applies workbook edits. It can preview scoped range value writes, grouped multi-range value patches, formula writes, style updates, template-sheet cleanup, and explicit table-row appends through the default agent tool. `auto` may preview and apply a clearly authorized, scoped value edit when safety checks pass; structural, destructive, broad, sparse, stale, ambiguous, style, formula, template, or table append edits stop before mutation and return `nextAction`. Manual applying requires a second `excel.agent.run` call with `mode: "apply_update"`, the previewed `operationId`, and the matching `confirmationToken`. If a grouped preview succeeds, agents should call `apply_update` once and should not split the patches unless apply returns a hard failure with actionable details.
 
-Agent results include `structuredContent`, a text fallback, compact proof ranges, resource links such as `excel://agent/contexts/{workbook_context_id}` and `excel://agent/operations/{operation_id}`, and telemetry for payload bytes, estimated tokens, elapsed time, cache reuse, metadata cache status, auto-apply decisions, internal read count, full-read cell count, candidate count, resource-link count, and estimated token savings. `budget.maxPayloadBytes`, `budget.maxEstimatedTokens`, and `budget.maxExamples` bound inline agent output; larger context is summarized or moved behind resource links.
+Agent results include `structuredContent`, a text fallback, compact proof ranges, reusable candidate ids, resource links such as `excel://agent/contexts/{workbook_context_id}` and `excel://agent/operations/{operation_id}`, and telemetry for payload bytes, estimated tokens, elapsed time, cache reuse, metadata cache status, auto-apply decisions, internal read count, full-read cell count, candidate count, resource-link count, and estimated token savings. `budget.maxPayloadBytes`, `budget.maxEstimatedTokens`, and `budget.maxExamples` bound inline agent output; larger context is summarized or moved behind resource links.
 
 `excel.runtime.get_capabilities` is the source of truth for the complete catalog, resources, prompts, runtime connection status, and active Excel host capability status. When an add-in is connected, it includes the host platform, Office version when available, Office API-set support such as `ExcelApi` versions, and derived feature statuses for ranges, tables, pivots, charts, and known host-limited paths. Without a connected add-in, it returns a daemon fallback that marks Excel host capabilities as `unknown`.
 
 ## Stable Tool Groups
 
-The groups below describe the advanced/internal capability surface. They are exposed to MCP only when `OPEN_WORKBOOK_MCP_SURFACE=advanced`.
+The groups below describe the internal capability catalog used by backend orchestration and tests. They are not exposed as the normal MCP client surface.
 
 - Agent: `excel.agent.run`
 - Runtime: `excel.runtime.get_status`, `excel.runtime.connect_addin`, `excel.runtime.disconnect_addin`, `excel.runtime.ping_addin`, `excel.runtime.get_capabilities`, `excel.runtime.get_active_context`, `excel.runtime.get_selection`, `excel.runtime.set_active_workbook`, `excel.runtime.set_active_sheet`
@@ -1459,15 +1478,17 @@ No mutating tool should bypass the backend safety lifecycle. It must validate pe
 
 Mutating MCP tools accept `idempotencyKey` for retry safety. A repeated call with the same key and same payload returns the previous compact proof with `idempotentReplay: true` and does not execute the workbook mutation again. Reusing the same key with a different payload returns an idempotency conflict and `nextActionRecommendation: "needs_user_confirmation"`.
 
-`excel.workflow.prepare_session` is the preferred first call for agent workflows. It returns runtime status, active context, capabilities, workbook map, and collaboration state in one read-only result so agents can establish workbook identity before mutation.
+On the public agent surface, `excel.agent.run` with `mode: "prepare"` is the preferred first call. Prepare builds lightweight structure metadata for fast workbook identity, sheet, table, and named-range context; later targeted answers upgrade that context with sheet samples only when actual rows, values, formulas, comparisons, or raw header sections are needed. Internally, workflow preflight combines runtime status, active context, capabilities, workbook map, and collaboration state before mutations.
 
-`excel.agent.run` `mode: "prepare"` returns a server-side `workbookContextId`. In advanced/debug mode, `excel.workbook.get_summary`, `excel.sheet.get_summary`, `excel.range.read_compact`, `excel.table.read_compact`, and `excel.compact.get_resource` can reuse that ID to avoid repeated workbook discovery; missing or ambiguous sheet/table targets return structured candidates.
+Runtime readiness is stricter than socket connection. Status payloads include `connectionState` (`disconnected`, `connected_no_workbook`, `ready`, or `stale`), `activeAddinReachable`, and `activeWorkbookAvailable`. `excel.agent.run` probes the add-in quickly before workbook work; stale or unresponsive sessions return `NEEDS_INPUT` with taskpane reload guidance instead of waiting on a long Office.js RPC timeout.
+
+`excel.agent.run` `mode: "prepare"` returns a server-side `workbookContextId`. Ambiguous public-surface calls return candidates with ids; pass the selected id back as `target.candidateId` with the same `workbookContextId` to continue without switching surfaces. Internally, workbook summaries, sheet summaries, compact range/table reads, and compact resources can reuse that ID to avoid repeated workbook discovery; missing or ambiguous sheet/table targets return structured candidates.
 
 Lookup and compact context tools reduce token use by exposing target candidates and workbook structure before cell data. Use `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range` when the target sheet, table, column, entity, or range is unknown. Use `excel.lookup.inspect_match` to read one bounded candidate preview instead of probing whole sheets.
 
 `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, and `excel.range.get_summary` return dimensions, table/schema metadata, truncation status, `payloadBytes`, and rough `estimatedTokens` without full cell matrices. Use them before broad reads when the target scope is already known.
 
-`excel.range.read_compact` and `excel.table.read_compact` are the default token-saving read paths. They default to `responseMode: "brief"`, storing full page/sample details locally while returning schema/window proof, `contextId`, `resourceUri`, `truncated`, `nextPage`, `payloadBytes`, and `estimatedTokens`. Pass `responseMode: "standard"` or `verbose` only when inline cell bodies are needed. Full detail remains available through compact resource handles instead of separate public full-read tools.
+`excel.range.read_compact` and `excel.table.read_compact` are the internal token-saving read paths. They default to `responseMode: "brief"`, storing full page/sample details locally while returning schema/window proof, `contextId`, `resourceUri`, `truncated`, `nextPage`, `payloadBytes`, and `estimatedTokens`. Range compact reads also accept `cellOutput: "auto" | "matrix" | "sparse"`; auto mode keeps dense small matrices readable and returns coordinate-aware `sparseRows` plus `emptySummary` for mostly empty ranges. `agent.run` uses these patterns to return bounded proof and resource links without asking agents to fetch full cell bodies unless the user requests detail.
 
 Large or budget-limited compact results can return an `excel://compact/{resource_id}` handle instead of embedding full detail. Compact-profile results are capped by shared limits and include `truncated`, `budgetExceeded`, `omittedCounts`, `fullResult`, and token telemetry when detail is stored locally. `excel.compact.get_resource` returns metadata by default; use `mode: "preview"` or `mode: "page"` for bounded JSON-text inspection, and pass `mode: "full"` or `includePayload: true` only for explicit full-detail inspection with optional payload/token budgets. Stored resources include `contextId`, scope, source hash, size, creation time, last access time, and access count; `excel.compact.gc_resources` prunes old unpinned contexts. `excel.compact.context_stats` reports stored bytes, estimated tokens, cache reuse, and estimated savings for debugging token regressions. `excel.snapshot.get_compact`, `excel.snapshot.compare_compact`, and `excel.diff.get_compact` use this pattern for snapshot and diff details. Summary/schema cache entries are local to the MCP process and are cleared automatically after workbook-mutating tools; `excel.compact.get_cache_status` and `excel.compact.clear_cache` expose the cache lifecycle.
 
@@ -1478,7 +1499,7 @@ Compact-profile results may include `nextActionRecommendation`, `reasoningHints`
 
 After successful compact mutations, stale compact read, summary, validation, snapshot, and diff resources for the same workbook are invalidated conservatively. Mutation proofs include `invalidatedContextIds` when previous context handles were removed, so agents should not reuse old `contextId` values after an edit.
 
-Combined mutating workflows also include an internal read-only preflight before mutation and return that `preflight` payload. Agents should still call `excel.workflow.prepare_session` first when possible, but a matched combined workflow can safely establish workbook identity and capability context itself when a cheap or compact model selects the workflow directly.
+Combined mutating workflows also include an internal read-only preflight before mutation and return that `preflight` payload. On the public surface, use `excel.agent.run` preview/apply modes.
 
 `excel.workflow.create_formula_sheet` is a combined formula-sheet workflow for common input-sheet tasks. It creates the sheet, writes constants and formulas through the batch lifecycle, applies number formats, and validates the formula range before returning.
 
@@ -2181,8 +2202,9 @@ Open Workbook treats speed as a correctness requirement because slow workbook au
 - Use 2D array assignments for values and formulas.
 - Load only requested Office.js properties.
 - Start unknown target discovery with lookup tools: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range`.
-- Start known-scope large workbook reads with compact context: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, or `excel.range.get_summary`.
-- Prefer `excel.table.read_compact` and `excel.range.read_compact` for exploratory reads, broad used ranges, and large tables; page or project only the rows/columns needed for the task.
+- On the default agent surface, let `excel.agent.run` choose lightweight structure metadata, targeted reads, and compact proof.
+- Internally, start known-scope large workbook reads with compact context: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, or `excel.range.get_summary`.
+- Internally, prefer `excel.table.read_compact` and `excel.range.read_compact` for exploratory reads, broad used ranges, and large tables; page or project only the rows/columns needed for the task.
 - Use `excel.validate.compact` when validation counts and examples are enough; fetch the returned compact resource only when full details are needed.
 - Reserve full reads for explicit user requests, audits, exports, or exact-data tasks that genuinely need every cell or facet.
 - Group operations by workbook, sheet, and contiguous range.
@@ -2221,7 +2243,7 @@ Every read/write result records:
 Compact summary and read tools also return `payloadBytes`, rough `estimatedTokens`, `truncated`, and optional `nextPage` metadata so agents can stop before sending oversized workbook context to the model.
 Compact tools accept `responseMode` values of `brief`, `standard`, or `verbose`; compact-profile defaults to `brief`, storing full details locally and returning `contextId`/`resourceUri` handles plus proof metadata. Compact-profile responses are guarded by shared output limits for summaries, warnings, examples, issue lists, schema/sample fields, and final result size. Budget-limited compact responses return `resourceUri` handles for full details plus `truncated`, `omittedCounts`, `fullResult`, and telemetry. Mutation results include `compactProof` metadata so agents can report changed cells/ranges, warnings, backup IDs, and rollback availability without reading changed sheets back.
 
-For MCP clients that resend all tool schemas with each generation, workbook payload savings can be hidden by tool-schema overhead. `owb mcp` now exposes one optimized compact-first surface with no user configuration. The surface hides raw range facet reads such as `excel.range.read_values`; use `excel.range.read_compact` so sparse ranges can be bounded, trimmed, and paged. `excel.runtime.get_capabilities` and workflow preflights return the optimized exposed catalog rather than a full/raw tool catalog.
+For MCP clients that resend all tool schemas with each generation, workbook payload savings can be hidden by tool-schema overhead. `owb mcp` exposes the public `excel.agent.run` surface so normal agents avoid primitive compact-tool chains. Raw range facet reads such as `excel.range.read_values` are not part of the public agent surface; backend routing should use compact reads so sparse ranges can be bounded, trimmed, and paged. `excel.runtime.get_capabilities` reports the public tool list rather than a full/raw tool catalog.
 
 Snapshot creation and mutation results can contain full before/after workbook payloads for rollback. Public MCP responses return metadata, IDs, counts, rollback proof, `nextActionRecommendation`, `reasoningHints`, confidence metadata, and a `contextId`/`resourceUri` for the full detail instead of embedding snapshot, backup, or diff bodies inline. Snapshot and diff compact tools accept nested `budget` controls for tighter response caps. Stored detail can be inspected with metadata, preview, or paged resource reads before requesting full payloads. Use `excel.compact.context_stats` to inspect stored bytes, estimated tokens, cache hits, and estimated token savings during long agent sessions.
 
@@ -2237,6 +2259,7 @@ Compact workflows should usually cut large workbook context by 80-99%:
 
 - Use `excel.table.get_schema` plus a 50-row `excel.table.read_compact` page instead of sending a 10,000-row table.
 - Use `excel.range.get_summary` plus projected `excel.range.read_compact` facets instead of `excel.range.read_full` over a used range.
+- Let `excel.range.read_compact` use `cellOutput: "auto"` for sparse worksheets; mostly empty ranges return `sparseRows` and `emptySummary` instead of a large rectangular matrix.
 - Use `excel.lookup.find_headers` or `excel.lookup.resolve_range` instead of reading every sheet's first 100 rows to find a target column.
 - Use `excel.validate.compact`, `excel.snapshot.compare_compact`, or `excel.diff.get_compact` when issue/diff counts and examples are enough; fetch the `resourceUri` only for full detail review.
 
@@ -2534,17 +2557,18 @@ Capability-unavailable responses are preferred over simulated success when Offic
 - `corepack pnpm test:e2e` passes before release-gate E2E claims. This runs the generated E2E report, default agent surface smoke, default agent workflow smoke, deterministic fake-host MCP sweep, and `test:e2e:agent:core`.
 - `corepack pnpm test:e2e:agent-surface` passes before default MCP exposure claims. It validates that default `tools/list` exposes only `excel.agent.run` and that status mode returns structured telemetry without Excel.
 - `corepack pnpm test:e2e:agent-workflow` passes before token-saving agent workflow claims. It validates metadata cache reuse, bounded find payloads, targeted answer reads, preview confirmation tokens, apply, and validate on a fake Excel host.
+- `corepack pnpm test:e2e:office-agent:behavior` is reviewed before changing default-surface office workflow guidance. It is logging-first and produces behavior reports from the production office-agent scenario fixture, covering connection, workbook overview, targeting, sheet/table reads, comparisons, formula safety, edits, token guards, multilingual prompts, and multi-step workflows without acting as a release gate.
 - `corepack pnpm test:e2e:agent:core` passes with the default signed-in Codex model (`gpt-5.4-mini`) before large-workbook or multi-agent agent-safety claims. It validates skill-guided decisions for large table reorder/filter/sort/append/update and lock/conflict handling.
 - `corepack pnpm test:e2e:agent:quality` is reviewed before complex workflow quality claims. It is report-only by default and covers sheet/formula creation, formula repair, snapshot/diff/rollback preview, template/style repair, and pivot/chart decisions.
 - `corepack pnpm test:e2e:agent:quality:compare` is reviewed before comparing cheap-model baseline quality with a frontier model. Set `OPEN_WORKBOOK_E2E_CHEAP_MODEL` and `OPEN_WORKBOOK_E2E_FRONTIER_MODEL` to control the profiles.
 - `corepack pnpm test:e2e:agent:quality:gate` runs the cheap/frontier quality matrix in strict mode when a release claims workflow quality is passing rather than diagnostic.
 - MCP callable tool names stay in sync with the shared protocol catalog. `corepack pnpm verify` runs `scripts/validate-mcp-catalog.mjs` after build and fails if a stable or preview callable tool is missing from the MCP server or if the server registers a tool that is not in the callable catalog.
-- Tool surface docs stay in sync with the callable catalog. `corepack pnpm verify` runs `scripts/validate-docs-surface.mjs` and fails if `docs/tool-surface.md` omits an exposed stable or preview tool.
+- Tool surface docs stay in sync with the protocol catalog and public one-tool MCP surface. `corepack pnpm verify` runs `scripts/validate-docs-surface.mjs` and fails if `docs/tool-surface.md` omits a stable or preview catalog capability.
 - Package metadata stays publishable. `corepack pnpm verify` runs `scripts/validate-package-metadata.mjs` and fails if package versions, repository metadata, public/private publish intent, README presence, or `dist` entrypoints drift.
 - CLI install smoke stays healthy. `corepack pnpm verify` runs `scripts/smoke-cli.mjs` and checks `doctor`, `paths`, setup dry-run output, skills.sh guidance, fallback instruction generation, service wrapper generation, sideload manifest generation, and concise disconnected-runtime errors without requiring Excel or a bound local daemon.
 - `git diff --check` passes.
 - GitHub Actions CI passes the same non-E2E verification plus `corepack pnpm pack:dry-run` for every publishable package.
-- Tool catalog, README, installation docs, MCP client docs, and instruction docs match the exposed MCP surface.
+- Tool catalog, README, installation docs, MCP client docs, and instruction docs match the public `excel.agent.run` MCP surface.
 - Fresh local install can run `npx -y @components-kit/open-workbook setup`, install `open-workbook-excel` with `npx skills add components-kit/open-workbook --skill open-workbook-excel`, generate/install a manifest, launch `npx -y @components-kit/open-workbook@latest mcp`, and report runtime status. If the runtime cannot bind or cannot be reached, CLI commands must fail with concise user-facing errors.
 - Excel add-in can be sideloaded on macOS and Windows using the generated manifest.
 - Native file bridge host smoke passes on macOS and Windows with `owb file-bridge smoke --workbook <open-workbook-name> --target <copy.xlsx>`.
@@ -2665,7 +2689,7 @@ Example output:
 }
 ```
 
-The generated OpenCode snippet uses the default `excel.agent.run` workflow surface. Set `OPEN_WORKBOOK_MCP_SURFACE=advanced` only when you need the previous optimized primitive MCP surface for debugging or compatibility.
+The generated OpenCode snippet uses the public `excel.agent.run` workflow surface. Agents should call only `excel.agent.run`; the backend handles workbook discovery, target resolution, reads, previews, applies, validation, and compact proof internally. The primitive operation catalog is backend/test capability, not a normal OpenCode tool surface. Agents should not fall back to Python, openpyxl, pandas, shell scripts, or offline `.xlsx` parsing for a connected live workbook unless the user explicitly asks for offline file analysis or approves a non-live fallback after MCP is unavailable.
 
 For `npx`-based OpenCode config, keep the command equivalent to:
 
@@ -2687,15 +2711,23 @@ Install the Open Workbook Excel skill into OpenCode:
 npx skills add components-kit/open-workbook --skill open-workbook-excel -a opencode -g -y
 ```
 
-After Excel opens the add-in, useful first calls are:
+After Excel opens the add-in, useful default-surface calls are:
 
 ```text
-excel.runtime.get_status
-excel.runtime.get_active_context
-excel.runtime.get_capabilities
-excel.workbook.get_workbook_map
-excel.collab.get_status
+excel.agent.run mode=status request="Check Open Workbook status"
+excel.agent.run mode=prepare request="Prepare workbook context"
+excel.agent.run mode=find request="Find the sheet or table I need"
+excel.agent.run mode=answer request="Summarize the active workbook"
+excel.agent.run mode=answer request="Compare January and February"
+excel.agent.run mode=preview_update request="Change Sales!E2 to Reviewed"
+excel.agent.run mode=apply_update request="Apply the previewed update"
 ```
+
+For related edits across multiple ranges, send one grouped preview using `values.patches` and then apply that returned operation once. Do not issue one preview/apply pair per zone, column group, or row block unless the grouped apply returns a hard failure with actionable issue details.
+
+Omitted mode or `mode=auto` remains compatible for casual prompts, but explicit modes are more predictable for agent UIs. The backend should either answer from compact proof in one call or return a precise `nextAction`; agents should not chain primitive compact tools.
+
+`mode=status` reports workbook readiness with `connectionState`. `ready` means the add-in responded and an active workbook is available. `stale` means the backend saw an old or unresponsive taskpane session; reload or reopen the OpenWorkbook Local taskpane in Excel before retrying, and restart Excel only if the taskpane cannot reconnect.
 
 ---
 
@@ -2884,6 +2916,7 @@ corepack pnpm verify
 corepack pnpm test:e2e
 corepack pnpm test:e2e:agent-surface
 corepack pnpm test:e2e:agent-workflow
+corepack pnpm test:e2e:office-agent:behavior
 corepack pnpm test:e2e:agent:quality
 corepack pnpm test:e2e:agent:quality:compare
 corepack pnpm test:e2e:agent:quality:gate

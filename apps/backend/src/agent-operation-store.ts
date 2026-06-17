@@ -1,11 +1,24 @@
-import { makeId, type AgentOperationId, type AgentRunOutput, type ExcelOperation, type WorkbookId } from "@components-kit/open-workbook-protocol";
+import {
+  makeId,
+  type AgentOperationId,
+  type AgentRunOutput,
+  type ExcelOperation,
+  type TableAppendRowsRequest,
+  type TableSortRequest,
+  type WorkbookId
+} from "@components-kit/open-workbook-protocol";
+
+export type PendingAgentAction =
+  | { kind: "batch"; operations: ExcelOperation[] }
+  | { kind: "table.append_rows"; request: TableAppendRowsRequest }
+  | { kind: "table.sort"; request: TableSortRequest };
 
 export interface PendingAgentOperation {
   operationId: AgentOperationId | string;
   confirmationToken: string;
   workbookContextId: string;
   workbookId: WorkbookId;
-  operations: ExcelOperation[];
+  action: PendingAgentAction;
   changes: NonNullable<AgentRunOutput["changes"]>;
   createdAt: number;
   summary: string;

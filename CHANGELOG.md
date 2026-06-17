@@ -4,6 +4,29 @@ All notable changes to Open Workbook will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
 
+## [Unreleased]
+
+## [0.1.14] - 2026-06-18
+
+### Added
+
+- Added faster default `excel.agent.run` paths for workbook overviews, active/current sheet prompts, explicit two-sheet comparisons, style previews, formula previews, and template cleanup previews.
+- Added `target.candidateId` recovery for `excel.agent.run` so default-surface agents can retry an ambiguous workbook target without switching to primitive tools.
+- Added cached schema/header answers for `excel.agent.run` schema-style requests to avoid broad reads when table or range metadata is already available.
+- Added live-read routing and table-append previews for `excel.agent.run` so default-surface agents can read actual rows or append table data without using primitive tools.
+- Added raw monthly sheet range resolution for `excel.agent.run`, including exact sheet/range parsing and transaction/invoice header-block reads when no Excel Table exists.
+- Added a logging-first office-agent behavior harness for normal workbook overview, sheet reading, comparison, simple edit, and formula prompts without making the run a deploy gate.
+- Added the production office-agent scenario fixture to the behavior harness, expanding coverage to connection, targeting, table reads/edits, formula safety, token guards, multilingual prompts, save/recalc actions, and multi-step workflows.
+
+### Changed
+
+- Made vague workbook-level `.xlsx` review prompts return a complete lightweight workbook overview before target-specific reads, avoiding cold broad sheet sampling and misleading narrow-sheet summaries.
+- Reframed compact read/resource tools as backend-owned internals while keeping normal agent guidance centered on the backend-composed `excel.agent.run` workflow.
+- Removed the public advanced MCP surface path; primitive operation exposure is now reserved for internal test/development harnesses while packaged MCP clients see one public tool.
+- Reduced normal office-agent behavior call count and payload size by auto-applying small explicit value edits, compacting apply results, and updating the behavior harness to avoid unnecessary prepare/read chains.
+- Updated Open Workbook Excel skill guidance so default-surface clients start with `excel.agent.run` `mode: "prepare"` instead of unavailable advanced workflow tools.
+- Clarified OpenCode guidance so default-surface clients call `excel.agent.run` instead of runtime/workbook primitives.
+
 ## [0.1.13] - 2026-06-16
 
 ### Fixed
@@ -19,14 +42,14 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 ### Added
 
 - Added the default `excel.agent.run` MCP workflow surface so normal agents can use one compact intent interface while the backend orchestrates workbook discovery, cached metadata, target resolution, preview/apply, validation, rollback, and proof generation internally.
-- Added server-side `workbookContextId` reuse for agent prepare/find/answer/update flows, plus context-aware advanced compact routes for workbook summary, sheet summary, range compact reads, table compact reads, and compact resource fetches.
+- Added server-side `workbookContextId` reuse for agent prepare/find/answer/update flows, plus context-aware internal compact routes for workbook summary, sheet summary, range compact reads, table compact reads, and compact resource fetches.
 - Added natural-language target resolution across sheets, tables, headers, named ranges, regions, summary blocks, and formula regions with structured ambiguity candidates instead of guessing.
 - Added safe `auto` mode application for clearly scoped low-risk value edits after preview checks, while formula-sensitive, broad, sparse, structural, destructive, stale, or ambiguous edits stop before mutation.
 - Added agent surface and workflow E2E coverage for default tool exposure, metadata cache reuse, compact target reads, preview/apply confirmation, safe auto-apply, formula-sensitive blocking, and context-aware compact routes.
 
 ### Changed
 
-- Default MCP `tools/list` now exposes only `excel.agent.run`; set `OPEN_WORKBOOK_MCP_SURFACE=advanced` to expose the previous optimized primitive surface for debugging and compatibility.
+- Default MCP `tools/list` now exposes only `excel.agent.run`; primitive operation exposure is no longer documented as a public MCP client mode.
 - Updated Open Workbook agent skill guidance, tool-surface docs, release E2E report, and generated `llms-full.txt` for the agent workflow and context ID routing model.
 
 ## [0.1.11] - 2026-06-15

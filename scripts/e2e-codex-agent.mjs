@@ -272,7 +272,7 @@ async function runScenario(scenario, iteration) {
       "-c",
       'mcp_servers.open-workbook.args=["packages/cli/dist/index.js","mcp","--standalone","--agent-name","e2e-codex"]',
       "-c",
-      `mcp_servers.open-workbook.env={OPEN_WORKBOOK_HOST="127.0.0.1",OPEN_WORKBOOK_PORT="${backendPort}",OPEN_WORKBOOK_ADDIN_PATH="/addin",OPEN_WORKBOOK_MCP_SURFACE="advanced",OPEN_WORKBOOK_DISABLE_UPDATE_CHECK="1",OPEN_WORKBOOK_STATE_DIR="${path.join(tempRoot, scenarioSlug, "state")}",OPEN_WORKBOOK_BACKUP_DIR="${path.join(tempRoot, scenarioSlug, "backups")}"}`,
+      `mcp_servers.open-workbook.env={OPEN_WORKBOOK_HOST="127.0.0.1",OPEN_WORKBOOK_PORT="${backendPort}",OPEN_WORKBOOK_ADDIN_PATH="/addin",OPEN_WORKBOOK_INTERNAL_TOOL_SURFACE="1",OPEN_WORKBOOK_DISABLE_UPDATE_CHECK="1",OPEN_WORKBOOK_STATE_DIR="${path.join(tempRoot, scenarioSlug, "state")}",OPEN_WORKBOOK_BACKUP_DIR="${path.join(tempRoot, scenarioSlug, "backups")}"}`,
       "-c",
       "mcp_servers.open-workbook.required=true",
       prompt

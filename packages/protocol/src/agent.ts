@@ -37,6 +37,7 @@ export type AgentNextAction =
 export interface AgentRunTarget {
   workbookId?: WorkbookId | string;
   workbookName?: string;
+  candidateId?: string;
   sheetName?: string;
   tableName?: string;
   range?: string;
@@ -50,9 +51,17 @@ export interface AgentRunInput {
   mode?: AgentRunMode;
   workbookContextId?: WorkbookContextId | string;
   operationId?: AgentOperationId | string;
+  transactionId?: string;
   confirmationToken?: string;
   target?: AgentRunTarget;
-  values?: Record<string, unknown>;
+  values?: Record<string, unknown> & {
+    patches?: Array<{
+      target: AgentRunTarget;
+      values?: unknown[][];
+      rows?: unknown[][];
+      reason?: string;
+    }>;
+  };
   responseMode?: "brief" | "standard" | "verbose";
   budget?: {
     maxPayloadBytes?: number;
@@ -66,6 +75,7 @@ export interface AgentCandidate {
   kind: "workbook" | "sheet" | "table" | "column" | "row" | "range" | "region" | "pivot" | "chart";
   label: string;
   sheetName?: string;
+  tableName?: string;
   range?: string;
   confidence: number;
 }

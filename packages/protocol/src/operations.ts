@@ -163,6 +163,11 @@ export interface AutofitRowsOperation extends OperationBase {
   target: A1Range;
 }
 
+export interface ApplyAutoFilterOperation extends OperationBase {
+  kind: "range.apply_autofilter";
+  target: A1Range;
+}
+
 export interface MergeRangeOperation extends OperationBase {
   kind: "range.merge";
   target: A1Range;
@@ -285,6 +290,7 @@ export type ExcelOperation =
   | DeleteColumnsOperation
   | AutofitColumnsOperation
   | AutofitRowsOperation
+  | ApplyAutoFilterOperation
   | MergeRangeOperation
   | UnmergeRangeOperation
   | RestoreRangeSnapshotOperation
@@ -409,6 +415,7 @@ export interface OperationResult {
   agentId?: AgentId | undefined;
   diffSummary?: DiffSummary;
   data?: unknown;
+  readData?: unknown;
   rollbackAvailable: boolean;
   backups: BackupId[];
   warnings: OperationWarning[];
@@ -727,6 +734,7 @@ export interface RangeCompactReadRequest extends CompactReadBudget {
   sheetName: string;
   address: string;
   mode?: CompactReadMode;
+  cellOutput?: "auto" | "matrix" | "sparse";
   rowOffset?: number;
   columnOffset?: number;
   includeValues?: boolean;

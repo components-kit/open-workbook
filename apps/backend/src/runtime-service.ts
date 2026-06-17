@@ -163,7 +163,18 @@ import { NativeFileBridge } from "./native-file-bridge.js";
 import { RuntimeStateStore } from "./state-store.js";
 import { AgentOrchestrator } from "./agent-orchestrator.js";
 
-const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.13";
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.14";
+type AddinConnectionState = "disconnected" | "connected_no_workbook" | "ready" | "stale";
+
+function addinStaleTtlMs(): number {
+  const value = Number(process.env.OPEN_WORKBOOK_ADDIN_STALE_TTL_MS ?? 15_000);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : 15_000;
+}
+
+function addinHealthTimeoutMs(): number {
+  const value = Number(process.env.OPEN_WORKBOOK_ADDIN_HEALTH_TIMEOUT_MS ?? 2_500);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : 2_500;
+}
 
 export interface RuntimeServiceOptions {
   stateDir?: string;
@@ -743,6 +754,58 @@ export class RuntimeService {
   async rollbackTransaction(transactionId: TransactionId, confirmationToken?: string): Promise<OperationResult> {
     const preview = this.previewTransactionRollback(transactionId);
     const transaction = this.transactions.get(transactionId);
+    if (transaction && !transaction.planId && transaction.backups.length > 0) {
+      const failedWarnings: OperationWarning[] = [];
+      let lastResult: OperationResult | undefined;
+      for (const backupId of transaction.backups) {
+        const result = await this.restoreBackup(backupId, confirmationToken);
+        lastResult = result;
+        if (!result.ok) {
+          failedWarnings.push({
+            code: "BACKUP_RESTORE_SKIPPED",
+            message: result.error?.message ?? `Backup restore failed for ${backupId}.`,
+            details: { backupId, error: result.error }
+          });
+          continue;
+        }
+        this.transactions.markRolledBack(transactionId);
+        this.recordCollabEvent({
+          type: "transaction.rolled_back",
+          workbookId: transaction.workbookId,
+          agentId: transaction.agentId,
+          taskId: transaction.taskId,
+          transactionId,
+          message: `Transaction rolled back from backup: ${transaction.goal}`
+        });
+        this.persistState();
+        return {
+          ...result,
+          transactionId,
+          taskId: transaction.taskId,
+          agentId: transaction.agentId,
+          warnings: [...(result.warnings ?? []), ...failedWarnings]
+        };
+      }
+      return {
+        ...(lastResult ?? {
+          ok: false,
+          rollbackAvailable: false,
+          backups: [],
+          warnings: [],
+          telemetry: {},
+          error: {
+            code: "BACKUP_UNAVAILABLE",
+            message: "No transaction backups were restorable.",
+            severity: "error",
+            retryable: false
+          }
+        }),
+        transactionId,
+        taskId: transaction.taskId,
+        agentId: transaction.agentId,
+        warnings: [...(lastResult?.warnings ?? []), ...failedWarnings]
+      };
+    }
     if (!preview.ok || !transaction?.planId) {
       return {
         ok: false,
@@ -1232,6 +1295,8 @@ export class RuntimeService {
 
   getStatus() {
     const activeSession = this.sessions.getActive();
+    const connectionState = this.connectionStateFor(activeSession);
+    const readySession = connectionState === "ready" || connectionState === "connected_no_workbook" ? activeSession : undefined;
     return {
       ok: true,
       runtime: {
@@ -1240,11 +1305,71 @@ export class RuntimeService {
         version: runtimeVersion,
         pid: process.pid
       },
-      activeAddinConnected: Boolean(activeSession),
+      connectionState,
+      activeAddinConnected: Boolean(readySession),
+      activeAddinReachable: Boolean(readySession),
+      activeWorkbookAvailable: Boolean(readySession?.activeWorkbook),
       fileBridge: this.fileBridge.getStatus(),
-      sessions: this.sessions.list(),
-      activeWorkbook: activeSession?.activeWorkbook
+      sessions: this.sessions.list().map((session) => ({
+        ...session,
+        ageMs: this.sessionAgeMs(session),
+        stale: this.isSessionStale(session)
+      })),
+      activeWorkbook: readySession?.activeWorkbook
     };
+  }
+
+  async getConnectionReadiness() {
+    const activeSession = this.sessions.getActive();
+    if (!activeSession) {
+      return {
+        ok: false,
+        connectionState: "disconnected" as const,
+        status: this.getStatus(),
+        error: runtimeError("ADDIN_DISCONNECTED", "No Excel add-in session is connected.", { retryable: true })
+      };
+    }
+    if (this.isSessionStale(activeSession)) {
+      return {
+        ok: false,
+        connectionState: "stale" as const,
+        status: this.getStatus(),
+        error: runtimeError("ADDIN_STALE", "The Excel add-in session is stale. Reload the OpenWorkbook Local taskpane, then retry.", { retryable: true })
+      };
+    }
+    const client = this.addinClients.get(activeSession.connectionId);
+    if (!client) {
+      this.sessions.remove(activeSession.connectionId);
+      return {
+        ok: false,
+        connectionState: "disconnected" as const,
+        status: this.getStatus(),
+        error: runtimeError("ADDIN_DISCONNECTED", "No active Excel add-in client is available.", { retryable: true })
+      };
+    }
+    try {
+      const activeWorkbook = await client.request<WorkbookRef | undefined>("runtime.get_active_context", undefined, { timeoutMs: addinHealthTimeoutMs() });
+      if (activeWorkbook) {
+        this.sessions.update(activeSession.connectionId, { activeWorkbook });
+        return { ok: true, connectionState: "ready" as const, activeWorkbook, status: this.getStatus() };
+      }
+      return {
+        ok: false,
+        connectionState: "connected_no_workbook" as const,
+        status: this.getStatus(),
+        error: runtimeError("NO_ACTIVE_WORKBOOK", "Open Workbook is connected to Excel, but there is no active workbook.", { retryable: true })
+      };
+    } catch (error) {
+      this.addinClients.get(activeSession.connectionId)?.close();
+      this.detachAddinClient(activeSession.connectionId);
+      this.sessions.remove(activeSession.connectionId);
+      return {
+        ok: false,
+        connectionState: "stale" as const,
+        status: this.getStatus(),
+        error: runtimeError("ADDIN_STALE", `The Excel add-in session stopped responding: ${error instanceof Error ? error.message : String(error)}`, { retryable: true })
+      };
+    }
   }
 
   async runAgent(input: AgentRunInput): Promise<AgentRunOutput> {
@@ -1271,10 +1396,12 @@ export class RuntimeService {
     const catalogOptions = options.includePreview === undefined ? {} : { includePreview: options.includePreview };
     const sessions = this.sessions.list();
     const activeSession = this.sessions.getActive();
+    const readyActiveSession = activeSession && !this.isSessionStale(activeSession) ? activeSession : undefined;
     return {
       runtime: this.getStatus(),
-      activeHostCapabilities: activeSession?.capabilities ?? disconnectedRuntimeCapabilities(),
+      activeHostCapabilities: readyActiveSession?.capabilities ?? disconnectedRuntimeCapabilities(),
       connectedHostCapabilities: sessions
+        .filter((session) => !this.isSessionStale(session))
         .filter((session) => session.capabilities !== undefined)
         .map((session) => ({
           connectionId: session.connectionId,
@@ -1411,12 +1538,15 @@ export class RuntimeService {
   }
 
   connectAddinInfo() {
+    const status = this.getStatus();
     return {
       ok: true,
       backendUrl: `ws://${process.env.OPEN_WORKBOOK_HOST ?? "127.0.0.1"}:${process.env.OPEN_WORKBOOK_PORT ?? 37845}${
         process.env.OPEN_WORKBOOK_ADDIN_PATH ?? "/addin"
       }`,
-      activeAddinConnected: Boolean(this.sessions.getActive())
+      activeAddinConnected: status.activeAddinConnected,
+      connectionState: status.connectionState,
+      activeWorkbookAvailable: status.activeWorkbookAvailable
     };
   }
 
@@ -5834,7 +5964,29 @@ export class RuntimeService {
 
   private getActiveAddinClient(): AddinRpcClient | undefined {
     const activeSession = this.sessions.getActive();
-    return activeSession ? this.addinClients.get(activeSession.connectionId) : undefined;
+    if (!activeSession || this.isSessionStale(activeSession)) {
+      return undefined;
+    }
+    return this.addinClients.get(activeSession.connectionId);
+  }
+
+  private sessionAgeMs(session: { lastSeenAt: string }): number {
+    const parsed = Date.parse(session.lastSeenAt);
+    return Number.isFinite(parsed) ? Math.max(0, Date.now() - parsed) : Number.POSITIVE_INFINITY;
+  }
+
+  private isSessionStale(session: { lastSeenAt: string }): boolean {
+    return this.sessionAgeMs(session) > addinStaleTtlMs();
+  }
+
+  private connectionStateFor(session: { lastSeenAt: string; activeWorkbook?: WorkbookRef } | undefined): AddinConnectionState {
+    if (!session) {
+      return "disconnected";
+    }
+    if (this.isSessionStale(session)) {
+      return "stale";
+    }
+    return session.activeWorkbook ? "ready" : "connected_no_workbook";
   }
 
   private resolveTemplateSources(request: BatchRequest): TemplateExecutionSource[] {
@@ -7012,6 +7164,7 @@ function scopesFromOperation(workbookId: WorkbookId, operation: ExcelOperation):
     case "range.delete_columns":
     case "range.autofit_columns":
     case "range.autofit_rows":
+    case "range.apply_autofilter":
     case "range.merge":
     case "range.unmerge":
     case "range.restore_snapshot":

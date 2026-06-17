@@ -688,6 +688,59 @@ describe("RuntimeService capabilities", () => {
     expect(runtime.getCapabilities().fileBridge.available).toBe(true);
   });
 
+  it("marks old add-in sessions as stale instead of connected", () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const session = runtime.sessions.createSession();
+    session.lastSeenAt = new Date(Date.now() - 60_000).toISOString();
+
+    const status = runtime.getStatus();
+
+    expect(status.connectionState).toBe("stale");
+    expect(status.activeAddinConnected).toBe(false);
+    expect(status.activeAddinReachable).toBe(false);
+    expect(status.sessions[0]).toMatchObject({ connectionId: session.connectionId, stale: true });
+    expect(runtime.getCapabilities().connectedHostCapabilities).toHaveLength(0);
+  });
+
+  it("removes an active add-in session when the fast readiness probe fails", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const session = runtime.sessions.createSession();
+    runtime.attachAddinClient(session.connectionId, {
+      request: async () => {
+        throw new Error("Timed out waiting for add-in method: runtime.get_active_context");
+      },
+      close: () => undefined
+    } as any);
+
+    const readiness = await runtime.getConnectionReadiness();
+
+    expect(readiness.ok).toBe(false);
+    expect(readiness.connectionState).toBe("stale");
+    expect(runtime.getStatus().connectionState).toBe("disconnected");
+    expect(runtime.getStatus().sessions).toHaveLength(0);
+  });
+
+  it("reports ready after a fast readiness probe returns an active workbook", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const session = runtime.sessions.createSession();
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string) => {
+        expect(method).toBe("runtime.get_active_context");
+        return { workbookId: "workbook_ready", name: "Ready.xlsx", platform: "mac" };
+      }
+    } as any);
+
+    const readiness = await runtime.getConnectionReadiness();
+
+    expect(readiness.ok).toBe(true);
+    expect(readiness.connectionState).toBe("ready");
+    expect(runtime.getStatus()).toMatchObject({
+      connectionState: "ready",
+      activeAddinConnected: true,
+      activeWorkbookAvailable: true
+    });
+  });
+
   it("can probe configured native file bridge status", async () => {
     const runtime = new RuntimeService({
       persistState: false,

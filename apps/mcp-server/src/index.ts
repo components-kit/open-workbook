@@ -75,10 +75,13 @@ type RuntimeFacade = RuntimeService & {
   compileBatch(request: BatchRequest): unknown;
 };
 
+type CompactCellOutput = "auto" | "matrix" | "sparse";
+
 type ContextRangeCompactReadRequest = Omit<RangeCompactReadRequest, "workbookId" | "sheetName"> & {
   workbookId?: WorkbookId | string;
   workbookContextId?: string;
   sheetName?: string;
+  cellOutput?: CompactCellOutput;
 };
 
 type ContextTableCompactReadRequest = Omit<TableCompactReadRequest, "workbookId" | "tableName"> & {
@@ -96,6 +99,7 @@ interface AgentWorkbookContextResource {
     activeSheet?: string;
     sheetCount: number;
   };
+  selection?: unknown;
   sheets: Array<{
     name: string;
     kind?: string;
@@ -126,7 +130,7 @@ const addinPath = process.env.OPEN_WORKBOOK_ADDIN_PATH ?? "/addin";
 const daemonUrl = trimTrailingSlash(readArg("--daemon-url") ?? process.env.OPEN_WORKBOOK_DAEMON_URL ?? `http://${host}:${port}`);
 const agentName = readArg("--agent-name") ?? process.env.OPEN_WORKBOOK_AGENT_NAME;
 const standalone = hasArg("--standalone") || process.env.OPEN_WORKBOOK_MCP_STANDALONE === "1";
-const mcpSurface = process.env.OPEN_WORKBOOK_MCP_SURFACE ?? "agent";
+const exposeInternalToolSurface = process.env.OPEN_WORKBOOK_INTERNAL_TOOL_SURFACE === "1";
 const catalogOptions = {
   includePreview: process.env.OPEN_WORKBOOK_PREVIEW_TOOLS === "1"
 };
@@ -164,7 +168,7 @@ const STYLE_COPY_TOOL_DIMENSIONS: Record<string, StyleDimension> = {
 };
 
 const runtime = await createRuntimeFacade();
-const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.13";
+const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.14";
 const COMPACT_RESOURCE_LIMIT = 100;
 const COMPACT_DEFAULT_RESOURCE_THRESHOLD_BYTES = 24_000;
 const COMPACT_LIMITS = {
@@ -340,10 +344,12 @@ function registerAgentTools(mcp: McpServer): void {
         mode: z.enum(["auto", "status", "prepare", "find", "answer", "preview_update", "apply_update", "validate", "rollback"]).optional(),
         workbookContextId: z.string().optional(),
         operationId: z.string().optional(),
+        transactionId: z.string().optional(),
         confirmationToken: z.string().optional(),
         target: z.object({
           workbookId: z.string().optional(),
           workbookName: z.string().optional(),
+          candidateId: z.string().optional(),
           sheetName: z.string().optional(),
           tableName: z.string().optional(),
           range: z.string().optional(),
@@ -351,7 +357,24 @@ function registerAgentTools(mcp: McpServer): void {
           column: z.string().optional(),
           entity: z.string().optional()
         }).optional(),
-        values: z.record(z.string(), z.any()).optional(),
+        values: z.record(z.string(), z.any()).and(z.object({
+          patches: z.array(z.object({
+            target: z.object({
+              workbookId: z.string().optional(),
+              workbookName: z.string().optional(),
+              candidateId: z.string().optional(),
+              sheetName: z.string().optional(),
+              tableName: z.string().optional(),
+              range: z.string().optional(),
+              row: z.number().int().optional(),
+              column: z.string().optional(),
+              entity: z.string().optional()
+            }),
+            values: z.array(z.array(z.any())).optional(),
+            rows: z.array(z.array(z.any())).optional(),
+            reason: z.string().optional()
+          })).optional()
+        })).optional(),
         responseMode: z.enum(["brief", "standard", "verbose"]).optional(),
         budget: z.object({
           maxPayloadBytes: z.number().int().positive().optional(),
@@ -377,6 +400,7 @@ function agentRunOutputSchema() {
     mode: z.string(),
     workbookContextId: z.string().optional(),
     operationId: z.string().optional(),
+    transactionId: z.string().optional(),
     confirmationToken: z.string().optional(),
     summary: z.string(),
     answer: z.any().optional(),
@@ -727,7 +751,7 @@ function registerPrompts(mcp: McpServer): void {
       "1. Map workbook sheets, tables, names, regions, filters, PivotTables, and charts.",
       "2. Ask the user which metrics/groupings/date ranges matter if not obvious.",
       "3. Prefer creating a new sheet from a template or copying a previous report sheet.",
-      "4. Use table reads, formulas, PivotTables, and charts through planned operations.",
+      "4. Use table reads, formulas, PivotTables, and charts through available agent workflows and internal operations.",
       "5. Preview and apply via plan/batch; never write directly outside the target report regions.",
       "6. Validate formulas, style consistency, tables, charts, and no unintended source changes."
     ]
@@ -953,10 +977,9 @@ function runtimeCapabilities(includePreview?: boolean) {
 }
 
 function exposedProfileToolNames(): string[] {
-  if (mcpSurface === "agent") {
-    return ["excel.agent.run"];
-  }
-  return getExposedToolCatalog(catalogOptions).map((tool) => tool.name).filter((name) => shouldExposeMcpTool(name)).sort();
+  return exposeInternalToolSurface
+    ? getExposedToolCatalog(catalogOptions).map((tool) => tool.name).filter((name) => shouldExposeMcpTool(name)).sort()
+    : ["excel.agent.run"];
 }
 
 function registerWorkbookTools(mcp: McpServer): void {
@@ -1809,6 +1832,7 @@ function registerRangeTools(mcp: McpServer): void {
     sheetName: z.string().optional(),
     address: z.string(),
     mode: z.enum(["window", "summary", "sample"]).optional(),
+    cellOutput: z.enum(["auto", "matrix", "sparse"]).optional(),
     rowOffset: z.number().int().min(0).optional(),
     columnOffset: z.number().int().min(0).optional(),
     maxRows: z.number().int().min(0).max(10000).optional(),
@@ -8289,7 +8313,7 @@ async function compactRangeRead(args: ContextRangeCompactReadRequest) {
   if (!normalized.ok) {
     return normalized.response;
   }
-  const request = normalized.value;
+  const request = normalized.value as RangeCompactReadRequest & { cellOutput?: CompactCellOutput };
   const mode = request.mode ?? "window";
   const responseMode = compactResponseMode(request.responseMode);
   const budget = compactRequestedBudget(request as RangeCompactReadRequest & { budget?: Record<string, unknown> });
@@ -8343,7 +8367,7 @@ async function compactRangeRead(args: ContextRangeCompactReadRequest) {
       const sampleAddress = compactWindowAddress(request.address, sample.rowOffset, columnOffset, sample.rowCount, columnLimit);
       const sampleResult = await readRangeSnapshot(request.workbookId, request.sheetName, sampleAddress, facets);
       const sampleSnapshot = compactReadSnapshots(sampleResult)[0]?.snapshot;
-      const compactSnapshot = compactRangeSnapshotPayload(sampleSnapshot, facets);
+      const compactSnapshot = compactRangeSnapshotPayload(sampleSnapshot, facets, sampleAddress, request.cellOutput);
       return {
         label: sample.label,
         rowOffset: sample.rowOffset,
@@ -8379,7 +8403,8 @@ async function compactRangeRead(args: ContextRangeCompactReadRequest) {
     return withCompactTelemetry(payload, { detailLevel: "compact", responseMode, truncated, nextPage, maxPayloadBytes: budget.maxChars, maxEstimatedTokens: request.maxEstimatedTokens, resourceKind: "read", resourceTitle: "Compact range read error", resourcePayload: payload, resourceScope: compactReadScope({ workbookId: request.workbookId, sheetName: request.sheetName, address: request.address, mode, rowOffset, columnOffset }), sourceHash: compactSourceHash(payload), budgetSummary: { ok: false, ...summary, budgetSummary: budget.applied } });
   }
   const snapshot = compactReadSnapshots(result)[0]?.snapshot;
-  const compactSnapshot = compactRangeSnapshotPayload(snapshot, facets);
+  const compactSnapshot = compactRangeSnapshotPayload(snapshot, facets, windowAddress, request.cellOutput);
+  const fullSnapshot = compactRangeSnapshotPayload(snapshot, facets, windowAddress, "matrix");
   const payload = {
     ok: true,
     ...summary,
@@ -8399,7 +8424,7 @@ async function compactRangeRead(args: ContextRangeCompactReadRequest) {
       maxEstimatedTokens: request.maxEstimatedTokens,
       resourceKind: "read",
       resourceTitle: "Compact range read",
-      resourcePayload: payload,
+      resourcePayload: { ...payload, ...fullSnapshot },
       resourceScope: compactReadScope({ workbookId: request.workbookId, sheetName: request.sheetName, address: request.address, windowAddress, mode, rowOffset, columnOffset }),
       sourceHash,
       nextActionRecommendation: "answer_now",
@@ -8428,7 +8453,7 @@ async function tableSchema(selector: TableSelector) {
   });
 }
 
-function compactRangeSnapshotPayload(snapshot: any, facets: RangeReadFacet[]): Record<string, unknown> {
+function compactRangeSnapshotPayload(snapshot: any, facets: RangeReadFacet[], address?: string, cellOutput: CompactCellOutput = "auto"): Record<string, unknown> {
   if (!snapshot || typeof snapshot !== "object") {
     return {};
   }
@@ -8445,10 +8470,27 @@ function compactRangeSnapshotPayload(snapshot: any, facets: RangeReadFacet[]): R
   if (snapshot.fingerprint !== undefined) {
     output.fingerprint = snapshot.fingerprint;
   }
-  for (const [name, value] of requestedEntries) {
-    output[name] = trimMatrixToBounds(value as unknown[][], bounds);
+  const sparseRows = compactSparseRows(requestedEntries, address);
+  const useSparse = cellOutput === "sparse" || (cellOutput !== "matrix" && shouldUseCompactSparse(bounds, sparseRows.nonEmptyCells));
+  output.cellOutput = useSparse ? "sparse" : "matrix";
+  output.emptySummary = {
+    sourceRows: bounds.sourceRows,
+    sourceColumns: bounds.sourceColumns,
+    sourceCells: bounds.sourceRows * bounds.sourceColumns,
+    nonEmptyCells: sparseRows.nonEmptyCells,
+    emptyCells: Math.max(0, bounds.sourceRows * bounds.sourceColumns - sparseRows.nonEmptyCells),
+    trailingRows: Math.max(0, bounds.sourceRows - bounds.rows),
+    trailingColumns: Math.max(0, bounds.sourceColumns - bounds.columns)
+  };
+  if (useSparse) {
+    output.sparseRows = sparseRows.rows;
   }
-  if (bounds.sourceRows > bounds.rows || bounds.sourceColumns > bounds.columns) {
+  for (const [name, value] of requestedEntries) {
+    if (!useSparse) {
+      output[name] = trimMatrixToBounds(value as unknown[][], bounds);
+    }
+  }
+  if (!useSparse && (bounds.sourceRows > bounds.rows || bounds.sourceColumns > bounds.columns)) {
     output.omittedEmpty = {
       trailingRows: Math.max(0, bounds.sourceRows - bounds.rows),
       trailingColumns: Math.max(0, bounds.sourceColumns - bounds.columns),
@@ -8459,6 +8501,58 @@ function compactRangeSnapshotPayload(snapshot: any, facets: RangeReadFacet[]): R
     };
   }
   return output;
+}
+
+function shouldUseCompactSparse(bounds: { sourceRows: number; sourceColumns: number }, nonEmptyCells: number): boolean {
+  const cellCount = bounds.sourceRows * bounds.sourceColumns;
+  if (nonEmptyCells === 0) return false;
+  return (cellCount >= 50 && nonEmptyCells / cellCount <= 0.4) || cellCount >= 500;
+}
+
+function compactSparseRows(
+  entries: ReadonlyArray<readonly [string, unknown]>,
+  address?: string
+): { rows: Array<{ row: number; cells: Array<Record<string, unknown>> }>; nonEmptyCells: number } {
+  const parsed = address ? parseCompactA1Address(address) : undefined;
+  const startRow = parsed?.startRow ?? 1;
+  const startColumn = parsed?.startColumn ?? 1;
+  const matrices = entries.map(([name, value]) => [compactFacetCellKey(name), value as unknown[][]] as const);
+  const rowCount = matrices.reduce((max, [, matrix]) => Math.max(max, matrix.length), 0);
+  const columnCount = matrices.reduce((max, [, matrix]) => Math.max(max, ...matrix.map((row) => Array.isArray(row) ? row.length : 0)), 0);
+  const rows: Array<{ row: number; cells: Array<Record<string, unknown>> }> = [];
+  let nonEmptyCells = 0;
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+    const cells: Array<Record<string, unknown>> = [];
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+      const cell: Record<string, unknown> = {};
+      for (const [key, matrix] of matrices) {
+        const value = matrix[rowIndex]?.[columnIndex];
+        if (!isCompactEmptyCell(value)) {
+          cell[key] = value;
+        }
+      }
+      if (Object.keys(cell).length > 0) {
+        const columnNumber = startColumn + columnIndex;
+        const rowNumber = startRow + rowIndex;
+        cells.push({
+          column: compactColumnName(columnNumber),
+          address: `${compactColumnName(columnNumber)}${rowNumber}`,
+          ...cell
+        });
+        nonEmptyCells += 1;
+      }
+    }
+    if (cells.length > 0) {
+      rows.push({ row: startRow + rowIndex, cells });
+    }
+  }
+  return { rows, nonEmptyCells };
+}
+
+function compactFacetCellKey(name: string): string {
+  if (name === "values") return "value";
+  if (name === "formulas") return "formula";
+  return name;
 }
 
 function compactReadSnapshots(result: unknown): Array<{ snapshot?: any }> {
@@ -10793,10 +10887,7 @@ function enforceCompactResultBudget(toolName: string, result: unknown) {
 }
 
 function shouldExposeMcpTool(name: string): boolean {
-  if (mcpSurface === "agent") {
-    return name === "excel.agent.run";
-  }
-  return isToolExposed(name, catalogOptions);
+  return exposeInternalToolSurface ? isToolExposed(name, catalogOptions) : name === "excel.agent.run";
 }
 
 function jsonResult(value: unknown) {

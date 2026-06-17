@@ -32,7 +32,7 @@ The protocol package owns the full tool, resource, and prompt catalog. MCP regis
 
 - stable tools are registered by default
 - preview tools, when present, require `OPEN_WORKBOOK_PREVIEW_TOOLS=1`
-- planned tools are omitted from production catalogs until their contract and implementation are ready
+- unfinished tools are omitted from catalogs until their contract and implementation are ready
 - unsupported host-specific capabilities are reported honestly by the relevant stable tools
 
 This keeps agents from calling incomplete tools while still letting stable tools report host limitations explicitly.

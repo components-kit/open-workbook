@@ -46,7 +46,7 @@ const report = {
         "Default resources/list remains available"
       ],
       reliabilityAssertions: [
-        "Primitive optimized tools stay hidden from the default surface",
+        "Primitive operation tools stay hidden from the public surface",
         "Agent output includes payload and estimated token telemetry"
       ],
       gaps: [
@@ -88,7 +88,7 @@ const report = {
       coverage: [
         "MCP initialize/tools/resources/prompts protocol sweep",
         "Runtime status, active context, capabilities, workbook map",
-        "Context-aware advanced compact routes reuse workbookContextId after agent prepare",
+        "Context-aware internal compact routes reuse workbookContextId after agent prepare",
         "Sheet create",
         "Range values/formulas/number formats/copy/clear/read",
         "Large table create/read window/reorder/filter/sort",

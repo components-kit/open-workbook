@@ -4,42 +4,42 @@ The full namespace is represented in the protocol catalog, but MCP only exposes 
 
 ## Status Model
 
-- `stable`: exposed by default.
+- `stable`: implemented catalog capability; only `excel.agent.run` is public in normal MCP `tools/list`.
 - `preview`: exposed only with `OPEN_WORKBOOK_PREVIEW_TOOLS=1`.
-- `planned`: intentionally omitted from the production MCP surface until the contract and implementation are ready.
+- `planned`: not shipped in the current catalog; unfinished names stay out of the tool surface until their contract and implementation are ready.
 - `unsupported`: listed by capabilities only when a host or adapter cannot provide a deterministic implementation.
 
-`owb mcp` now defaults to the agent workflow surface. Normal agents see one public tool, `excel.agent.run`, while Open Workbook keeps the compact discovery, range, table, batch, plan, workflow, validation, diff, snapshot, job, and rollback tools as internal backend capabilities. This keeps `tools/list` small and lets the backend own workbook discovery, metadata reuse, target resolution, preview/apply, validation, rollback, and compact proof generation.
+`owb mcp` exposes the agent workflow surface. Normal agents see one public tool, `excel.agent.run`, while Open Workbook keeps the compact discovery, range, table, batch, plan, workflow, validation, diff, snapshot, job, and rollback tools as internal backend capabilities. This keeps `tools/list` small and lets the backend own workbook discovery, metadata reuse, target resolution, preview/apply, validation, rollback, and compact proof generation.
 
-Set `OPEN_WORKBOOK_MCP_SURFACE=advanced` to expose the previous optimized compact-first primitive surface for debugging, compatibility, or power-user clients. Advanced mode still hides raw high-token reads and duplicate wrappers such as `excel.range.read_values`, so agents use compact reads instead of dumping large sparse ranges. `excel.runtime.get_capabilities` reports the active MCP surface.
+The full protocol catalog remains available to backend/runtime tests and internal orchestration. It is not a normal MCP client surface; agents should not manually compose primitive compact reads or mutation tools.
 
 ## Agent Surface
 
 Default public tool:
 
-- `excel.agent.run`: send workbook intent through `request` and optional `mode`, `workbookContextId`, `target`, `values`, `operationId`, and `confirmationToken`. The backend performs deterministic orchestration over internal Excel capabilities and returns structured compact output. Natural-language targets are resolved against cached sheets, tables, headers, named ranges, registered regions, summary blocks, and formula regions; close matches return `AMBIGUOUS_TARGET` with candidates instead of guessing.
+- `excel.agent.run`: send workbook intent through `request` and optional `mode`, `workbookContextId`, `target`, `values`, `operationId`, and `confirmationToken`. The backend performs deterministic orchestration over internal Excel capabilities and returns structured compact output. Natural-language targets are resolved against cached sheets, tables, headers, named ranges, registered regions, summary blocks, and formula regions; close matches return `AMBIGUOUS_TARGET` with candidates instead of guessing. Retry with `target.candidateId` from a returned candidate to force that target in a follow-up call. Workbook overview, sheet-count, table-list, named-range, and vague `.xlsx` review questions answer from lightweight structure metadata before deeper reads. Schema/header-only requests can answer from cached metadata; row/value/sample/A1-range requests perform live targeted reads. Explicit two-sheet comparison requests read both targets in one agent call. Raw monthly sheets without Excel Tables can resolve exact sheet/range references and transaction/invoice header blocks. Related range value edits can be grouped with `values.patches`, where each patch has `target.sheetName`, `target.range`, and a 2D `values` matrix; the backend returns one preview operation that should be applied once.
 
 Supported modes:
 
-- `auto`: answer/find/prepare, and apply only clearly scoped low-risk value edits after the same preview checks; risky edits return `PREVIEW_READY`, `NEEDS_INPUT`, or `AMBIGUOUS_TARGET`.
+- `auto`: compatibility route for casual prompts; answer/find/prepare, and apply only clearly scoped low-risk value edits after the same preview checks. Risky edits return `PREVIEW_READY`, `NEEDS_INPUT`, or `AMBIGUOUS_TARGET`. Common style, formula, and template-copy intents route to dedicated previews instead of generic value writes.
 - `status`: return runtime/add-in status.
 - `prepare`: build or refresh the workbook metadata cache and return `workbookContextId`.
 - `find`: locate sheets, tables, columns, ranges, regions, and summary blocks from cached metadata.
-- `answer`: answer when deterministic cached metadata and targeted reads are enough; otherwise return candidates and `NEEDS_INPUT`.
+- `answer`: answer when deterministic cached metadata and targeted reads are enough; otherwise return candidates and `NEEDS_INPUT`. Schema/header/column-only requests return cached table or range metadata when possible; requests for actual rows, values, samples, raw monthly sections, or explicit A1 ranges perform live targeted reads.
 - `preview_update`: prepare a scoped workbook change and return `operationId` plus `confirmationToken`.
 - `apply_update`: apply a previously previewed operation.
 - `validate`: run compact validation.
-- `rollback`: reserved for conservative rollback orchestration; advanced rollback tools remain available in advanced mode.
+- `rollback`: reserved for conservative rollback orchestration.
 
-Mutation rule: `preview_update` never applies workbook edits. `auto` may preview and apply a clearly authorized, scoped value edit when safety checks pass; formula-sensitive, structural, destructive, broad, sparse, stale, or ambiguous edits stop before mutation and return `nextAction`. Manual applying requires a second `excel.agent.run` call with `mode: "apply_update"`, the previewed `operationId`, and the matching `confirmationToken`.
+Mutation rule: `preview_update` never applies workbook edits. It can preview scoped range value writes, grouped multi-range value patches, formula writes, style updates, template-sheet cleanup, and explicit table-row appends through the default agent tool. `auto` may preview and apply a clearly authorized, scoped value edit when safety checks pass; structural, destructive, broad, sparse, stale, ambiguous, style, formula, template, or table append edits stop before mutation and return `nextAction`. Manual applying requires a second `excel.agent.run` call with `mode: "apply_update"`, the previewed `operationId`, and the matching `confirmationToken`. If a grouped preview succeeds, agents should call `apply_update` once and should not split the patches unless apply returns a hard failure with actionable details.
 
-Agent results include `structuredContent`, a text fallback, compact proof ranges, resource links such as `excel://agent/contexts/{workbook_context_id}` and `excel://agent/operations/{operation_id}`, and telemetry for payload bytes, estimated tokens, elapsed time, cache reuse, metadata cache status, auto-apply decisions, internal read count, full-read cell count, candidate count, resource-link count, and estimated token savings. `budget.maxPayloadBytes`, `budget.maxEstimatedTokens`, and `budget.maxExamples` bound inline agent output; larger context is summarized or moved behind resource links.
+Agent results include `structuredContent`, a text fallback, compact proof ranges, reusable candidate ids, resource links such as `excel://agent/contexts/{workbook_context_id}` and `excel://agent/operations/{operation_id}`, and telemetry for payload bytes, estimated tokens, elapsed time, cache reuse, metadata cache status, auto-apply decisions, internal read count, full-read cell count, candidate count, resource-link count, and estimated token savings. `budget.maxPayloadBytes`, `budget.maxEstimatedTokens`, and `budget.maxExamples` bound inline agent output; larger context is summarized or moved behind resource links.
 
 `excel.runtime.get_capabilities` is the source of truth for the complete catalog, resources, prompts, runtime connection status, and active Excel host capability status. When an add-in is connected, it includes the host platform, Office version when available, Office API-set support such as `ExcelApi` versions, and derived feature statuses for ranges, tables, pivots, charts, and known host-limited paths. Without a connected add-in, it returns a daemon fallback that marks Excel host capabilities as `unknown`.
 
 ## Stable Tool Groups
 
-The groups below describe the advanced/internal capability surface. They are exposed to MCP only when `OPEN_WORKBOOK_MCP_SURFACE=advanced`.
+The groups below describe the internal capability catalog used by backend orchestration and tests. They are not exposed as the normal MCP client surface.
 
 - Agent: `excel.agent.run`
 - Runtime: `excel.runtime.get_status`, `excel.runtime.connect_addin`, `excel.runtime.disconnect_addin`, `excel.runtime.ping_addin`, `excel.runtime.get_capabilities`, `excel.runtime.get_active_context`, `excel.runtime.get_selection`, `excel.runtime.set_active_workbook`, `excel.runtime.set_active_sheet`
@@ -114,15 +114,17 @@ No mutating tool should bypass the backend safety lifecycle. It must validate pe
 
 Mutating MCP tools accept `idempotencyKey` for retry safety. A repeated call with the same key and same payload returns the previous compact proof with `idempotentReplay: true` and does not execute the workbook mutation again. Reusing the same key with a different payload returns an idempotency conflict and `nextActionRecommendation: "needs_user_confirmation"`.
 
-`excel.workflow.prepare_session` is the preferred first call for agent workflows. It returns runtime status, active context, capabilities, workbook map, and collaboration state in one read-only result so agents can establish workbook identity before mutation.
+On the public agent surface, `excel.agent.run` with `mode: "prepare"` is the preferred first call. Prepare builds lightweight structure metadata for fast workbook identity, sheet, table, and named-range context; later targeted answers upgrade that context with sheet samples only when actual rows, values, formulas, comparisons, or raw header sections are needed. Internally, workflow preflight combines runtime status, active context, capabilities, workbook map, and collaboration state before mutations.
 
-`excel.agent.run` `mode: "prepare"` returns a server-side `workbookContextId`. In advanced/debug mode, `excel.workbook.get_summary`, `excel.sheet.get_summary`, `excel.range.read_compact`, `excel.table.read_compact`, and `excel.compact.get_resource` can reuse that ID to avoid repeated workbook discovery; missing or ambiguous sheet/table targets return structured candidates.
+Runtime readiness is stricter than socket connection. Status payloads include `connectionState` (`disconnected`, `connected_no_workbook`, `ready`, or `stale`), `activeAddinReachable`, and `activeWorkbookAvailable`. `excel.agent.run` probes the add-in quickly before workbook work; stale or unresponsive sessions return `NEEDS_INPUT` with taskpane reload guidance instead of waiting on a long Office.js RPC timeout.
+
+`excel.agent.run` `mode: "prepare"` returns a server-side `workbookContextId`. Ambiguous public-surface calls return candidates with ids; pass the selected id back as `target.candidateId` with the same `workbookContextId` to continue without switching surfaces. Internally, workbook summaries, sheet summaries, compact range/table reads, and compact resources can reuse that ID to avoid repeated workbook discovery; missing or ambiguous sheet/table targets return structured candidates.
 
 Lookup and compact context tools reduce token use by exposing target candidates and workbook structure before cell data. Use `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range` when the target sheet, table, column, entity, or range is unknown. Use `excel.lookup.inspect_match` to read one bounded candidate preview instead of probing whole sheets.
 
 `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, and `excel.range.get_summary` return dimensions, table/schema metadata, truncation status, `payloadBytes`, and rough `estimatedTokens` without full cell matrices. Use them before broad reads when the target scope is already known.
 
-`excel.range.read_compact` and `excel.table.read_compact` are the default token-saving read paths. They default to `responseMode: "brief"`, storing full page/sample details locally while returning schema/window proof, `contextId`, `resourceUri`, `truncated`, `nextPage`, `payloadBytes`, and `estimatedTokens`. Pass `responseMode: "standard"` or `verbose` only when inline cell bodies are needed. Full detail remains available through compact resource handles instead of separate public full-read tools.
+`excel.range.read_compact` and `excel.table.read_compact` are the internal token-saving read paths. They default to `responseMode: "brief"`, storing full page/sample details locally while returning schema/window proof, `contextId`, `resourceUri`, `truncated`, `nextPage`, `payloadBytes`, and `estimatedTokens`. Range compact reads also accept `cellOutput: "auto" | "matrix" | "sparse"`; auto mode keeps dense small matrices readable and returns coordinate-aware `sparseRows` plus `emptySummary` for mostly empty ranges. `agent.run` uses these patterns to return bounded proof and resource links without asking agents to fetch full cell bodies unless the user requests detail.
 
 Large or budget-limited compact results can return an `excel://compact/{resource_id}` handle instead of embedding full detail. Compact-profile results are capped by shared limits and include `truncated`, `budgetExceeded`, `omittedCounts`, `fullResult`, and token telemetry when detail is stored locally. `excel.compact.get_resource` returns metadata by default; use `mode: "preview"` or `mode: "page"` for bounded JSON-text inspection, and pass `mode: "full"` or `includePayload: true` only for explicit full-detail inspection with optional payload/token budgets. Stored resources include `contextId`, scope, source hash, size, creation time, last access time, and access count; `excel.compact.gc_resources` prunes old unpinned contexts. `excel.compact.context_stats` reports stored bytes, estimated tokens, cache reuse, and estimated savings for debugging token regressions. `excel.snapshot.get_compact`, `excel.snapshot.compare_compact`, and `excel.diff.get_compact` use this pattern for snapshot and diff details. Summary/schema cache entries are local to the MCP process and are cleared automatically after workbook-mutating tools; `excel.compact.get_cache_status` and `excel.compact.clear_cache` expose the cache lifecycle.
 
@@ -133,7 +135,7 @@ Compact-profile results may include `nextActionRecommendation`, `reasoningHints`
 
 After successful compact mutations, stale compact read, summary, validation, snapshot, and diff resources for the same workbook are invalidated conservatively. Mutation proofs include `invalidatedContextIds` when previous context handles were removed, so agents should not reuse old `contextId` values after an edit.
 
-Combined mutating workflows also include an internal read-only preflight before mutation and return that `preflight` payload. Agents should still call `excel.workflow.prepare_session` first when possible, but a matched combined workflow can safely establish workbook identity and capability context itself when a cheap or compact model selects the workflow directly.
+Combined mutating workflows also include an internal read-only preflight before mutation and return that `preflight` payload. On the public surface, use `excel.agent.run` preview/apply modes.
 
 `excel.workflow.create_formula_sheet` is a combined formula-sheet workflow for common input-sheet tasks. It creates the sheet, writes constants and formulas through the batch lifecycle, applies number formats, and validates the formula range before returning.
 

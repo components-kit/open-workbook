@@ -10,8 +10,9 @@ Open Workbook treats speed as a correctness requirement because slow workbook au
 - Use 2D array assignments for values and formulas.
 - Load only requested Office.js properties.
 - Start unknown target discovery with lookup tools: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range`.
-- Start known-scope large workbook reads with compact context: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, or `excel.range.get_summary`.
-- Prefer `excel.table.read_compact` and `excel.range.read_compact` for exploratory reads, broad used ranges, and large tables; page or project only the rows/columns needed for the task.
+- On the default agent surface, let `excel.agent.run` choose lightweight structure metadata, targeted reads, and compact proof.
+- Internally, start known-scope large workbook reads with compact context: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, or `excel.range.get_summary`.
+- Internally, prefer `excel.table.read_compact` and `excel.range.read_compact` for exploratory reads, broad used ranges, and large tables; page or project only the rows/columns needed for the task.
 - Use `excel.validate.compact` when validation counts and examples are enough; fetch the returned compact resource only when full details are needed.
 - Reserve full reads for explicit user requests, audits, exports, or exact-data tasks that genuinely need every cell or facet.
 - Group operations by workbook, sheet, and contiguous range.
@@ -50,7 +51,7 @@ Every read/write result records:
 Compact summary and read tools also return `payloadBytes`, rough `estimatedTokens`, `truncated`, and optional `nextPage` metadata so agents can stop before sending oversized workbook context to the model.
 Compact tools accept `responseMode` values of `brief`, `standard`, or `verbose`; compact-profile defaults to `brief`, storing full details locally and returning `contextId`/`resourceUri` handles plus proof metadata. Compact-profile responses are guarded by shared output limits for summaries, warnings, examples, issue lists, schema/sample fields, and final result size. Budget-limited compact responses return `resourceUri` handles for full details plus `truncated`, `omittedCounts`, `fullResult`, and telemetry. Mutation results include `compactProof` metadata so agents can report changed cells/ranges, warnings, backup IDs, and rollback availability without reading changed sheets back.
 
-For MCP clients that resend all tool schemas with each generation, workbook payload savings can be hidden by tool-schema overhead. `owb mcp` now exposes one optimized compact-first surface with no user configuration. The surface hides raw range facet reads such as `excel.range.read_values`; use `excel.range.read_compact` so sparse ranges can be bounded, trimmed, and paged. `excel.runtime.get_capabilities` and workflow preflights return the optimized exposed catalog rather than a full/raw tool catalog.
+For MCP clients that resend all tool schemas with each generation, workbook payload savings can be hidden by tool-schema overhead. `owb mcp` exposes the public `excel.agent.run` surface so normal agents avoid primitive compact-tool chains. Raw range facet reads such as `excel.range.read_values` are not part of the public agent surface; backend routing should use compact reads so sparse ranges can be bounded, trimmed, and paged. `excel.runtime.get_capabilities` reports the public tool list rather than a full/raw tool catalog.
 
 Snapshot creation and mutation results can contain full before/after workbook payloads for rollback. Public MCP responses return metadata, IDs, counts, rollback proof, `nextActionRecommendation`, `reasoningHints`, confidence metadata, and a `contextId`/`resourceUri` for the full detail instead of embedding snapshot, backup, or diff bodies inline. Snapshot and diff compact tools accept nested `budget` controls for tighter response caps. Stored detail can be inspected with metadata, preview, or paged resource reads before requesting full payloads. Use `excel.compact.context_stats` to inspect stored bytes, estimated tokens, cache hits, and estimated token savings during long agent sessions.
 
@@ -66,6 +67,7 @@ Compact workflows should usually cut large workbook context by 80-99%:
 
 - Use `excel.table.get_schema` plus a 50-row `excel.table.read_compact` page instead of sending a 10,000-row table.
 - Use `excel.range.get_summary` plus projected `excel.range.read_compact` facets instead of `excel.range.read_full` over a used range.
+- Let `excel.range.read_compact` use `cellOutput: "auto"` for sparse worksheets; mostly empty ranges return `sparseRows` and `emptySummary` instead of a large rectangular matrix.
 - Use `excel.lookup.find_headers` or `excel.lookup.resolve_range` instead of reading every sheet's first 100 rows to find a target column.
 - Use `excel.validate.compact`, `excel.snapshot.compare_compact`, or `excel.diff.get_compact` when issue/diff counts and examples are enough; fetch the `resourceUri` only for full detail review.
 

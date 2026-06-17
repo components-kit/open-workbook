@@ -50,7 +50,7 @@ const missing = required.filter((name) => !exposedTools.has(name));
 const leaked = forbidden.filter((name) => exposedTools.has(name));
 
 if (missing.length > 0 || leaked.length > 0) {
-  console.error("Optimized MCP surface validation failed.");
+  console.error("Internal tool catalog validation failed.");
   if (missing.length > 0) {
     console.error(`Missing required optimized tools:\n${missing.map((name) => `- ${name}`).join("\n")}`);
   }
@@ -60,4 +60,4 @@ if (missing.length > 0 || leaked.length > 0) {
   process.exit(1);
 }
 
-console.log(`Optimized MCP surface check passed: ${exposedTools.size} exposed tools, ${forbidden.length} raw/full or duplicate tools excluded.`);
+console.log(`Internal tool catalog check passed: ${exposedTools.size} stable capabilities, ${forbidden.length} raw/full or duplicate tools excluded.`);

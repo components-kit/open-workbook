@@ -1,4 +1,4 @@
-import { makeId, type BatchRequest, type CellMatrix, type ExcelOperation, type NameInfo, type OperationId, type WorkbookId, type WorkbookRef } from "@components-kit/open-workbook-protocol";
+import { makeId, type BatchRequest, type CellMatrix, type ExcelOperation, type NameInfo, type OperationId, type RuntimeSelectionResponse, type SelectionInfo, type WorkbookId, type WorkbookRef } from "@components-kit/open-workbook-protocol";
 import {
   checkMetadataFreshness,
   columnLetter,
@@ -9,6 +9,8 @@ import {
   type ColumnType,
   type FormulaRegionMetadata,
   type HeaderMetadata,
+  type SectionKind,
+  type SectionMetadata,
   type SheetKind,
   type SheetMetadata,
   type SummaryBlockMetadata,
@@ -30,7 +32,8 @@ export class WorkbookMetadataBuilder {
     private readonly cache: WorkbookMetadataCache
   ) {}
 
-  async getOrBuild(input: { workbookContextId?: string; workbookId?: WorkbookId | string; workbookName?: string }): Promise<MetadataBuildResult> {
+  async getOrBuild(input: { workbookContextId?: string; workbookId?: WorkbookId | string; workbookName?: string; includeSamples?: boolean }): Promise<MetadataBuildResult> {
+    const includeSamples = input.includeSamples === true;
     const existingByContext = input.workbookContextId ? this.cache.getByContextId(input.workbookContextId) : undefined;
     const reusableContextId = existingByContext?.workbookContextId;
     const activeContext = await this.runtime.getActiveContext();
@@ -38,6 +41,7 @@ export class WorkbookMetadataBuilder {
     if (!activeWorkbook) {
       throw new Error("No active Excel workbook is available. Open Excel and connect the Open Workbook add-in.");
     }
+    const selection = await this.readSelection(activeWorkbook.workbookId);
     const mapResult = await this.runtime.getWorkbookMap();
     if ((mapResult as { ok?: boolean }).ok === false) {
       throw new Error("Workbook map is unavailable because the Excel add-in is disconnected.");
@@ -50,9 +54,9 @@ export class WorkbookMetadataBuilder {
       sheets
     });
     if (existingByContext) {
-      const freshness = checkMetadataFreshness(existingByContext, fingerprint);
+      const freshness = checkMetadataFreshness(existingByContext, fingerprint, { requireSampled: includeSamples });
       if (freshness.status === "FRESH") {
-        return { metadata: existingByContext, cacheHit: true };
+        return { metadata: this.cache.set(withFreshSelection(existingByContext, selection)), cacheHit: true };
       }
       this.cache.delete(existingByContext.workbookKey);
     }
@@ -63,8 +67,8 @@ export class WorkbookMetadataBuilder {
       ...(activeWorkbook.path !== undefined ? { workbookPath: activeWorkbook.path } : {})
     });
     const existing = this.cache.get(key);
-    if (existing && checkMetadataFreshness(existing, fingerprint).status === "FRESH") {
-      return { metadata: existing, cacheHit: true };
+    if (existing && checkMetadataFreshness(existing, fingerprint, { requireSampled: includeSamples }).status === "FRESH") {
+      return { metadata: this.cache.set(withFreshSelection(existing, selection)), cacheHit: true };
     }
 
     const tables = await this.buildTableMetadata(activeWorkbook.workbookId, sheets);
@@ -76,13 +80,17 @@ export class WorkbookMetadataBuilder {
     }));
     const tableMap = groupBy(tables, (table) => table.sheetName);
     const samples = new Map<string, CellMatrix>();
-    for (const sheet of sheets) {
-      const sample = await this.readSheetSample(activeWorkbook.workbookId, sheet);
-      if (sample.length > 0) {
-        samples.set(sheet.name, sample);
+    if (includeSamples) {
+      for (const sheet of sheets) {
+        const sample = await this.readSheetSample(activeWorkbook.workbookId, sheet);
+        if (sample.length > 0) {
+          samples.set(sheet.name, sample);
+        }
       }
     }
 
+    const sections = sheets.flatMap((sheet, index) => detectSections(sheet, samples.get(sheet.name) ?? [], index));
+    const sectionIdsBySheet = groupBy(sections, (section) => section.sheetName);
     const summaryBlocks = sheets.flatMap((sheet, index) => detectSummaryBlocks(sheet, samples.get(sheet.name) ?? [], index));
     const formulaRegions = sheets.flatMap((sheet, index) => detectFormulaRegions(sheet, samples.get(sheet.name) ?? [], index));
     const summaryIdsBySheet = groupBy(summaryBlocks, (block) => block.sheetName);
@@ -91,6 +99,7 @@ export class WorkbookMetadataBuilder {
     const metadata: WorkbookMetadata = {
       workbookContextId: reusableContextId ?? makeId("wbctx"),
       workbookKey: key,
+      detailLevel: includeSamples ? "sampled" : "structure",
       workbook: {
         workbookId: activeWorkbook.workbookId,
         name: activeWorkbook.name,
@@ -98,18 +107,21 @@ export class WorkbookMetadataBuilder {
         ...(activeWorkbook.path !== undefined ? { path: activeWorkbook.path } : {}),
         ...(map.activeSheet !== undefined ? { activeSheet: map.activeSheet } : {})
       },
+      ...(selection ? { selection } : {}),
       sheets: sheets.map((sheet, index) =>
         sheetMetadataFromMap(
           sheet,
           index,
           tableMap.get(sheet.name) ?? [],
           samples.get(sheet.name) ?? [],
+          sectionIdsBySheet.get(sheet.name) ?? [],
           summaryIdsBySheet.get(sheet.name) ?? [],
           formulaIdsBySheet.get(sheet.name) ?? []
         )
       ),
       tables,
       namedRanges: [...namedRanges, ...registeredRegions],
+      sections,
       summaryBlocks,
       formulaRegions,
       fingerprint,
@@ -122,6 +134,19 @@ export class WorkbookMetadataBuilder {
 
   invalidateWorkbook(workbookId: WorkbookId | string): void {
     this.cache.deleteByWorkbookId(workbookId);
+  }
+
+  private async readSelection(workbookId: WorkbookId | string): Promise<SelectionInfo | undefined> {
+    try {
+      const result = await this.runtime.getSelection() as RuntimeSelectionResponse | { ok?: boolean; selection?: SelectionInfo };
+      if ((result as { ok?: boolean }).ok === false) {
+        return undefined;
+      }
+      const selection = result.selection;
+      return selection && String(selection.workbookId) === String(workbookId) ? selection : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private async buildTableMetadata(workbookId: WorkbookId, sheets: any[]): Promise<TableMetadata[]> {
@@ -175,9 +200,27 @@ export class WorkbookMetadataBuilder {
     };
     const request: BatchRequest = { workbookId, mode: "apply", operations: [operation] };
     const result = await this.runtime.applyBatch(request);
-    const snapshot = (result as { readData?: Array<{ snapshot?: { values?: CellMatrix; formulas?: CellMatrix<string | null>; text?: string[][] } }> }).readData?.[0]?.snapshot;
+    const snapshot = operationReadSnapshots(result)[0]?.snapshot;
     return mergeFormulaSample(snapshot?.values ?? snapshot?.text ?? [], snapshot?.formulas ?? []);
   }
+}
+
+function withFreshSelection(metadata: WorkbookMetadata, selection: SelectionInfo | undefined): WorkbookMetadata {
+  const next: WorkbookMetadata = { ...metadata, updatedAt: Date.now() };
+  if (selection) {
+    next.selection = selection;
+  } else {
+    delete next.selection;
+  }
+  return next;
+}
+
+function operationReadSnapshots(result: unknown): Array<{ snapshot?: { values?: CellMatrix; formulas?: CellMatrix<string | null>; text?: string[][] } }> {
+  const typed = result as {
+    data?: Array<{ snapshot?: { values?: CellMatrix; formulas?: CellMatrix<string | null>; text?: string[][] } }>;
+    readData?: Array<{ snapshot?: { values?: CellMatrix; formulas?: CellMatrix<string | null>; text?: string[][] } }>;
+  };
+  return typed.readData ?? typed.data ?? [];
 }
 
 function mergeFormulaSample(values: CellMatrix, formulas: CellMatrix<string | null>): CellMatrix {
@@ -201,6 +244,7 @@ function sheetMetadataFromMap(
   index: number,
   tables: TableMetadata[],
   sample: CellMatrix,
+  sections: SectionMetadata[],
   summaryBlocks: SummaryBlockMetadata[],
   formulaRegions: FormulaRegionMetadata[]
 ): SheetMetadata {
@@ -231,6 +275,7 @@ function sheetMetadataFromMap(
     kind: inferSheetKind(sheet.name, headers.flatMap((header) => header.columns), tableIds.length, summaryBlocks.length),
     headers,
     tableIds,
+    sectionIds: sections.map((section) => section.id),
     summaryBlockIds: summaryBlocks.map((block) => block.id),
     formulaRegionIds: formulaRegions.map((region) => region.id)
   };
@@ -242,21 +287,153 @@ function detectHeaders(sheetName: string, sample: CellMatrix): HeaderMetadata[] 
     const textLike = nonEmpty.filter((value) => typeof value === "string" && !/^\d+([.,]\d+)?$/.test(value.trim()));
     return { row, rowIndex, nonEmpty, textLike, confidence: nonEmpty.length >= 3 ? textLike.length / nonEmpty.length : 0 };
   }).filter((candidate) => candidate.nonEmpty.length >= 3 && candidate.confidence >= 0.6);
-  const best = candidates.sort((left, right) => right.confidence - left.confidence)[0];
-  if (!best) {
+  return candidates
+    .sort((left, right) => left.rowIndex - right.rowIndex || right.confidence - left.confidence)
+    .map((candidate) => {
+      const columns = candidate.row.map((value, index) => ({ value, index }))
+        .filter((entry) => entry.value !== null && entry.value !== undefined && String(entry.value).trim() !== "")
+        .map((entry) => columnMetadata(entry.index, String(entry.value)));
+      return {
+        id: `header:${sheetName}:${candidate.rowIndex + 1}`,
+        sheetName,
+        row: candidate.rowIndex + 1,
+        range: `${columnLetter(columns[0]?.index ?? 0)}${candidate.rowIndex + 1}:${columnLetter(columns.at(-1)?.index ?? candidate.row.length - 1)}${candidate.rowIndex + 1}`,
+        columns,
+        confidence: Number(candidate.confidence.toFixed(3))
+      };
+    });
+}
+
+function detectSections(sheet: any, sample: CellMatrix, sheetIndex: number): SectionMetadata[] {
+  if (sample.length === 0) {
     return [];
   }
-  const columns = best.row.map((value, index) => ({ value, index }))
-    .filter((entry) => entry.value !== null && entry.value !== undefined && String(entry.value).trim() !== "")
-    .map((entry) => columnMetadata(entry.index, String(entry.value)));
-  return [{
-    id: `header:${sheetName}:${best.rowIndex + 1}`,
-    sheetName,
-    row: best.rowIndex + 1,
-    range: `A${best.rowIndex + 1}:${columnLetter(best.row.length - 1)}${best.rowIndex + 1}`,
-    columns,
-    confidence: Number(best.confidence.toFixed(3))
-  }];
+  const sections: SectionMetadata[] = [];
+  const rowBands = contiguousIndexGroups(
+    sample
+      .map((row, rowIndex) => ({ row, rowIndex }))
+      .filter(({ row }) => row.some(isNonEmptyCell))
+      .map(({ rowIndex }) => rowIndex)
+  );
+  for (const band of rowBands) {
+    const columnIndexes = new Set<number>();
+    for (let rowIndex = band.start; rowIndex <= band.end; rowIndex += 1) {
+      const row = sample[rowIndex] ?? [];
+      row.forEach((value, columnIndex) => {
+        if (isNonEmptyCell(value)) {
+          columnIndexes.add(columnIndex);
+        }
+      });
+    }
+    for (const columnGroup of contiguousIndexGroups([...columnIndexes])) {
+      const section = buildSection(sheet, sample, sheetIndex, sections.length, band, columnGroup);
+      if (section.nonEmptyCellCount >= 2) {
+        sections.push(section);
+      }
+    }
+  }
+  return sections;
+}
+
+function buildSection(
+  sheet: any,
+  sample: CellMatrix,
+  sheetIndex: number,
+  sectionIndex: number,
+  rows: { start: number; end: number },
+  columns: { start: number; end: number }
+): SectionMetadata {
+  const matrix = sample.slice(rows.start, rows.end + 1).map((row) => row.slice(columns.start, columns.end + 1));
+  const nonEmptyValues = matrix.flat().filter(isNonEmptyCell);
+  const header = detectSectionHeader(matrix, rows.start, columns.start);
+  const formulaCount = nonEmptyValues.filter((value) => typeof value === "string" && value.startsWith("=")).length;
+  const labels = sectionLabels(matrix, header?.columns.map((column) => column.name) ?? []);
+  const kind = inferSectionKind({ sheetName: String(sheet.name), labels, columns: header?.columns ?? [], formulaCount, rowStart: rows.start });
+  const range = `${columnLetter(columns.start)}${rows.start + 1}:${columnLetter(columns.end)}${rows.end + 1}`;
+  return {
+    id: `section:${sheetIndex}:${sectionIndex}`,
+    sheetName: String(sheet.name),
+    label: sectionLabel(kind, labels, header?.columns ?? [], sectionIndex),
+    kind,
+    range,
+    ...(header ? { headerRange: header.range, headerRow: header.row } : {}),
+    columns: header?.columns ?? [],
+    labels,
+    rowCount: rows.end - rows.start + 1,
+    columnCount: columns.end - columns.start + 1,
+    nonEmptyCellCount: nonEmptyValues.length,
+    confidence: sectionConfidence(kind, header?.columns.length ?? 0, nonEmptyValues.length)
+  };
+}
+
+function detectSectionHeader(matrix: CellMatrix, rowOffset: number, columnOffset: number): { row: number; range: string; columns: ColumnMetadata[] } | undefined {
+  const candidates = matrix.slice(0, Math.min(matrix.length, 5)).map((row, localRowIndex) => {
+    const nonEmpty = row.map((value, index) => ({ value, index })).filter((entry) => isNonEmptyCell(entry.value));
+    const textLike = nonEmpty.filter((entry) => typeof entry.value === "string" && !/^\d+([.,]\d+)?$/.test(entry.value.trim()));
+    return { row, localRowIndex, nonEmpty, confidence: nonEmpty.length >= 2 ? textLike.length / nonEmpty.length : 0 };
+  }).filter((candidate) => candidate.nonEmpty.length >= 2 && candidate.confidence >= 0.6);
+  const best = candidates.sort((left, right) => right.confidence - left.confidence || left.localRowIndex - right.localRowIndex)[0];
+  if (!best) {
+    return undefined;
+  }
+  const columns = best.nonEmpty.map((entry) => columnMetadata(columnOffset + entry.index, String(entry.value)));
+  return {
+    row: rowOffset + best.localRowIndex + 1,
+    range: `${columnLetter(columns[0]?.index ?? columnOffset)}${rowOffset + best.localRowIndex + 1}:${columnLetter(columns.at(-1)?.index ?? columnOffset)}${rowOffset + best.localRowIndex + 1}`,
+    columns
+  };
+}
+
+function sectionLabels(matrix: CellMatrix, headers: string[]): string[] {
+  const values = matrix
+    .flat()
+    .filter((value) => typeof value === "string" && value.trim() !== "" && !value.trim().startsWith("="))
+    .map((value) => String(value).trim());
+  return [...new Set([...headers, ...values].filter((value) => value.length <= 48))].slice(0, 12);
+}
+
+function inferSectionKind(input: { sheetName: string; labels: string[]; columns: ColumnMetadata[]; formulaCount: number; rowStart: number }): SectionKind {
+  const text = normalizeHeaderName([input.sheetName, ...input.labels, ...input.columns.map((column) => column.name)].join(" "));
+  if (input.formulaCount > 0 || /formula|reconciliation|variance|calc|calculation/.test(text)) return "formula";
+  if (/note|comment|owner|status|action|approval|follow_up/.test(text)) return "notes";
+  if (/summary|kpi|metric|total|revenue|expense|profit|balance/.test(text)) return "summary";
+  if (input.columns.length >= 3) return "table-like";
+  if (input.rowStart <= 2 || /report|period|prepared|as_of/.test(text)) return "metadata";
+  return "unknown";
+}
+
+function sectionLabel(kind: SectionKind, labels: string[], columns: ColumnMetadata[], index: number): string {
+  const headerText = normalizeHeaderName(columns.map((column) => column.name).join(" "));
+  const text = normalizeHeaderName([...labels, ...columns.map((column) => column.name)].join(" "));
+  if (/invoice|billed|booking|container|collect/.test(headerText)) return "invoice section";
+  if (/transaction|payment|cash|truck/.test(headerText)) return "transaction section";
+  if (/kpi|metric|summary|revenue|expense|profit/.test(text)) return "KPI summary section";
+  if (/note|owner|status|action|approval/.test(text)) return "notes/status section";
+  if (/formula|reconciliation|variance/.test(text)) return "formula/reconciliation section";
+  return `${kind} section ${index + 1}`;
+}
+
+function sectionConfidence(kind: SectionKind, columnCount: number, nonEmptyCellCount: number): number {
+  const base = kind === "unknown" ? 0.45 : 0.65;
+  return Number(Math.min(0.95, base + Math.min(columnCount, 6) * 0.03 + Math.min(nonEmptyCellCount, 20) * 0.005).toFixed(3));
+}
+
+function contiguousIndexGroups(indexes: number[]): Array<{ start: number; end: number }> {
+  const sorted = [...new Set(indexes)].sort((left, right) => left - right);
+  const groups: Array<{ start: number; end: number }> = [];
+  for (const index of sorted) {
+    const current = groups[groups.length - 1];
+    if (current && index === current.end + 1) {
+      current.end = index;
+    } else {
+      groups.push({ start: index, end: index });
+    }
+  }
+  return groups;
+}
+
+function isNonEmptyCell(value: unknown): value is string | number | boolean {
+  return value !== null && value !== undefined && String(value).trim() !== "";
 }
 
 function detectSummaryBlocks(sheet: any, sample: CellMatrix, index: number): SummaryBlockMetadata[] {
@@ -326,7 +503,7 @@ export function inferSheetKind(sheetName: string, columns: ColumnMetadata[], tab
 function sampleAddress(address: string, rowCount?: number, columnCount?: number): string {
   const start = /^'?[^'!]+(?:'!)?([A-Z]+\d+)/i.exec(address)?.[1] ?? "A1";
   const rows = Math.max(1, Math.min(rowCount ?? 20, 20));
-  const cols = Math.max(1, Math.min(columnCount ?? 30, 30));
+  const cols = Math.max(1, Math.min(columnCount ?? 40, 40));
   return `${start}:${columnLetter(cols - 1)}${rows}`;
 }
 

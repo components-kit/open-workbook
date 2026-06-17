@@ -4,22 +4,26 @@ Choose the narrowest Open Workbook MCP interface that preserves workbook intent.
 
 Default MCP clients should use `excel.agent.run` as the public interface. Use its request modes instead of choosing primitive tools directly:
 
-- `prepare`: cache workbook metadata for sheets, tables, headers, named ranges, regions, summaries, formulas, and sheet kind.
+- `prepare`: cache lightweight workbook structure metadata for sheets, tables, named ranges, regions, and sheet kind.
 - `find`: search cached metadata for candidate sheets, tables, headers, named ranges, regions, summary blocks, and formula regions.
-- `answer`: perform targeted compact reads and deterministic calculations.
-- `auto`: handle normal user requests and apply only clearly scoped low-risk value edits after preview checks.
-- `preview_update`: resolve the target, read before values, block unsafe broad/formula edits, and return an operation plus confirmation token.
+- `answer`: perform targeted live reads and deterministic calculations for row/value/sample/A1-range/raw-monthly-section requests; use cached metadata for schema-only requests.
+- `auto`: compatibility route for casual prompts; explicit modes are preferred when the agent knows the workflow step.
+- `preview_update`: resolve the target, read before values for range writes, preview table-row appends, block unsafe broad/formula edits, and return an operation plus confirmation token.
 - `apply_update`: apply a previewed update only with the returned confirmation token.
 - `rollback`: map transaction or backup identifiers to the rollback lifecycle.
 - `validate`: validate the current workbook after risky changes.
 
-The primitive tools below are the advanced compatibility/debug surface. Use them only when that surface is explicitly exposed.
+If an `excel.agent.run` result returns `AMBIGUOUS_TARGET`, select one returned candidate and retry with `target.candidateId` plus the same `workbookContextId`. For table appends, pass `target.candidateId` or `target.tableName` with `values.rows`, preview first, then apply with the returned confirmation token. Do not switch to shell/Python/offline `.xlsx` parsing for live Excel workbooks.
+
+The primitive tools below describe backend capabilities and test coverage. Normal agents should not chain compact primitive calls when an `excel.agent.run` mode can perform the task.
+`excel.agent.run` receives the active Excel selection as ambient context, so prompts such as "selected cell", "active cell", "selected range", and "this column" should be handled through the agent surface without a separate selection tool call.
 
 ## Session And Discovery
 
 - Runtime health: `excel.runtime.get_status`
-- Full workflow setup: `excel.workflow.prepare_session`
-- Active workbook and selection context: `excel.runtime.get_active_context`
+- Full backend workflow setup capability: `excel.workflow.prepare_session`
+- Active workbook context: `excel.runtime.get_active_context`
+- Active selection diagnostic: `excel.runtime.get_selection`
 - Host/tool capability matrix: `excel.runtime.get_capabilities`
 - Workbook structure: `excel.workbook.get_workbook_map`
 - Compact workbook structure: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`
@@ -27,9 +31,9 @@ The primitive tools below are the advanced compatibility/debug surface. Use them
 - Open workbooks: `excel.workbook.list_open_workbooks`
 - Sheets: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.get_summary`, `excel.sheet.get_used_range`
 
-Prefer `excel.workflow.prepare_session` as the first call. If capabilities are unknown because the add-in is disconnected, stop and ask for runtime setup instead of guessing.
+On the public surface, prefer `excel.agent.run` with `mode: "prepare"` as the first call. If capabilities are unknown because the add-in is disconnected, stop and ask for runtime setup instead of guessing.
 
-When `excel.agent.run` prepare has returned a `workbookContextId`, reuse it with context-aware compact tools in advanced/debug mode: `excel.workbook.get_summary`, `excel.sheet.get_summary`, `excel.range.read_compact`, `excel.table.read_compact`, and `excel.compact.get_resource`.
+When `excel.agent.run` prepare has returned a `workbookContextId`, pass that same id back to later `agent.run` calls. The backend may reuse context-aware compact capabilities such as workbook/sheet summaries, compact range/table reads, and compact resources without exposing them to the agent.
 
 ## Reading Data
 
@@ -43,7 +47,7 @@ When `excel.agent.run` prepare has returned a `workbookContextId`, reuse it with
 - Search and diagnostics: `excel.range.search`, `excel.range.find_blank_cells`, `excel.range.find_errors`
 - Table data: use `excel.table.read_compact` with `columns`, `rowOffset`, `maxRows`, and include flags
 
-Use lookup tools before reading when the target sheet, table, header, entity, or range is unknown. Use compact summaries or schemas before cell bodies once the target scope is known. Use explicit sheet/address ranges whenever possible. Use used-range or workbook-wide scans only for audits, validation, search, or discovery. For simple reads, use one projected `excel.range.read_compact` or `excel.table.read_compact` call instead of separate raw reads.
+Backend routing should use lookup capabilities before reading when the target sheet, table, header, entity, or range is unknown. It should use compact summaries or schemas before cell bodies once the target scope is known. Agents should express explicit sheet/address ranges whenever possible and avoid prompts that require used-range or workbook-wide scans unless the task is audit, validation, search, or discovery.
 
 ## Writing Data
 
@@ -64,7 +68,7 @@ Use lookup tools before reading when the target sheet, table, header, entity, or
 - Queued mutation status: `excel.transaction.get`, `excel.transaction.wait`, `excel.transaction.cancel`
 
 Prefer `excel.workflow.create_formula_sheet` for standard new sheets that need values, formulas, number formats, and validation. Prefer `excel.workflow.repair_formula_errors` for formula error repair when an error range and source formula range are known. Prefer `excel.workflow.preview_risky_edit` when a risky scoped edit should apply and return before/after snapshots, a diff, transaction id, and rollback preview in one response. Provide at least one minimal scoped operation and leave `apply` enabled unless the user asked for preview only. Prefer `excel.plan.*` when a user should review a diff before applying, when formulas/templates are at risk, or when rollback clarity matters. Prefer `excel.batch.*` for compact, well-scoped range mutations. Preflight large generated batches before applying them.
-Combined mutating workflows include an internal read-only preflight payload before mutation; still prefer `excel.workflow.prepare_session` first when possible.
+Combined mutating workflows include an internal read-only preflight payload before mutation. On the public surface use `excel.agent.run` preview/apply modes; backend tests may exercise primitive workflow capabilities directly.
 Values, formulas, formats, and styles are separate workbook facets. Use `excel.range.write_values` for constants only, `excel.range.write_formulas` for formulas beginning with `=`, and `excel.range.write_number_formats` for display formats. Do not merge formulas into a values write just because the matrix is convenient.
 Do not pad a large range write with `null`, blank strings, or unchanged cells when only one cell or a smaller rectangle should change. Use the smallest changed target range, or use `excel.range.clear_values_keep_format` for intentional clearing.
 Use `excel.range.write_styles_many` for report styling that touches many ranges, such as title bands, headers, zebra rows, status colors, or type colors. Use single `excel.range.write_styles` only for one contiguous range. Large grouped style updates may return queued parent jobs; wait or poll their job IDs.

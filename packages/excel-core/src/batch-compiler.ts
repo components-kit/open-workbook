@@ -94,6 +94,7 @@ function getOperationTarget(operation: ExcelOperation) {
     case "range.delete_columns":
     case "range.autofit_columns":
     case "range.autofit_rows":
+    case "range.apply_autofilter":
     case "range.merge":
     case "range.unmerge":
     case "range.restore_snapshot":

@@ -16,9 +16,9 @@ Daily spreadsheet work usually does not need the largest model available, but it
 
 The project is being prepared for npm distribution as `@components-kit/open-workbook`. It is not a Microsoft AppSource add-in and does not attempt to install itself into Excel without user or admin trust approval.
 
-Stable areas include runtime connection, workbook/sheet/range operations, compact workbook/table/range discovery, workbook-wide lookup/search, compact paged reads with token telemetry, reversible batches, combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Some advanced Office.js-limited paths return explicit capability-unavailable results instead of pretending to work.
+Stable areas include runtime connection, workbook/sheet/range operations, compact workbook/table/range discovery, workbook-wide lookup/search, compact paged reads with token telemetry, reversible batches, combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Host-limited paths return explicit capability-unavailable results instead of pretending to work.
 
-The simple flow is MCP-owned: `npx ... mcp` starts the MCP adapter, the local add-in taskpane server, and an embedded backend when no shared daemon is running. By default, agents see the compact `excel.agent.run` workflow interface instead of hundreds of Excel primitives; Open Workbook handles workbook discovery, cached metadata, target resolution, preview/apply, validation, rollback, and compact proof internally. The shared `owb daemon` remains available for advanced multi-client coordination.
+The simple flow is MCP-owned: `npx ... mcp` starts the MCP adapter, the local add-in taskpane server, and an embedded backend when no shared daemon is running. Agents see one public workflow tool, `excel.agent.run`, instead of hundreds of Excel primitives; Open Workbook handles workbook discovery, cached metadata, target resolution, preview/apply, validation, rollback, and compact proof internally. The full operation catalog remains backend capability for deterministic orchestration and test coverage. The shared `owb daemon` remains available for multi-client coordination.
 
 ## Architecture
 
@@ -79,16 +79,10 @@ Use the printed MCP launch command in your agent UI:
 npx -y @components-kit/open-workbook@latest mcp
 ```
 
-Start the MCP adapter with the default agent workflow surface:
+Start the MCP adapter with the public agent workflow surface:
 
 ```bash
 npx -y @components-kit/open-workbook@latest mcp
-```
-
-For debugging or compatibility with clients that need the previous primitive MCP surface, set:
-
-```bash
-OPEN_WORKBOOK_MCP_SURFACE=advanced npx -y @components-kit/open-workbook@latest mcp
 ```
 
 Start the agent UI before opening the Open Workbook add-in in Excel; the MCP command starts the local add-in asset server and backend for the simple flow.
@@ -165,7 +159,7 @@ Environment overrides:
 
 ## Token-Saving Reads
 
-Open Workbook exposes `excel.agent.run` by default so agents can send workbook intent without manually choosing discovery, lookup, read, write, validation, and rollback primitives. The backend builds a workbook metadata cache, resolves natural-language targets across sheets, tables, headers, named ranges, regions, summaries, and formulas, performs targeted compact reads internally, and returns compact structured answers, previews, proof ranges, telemetry, and resource links. `auto` can apply clearly scoped low-risk value edits after preview checks, while ambiguous, broad, formula-sensitive, structural, or destructive edits stop for review. Close matches return candidates instead of guessing. In advanced mode, selected compact discovery/read tools can reuse `workbookContextId` so agents can route multiple calls without repeating workbook discovery.
+Open Workbook exposes `excel.agent.run` so agents can send workbook intent without manually choosing discovery, lookup, read, write, validation, and rollback primitives. The backend builds a workbook metadata cache, resolves natural-language targets across sheets, tables, headers, named ranges, regions, summaries, and formulas, performs targeted compact reads internally, and returns compact structured answers, previews, proof ranges, telemetry, and resource links. Use explicit modes for deterministic workflows: `prepare`, `find`, `answer`, `preview_update`, `apply_update`, `validate`, and `rollback`. Omitted mode or `auto` remains compatible for casual prompts and can apply clearly scoped low-risk value edits after preview checks, while ambiguous, broad, formula-sensitive, structural, or destructive edits stop for review. Close matches return candidates instead of guessing; retry with `target.candidateId` from the chosen candidate to continue on the one-tool surface. Schema/header-only requests return cached table or range metadata when possible; requests for rows, samples, explicit A1 ranges, raw monthly sheets, or actual values perform a live read. Raw monthly transaction/invoice sections can resolve from detected header blocks even when no Excel Table exists. Table append requests preview/apply through the same agent tool while preserving the table mutation path internally.
 
 When details would exceed a caller's budget, compact tools can store the full payload locally and return an `excel://compact/{resource_id}` handle for later retrieval through `excel.compact.get_resource`. Compact summary/schema cache entries are invalidated after workbook mutations. Use `excel.validate.compact` for validation proof that returns counts and examples inline while keeping the full issue report behind a resource handle.
 
@@ -176,6 +170,7 @@ corepack pnpm check
 corepack pnpm test
 corepack pnpm test:e2e:agent-surface
 corepack pnpm test:e2e:agent-workflow
+corepack pnpm test:e2e:office-agent:behavior
 corepack pnpm test:e2e:fast
 corepack pnpm test:e2e:agent:quality:compare
 corepack pnpm test:e2e:agent:quality:gate

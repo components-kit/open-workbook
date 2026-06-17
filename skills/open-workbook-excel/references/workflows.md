@@ -4,26 +4,25 @@ These are default Open Workbook MCP workflows. Adjust scope and validation to th
 
 ## Inspect A Workbook
 
-1. Call `excel.runtime.get_status`.
-2. Call `excel.runtime.get_active_context`.
-3. Call `excel.runtime.get_capabilities`.
-4. Call `excel.workbook.get_workbook_map`.
-5. For a specific sheet, call `excel.sheet.get_used_range` and scoped `excel.range.read_compact`.
+On the public surface, call `excel.agent.run` with `mode: "prepare"` first. Then use `mode: "find"` for discovery and `mode: "answer"` for targeted reads.
 
-Use `excel.workflow.prepare_session` when available to combine the first four calls plus collaboration state.
+The backend can combine runtime status, active context, capabilities, workbook map, and collaboration state before a workflow mutates. It should use scoped compact range/table reads only after the target is known.
 
 Use display text when reporting what a user sees. Use values/formulas/number formats when making calculations or edits.
 
 ## Read And Analyze Data
 
 1. Identify the smallest sheet, table, region, or range that answers the question.
-2. Use `excel.table.read_compact` for Excel tables; otherwise use `excel.range.read_compact`.
-3. For formula-sensitive analysis, include formulas in the compact read or use a matched formula workflow.
-4. For data-quality work, use `excel.clean.detect_header_row`, `excel.range.find_blank_cells`, `excel.range.find_errors`, and relevant validators.
+2. On the default surface, use `excel.agent.run` with `mode: "answer"` and a clear target or `target.candidateId`; include the sheet/range, raw monthly transaction/invoice section, or row/sample/value wording when actual cell data is needed.
+3. Let the backend use table-native compact reads for Excel tables and range compact reads for normal ranges.
+4. For formula-sensitive analysis, include formulas in the compact read or use a matched formula workflow.
+5. For data-quality work, ask through `agent.run`; the backend can use header detection, blank/error scans, and relevant validators.
 
 Do not read the whole workbook when a named table, used range, or explicit range is enough.
 
 ## Write Values Safely
+
+On the public surface, use `excel.agent.run` with `mode: "preview_update"` and then `mode: "apply_update"` for scoped value edits. The primitive steps below describe backend behavior.
 
 1. Resolve workbook, sheet, and target address.
 2. Use `excel.batch.validate` or `excel.plan.preview` for non-trivial changes.
@@ -35,7 +34,7 @@ For a one-range value update, direct `excel.range.write_values` is acceptable be
 
 For new sheets with formulas and number formats, prefer `excel.workflow.create_formula_sheet`.
 
-Combined mutating workflows return an internal `preflight` payload with runtime status, active context, capabilities, workbook map, and collaboration state before they mutate. Still prefer `excel.workflow.prepare_session` first when possible; use the matched combined workflow directly when the task is standard and speed/model reliability matters.
+Combined mutating workflows return an internal `preflight` payload with runtime status, active context, capabilities, workbook map, and collaboration state before they mutate. On the public surface, use `excel.agent.run` preview/apply modes and let the backend select the matched workflow.
 
 ## Create A New Period Sheet From Template
 
@@ -73,6 +72,10 @@ Do not convert formulas to values unless the user explicitly asks or the workflo
 Cleaning writes must stay within the requested sheet, range, table, or registered region.
 
 ## Update Tables, Filters, Or Sorts
+
+On the default surface, append table rows with `excel.agent.run` `mode: "preview_update"` plus `target.candidateId` or `target.tableName` and `values.rows`, then apply with the returned `confirmationToken`.
+
+Backend table workflow:
 
 1. Inspect with `excel.table.get_info`.
 2. Use projected `excel.table.read_compact` options when only some columns or rows are needed.

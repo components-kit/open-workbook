@@ -20,7 +20,7 @@ export class AddinRpcClient {
     private readonly options: AddinRpcClientOptions
   ) {}
 
-  request<TResult>(method: string, params?: unknown): Promise<TResult> {
+  request<TResult>(method: string, params?: unknown, options: { timeoutMs?: number } = {}): Promise<TResult> {
     const id = this.nextId++;
     const message: JsonRpcRequest = {
       jsonrpc: "2.0",
@@ -33,7 +33,7 @@ export class AddinRpcClient {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Timed out waiting for add-in method: ${method}`));
-      }, this.options.timeoutMs);
+      }, options.timeoutMs ?? this.options.timeoutMs);
 
       this.pending.set(id, {
         resolve: (value) => resolve(value as TResult),

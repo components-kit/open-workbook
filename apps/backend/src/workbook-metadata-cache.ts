@@ -1,5 +1,5 @@
 import { hashStable } from "@components-kit/open-workbook-excel-core";
-import type { WorkbookFingerprint, WorkbookId } from "@components-kit/open-workbook-protocol";
+import type { SelectionInfo, WorkbookFingerprint, WorkbookId } from "@components-kit/open-workbook-protocol";
 
 export type SheetKind = "transaction" | "summary" | "dashboard" | "lookup" | "template" | "unknown";
 export type ColumnType = "text" | "number" | "currency" | "date" | "status" | "formula" | "unknown";
@@ -32,6 +32,7 @@ export interface SheetMetadata {
   kind: SheetKind;
   headers: HeaderMetadata[];
   tableIds: string[];
+  sectionIds: string[];
   summaryBlockIds: string[];
   formulaRegionIds: string[];
 }
@@ -67,9 +68,28 @@ export interface FormulaRegionMetadata {
   formulaCount: number;
 }
 
+export type SectionKind = "table-like" | "summary" | "notes" | "formula" | "metadata" | "unknown";
+
+export interface SectionMetadata {
+  id: string;
+  sheetName: string;
+  label: string;
+  kind: SectionKind;
+  range: string;
+  headerRange?: string;
+  headerRow?: number;
+  columns: ColumnMetadata[];
+  labels: string[];
+  rowCount: number;
+  columnCount: number;
+  nonEmptyCellCount: number;
+  confidence: number;
+}
+
 export interface WorkbookMetadata {
   workbookContextId: string;
   workbookKey: string;
+  detailLevel: "structure" | "sampled";
   workbook: {
     workbookId?: WorkbookId | string;
     name: string;
@@ -77,9 +97,11 @@ export interface WorkbookMetadata {
     activeSheet?: string;
     sheetCount: number;
   };
+  selection?: SelectionInfo;
   sheets: SheetMetadata[];
   tables: TableMetadata[];
   namedRanges: NamedRangeMetadata[];
+  sections: SectionMetadata[];
   summaryBlocks: SummaryBlockMetadata[];
   formulaRegions: FormulaRegionMetadata[];
   fingerprint: WorkbookFingerprint;
@@ -191,10 +213,14 @@ export function createMetadataFingerprint(input: {
 
 export function checkMetadataFreshness(
   metadata: WorkbookMetadata,
-  latest: WorkbookFingerprint
+  latest: WorkbookFingerprint,
+  options: { requireSampled?: boolean } = {}
 ): WorkbookMetadataFreshness {
   if (metadata.fingerprint.structureHash !== latest.structureHash) {
     return { status: "STALE", reason: "Workbook structure fingerprint changed." };
+  }
+  if (options.requireSampled === true && metadata.detailLevel !== "sampled") {
+    return { status: "STALE", reason: "Workbook metadata needs sheet samples." };
   }
   return { status: "FRESH" };
 }

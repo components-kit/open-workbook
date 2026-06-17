@@ -1,6 +1,6 @@
 {
   "name": "@components-kit/open-workbook-mcp-server",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "MCP stdio server exposing Open Workbook Excel automation tools.",
   "license": "MIT",
   "type": "module",

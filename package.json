@@ -1,6 +1,6 @@
 {
   "name": "open-workbook",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "private": true,
   "description": "Local-first MCP runtime for fast, reversible, template-aware Excel automation.",
   "license": "MIT",
@@ -39,6 +39,7 @@
     "test:e2e:report": "node scripts/e2e-report.mjs",
     "test:e2e:agent-surface": "node scripts/e2e-agent-surface.mjs",
     "test:e2e:agent-workflow": "node scripts/e2e-agent-workflow.mjs",
+    "test:e2e:office-agent:behavior": "node scripts/e2e-office-agent-behavior.mjs",
     "test:e2e:fast": "node scripts/e2e-fast.mjs",
     "test:e2e:agent": "corepack pnpm test:e2e:agent:core",
     "test:e2e:agent:core": "node scripts/e2e-codex-agent.mjs --scenarios core",

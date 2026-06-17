@@ -30,7 +30,7 @@ describe("tool catalog", () => {
     expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.rollback_validate")).toBe(true);
   });
 
-  it("exposes the optimized compact-first surface by default", () => {
+  it("keeps the internal compact and workflow capabilities in the stable catalog", () => {
     const exposed = getExposedToolCatalog();
     const exposedNames = new Set(exposed.map((tool) => tool.name));
     expect(exposed.every((tool) => tool.status === "stable")).toBe(true);
@@ -85,7 +85,8 @@ describe("tool catalog", () => {
     expect(exposed.some((tool) => tool.name === "excel.workflow.rollback_validate")).toBe(true);
     expect(exposed.find((tool) => tool.name === "excel.workflow.rollback_validate")?.requiresConfirmation).toBe(true);
     expect(exposed.find((tool) => tool.name === "excel.runtime.get_selection")?.status).toBe("stable");
-    for (const hidden of [
+    const catalogNames = new Set(ToolCatalog.map((tool) => tool.name));
+    for (const omitted of [
       "excel.range.read_values",
       "excel.range.read_formulas",
       "excel.range.read_number_formats",
@@ -98,10 +99,17 @@ describe("tool catalog", () => {
       "excel.diff.get_details",
       "excel.diff.export_json",
       "excel.diff.export_html",
+      "excel.filter.get_filters",
       "excel.filter.apply",
-      "excel.sort.apply"
+      "excel.filter.clear",
+      "excel.filter.preserve_from_template",
+      "excel.filter.validate",
+      "excel.sort.apply",
+      "excel.sort.clear",
+      "excel.sort.preserve_from_template"
     ]) {
-      expect(exposedNames.has(hidden)).toBe(false);
+      expect(exposedNames.has(omitted)).toBe(false);
+      expect(catalogNames.has(omitted)).toBe(false);
     }
   });
 
@@ -112,7 +120,7 @@ describe("tool catalog", () => {
     expect(exposed.every((tool) => tool.status === "stable" || tool.status === "preview")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.workbook.get_workbook_map" && tool.status === "stable")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.range.read_compact" && tool.status === "stable")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.status === "planned")).toBe(true);
+    expect(ToolCatalog.some((tool) => tool.status === "planned")).toBe(false);
   });
 
   it("tracks resources and prompts as catalog entries", () => {

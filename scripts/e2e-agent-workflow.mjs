@@ -80,6 +80,77 @@ async function main() {
     const ambiguous = await agentRun(mcp, { request: "Analyze financial 2026", mode: "answer", workbookContextId: prepared.workbookContextId }, agentOutputSchema);
     assert(ambiguous.status === "AMBIGUOUS_TARGET", "ambiguous financial request should return candidates instead of guessing");
 
+    const rawAprRange = await agentRun(mcp, {
+      request: "Read 'Apr 2026'!O1:AE3 actual values",
+      mode: "answer",
+      workbookContextId: prepared.workbookContextId
+    }, agentOutputSchema);
+    assert(rawAprRange.status === "SUCCESS", "quoted raw sheet range should resolve");
+    assert(rawAprRange.proof?.[0]?.sheetName === "Apr 2026", `raw range should use Apr 2026, got ${rawAprRange.proof?.[0]?.sheetName}`);
+    assert(rawAprRange.proof?.[0]?.range === "O1:AE3", `raw range should preserve O1:AE3, got ${rawAprRange.proof?.[0]?.range}`);
+    assert(rawAprRange.answer?.kind === "range_profile" && rawAprRange.answer?.source === "live_read", "raw range should be a live read");
+
+    const rawAprInvoice = await agentRun(mcp, {
+      request: "Read Apr 2026 invoice rows",
+      mode: "answer",
+      workbookContextId: prepared.workbookContextId
+    }, agentOutputSchema);
+    assert(rawAprInvoice.status === "SUCCESS", "raw invoice block should resolve");
+    assert(rawAprInvoice.proof?.[0]?.sheetName === "Apr 2026", "raw invoice block should use Apr 2026");
+    assert(rawAprInvoice.proof?.[0]?.range === "O1:AE3", `raw invoice block should use invoice range, got ${rawAprInvoice.proof?.[0]?.range}`);
+    assert(rawAprInvoice.telemetry?.internalReadCount === 1, "raw invoice block should perform one live read");
+
+    addin.workbook.sheet("Data").writeValues("F1:I4", [
+      ["Date", "Account", "Amount", "Status"],
+      ["2026-02-01", "B-100", 300, "Open"],
+      ["2026-02-02", "B-200", 400, "Closed"],
+      ["2026-02-03", "B-300", 500, "Open"]
+    ]);
+    addin.workbook.createTable({ sheetName: "Data", address: "F1:I4", tableName: "TransactionsArchive" });
+    const refreshed = await agentRun(mcp, { request: "Refresh workbook after adding another transaction table", mode: "prepare", workbookContextId: prepared.workbookContextId }, agentOutputSchema);
+    const tableCandidates = await agentRun(mcp, { request: "Find TransactionsArchive table", mode: "find", workbookContextId: refreshed.workbookContextId }, agentOutputSchema);
+    const archiveCandidateId = tableCandidates.candidates?.find((candidate) => candidate.tableName === "TransactionsArchive")?.id;
+    assert(archiveCandidateId, "find response should include a usable TransactionsArchive candidateId");
+    const selectedSchema = await agentRun(mcp, {
+      request: "Read the selected table schema",
+      mode: "answer",
+      workbookContextId: refreshed.workbookContextId,
+      target: { candidateId: archiveCandidateId }
+    }, agentOutputSchema);
+    assert(selectedSchema.status === "SUCCESS", "candidateId retry should resolve the selected schema");
+    assert(selectedSchema.answer?.kind === "table_schema", "candidateId schema retry should return table schema");
+    assert(selectedSchema.answer?.tableName === "TransactionsArchive", `candidateId schema retry should select TransactionsArchive, got ${selectedSchema.answer?.tableName}`);
+    assert(selectedSchema.telemetry?.internalReadCount === 0, "schema answers should use cached metadata without full reads");
+
+    const selectedRows = await agentRun(mcp, {
+      request: "Read headers and first 2 rows from the selected table",
+      mode: "answer",
+      workbookContextId: refreshed.workbookContextId,
+      target: { candidateId: archiveCandidateId }
+    }, agentOutputSchema);
+    assert(selectedRows.status === "SUCCESS", "candidateId row request should read live values");
+    assert(selectedRows.answer?.kind === "range_profile", "row request should return a live range profile");
+    assert(selectedRows.answer?.source === "live_read", "row request should report live_read source");
+    assert(selectedRows.telemetry?.internalReadCount === 1, "row request should perform one internal read");
+
+    const appendPreview = await agentRun(mcp, {
+      request: "Append transaction rows to the selected table",
+      mode: "preview_update",
+      workbookContextId: refreshed.workbookContextId,
+      target: { candidateId: archiveCandidateId },
+      values: { rows: [["2026-02-04", "B-400", 600, "Open"]] }
+    }, agentOutputSchema);
+    assert(appendPreview.status === "PREVIEW_READY", "table append should return a pending operation");
+    assert(appendPreview.answer?.kind === "table_append_preview", "table append should return append preview metadata");
+    const appendApplied = await agentRun(mcp, {
+      request: "Apply table append",
+      mode: "apply_update",
+      operationId: appendPreview.operationId,
+      confirmationToken: appendPreview.confirmationToken
+    }, agentOutputSchema);
+    assert(appendApplied.status === "SUCCESS", "table append apply should succeed");
+    assert(addin.workbook.table("TransactionsArchive").info().rowCount === 4, "fake add-in table should have one appended row");
+
     const preview = await agentRun(mcp, {
       request: "Update Data B2",
       mode: "preview_update",
@@ -310,6 +381,8 @@ class FakeAddin {
         return { ok: true, tables: [...this.workbook.tables.values()].map((table) => table.info()) };
       case "table.get_info":
         return { ok: true, info: this.workbook.table(params.tableName).info() };
+      case "table.append_rows":
+        return this.workbook.table(params.tableName).appendRows(params.values);
       case "names.list":
         return { ok: true, names: [...this.workbook.names.values()] };
       case "operation.execute_batch":
@@ -512,6 +585,14 @@ class FakeTable {
       columns: headers.map((name, index) => ({ id: index + 1, index, name }))
     };
   }
+
+  appendRows(values) {
+    const range = parseRange(this.address);
+    const startAddress = `${columnName(range.startCol)}${range.endRow + 1}`;
+    this.workbook.sheet(this.sheetName).writeValues(startAddress, values);
+    this.address = `${columnName(range.startCol)}${range.startRow}:${columnName(range.endCol)}${range.endRow + values.length}`;
+    return { ok: true, rowCount: values.length, tableName: this.tableName, address: this.address };
+  }
 }
 
 function createWorkbookFixture(id) {
@@ -524,6 +605,11 @@ function createWorkbookFixture(id) {
   ]);
   workbook.addSheet("Report").writeValues("A1:B3", [["Metric", "Value"], ["Revenue", 1000], ["Total", 1000]]);
   workbook.sheet("Report").writeFormulas("A10:A12", [["=SUM(B1:B3)"], ["=A10"], ["=A11"]]);
+  workbook.addSheet("Apr 2026").writeValues("A1:AE3", [
+    ["Transaction Date", "Job ID", "Truck ID", "Description", "Transaction Type", "Direction", "Cash Amount", "Actual Amount", "Payment Variance", "Reconciliation Note", "Transfer From/To", "Proof File", "Detail Notes", "", "Invoice No", "Job ID", "Invoice Date", "Billed To", "Booking No", "Customer", "Job", "Container No", "Container Size", "Job Price", "Lifting On", "Lifting Off", "Total Lifting", "Other Fees", "Gross Billed", "W/H Tax", "Net Collect"],
+    ["2026-04-01", "204", "71-4653", "Company gas top-up", "company_gas_topup", "Outflow", "2211.21", "2211.21", "0", "", "Bank", "proof.pdf", "text note", "", "INV-001", "204", "2026-04-01", "ACME", "BK-001", "Customer A", "งาน 204", "CONT-1", "20GP", "10000", "1000", "1000", "2000", "0", "12000", "360", "11640"],
+    ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""]
+  ]);
   workbook.addSheet("Financials - June 2026").writeValues("A1:C4", [["Metric", "Jun 2026", "Variance"], ["Revenue", 1200, 50], ["Expense", 700, -20], ["Profit", 500, 70]]);
   workbook.addSheet("Financials - May 2026").writeValues("A1:C4", [["Metric", "May 2026", "Variance"], ["Revenue", 1100, 30], ["Expense", 680, 10], ["Profit", 420, 20]]);
   workbook.createTable({ sheetName: "Data", address: "A1:D4", tableName: "Transactions" });
