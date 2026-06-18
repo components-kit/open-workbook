@@ -95,6 +95,7 @@ function assertAgentTelemetrySchema(outputSchema) {
     "routeConfidence",
     "routeReasons",
     "operationRisk",
+    "actionHandlerId",
     "autoApplyBlockedReason",
     "targetFingerprintStatus",
     "intentSource",

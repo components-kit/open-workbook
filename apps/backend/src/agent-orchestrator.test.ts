@@ -904,6 +904,7 @@ describe("AgentOrchestrator", () => {
     expect(result.telemetry.intentAction).toBe("format_range");
     expect(result.telemetry.intentAccepted).toBe(true);
     expect(result.telemetry.operationRisk).toBe("safe_format");
+    expect(result.telemetry.actionHandlerId).toBe("format_range");
     expect(runtime.writeBatchCount).toBe(0);
   });
 

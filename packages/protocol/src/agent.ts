@@ -165,6 +165,7 @@ export interface AgentRunOutput {
     routeConfidence?: number;
     routeReasons?: string[];
     operationRisk?: string;
+    actionHandlerId?: string;
     autoApplyBlockedReason?: string;
     targetFingerprintStatus?: "matched" | "changed" | "not_applicable";
     intentSource?: "caller_structured" | "deterministic_fallback" | "mixed";

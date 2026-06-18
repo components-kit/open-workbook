@@ -27,6 +27,7 @@ import type { RuntimeService } from "./runtime-service.js";
 import { classifyAgentActionRisk, type AgentOperationRisk } from "./agent-action-policy.js";
 import { routeAgentRequest, type IntentRoute } from "./agent-routing.js";
 import { isAgentIntentAction, normalizeAgentIntent, type AgentIntentAction, type NormalizedAgentIntent } from "./agent-intent.js";
+import { findAgentActionHandler, type AgentActionHandlerDefinition, type AgentActionHandlerId } from "./agent-action-handlers.js";
 
 export class AgentOrchestrator {
   readonly metadataCache = new WorkbookMetadataCache();
@@ -47,6 +48,7 @@ export class AgentOrchestrator {
     const finish = (output: Omit<AgentRunOutput, "telemetry">, cacheHit = false): AgentRunOutput => {
       const outputMetrics = output.metrics as Record<string, unknown> | undefined;
       const operationRisk = typeof outputMetrics?.operationRisk === "string" ? outputMetrics.operationRisk : runMetrics.operationRisk;
+      const actionHandlerId = typeof outputMetrics?.actionHandlerId === "string" ? outputMetrics.actionHandlerId : runMetrics.actionHandlerId;
       const autoApplyBlockedReason = typeof outputMetrics?.autoApplyBlockedReason === "string" ? outputMetrics.autoApplyBlockedReason : runMetrics.autoApplyBlockedReason;
       const targetFingerprintStatus = isTargetFingerprintStatus(outputMetrics?.targetFingerprintStatus) ? outputMetrics.targetFingerprintStatus : runMetrics.targetFingerprintStatus;
       const preBudgetPayloadBytes = Buffer.byteLength(JSON.stringify(output));
@@ -75,6 +77,7 @@ export class AgentOrchestrator {
           routeConfidence: runMetrics.route.confidence,
           routeReasons: runMetrics.route.reasons,
           ...(operationRisk !== undefined ? { operationRisk } : {}),
+          ...(actionHandlerId !== undefined ? { actionHandlerId } : {}),
           ...(autoApplyBlockedReason !== undefined ? { autoApplyBlockedReason } : {}),
           ...(targetFingerprintStatus !== undefined ? { targetFingerprintStatus } : {}),
           intentSource: runMetrics.intent.source,
@@ -747,34 +750,10 @@ export class AgentOrchestrator {
   }
 
   private async previewOperationIntent(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
-    const request = input.request.toLowerCase();
     const action = intentAction(input);
-    if (action === "save") {
-      return this.previewWorkbookOperation(metadata, input, requestedMode, "workbook.save");
-    }
-    if (action === "calculate") {
-      return this.previewWorkbookOperation(metadata, input, requestedMode, "workbook.calculate");
-    }
-    if (action === "copy_template_sheet") {
-      return this.previewTemplateCleanup(metadata, input, requestedMode);
-    }
-    if (action === "sort_table") {
-      return this.previewTableSort(metadata, input, requestedMode);
-    }
-    if (/\b(save)\b/.test(request)) {
-      return this.previewWorkbookOperation(metadata, input, requestedMode, "workbook.save");
-    }
-    if (/\b(recalculate|calculate|calculation)\b/.test(request)) {
-      return this.previewWorkbookOperation(metadata, input, requestedMode, "workbook.calculate");
-    }
-    if (/\btemplate\b/.test(request) || (/\b(duplicate|copy)\b/.test(request) && /\bsheet\b/.test(request))) {
-      return this.previewTemplateCleanup(metadata, input, requestedMode);
-    }
-    if (!input.values && /\bfirst\s+open\b/i.test(input.request) && /\breviewed\b/i.test(input.request)) {
-      return this.previewFirstStatusMatchUpdate(metadata, input, requestedMode);
-    }
-    if (/\b(sort)\b/.test(request)) {
-      return this.previewTableSort(metadata, input, requestedMode);
+    const workbookLevelHandler = findAgentActionHandler(input, action, false);
+    if (workbookLevelHandler) {
+      return this.previewActionHandler(metadata, input, requestedMode, workbookLevelHandler);
     }
     const resolved = resolveAgentUpdateTarget(metadata, input);
     if (!resolved.ok) {
@@ -782,19 +761,51 @@ export class AgentOrchestrator {
     }
     const normalizedRange = normalizeOperationRange(metadata, resolved.sheetName, resolved.range);
     const normalizedResolved = { ...resolved, range: normalizedRange };
-    if (action === "filter_range" || /\b(filter|filters)\b/.test(request)) {
-      return this.previewAutoFilter(metadata, input, requestedMode, normalizedResolved);
-    }
-    if (action === "autofit" || /\b(autofit|auto\s*fit)\b/.test(request)) {
-      return this.previewAutofit(metadata, input, requestedMode, normalizedResolved);
-    }
-    if (action === "clear_values" || (/\b(clear|remove|delete|wipe)\b/.test(request) && /\b(data|values?|contents?|test data|input data)\b/.test(request))) {
-      return this.previewClearValues(metadata, input, requestedMode, normalizedResolved);
-    }
-    if (action === "format_range" || /\b(style|format|formatting|header\s+row)\b/.test(request)) {
-      return this.previewStyleUpdate(metadata, input, requestedMode, normalizedResolved);
+    const targetLevelHandler = findAgentActionHandler(input, action, true);
+    if (targetLevelHandler) {
+      return this.previewActionHandler(metadata, input, requestedMode, targetLevelHandler, normalizedResolved);
     }
     return undefined;
+  }
+
+  private async previewActionHandler(
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode,
+    handler: AgentActionHandlerDefinition,
+    resolved?: Extract<AgentTargetResolution, { ok: true }>
+  ): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
+    const result = await this.previewActionHandlerOutput(metadata, input, requestedMode, handler, resolved);
+    return result ? withActionHandlerMetric(result, handler.id) : result;
+  }
+
+  private previewActionHandlerOutput(
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode,
+    handler: AgentActionHandlerDefinition,
+    resolved?: Extract<AgentTargetResolution, { ok: true }>
+  ): Omit<AgentRunOutput, "telemetry"> | Promise<Omit<AgentRunOutput, "telemetry"> | undefined> | undefined {
+    switch (handler.id) {
+      case "save_workbook":
+        return this.previewWorkbookOperation(metadata, input, requestedMode, "workbook.save");
+      case "calculate_workbook":
+        return this.previewWorkbookOperation(metadata, input, requestedMode, "workbook.calculate");
+      case "copy_template_sheet":
+        return this.previewTemplateCleanup(metadata, input, requestedMode);
+      case "first_open_reviewed":
+        return this.previewFirstStatusMatchUpdate(metadata, input, requestedMode);
+      case "sort_table":
+        return this.previewTableSort(metadata, input, requestedMode);
+      case "filter_range":
+        return resolved ? this.previewAutoFilter(metadata, input, requestedMode, resolved) : undefined;
+      case "autofit_columns":
+        return resolved ? this.previewAutofit(metadata, input, requestedMode, resolved) : undefined;
+      case "clear_values":
+        return resolved ? this.previewClearValues(metadata, input, requestedMode, resolved) : undefined;
+      case "format_range":
+        return resolved ? this.previewStyleUpdate(metadata, input, requestedMode, resolved) : undefined;
+    }
   }
 
   private previewWorkbookOperation(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode, kind: "workbook.calculate" | "workbook.save"): Omit<AgentRunOutput, "telemetry"> {
@@ -1410,6 +1421,7 @@ interface AgentRunMetrics {
   safetyDecision?: string;
   previewOperationId?: string;
   operationRisk?: AgentOperationRisk;
+  actionHandlerId?: AgentActionHandlerId | string;
   autoApplyBlockedReason?: string;
   targetFingerprintStatus?: "matched" | "changed" | "not_applicable";
   validationStatus: "passed" | "failed" | "not_run";
@@ -2197,6 +2209,16 @@ function compactCandidate(candidate: AgentCandidate): AgentCandidate {
   delete next.reason;
   delete next.nextRequestHint;
   return next;
+}
+
+function withActionHandlerMetric(output: Omit<AgentRunOutput, "telemetry">, actionHandlerId: AgentActionHandlerId): Omit<AgentRunOutput, "telemetry"> {
+  return {
+    ...output,
+    metrics: {
+      ...(output.metrics ?? {}),
+      actionHandlerId
+    }
+  };
 }
 
 function stripUndefinedOptionals(output: Omit<AgentRunOutput, "telemetry">): Omit<AgentRunOutput, "telemetry"> {

@@ -453,6 +453,7 @@ function agentRunOutputSchema() {
       routeConfidence: z.number().optional(),
       routeReasons: z.array(z.string()).optional(),
       operationRisk: z.string().optional(),
+      actionHandlerId: z.string().optional(),
       autoApplyBlockedReason: z.string().optional(),
       targetFingerprintStatus: z.enum(["matched", "changed", "not_applicable"]).optional(),
       intentSource: z.enum(["caller_structured", "deterministic_fallback", "mixed"]).optional(),
