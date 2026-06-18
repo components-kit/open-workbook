@@ -28,7 +28,7 @@ skills/
       multi-agent.md
 ```
 
-The skill tells agents to inspect runtime status first, choose narrow Excel MCP tools, batch workbook writes, preserve templates and formulas, validate after changes, and report backup or transaction IDs.
+The skill tells agents to use the public `excel.agent.run` workflow, preserve live Excel safety checks, pass structured intent fields when available, normalize multilingual requests into canonical routing fields, validate after changes, and report backup or transaction IDs. Primitive Excel capabilities are backend-owned and are not normal agent calls.
 
 ## Fallback Instructions
 

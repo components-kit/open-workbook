@@ -13,6 +13,7 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 - Added an internal agent action-handler registry and `actionHandlerId` telemetry for preview routing observability.
 - Added fine-grained internal Excel capability grouping and catalog-level agent status classification for future orchestration and test planning.
 - Added an internal capability coverage matrix and report command for tracking covered, unit-contract, future orchestration, host-limited, and deferred capability work.
+- Added skill guidance and tests for multilingual agent requests normalized through structured `excel.agent.run` intent fields.
 
 ### Changed
 
@@ -24,6 +25,7 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 - Removed inactive primitive MCP tool registration groups from the MCP server path and grouped internal Excel capabilities for backend orchestration.
 - Slimmed the default E2E gate to the supported one-tool public agent surface and removed the obsolete primitive-tool fake-host sweep.
 - Split monolithic backend orchestration and runtime tests into behavior-focused suites with shared test-support fixtures.
+- Updated bundled and packaged agent instructions to emphasize the one-tool public surface instead of primitive MCP tool selection.
 
 ## [0.1.14] - 2026-06-18
 

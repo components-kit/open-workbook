@@ -6,11 +6,12 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SKILLS_DIR = join(ROOT, "skills");
 const REQUIRED_PRIMARY_TERMS = [
-  "excel.runtime.get_status",
-  "excel.runtime.get_capabilities",
-  "excel.workbook.get_workbook_map",
-  "excel.plan.*",
-  "excel.batch.*",
+  "excel.agent.run",
+  "intent.action",
+  "intent.targetHints",
+  "multilingual",
+  "original language",
+  "canonical English",
   "snapshots",
   "backups",
   "fingerprints",

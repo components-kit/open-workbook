@@ -6,9 +6,9 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("answers with one targeted read instead of repeated broad reads", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({ request: "Answer amount from Transactions table", mode: "answer" });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect(result.telemetry.internalReadCount).toBe(1);
       expect(result.telemetry.fullReadCellCount).toBeLessThanOrEqual(16);
@@ -19,13 +19,13 @@ describe("AgentOrchestrator Target Resolution", () => {
       const runtime = new FakeAgentRuntime();
       runtime.returnDataOnly = true;
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "Read headers and first 5 rows from Data A1:D4",
         mode: "answer",
         target: { sheetName: "Data", range: "A1:D4" }
       });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).source).toBe("live_read");
       expect((result.answer as any).sample[1][1]).toBe("A-100");
@@ -36,13 +36,13 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("treats headers plus rows as a live value read instead of schema metadata", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "Read headers and first 5 rows from Data A1:D4",
         mode: "answer",
         target: { sheetName: "Data", range: "A1:D4" }
       });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).kind).toBe("range_profile");
       expect((result.answer as any).source).toBe("live_read");
@@ -52,13 +52,13 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("returns coordinate-aware sparse rows for mostly empty ranges", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "Read the sparse planning area.",
         mode: "answer",
         target: { sheetName: "Data", range: "A1:J10" }
       });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).kind).toBe("range_profile");
       expect((result.answer as any).rows).toBeUndefined();
@@ -73,9 +73,9 @@ describe("AgentOrchestrator Target Resolution", () => {
       const runtime = new FakeAgentRuntime();
       runtime.selection = selectionInfo("Data", "B3", { row: 3, column: 2 });
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({ request: "Analyze the selected cell.", mode: "answer" });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "B3", label: "selected cell" });
       expect((result.answer as any).rows).toBeUndefined();
@@ -86,13 +86,13 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("resolves exact raw sheet targets to the used range when no table exists", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "Read actual values from Apr 2026",
         mode: "answer",
         target: { sheetName: "Apr 2026" }
       });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]?.sheetName).toBe("Apr 2026");
       expect(result.proof[0]?.range).toBe("A1:AJ244");
@@ -104,12 +104,12 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("parses quoted raw sheet A1 references before fuzzy target matching", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "Read 'Apr 2026'!O1:AE3 actual values",
         mode: "answer"
       });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]?.sheetName).toBe("Apr 2026");
       expect(result.proof[0]?.range).toBe("O1:AE3");
@@ -119,12 +119,12 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("offers raw invoice header blocks as candidates for non-table sheets", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "Read Apr 2026 invoice rows",
         mode: "answer"
       });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]?.sheetName).toBe("Apr 2026");
       expect(result.proof[0]?.range).toBe("O1:AE244");
@@ -133,13 +133,13 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("answers messy worksheet section inventory from cached sampled metadata", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "What sections are on the Operations sheet?",
         mode: "answer",
         target: { sheetName: "Operations" }
       });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).kind).toBe("sheet_sections");
       expect((result.answer as any).sectionCount).toBeGreaterThanOrEqual(4);
@@ -152,13 +152,13 @@ describe("AgentOrchestrator Target Resolution", () => {
       const runtime = new FakeAgentRuntime();
       runtime.returnDataOnly = true;
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "What sections are on the Operations sheet?",
         mode: "answer",
         target: { sheetName: "Operations" }
       });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).kind).toBe("sheet_sections");
       expect((result.answer as any).sectionCount).toBeGreaterThanOrEqual(4);
@@ -168,12 +168,12 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("targets one section on an unstructured worksheet instead of reading the whole used range", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "Show example rows from the invoice section on Operations",
         mode: "answer"
       });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]?.sheetName).toBe("Operations");
       expect(result.proof[0]?.range).toBe("A10:F13");
@@ -184,13 +184,13 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("keeps schema-only header requests on cached metadata", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "Read the table header schema",
         mode: "answer",
         target: { tableName: "Transactions" }
       });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).kind).toBe("table_schema");
       expect((result.answer as any).source).toBe("cached_metadata");
@@ -200,10 +200,10 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("answers workbook overview and table list questions from metadata without target ambiguity", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const about = await agent.run({ request: "Can you look into Agent Unit.xlsx file, what is it about?" });
       const tables = await agent.run({ request: "Which tables are in this workbook?" });
-  
+
       expect(about.status).toBe("SUCCESS");
       expect((about.answer as any).kind).toBe("workbook_overview");
       expect(about.telemetry.internalReadCount).toBe(0);
@@ -215,9 +215,9 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("uses active sheet metadata for active/current/this sheet prompts", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({ request: "Analyze the active sheet." });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]?.sheetName).toBe("Data");
       expect(result.telemetry.internalReadCount).toBe(1);
@@ -227,9 +227,9 @@ describe("AgentOrchestrator Target Resolution", () => {
       const runtime = new FakeAgentRuntime();
       runtime.selection = selectionInfo("Data", "B2");
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({ request: "Analyze the selected cell.", mode: "answer" });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "B2", label: "selected cell" });
       expect((result.answer as any).rows).toEqual([["A-100"]]);
@@ -239,9 +239,9 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("returns needs input for selection prompts when selection is unavailable", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({ request: "Analyze the selected cell.", mode: "answer" });
-  
+
       expect(result.status).toBe("NEEDS_INPUT");
       expect(result.summary).toContain("selection is unavailable");
       expect(result.telemetry.internalReadCount).toBe(0);
@@ -251,11 +251,11 @@ describe("AgentOrchestrator Target Resolution", () => {
       const runtime = new FakeAgentRuntime();
       runtime.selection = selectionInfo("Data", "B2");
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const first = await agent.run({ request: "Prepare workbook", mode: "prepare" });
       runtime.selection = selectionInfo("Data", "C2", { row: 2, column: 3 });
       const second = await agent.run({ request: "Prepare workbook again", mode: "prepare", workbookContextId: first.workbookContextId });
-  
+
       expect(second.telemetry.cacheHit).toBe(true);
       expect((second.answer as any).selection.address).toBe("C2");
     });
@@ -263,9 +263,9 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("compares two explicitly named sheets in one agent call", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({ request: "Compare Financials - May 2026 and Financials - June 2026." });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).kind).toBe("comparison_profile");
       expect((result.answer as any).sheets.map((sheet: any) => sheet.sheetName)).toEqual(["Financials - June 2026", "Financials - May 2026"]);
@@ -277,9 +277,9 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("compares monthly performance from KPI sections instead of whole used ranges", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({ request: "Can you compare Mar and Apr, how our company perform", mode: "answer" });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).kind).toBe("comparison_profile");
       expect((result.answer as any).sheets.map((sheet: any) => sheet.sheetName)).toEqual(["Mar 2026", "Apr 2026"]);
@@ -293,9 +293,9 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("normalizes whole-column summary reads and returns complete small rows", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({ request: "Read all data from columns AG to AJ in the Apr 2026 sheet.", mode: "answer" });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]?.sheetName).toBe("Apr 2026");
       expect(result.proof[0]?.range).toBe("AG1:AJ244");
@@ -307,20 +307,34 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("resolves natural-language sheet names before answering", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({ request: "Analyze the June financial sheet", mode: "answer" });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]?.sheetName).toBe("Financials - June 2026");
       expect(result.summary).toContain("Financials - June 2026");
     });
 
+  it("handles non-English requests safely when the workbook target is clear", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "ช่วยอ่านข้อมูลจาก Financials - June 2026",
+        mode: "answer"
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.proof[0]?.sheetName).toBe("Financials - June 2026");
+      expect(result.telemetry.intentSource).toBe("deterministic_fallback");
+    });
+
   it("returns ambiguity instead of guessing when natural language matches competing targets", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({ request: "Analyze financial 2026", mode: "answer" });
-  
+
       expect(result.status).toBe("AMBIGUOUS_TARGET");
       expect(result.candidates?.map((candidate) => candidate.sheetName)).toContain("Financials - June 2026");
       expect(result.candidates?.map((candidate) => candidate.sheetName)).toContain("Financials - May 2026");
@@ -361,7 +375,7 @@ describe("AgentOrchestrator Target Resolution", () => {
         }
       ];
       agent.metadataCache.set(metadata);
-  
+
       const ambiguous = await agent.run({
         request: "Read the transactions table schema",
         mode: "answer",
@@ -374,7 +388,7 @@ describe("AgentOrchestrator Target Resolution", () => {
         workbookContextId: metadata.workbookContextId,
         target: { candidateId }
       });
-  
+
       expect(ambiguous.status).toBe("AMBIGUOUS_TARGET");
       expect(candidateId).toBe("table:Transactions_February");
       expect(resolved.status).toBe("SUCCESS");
@@ -387,13 +401,13 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("honors exact tableName targets for schema requests before fuzzy ambiguity", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "Read the schema columns",
         mode: "answer",
         target: { tableName: "Transactions" }
       });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).kind).toBe("table_schema");
       expect((result.answer as any).tableName).toBe("Transactions");
@@ -403,13 +417,13 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("reports missing candidateId without fuzzy-reading a different target", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "Read the selected table schema",
         mode: "answer",
         target: { candidateId: "table:missing" }
       });
-  
+
       expect(result.status).toBe("NOT_FOUND");
       expect(result.nextAction).toBe("call_with_target");
       expect(result.telemetry.internalReadCount).toBe(0);
@@ -418,14 +432,14 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("canonicalizes fuzzy sheet names before previewing updates", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "Update june financial report input",
         mode: "preview_update",
         target: { sheetName: "Financial Jun 2026", range: "B2" },
         values: { values: [[1234]] }
       });
-  
+
       expect(result.status).toBe("PREVIEW_READY");
       expect(result.proof[0]?.sheetName).toBe("Financials - June 2026");
       expect(result.changes?.[0]?.sheetName).toBe("Financials - June 2026");
@@ -434,12 +448,12 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("adds candidate reasons and retry hints for ambiguous targets", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "Analyze financial 2026",
         mode: "answer"
       });
-  
+
       expect(result.status).toBe("AMBIGUOUS_TARGET");
       expect(result.candidates?.[0]?.reason).toContain("match");
       expect(result.candidates?.[0]?.nextRequestHint).toContain("target.candidateId");
@@ -448,13 +462,13 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("uses caller target hints to resolve vague read targets deterministically", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "Analyze financial 2026",
         mode: "answer",
         intent: { action: "read_values", targetHints: ["Financials - June 2026"] }
       });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]?.sheetName).toBe("Financials - June 2026");
       expect(result.candidates?.[0]?.reason).toContain("caller target hint");
@@ -465,13 +479,13 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("keeps conflicting caller target hints ambiguous", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "Analyze financial 2026",
         mode: "answer",
         intent: { action: "read_values", targetHints: ["Financials - June 2026", "Financials - May 2026"] }
       });
-  
+
       expect(result.status).toBe("AMBIGUOUS_TARGET");
       expect(result.candidates?.slice(0, 2).map((candidate) => candidate.sheetName)).toEqual([
         "Financials - June 2026",
@@ -484,14 +498,14 @@ describe("AgentOrchestrator Target Resolution", () => {
   it("keeps explicit targets ahead of misleading caller target hints", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
-  
+
       const result = await agent.run({
         request: "Read this target",
         mode: "answer",
         intent: { action: "read_values", targetHints: ["Financials - June 2026"] },
         target: { sheetName: "Data", range: "A1:D4" }
       });
-  
+
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]?.sheetName).toBe("Data");
       expect(result.proof[0]?.range).toBe("A1:D4");

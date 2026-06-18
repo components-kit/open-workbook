@@ -53,11 +53,10 @@ node packages/cli/dist/index.js setup
 After Excel opens the Open Workbook add-in, start workbook sessions with:
 
 ```text
-excel.runtime.get_status
-excel.runtime.get_active_context
-excel.runtime.get_capabilities
-excel.workbook.get_workbook_map
-excel.collab.get_status
+excel.agent.run mode=status request="Check Open Workbook status"
+excel.agent.run mode=prepare request="Prepare workbook context"
+excel.agent.run mode=find request="Find the sheet or table I need"
+excel.agent.run mode=answer request="Summarize the active workbook"
 ```
 
-Use `excel.plan.*` or `excel.batch.*` for writes so changes remain backup-aware, validated, and rollback-capable.
+Use `excel.agent.run` `mode=preview_update` and then `mode=apply_update` for writes so changes remain backup-aware, validated, and rollback-capable.

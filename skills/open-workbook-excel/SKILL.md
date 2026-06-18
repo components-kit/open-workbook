@@ -1,6 +1,6 @@
 ---
 name: open-workbook-excel
-description: "Use when an agent needs to automate live Microsoft Excel workbooks through Open Workbook MCP, including inspecting workbooks, reading or writing ranges, updating tables, preserving templates, repairing formulas/styles, creating pivots/charts, validating reports, saving/exporting files, coordinating multiple agents, or choosing the fastest reliable Excel MCP tool instead of slow manual spreadsheet automation."
+description: "Use when an agent needs to automate live Microsoft Excel workbooks through Open Workbook MCP with the public excel.agent.run workflow, including inspecting workbooks, reading or writing ranges, updating tables, preserving templates, repairing formulas/styles, creating pivots/charts, validating reports, saving/exporting files, coordinating multiple agents, or normalizing multilingual user requests into structured agent intent instead of using offline spreadsheet automation."
 ---
 
 # Open Workbook Excel
@@ -23,13 +23,15 @@ Use `mode: "prepare"` to cache lightweight workbook structure metadata, `mode: "
 
 Pass natural-language targets directly when the user speaks casually, such as "June financial sheet" or "amount column in transactions". The backend resolves them against cached workbook metadata and returns `AMBIGUOUS_TARGET` with candidates when the request is too broad.
 
+For non-English or mixed-language requests, keep `request` in the user's original language for audit and final response context, but normalize machine-routing fields when you can infer them: use canonical English `intent.action` values such as `read_values`, `read_schema`, `write_values`, `write_formulas`, `format_range`, `clear_values`, `append_table_rows`, `sort_table`, `filter_range`, `autofit`, `copy_template_sheet`, `calculate`, or `save`; include `intent.targetHints` with workbook-native labels and useful translated aliases; pass explicit `target` and `values` when known. Do not ask the backend to translate the whole prompt. Answer the user in their language unless they ask otherwise.
+
 If `excel.agent.run` returns `AMBIGUOUS_TARGET`, choose one returned candidate and retry with the same `workbookContextId` plus `target.candidateId`. For exact value reads, call `mode: "answer"` with `target.sheetName` and `target.range` when available, or put the sheet name and A1 range clearly in the request. Requests for rows, samples, actual values, raw monthly sheets, or explicit A1 ranges should return live read proof; schema/columns/headers-only questions can return cached metadata. For raw month sheets without Excel Tables, ask for the exact sheet/range or the transaction/invoice section by month, such as `Apr 2026 invoice rows`. For small direct value edits with explicit range and values, use `auto` and let the backend apply safely in one call. For related edits across multiple ranges, send one `mode: "preview_update"` call with `values.patches`, where each patch has `target.sheetName`, `target.range`, and a 2D `values` matrix; then call `mode: "apply_update"` once with the returned `operationId` and `confirmationToken`. To add rows to an Excel table on the default surface, call `mode: "preview_update"` with `target.candidateId` or `target.tableName` and `values.rows`, then call `mode: "apply_update"` with the returned `operationId` and `confirmationToken`.
 
 Open Workbook's primitive operation catalog, compact reads, batch/plan/workflow tools, validation, backup, snapshot, transaction, job, lock, and collaboration capabilities are backend-owned for normal agents. Do not ask for or assume a separate primitive MCP surface in user workflows.
 
 If the add-in is disconnected, ask the user to start their agent UI so it launches the configured Open Workbook MCP command, then open Excel and load the Open Workbook add-in. For manual troubleshooting, run `npx -y @components-kit/open-workbook@latest mcp` and retry. Do not fake workbook state from stale assumptions.
 
-## Tool Selection
+## Agent Run Inputs
 
 On the default surface, keep the interaction in `excel.agent.run` instead of composing primitive reads, compact resources, validation, and mutation tools yourself:
 
@@ -70,7 +72,7 @@ For detailed routing, read `references/tool-selection.md`.
 - Multi-range value updates: use one grouped `preview_update` with `values.patches`, then one `apply_update`. Do not split related patches unless apply returns a hard failure with actionable issue details.
 - Unknown target work: use `mode: "find"` or retry with a returned `target.candidateId`.
 - Snapshot/diff/rollback proof: prefer compact diff or risky-edit workflow results; fetch full compact resources only for detailed review.
-- Multi-agent work: use collaboration/task/lock tools before mutation.
+- Multi-agent work: describe the coordination need through `excel.agent.run`; the backend owns collaboration, task, lock, transaction, and job capabilities.
 
 ## Workflow References
 

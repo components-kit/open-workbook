@@ -196,7 +196,7 @@ Open Workbook includes generic agent instruction source for fast, reliable live 
 - `skills/open-workbook-excel/SKILL.md`
 - `skills/open-workbook-excel/references/`
 
-Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`. The skill teaches agents to inspect runtime capabilities, use lookup before broad reads, choose the narrowest efficient MCP tool, use combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows when they match the task, avoid sparse null-padded overwrites, batch workbook writes, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews. `owb instructions` remains available as a fallback for clients that do not support skills.sh.
+Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`. The skill teaches agents to use the public `excel.agent.run` workflow, pass structured intent and target hints when available, normalize multilingual requests into canonical routing fields while preserving the user's language, avoid sparse null-padded overwrites, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews. `owb instructions` remains available as a fallback for clients that do not support skills.sh.
 
 ## Safety Contract
 

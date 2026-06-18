@@ -10,9 +10,9 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 - Use table APIs for table-shaped work.
 - Group writes by workbook, sheet, and contiguous range.
 - Read only requested properties.
-- Backend routing should start unknown targets with lookup capabilities, then inspect one candidate.
-- Backend routing should start known large scopes with compact summaries and schemas.
-- Use `excel.runtime.get_capabilities` before trying expensive or host-limited features.
+- Express unknown targets with `mode: "find"` or `targetHints`; the backend starts with lookup internally.
+- Express known large scopes with `mode: "answer"` and a narrow target; the backend starts with compact summaries and schemas internally.
+- Let `agent.run` report host capability warnings before expensive or host-limited features.
 
 ## Reads
 
@@ -22,7 +22,7 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 - For formatting review, read number formats or styles only for the relevant range.
 - For table analysis, read the table instead of a sheet-sized range.
 - On the public surface, use `excel.agent.run` `mode: "find"` or `mode: "answer"` for unknown targets and exploratory reads.
-- Internally, use lookup before reading cells and use compact range/table reads before full reads.
+- The backend should use lookup before reading cells and compact range/table reads before full reads.
 
 Avoid workbook-wide reads unless the task is search, validation, audit, or discovery.
 
@@ -33,11 +33,11 @@ When a compact response includes `resourceUri`, fetch it only if the full detail
 
 - Use one batch or plan for related edits.
 - On the public agent surface, group related range value edits with `values.patches` in one `preview_update`, then call `apply_update` once for the returned operation.
-- Preflight large generated batches before applying them.
+- Ask for preview before applying large generated changes.
 - Keep matrix shapes exact: rows and columns must match the target range.
 - Let Open Workbook chunk large values/formulas/number formats through safe row-based chunk plans.
 - Avoid alternating read/write/read/write loops. Read once, compute, apply once, validate once.
-- If work is queued or applying, report the progress message to the user and wait/poll the job or transaction rather than starting parallel mutations.
+- If work is queued or applying, report the progress message to the user and wait for the existing operation rather than starting parallel mutations.
 
 For very large writes, consider a plan preview first so the agent can expose scope, chunk count, and rollback coverage before applying.
 
@@ -45,9 +45,9 @@ Automatic timeout retry is limited to style-only batches because repeating the s
 
 ## Formulas
 
-- Prefer formula pattern tools for repeated formula layouts.
-- Trace precedents/dependents before editing source ranges used by reports, charts, pivots, or formulas.
-- Recalculate with `excel.formula.recalculate` or `excel.workbook.calculate` when the workflow requires fresh computed values.
+- Ask `agent.run` for formula-pattern repair when repeated formula layouts are involved.
+- Ask for dependency-aware preview before editing source ranges used by reports, charts, pivots, or formulas.
+- Use `intent.action: "calculate"` when the workflow requires fresh computed values.
 
 ## Telemetry
 

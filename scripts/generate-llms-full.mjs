@@ -22,9 +22,9 @@ Then install the skill with \`npx skills add components-kit/open-workbook --skil
 
 ## Production Rules
 
-- Use stable MCP tools by default.
-- Use \`excel.runtime.get_capabilities\` to inspect tool catalog and host capabilities.
-- Use \`excel.plan.*\` or \`excel.batch.*\` for rollback-aware mutations.
+- Use \`excel.agent.run\` as the public MCP tool.
+- Keep primitive Excel capabilities backend-owned unless explicitly working on backend tests.
+- Normalize multilingual requests into canonical \`intent.action\`, \`intent.targetHints\`, \`target\`, and \`values\` fields while preserving the original user request.
 - Do not bypass permissions, snapshots, backups, fingerprint checks, or transaction logging.
 - Treat Office.js host limitations as capability-status metadata, not silent success.
 - For multi-agent work, use tasks, locks, serialized transactions, conflict guidance, and rollback previews.
