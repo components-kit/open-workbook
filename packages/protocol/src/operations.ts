@@ -1225,8 +1225,10 @@ export interface WorkbookRestoreFileBackupRequest {
 
 export interface WorkbookBackupRetentionRequest {
   workbookId?: WorkbookId;
+  kind?: "all" | "file-copy" | "snapshot-json";
   maxAgeDays?: number;
   maxBackupsPerWorkbook?: number;
+  maxTotalBytes?: number;
   dryRun?: boolean;
 }
 

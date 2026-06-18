@@ -36,13 +36,23 @@ Plans use a target-region strict policy:
 
 ## Retention
 
-Region snapshots are retained for the active session by default. Workbook-copy backups persist until explicit cleanup or configured retention removes them. Normal rollback must not delete backups.
+Region snapshots are retained for the active session by default. Persisted backups are bounded by unified retention so local backup storage does not grow indefinitely. Normal rollback must not delete the backup it just used.
+
+Default persisted-backup retention keeps a balanced rollback window:
+
+- 30 days
+- 20 backups per workbook
+- 1 GiB total persisted backup payloads
+
+Pinned backups are never pruned or deleted. Set `OPEN_WORKBOOK_BACKUP_RETENTION_DAYS`, `OPEN_WORKBOOK_BACKUP_RETENTION_COUNT`, or `OPEN_WORKBOOK_BACKUP_RETENTION_BYTES` to override the defaults. Set `OPEN_WORKBOOK_BACKUP_RETENTION_DISABLED=1` to disable automatic retention.
 
 ## Persistent Snapshot Backups
 
 Workbook-copy backups are persisted as JSON snapshot payloads under `OPEN_WORKBOOK_BACKUP_DIR` when set, otherwise `.open-workbook/backups` under the MCP process working directory.
 
 These backups are restorable through `excel.workbook.restore_backup` because they contain captured range values, formulas, number formats, display text, and basic styles. They are not full `.xlsx` file copies. True workbook export uses the native file bridge when configured or the Excel desktop compressed-file export path; `save_as` still requires the native bridge because Office.js does not expose a local save-as path API.
+
+`excel.backup.list`, `excel.backup.get`, `excel.backup.delete`, and `excel.backup.prune` cover both durable full-file backups and persisted JSON snapshot backups. `excel.backup.prune` supports `dryRun`, `kind`, `maxAgeDays`, `maxBackupsPerWorkbook`, and `maxTotalBytes`.
 
 ## Implemented Rollback
 

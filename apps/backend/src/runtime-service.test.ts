@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -1686,7 +1686,7 @@ describe("RuntimeService durable file backups", () => {
       const created = await runtime.createFileBackup({ workbookId, reason: "Before risky report edit", pin: true });
       const backupId = (created as { manifest?: { backupId?: string } }).manifest?.backupId as any;
       const verified = await runtime.verifyFileBackup(backupId);
-      const pinnedDelete = runtime.deleteFileBackup(backupId);
+      const pinnedDelete = await runtime.deleteFileBackup(backupId);
       const restored = await runtime.restoreFileBackup({
         workbookId,
         backupId,
@@ -1696,7 +1696,7 @@ describe("RuntimeService durable file backups", () => {
       });
       const auditEvents = runtime.getCollaborationStatus(workbookId).events;
       const unpinned = runtime.pinFileBackup(backupId, false);
-      const prunedDryRun = runtime.pruneFileBackups({ workbookId, maxBackupsPerWorkbook: 0, dryRun: true });
+      const prunedDryRun = await runtime.pruneFileBackups({ workbookId, kind: "file-copy", maxBackupsPerWorkbook: 0, dryRun: true });
 
       expect((created as { ok?: boolean }).ok).toBe(true);
       expect((created as { manifest?: { checksum?: string; size?: number; pinned?: boolean } }).manifest?.checksum).toMatch(/^sha256:/);
@@ -1715,6 +1715,104 @@ describe("RuntimeService durable file backups", () => {
         delete process.env.OPEN_WORKBOOK_BACKUP_DIR;
       } else {
         process.env.OPEN_WORKBOOK_BACKUP_DIR = previousBackupDir;
+      }
+    }
+  });
+
+  it("prunes and deletes persisted JSON snapshot backup payloads", async () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "open-workbook-json-backup-"));
+    const previousBackupDir = process.env.OPEN_WORKBOOK_BACKUP_DIR;
+    const previousDisabled = process.env.OPEN_WORKBOOK_BACKUP_RETENTION_DISABLED;
+    process.env.OPEN_WORKBOOK_BACKUP_DIR = path.join(stateDir, "backups");
+    process.env.OPEN_WORKBOOK_BACKUP_RETENTION_DISABLED = "1";
+    const workbookId = "workbook_json_backup" as WorkbookId;
+    try {
+      const runtime = runtimeWithPersistentAddin(stateDir, workbookId);
+      const first = await runtime.createWorkbookBackup({
+        workbookId,
+        reason: "First JSON backup",
+        ranges: [{ workbookId, sheetName: "Report", address: "A1:B2" }]
+      });
+      const second = await runtime.createWorkbookBackup({
+        workbookId,
+        reason: "Second JSON backup",
+        ranges: [{ workbookId, sheetName: "Report", address: "C1:D2" }]
+      });
+      if (!("backup" in first) || !("backup" in second)) {
+        throw new Error("Expected JSON backups to be created");
+      }
+      const firstPath = first.backup.payloadRef;
+      const secondPath = second.backup.payloadRef;
+      const firstExistedBefore = Boolean(firstPath && existsSync(firstPath));
+      const secondExistedBefore = Boolean(secondPath && existsSync(secondPath));
+      const dryRun = await runtime.pruneFileBackups({ workbookId, kind: "snapshot-json", maxBackupsPerWorkbook: 1, dryRun: true });
+      const pruned = await runtime.pruneFileBackups({ workbookId, kind: "snapshot-json", maxBackupsPerWorkbook: 1 });
+      const prunedId = (pruned as { pruned?: string[] }).pruned?.[0];
+      const remaining = prunedId === first.backup.backupId ? second : first;
+      const remainingPath = prunedId === first.backup.backupId ? secondPath : firstPath;
+      const prunedPath = prunedId === first.backup.backupId ? firstPath : secondPath;
+      const deleted = await runtime.deleteFileBackup(remaining.backup.backupId);
+
+      expect(firstExistedBefore).toBe(true);
+      expect(secondExistedBefore).toBe(true);
+      expect((dryRun as { candidates?: Array<{ reasons?: string[] }> }).candidates?.[0]?.reasons).toContain("count");
+      expect([first.backup.backupId, second.backup.backupId]).toContain(prunedId);
+      expect(prunedPath && existsSync(prunedPath)).toBe(false);
+      expect((deleted as { ok?: boolean }).ok).toBe(true);
+      expect(remainingPath && existsSync(remainingPath)).toBe(false);
+    } finally {
+      if (previousBackupDir === undefined) {
+        delete process.env.OPEN_WORKBOOK_BACKUP_DIR;
+      } else {
+        process.env.OPEN_WORKBOOK_BACKUP_DIR = previousBackupDir;
+      }
+      if (previousDisabled === undefined) {
+        delete process.env.OPEN_WORKBOOK_BACKUP_RETENTION_DISABLED;
+      } else {
+        process.env.OPEN_WORKBOOK_BACKUP_RETENTION_DISABLED = previousDisabled;
+      }
+    }
+  });
+
+  it("reports byte-budget prune candidates across persisted backup kinds", async () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "open-workbook-byte-backup-"));
+    const previousBackupDir = process.env.OPEN_WORKBOOK_BACKUP_DIR;
+    const previousDisabled = process.env.OPEN_WORKBOOK_BACKUP_RETENTION_DISABLED;
+    process.env.OPEN_WORKBOOK_BACKUP_DIR = path.join(stateDir, "backups");
+    process.env.OPEN_WORKBOOK_BACKUP_RETENTION_DISABLED = "1";
+    const workbookId = "workbook_byte_backup" as WorkbookId;
+    try {
+      const runtime = runtimeWithPersistentAddin(stateDir, workbookId);
+      const first = await runtime.createWorkbookBackup({
+        workbookId,
+        reason: "Large JSON backup",
+        ranges: [{ workbookId, sheetName: "Report", address: "A1:D20" }]
+      });
+      const second = await runtime.createWorkbookBackup({
+        workbookId,
+        reason: "Another JSON backup",
+        ranges: [{ workbookId, sheetName: "Report", address: "A1:D20" }]
+      });
+      if (!("backup" in first) || !("backup" in second)) {
+        throw new Error("Expected JSON backups to be created");
+      }
+      const dryRun = await runtime.pruneFileBackups({ workbookId, maxTotalBytes: 1, dryRun: true });
+
+      expect((dryRun as { candidates?: Array<{ reasons?: string[]; bytes?: number }>; reclaimedBytes?: number }).candidates?.length).toBeGreaterThan(0);
+      expect((dryRun as { candidates?: Array<{ reasons?: string[] }> }).candidates?.some((candidate) => candidate.reasons?.includes("size"))).toBe(true);
+      expect((dryRun as { reclaimedBytes?: number }).reclaimedBytes).toBeGreaterThan(0);
+      expect(first.backup.payloadRef && existsSync(first.backup.payloadRef)).toBe(true);
+      expect(second.backup.payloadRef && existsSync(second.backup.payloadRef)).toBe(true);
+    } finally {
+      if (previousBackupDir === undefined) {
+        delete process.env.OPEN_WORKBOOK_BACKUP_DIR;
+      } else {
+        process.env.OPEN_WORKBOOK_BACKUP_DIR = previousBackupDir;
+      }
+      if (previousDisabled === undefined) {
+        delete process.env.OPEN_WORKBOOK_BACKUP_RETENTION_DISABLED;
+      } else {
+        process.env.OPEN_WORKBOOK_BACKUP_RETENTION_DISABLED = previousDisabled;
       }
     }
   });

@@ -11,8 +11,9 @@ Open Workbook separates workbook state safety from local file-system control.
 - `excel.workbook.restore_backup` restores a persistent or in-memory snapshot backup.
 - `excel.workbook.export_copy` creates a persistent snapshot backup, then writes a true `.xlsx` file. If `OPEN_WORKBOOK_FILE_BRIDGE_URL` is configured, the built-in native bridge uses Excel desktop `SaveCopyAs` automation first. If no bridge is configured or the bridge fails, Open Workbook falls back to Office.js compressed workbook slices on supported Excel desktop hosts. If no `targetPath` is provided, the file is written under `.open-workbook/exports` or `OPEN_WORKBOOK_EXPORT_DIR`.
 - `excel.backup.create_file` creates a durable full-file backup manifest with path, size, checksum, source snapshot backup id when available, pin state, verification time, and restore status.
-- `excel.backup.list`, `excel.backup.get`, and `excel.backup.verify` inspect durable file backups and detect missing or checksum-mismatched backup files.
-- `excel.backup.pin`, `excel.backup.unpin`, `excel.backup.prune`, and `excel.backup.delete` manage retention. Pinned backups are not pruned or deleted.
+- `excel.backup.list` and `excel.backup.get` inspect persisted backup records, including full-file backups and JSON snapshot backups.
+- `excel.backup.verify` verifies durable full-file backups and detects missing or checksum-mismatched backup files.
+- `excel.backup.pin`, `excel.backup.unpin`, `excel.backup.prune`, and `excel.backup.delete` manage persisted backup retention. Pinned backups are not pruned or deleted.
 - `excel.backup.restore_file` defaults to safe `open-as-new` recovery. `replace-open-workbook` requires explicit confirmation, verifies the source backup, creates a pinned emergency file backup, then calls the native bridge to close, replace, reopen, and verify through host automation. `restore-into-open-workbook` remains unsupported because it is not deterministic for full workbook fidelity.
 - `excel.workbook.export_local_config` exports versioned JSON metadata for Open Workbook templates, regions, and optional permissions.
 - `excel.workbook.import_local_config` imports that JSON into the local daemon registry.
@@ -84,7 +85,9 @@ Durable file backups are separate from snapshot backups. Snapshot backups are us
 
 The built-in bridge uses AppleScript on macOS and PowerShell COM automation on Windows for `replace-open-workbook`. It validates backup and target paths against `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` when configured. Production agents should still prefer snapshot rollback for in-workbook undo and use full-file replace restore only for explicit disaster recovery.
 
-File backup lifecycle operations emit collaboration audit events: `backup.created`, `backup.verified`, `backup.restored`, `backup.deleted`, `backup.pruned`, and `backup.updated`. These events appear in `excel.collab.get_status` so multi-agent clients can show which agent or workflow created, verified, restored, pinned, or removed a file backup.
+Backup lifecycle operations emit collaboration audit events: `backup.created`, `backup.verified`, `backup.restored`, `backup.deleted`, `backup.pruned`, and `backup.updated`. These events appear in `excel.collab.get_status` so multi-agent clients can show which agent or workflow created, verified, restored, pinned, or removed a persisted backup.
+
+`excel.backup.prune` covers both durable full-file backups and persisted JSON snapshot backups. It accepts `kind` (`all`, `file-copy`, or `snapshot-json`), `maxAgeDays`, `maxBackupsPerWorkbook`, `maxTotalBytes`, and `dryRun`. Automatic retention uses balanced defaults of 30 days, 20 backups per workbook, and 1 GiB total payload bytes. Override with `OPEN_WORKBOOK_BACKUP_RETENTION_DAYS`, `OPEN_WORKBOOK_BACKUP_RETENTION_COUNT`, and `OPEN_WORKBOOK_BACKUP_RETENTION_BYTES`; set `OPEN_WORKBOOK_BACKUP_RETENTION_DISABLED=1` to disable automatic pruning.
 
 Set `OPEN_WORKBOOK_FILE_BRIDGE_TIMEOUT_MS` to override the default 30000 ms backend-to-bridge timeout. Set `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` to a path-delimited allowlist of output directories for native Save As and Export Copy. Set `OPEN_WORKBOOK_EXPORT_DIR` to control the default output directory for add-in compressed-file exports.
 

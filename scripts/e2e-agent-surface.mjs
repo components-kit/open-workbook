@@ -89,7 +89,18 @@ function assertAgentTelemetrySchema(outputSchema) {
     "fullReadCellCount",
     "candidateCount",
     "resourceLinkCount",
-    "estimatedTokensSaved"
+    "estimatedTokensSaved",
+    "routeMode",
+    "routeMatchedRule",
+    "routeConfidence",
+    "routeReasons",
+    "operationRisk",
+    "autoApplyBlockedReason",
+    "targetFingerprintStatus",
+    "intentSource",
+    "intentAction",
+    "intentAccepted",
+    "intentRejectedReason"
   ]) {
     assert(field in telemetryProperties, `excel.agent.run telemetry schema should declare ${field}`);
   }

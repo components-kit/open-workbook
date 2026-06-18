@@ -555,15 +555,35 @@ function resolveMentionedTable(
 }
 
 function toCandidate(source: CandidateSource, confidence: number): AgentCandidate {
+  const boundedConfidence = Number(Math.min(1, Math.max(0, confidence)).toFixed(3));
   return {
     id: source.id,
     kind: source.kind,
     label: source.label,
-    confidence: Number(Math.min(1, Math.max(0, confidence)).toFixed(3)),
+    confidence: boundedConfidence,
     ...(source.sheetName !== undefined ? { sheetName: source.sheetName } : {}),
     ...(source.tableName !== undefined ? { tableName: source.tableName } : {}),
-    ...(source.range !== undefined ? { range: source.range } : {})
+    ...(source.range !== undefined ? { range: source.range } : {}),
+    reason: candidateReason(source, boundedConfidence),
+    nextRequestHint: candidateNextRequestHint(source)
   };
+}
+
+function candidateReason(source: CandidateSource, confidence: number): string {
+  const location = source.sheetName ? ` on sheet "${source.sheetName}"` : "";
+  const scope = source.range ? ` at ${source.range}` : "";
+  return `${source.kind} match "${source.label}"${location}${scope} scored ${confidence}.`;
+}
+
+function candidateNextRequestHint(source: CandidateSource): string {
+  const target = [
+    source.sheetName ? `sheetName: "${source.sheetName}"` : undefined,
+    source.tableName ? `tableName: "${source.tableName}"` : undefined,
+    source.range ? `range: "${source.range}"` : undefined
+  ].filter(Boolean).join(", ");
+  return target
+    ? `Retry with target.candidateId "${source.id}" or target { ${target} }.`
+    : `Retry with target.candidateId "${source.id}".`;
 }
 
 function scoreSource(query: string, source: CandidateSource): number {

@@ -24,6 +24,9 @@ import { AgentOperationStore } from "./agent-operation-store.js";
 import { WorkbookMetadataBuilder } from "./workbook-metadata-builder.js";
 import { findAgentCandidates, resolveAgentReadTarget, resolveAgentUpdateTarget, type AgentTargetResolution } from "./agent-target-resolver.js";
 import type { RuntimeService } from "./runtime-service.js";
+import { classifyAgentActionRisk, type AgentOperationRisk } from "./agent-action-policy.js";
+import { routeAgentRequest, type IntentRoute } from "./agent-routing.js";
+import { isAgentIntentAction, normalizeAgentIntent, type AgentIntentAction, type NormalizedAgentIntent } from "./agent-intent.js";
 
 export class AgentOrchestrator {
   readonly metadataCache = new WorkbookMetadataCache();
@@ -37,9 +40,15 @@ export class AgentOrchestrator {
   async run(input: AgentRunInput): Promise<AgentRunOutput> {
     const startedAt = Date.now();
     let internalCallCount = 0;
-    const runMetrics: AgentRunMetrics = { internalReadCount: 0, fullReadCellCount: 0, validationStatus: "not_run" };
+    const intent = normalizeAgentIntent(input);
+    const route = routeAgentRequest(input.request, input.mode ?? "auto", intent);
+    const runMetrics: AgentRunMetrics = { internalReadCount: 0, fullReadCellCount: 0, validationStatus: "not_run", route, intent };
     const mode = input.mode ?? "auto";
     const finish = (output: Omit<AgentRunOutput, "telemetry">, cacheHit = false): AgentRunOutput => {
+      const outputMetrics = output.metrics as Record<string, unknown> | undefined;
+      const operationRisk = typeof outputMetrics?.operationRisk === "string" ? outputMetrics.operationRisk : runMetrics.operationRisk;
+      const autoApplyBlockedReason = typeof outputMetrics?.autoApplyBlockedReason === "string" ? outputMetrics.autoApplyBlockedReason : runMetrics.autoApplyBlockedReason;
+      const targetFingerprintStatus = isTargetFingerprintStatus(outputMetrics?.targetFingerprintStatus) ? outputMetrics.targetFingerprintStatus : runMetrics.targetFingerprintStatus;
       const preBudgetPayloadBytes = Buffer.byteLength(JSON.stringify(output));
       const budgeted = applyOutputBudget(output, input);
       const payloadBytes = Buffer.byteLength(JSON.stringify(budgeted));
@@ -60,7 +69,18 @@ export class AgentOrchestrator {
           fullReadCellCount: runMetrics.fullReadCellCount,
           candidateCount: budgeted.candidates?.length ?? 0,
           resourceLinkCount: budgeted.resourceLinks.length,
-          estimatedTokensSaved: Math.max(0, Math.ceil((preBudgetPayloadBytes - payloadBytes) / 4))
+          estimatedTokensSaved: Math.max(0, Math.ceil((preBudgetPayloadBytes - payloadBytes) / 4)),
+          routeMode: runMetrics.route.mode,
+          routeMatchedRule: runMetrics.route.matchedRule,
+          routeConfidence: runMetrics.route.confidence,
+          routeReasons: runMetrics.route.reasons,
+          ...(operationRisk !== undefined ? { operationRisk } : {}),
+          ...(autoApplyBlockedReason !== undefined ? { autoApplyBlockedReason } : {}),
+          ...(targetFingerprintStatus !== undefined ? { targetFingerprintStatus } : {}),
+          intentSource: runMetrics.intent.source,
+          ...(runMetrics.intent.action !== undefined ? { intentAction: runMetrics.intent.action } : {}),
+          intentAccepted: runMetrics.intent.accepted,
+          ...(runMetrics.intent.rejectedReason !== undefined ? { intentRejectedReason: runMetrics.intent.rejectedReason } : {})
         }
       };
     };
@@ -103,7 +123,7 @@ export class AgentOrchestrator {
       }
 
       const requestedOverviewIntent = workbookOverviewIntent(input);
-      const effectiveMode = mode === "auto" ? inferAgentMode(input.request) : mode;
+      const effectiveMode = route.mode;
       const includeSamples = shouldBuildSampledMetadata(input, effectiveMode, requestedOverviewIntent);
       internalCallCount += 1;
       const readiness = await this.runtime.getConnectionReadiness();
@@ -140,6 +160,20 @@ export class AgentOrchestrator {
           resourceLinks: [contextResource(metadata.workbookContextId)],
           nextAction: validation.ok === false ? "manual_review" : "answer_now",
           warnings: []
+        }, cacheHit);
+      }
+
+      if (!intent.accepted) {
+        return finish({
+          status: "VALIDATION_FAILED",
+          mode,
+          workbookContextId: metadata.workbookContextId,
+          summary: "The caller-provided structured intent is not supported by this agent surface.",
+          answer: { kind: "intent_rejected", rejectedReason: intent.rejectedReason },
+          proof: [],
+          resourceLinks: [contextResource(metadata.workbookContextId)],
+          nextAction: "ask_user",
+          warnings: ["Retry without intent.action or use one of the supported agent intent actions."]
         }, cacheHit);
       }
 
@@ -189,6 +223,7 @@ export class AgentOrchestrator {
         const autoDecision = autoApplyDecision(input, preview);
         runMetrics.safetyDecision = autoDecision.safetyDecision;
         if (!autoDecision.allow) {
+          runMetrics.autoApplyBlockedReason = autoDecision.reason;
           return finish({
             ...preview,
             summary: `${preview.summary} Auto-apply was not used: ${autoDecision.reason}.`,
@@ -379,7 +414,7 @@ export class AgentOrchestrator {
       };
     }
     const candidates = findAgentCandidates(metadata, input);
-    if (answerIntent(input.request) === "schema") {
+    if (answerIntent(input) === "schema") {
       return this.schemaAnswerOutput(metadata, input, requestedMode, resolved, candidates);
     }
     const normalizedRange = normalizeOperationRange(metadata, resolved.sheetName, resolved.range);
@@ -491,10 +526,10 @@ export class AgentOrchestrator {
       };
     }
     const matrix = objectToCellMatrix(input.values ?? {});
-    if (containsFormulaLikeValue(matrix) && isFormulaMutationRequest(input.request)) {
+    if (containsFormulaLikeValue(matrix) && (intentAction(input) === "write_formulas" || isFormulaMutationRequest(input.request))) {
       return this.previewFormulaUpdate(metadata, input, requestedMode, resolved, matrix);
     }
-    if (isTableAppendIntent(input.request) && resolved.candidate.kind === "table") {
+    if ((intentAction(input) === "append_table_rows" || isTableAppendIntent(input.request)) && resolved.candidate.kind === "table") {
       return this.previewTableAppend(metadata, input, requestedMode, resolved, matrix);
     }
     if (isSparseBroadWrite(resolved.range, matrix)) {
@@ -554,13 +589,11 @@ export class AgentOrchestrator {
       before: before[rowIndex]?.[columnIndex],
       after: value
     })));
-    const pending = this.operations.create({
-      workbookContextId: metadata.workbookContextId,
-      workbookId: metadata.workbook.workbookId as WorkbookId,
-      action: { kind: "batch", operations: [operation] },
+    const action = { kind: "batch" as const, operations: [operation] };
+    const pending = this.createPendingOperation(metadata, {
+      action,
       changes,
-      summary: `Prepared ${changes.length} cell update(s) on ${resolved.sheetName}!${resolved.range}.`,
-      sourceFingerprintHash: metadata.fingerprint.structureHash
+      summary: `Prepared ${changes.length} cell update(s) on ${resolved.sheetName}!${resolved.range}.`
     });
     return {
       status: "PREVIEW_READY",
@@ -569,6 +602,7 @@ export class AgentOrchestrator {
       operationId: pending.operationId,
       confirmationToken: pending.confirmationToken,
       summary: pending.summary,
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
       changes,
       proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "preview target" }],
       resourceLinks: [operationResource(String(pending.operationId))],
@@ -683,13 +717,10 @@ export class AgentOrchestrator {
       }))));
     }
 
-    const pending = this.operations.create({
-      workbookContextId: metadata.workbookContextId,
-      workbookId: metadata.workbook.workbookId as WorkbookId,
+    const pending = this.createPendingOperation(metadata, {
       action: { kind: "batch", operations },
       changes,
-      summary: `Prepared ${cellCount} cell update(s) across ${patches.length} grouped range patch(es).`,
-      sourceFingerprintHash: metadata.fingerprint.structureHash
+      summary: `Prepared ${cellCount} cell update(s) across ${patches.length} grouped range patch(es).`
     });
     const proof = uniqueProofFromChanges(changes).slice(0, 8);
     return {
@@ -706,6 +737,7 @@ export class AgentOrchestrator {
         operationCount: operations.length,
         grouped: true
       },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
       changes,
       proof,
       resourceLinks: [operationResource(String(pending.operationId))],
@@ -716,6 +748,19 @@ export class AgentOrchestrator {
 
   private async previewOperationIntent(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
     const request = input.request.toLowerCase();
+    const action = intentAction(input);
+    if (action === "save") {
+      return this.previewWorkbookOperation(metadata, input, requestedMode, "workbook.save");
+    }
+    if (action === "calculate") {
+      return this.previewWorkbookOperation(metadata, input, requestedMode, "workbook.calculate");
+    }
+    if (action === "copy_template_sheet") {
+      return this.previewTemplateCleanup(metadata, input, requestedMode);
+    }
+    if (action === "sort_table") {
+      return this.previewTableSort(metadata, input, requestedMode);
+    }
     if (/\b(save)\b/.test(request)) {
       return this.previewWorkbookOperation(metadata, input, requestedMode, "workbook.save");
     }
@@ -737,16 +782,16 @@ export class AgentOrchestrator {
     }
     const normalizedRange = normalizeOperationRange(metadata, resolved.sheetName, resolved.range);
     const normalizedResolved = { ...resolved, range: normalizedRange };
-    if (/\b(filter|filters)\b/.test(request)) {
+    if (action === "filter_range" || /\b(filter|filters)\b/.test(request)) {
       return this.previewAutoFilter(metadata, input, requestedMode, normalizedResolved);
     }
-    if (/\b(autofit|auto\s*fit)\b/.test(request)) {
+    if (action === "autofit" || /\b(autofit|auto\s*fit)\b/.test(request)) {
       return this.previewAutofit(metadata, input, requestedMode, normalizedResolved);
     }
-    if (/\b(clear|remove|delete|wipe)\b/.test(request) && /\b(data|values?|contents?|test data|input data)\b/.test(request)) {
+    if (action === "clear_values" || (/\b(clear|remove|delete|wipe)\b/.test(request) && /\b(data|values?|contents?|test data|input data)\b/.test(request))) {
       return this.previewClearValues(metadata, input, requestedMode, normalizedResolved);
     }
-    if (/\b(style|format|formatting|header\s+row)\b/.test(request)) {
+    if (action === "format_range" || /\b(style|format|formatting|header\s+row)\b/.test(request)) {
       return this.previewStyleUpdate(metadata, input, requestedMode, normalizedResolved);
     }
     return undefined;
@@ -802,13 +847,10 @@ export class AgentOrchestrator {
   }
 
   private previewBatchOperation(metadata: WorkbookMetadata, requestedMode: AgentRunMode, operations: ExcelOperation[], changes: NonNullable<AgentRunOutput["changes"]>, summary: string, answer: unknown): Omit<AgentRunOutput, "telemetry"> {
-    const pending = this.operations.create({
-      workbookContextId: metadata.workbookContextId,
-      workbookId: metadata.workbook.workbookId as WorkbookId,
+    const pending = this.createPendingOperation(metadata, {
       action: { kind: "batch", operations },
       changes,
-      summary,
-      sourceFingerprintHash: metadata.fingerprint.structureHash
+      summary
     });
     return {
       status: "PREVIEW_READY",
@@ -818,6 +860,7 @@ export class AgentOrchestrator {
       confirmationToken: pending.confirmationToken,
       summary,
       answer,
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
       changes,
       proof: changes.flatMap((change) => change.range ? [{ sheetName: change.sheetName, range: change.range, label: "preview target" }] : []).slice(0, 1),
       resourceLinks: [operationResource(String(pending.operationId))],
@@ -875,13 +918,10 @@ export class AgentOrchestrator {
       fields: [{ key, ascending: !/\b(highest|descending|desc|largest|lowest to highest)\b/i.test(input.request) }]
     };
     const changes: NonNullable<AgentRunOutput["changes"]> = [{ sheetName: table.sheetName, range: table.range, after: `sorted ${tableName} by ${amountColumn?.name ?? "Amount"}` }];
-    const pending = this.operations.create({
-      workbookContextId: metadata.workbookContextId,
-      workbookId: metadata.workbook.workbookId as WorkbookId,
+    const pending = this.createPendingOperation(metadata, {
       action: { kind: "table.sort", request },
       changes,
-      summary: `Prepared sort preview for ${tableName}.`,
-      sourceFingerprintHash: metadata.fingerprint.structureHash
+      summary: `Prepared sort preview for ${tableName}.`
     });
     return {
       status: "PREVIEW_READY",
@@ -891,6 +931,7 @@ export class AgentOrchestrator {
       confirmationToken: pending.confirmationToken,
       summary: pending.summary,
       answer: { kind: "table_sort_preview", tableName, sheetName: table.sheetName, sortField: amountColumn?.name ?? "Amount", ascending: request.fields[0]?.ascending !== false },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
       changes,
       proof: [{ sheetName: table.sheetName, range: table.range, label: tableName }],
       resourceLinks: [operationResource(String(pending.operationId))],
@@ -945,13 +986,10 @@ export class AgentOrchestrator {
       style,
       preserveValues: true
     };
-    const pending = this.operations.create({
-      workbookContextId: metadata.workbookContextId,
-      workbookId: metadata.workbook.workbookId as WorkbookId,
+    const pending = this.createPendingOperation(metadata, {
       action: { kind: "batch", operations: [operation] },
       changes: [{ sheetName: resolved.sheetName, range: resolved.range, after: style }],
-      summary: `Prepared style update on ${resolved.sheetName}!${resolved.range}.`,
-      sourceFingerprintHash: metadata.fingerprint.structureHash
+      summary: `Prepared style update on ${resolved.sheetName}!${resolved.range}.`
     });
     return {
       status: "PREVIEW_READY",
@@ -961,6 +999,7 @@ export class AgentOrchestrator {
       confirmationToken: pending.confirmationToken,
       summary: pending.summary,
       answer: { kind: "style_preview", sheetName: resolved.sheetName, range: resolved.range, style },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
       changes: pending.changes,
       proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "style target" }],
       resourceLinks: [operationResource(String(pending.operationId))],
@@ -1021,13 +1060,10 @@ export class AgentOrchestrator {
         target: { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: newSheetName, address: sourceSheet.usedRange }
       }
     ];
-    const pending = this.operations.create({
-      workbookContextId: metadata.workbookContextId,
-      workbookId: metadata.workbook.workbookId as WorkbookId,
+    const pending = this.createPendingOperation(metadata, {
       action: { kind: "batch", operations },
       changes: [{ sheetName: newSheetName, range: sourceSheet.usedRange, before: "copied values", after: "template formatting only" }],
-      summary: `Prepared template copy ${newSheetName} from ${sourceSheet.name} with values cleared.`,
-      sourceFingerprintHash: metadata.fingerprint.structureHash
+      summary: `Prepared template copy ${newSheetName} from ${sourceSheet.name} with values cleared.`
     });
     return {
       status: "PREVIEW_READY",
@@ -1037,6 +1073,7 @@ export class AgentOrchestrator {
       confirmationToken: pending.confirmationToken,
       summary: pending.summary,
       answer: { kind: "template_cleanup_preview", sourceSheetName: sourceSheet.name, newSheetName, clearRange: sourceSheet.usedRange },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
       changes: pending.changes,
       proof: [{ sheetName: sourceSheet.name, range: sourceSheet.usedRange, label: "template source" }],
       resourceLinks: [operationResource(String(pending.operationId))],
@@ -1069,13 +1106,10 @@ export class AgentOrchestrator {
       range: resolved.range,
       after: value
     })));
-    const pending = this.operations.create({
-      workbookContextId: metadata.workbookContextId,
-      workbookId: metadata.workbook.workbookId as WorkbookId,
+    const pending = this.createPendingOperation(metadata, {
       action: { kind: "batch", operations: [operation] },
       changes,
-      summary: `Prepared ${changes.length} formula update(s) on ${resolved.sheetName}!${resolved.range}.`,
-      sourceFingerprintHash: metadata.fingerprint.structureHash
+      summary: `Prepared ${changes.length} formula update(s) on ${resolved.sheetName}!${resolved.range}.`
     });
     return {
       status: "PREVIEW_READY",
@@ -1085,6 +1119,7 @@ export class AgentOrchestrator {
       confirmationToken: pending.confirmationToken,
       summary: pending.summary,
       answer: { kind: "formula_preview", sheetName: resolved.sheetName, range: resolved.range, formulaCount: changes.length },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
       changes,
       proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "formula target" }],
       resourceLinks: [operationResource(String(pending.operationId))],
@@ -1138,13 +1173,10 @@ export class AgentOrchestrator {
       after: value,
       cell: `table:${tableName}:newRow${rowIndex + 1}:col${columnIndex + 1}`
     })));
-    const pending = this.operations.create({
-      workbookContextId: metadata.workbookContextId,
-      workbookId: metadata.workbook.workbookId as WorkbookId,
+    const pending = this.createPendingOperation(metadata, {
       action: { kind: "table.append_rows", request },
       changes,
-      summary: `Prepared ${matrix.length} row append(s) to table ${tableName}.`,
-      sourceFingerprintHash: metadata.fingerprint.structureHash
+      summary: `Prepared ${matrix.length} row append(s) to table ${tableName}.`
     });
     return {
       status: "PREVIEW_READY",
@@ -1161,6 +1193,7 @@ export class AgentOrchestrator {
         rowCount: matrix.length,
         columnCount: matrix.reduce((max, row) => Math.max(max, row.length), 0)
       },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
       changes,
       proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: tableName }],
       resourceLinks: [operationResource(String(pending.operationId))],
@@ -1197,12 +1230,31 @@ export class AgentOrchestrator {
         workbookContextId: pending.workbookContextId,
         operationId: pending.operationId,
         summary: "Workbook structure changed after preview. Refresh the preview before applying.",
+        metrics: { operationRisk: pending.risk, targetFingerprintStatus: "changed" },
         changes: pending.changes,
         proof: [],
         resourceLinks: [contextResource(current.metadata.workbookContextId), operationResource(String(pending.operationId))],
         nextAction: "retry_after_refresh",
         warnings: ["Target fingerprints changed after preview."]
       };
+    }
+    if (pending.sourceTargetFingerprintHash && current.metadata.fingerprint.structureHash === pending.sourceFingerprintHash) {
+      const currentTargetFingerprint = targetFingerprintHash(current.metadata, pending.changes);
+      if (currentTargetFingerprint !== pending.sourceTargetFingerprintHash) {
+        return {
+          status: "STALE_CONTEXT",
+          mode: "apply_update",
+          workbookContextId: pending.workbookContextId,
+          operationId: pending.operationId,
+          summary: "Workbook target metadata changed after preview. Refresh the preview before applying.",
+          metrics: { operationRisk: pending.risk, targetFingerprintStatus: "changed" },
+          changes: pending.changes,
+          proof: [],
+          resourceLinks: [contextResource(current.metadata.workbookContextId), operationResource(String(pending.operationId))],
+          nextAction: "retry_after_refresh",
+          warnings: ["Target fingerprints changed after preview."]
+        };
+      }
     }
     const result = pending.action.kind === "batch"
       ? await this.runtime.applyBatch({ workbookId: pending.workbookId, operations: pending.action.operations, mode: "apply", idempotencyKey: `agent:${operationId}` })
@@ -1235,8 +1287,10 @@ export class AgentOrchestrator {
         transactionId: (result as { transactionId?: string }).transactionId,
         backupIds: (result as { backups?: string[] }).backups ?? [],
         rollbackAvailable: (result as { rollbackAvailable?: boolean }).rollbackAvailable ?? false,
+        operationRisk: pending.risk,
         telemetry: (result as { telemetry?: unknown }).telemetry
       },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
       changes: pending.changes,
       proof: pending.changes.flatMap((change) => change.range ? [{ sheetName: change.sheetName, range: change.range, label: "applied target" }] : []).slice(0, 1),
       resourceLinks: (result as { transactionId?: string }).transactionId ? [{ uri: `excel://transactions/${(result as { transactionId?: string }).transactionId}`, name: "transaction", description: "Applied workbook transaction.", mimeType: "application/json" }] : [],
@@ -1324,14 +1378,40 @@ export class AgentOrchestrator {
     }
     return values;
   }
+
+  private createPendingOperation(
+    metadata: WorkbookMetadata,
+    input: {
+      action: Parameters<AgentOperationStore["create"]>[0]["action"];
+      changes: NonNullable<AgentRunOutput["changes"]>;
+      summary: string;
+    }
+  ) {
+    const risk = classifyAgentActionRisk(input.action);
+    return this.operations.create({
+      workbookContextId: metadata.workbookContextId,
+      workbookId: metadata.workbook.workbookId as WorkbookId,
+      action: input.action,
+      changes: input.changes,
+      summary: input.summary,
+      risk,
+      sourceFingerprintHash: metadata.fingerprint.structureHash,
+      sourceTargetFingerprintHash: targetFingerprintHash(metadata, input.changes)
+    });
+  }
 }
 
 interface AgentRunMetrics {
   internalReadCount: number;
   fullReadCellCount: number;
+  route: IntentRoute;
+  intent: NormalizedAgentIntent;
   autoApplied?: boolean;
   safetyDecision?: string;
   previewOperationId?: string;
+  operationRisk?: AgentOperationRisk;
+  autoApplyBlockedReason?: string;
+  targetFingerprintStatus?: "matched" | "changed" | "not_applicable";
   validationStatus: "passed" | "failed" | "not_run";
 }
 
@@ -1354,6 +1434,53 @@ function operationReadSnapshots(result: unknown): Array<{ snapshot?: { values?: 
     readData?: Array<{ snapshot?: { values?: CellMatrix; text?: string[][] } }>;
   };
   return typed.readData ?? typed.data ?? [];
+}
+
+function isTargetFingerprintStatus(value: unknown): value is "matched" | "changed" | "not_applicable" {
+  return value === "matched" || value === "changed" || value === "not_applicable";
+}
+
+function targetFingerprintHash(metadata: WorkbookMetadata, changes: NonNullable<AgentRunOutput["changes"]>): string {
+  const targets = changes
+    .filter((change) => change.sheetName || change.range)
+    .map((change) => ({ sheetName: change.sheetName, range: change.range }))
+    .sort((left, right) => `${left.sheetName}!${left.range ?? ""}`.localeCompare(`${right.sheetName}!${right.range ?? ""}`));
+  const targetSheets = new Set(targets.map((target) => target.sheetName).filter(Boolean));
+  const targetTables = metadata.tables
+    .filter((table) => targetSheets.has(table.sheetName) || targets.some((target) => target.range && table.range === target.range))
+    .map((table) => ({
+      id: table.id,
+      name: table.name,
+      sheetName: table.sheetName,
+      range: table.range,
+      columns: table.columns.map((column) => ({ name: column.name, index: column.index, inferredType: column.inferredType }))
+    }));
+  const targetNamedRanges = metadata.namedRanges
+    .filter((name) => !name.sheetName || targetSheets.has(name.sheetName) || targets.some((target) => target.range && name.range === target.range))
+    .map((name) => ({ name: name.name, sheetName: name.sheetName, range: name.range }));
+  const targetFormulaRegions = metadata.formulaRegions
+    .filter((region) => targetSheets.has(region.sheetName) || targets.some((target) => target.range && rangesMayOverlap(target.range, region.range)))
+    .map((region) => ({ id: region.id, sheetName: region.sheetName, range: region.range }));
+  const targetSheetMetadata = metadata.sheets
+    .filter((sheet) => targetSheets.has(sheet.name))
+    .map((sheet) => ({
+      id: sheet.id,
+      name: sheet.name,
+      usedRange: sheet.usedRange,
+      rowCount: sheet.rowCount,
+      columnCount: sheet.columnCount
+    }));
+  return JSON.stringify({
+    targets,
+    sheets: targetSheetMetadata,
+    tables: targetTables,
+    namedRanges: targetNamedRanges,
+    formulaRegions: targetFormulaRegions,
+    selection: metadata.selection ? {
+      sheetName: metadata.selection.sheetName,
+      address: metadata.selection.address
+    } : undefined
+  });
 }
 
 function detectWorkbookOverviewIntent(requestText: string) {
@@ -2049,7 +2176,7 @@ function applyOutputBudget(output: Omit<AgentRunOutput, "telemetry">, input: Age
     compact = stripUndefinedOptionals({
       ...compact,
       ...(compact.answer && compact.workbookContextId ? { answer: { resource: contextResource(String(compact.workbookContextId)).uri } } : {}),
-      ...(compact.candidates ? { candidates: compact.candidates.slice(0, Math.min(compact.candidates.length, 3)) } : {}),
+      ...(compact.candidates ? { candidates: compact.candidates.slice(0, Math.min(compact.candidates.length, 3)).map(compactCandidate) } : {}),
       proof: compact.proof.slice(0, Math.min(compact.proof.length, 3)),
       ...(compact.changes ? { changes: compact.changes.slice(0, Math.min(compact.changes.length, 3)) } : {}),
       warnings: [...compact.warnings, "Agent response was compacted to satisfy the requested payload/token budget."]
@@ -2063,6 +2190,13 @@ function applyOutputBudget(output: Omit<AgentRunOutput, "telemetry">, input: Age
     });
   }
   return stripUndefinedOptionals(compact);
+}
+
+function compactCandidate(candidate: AgentCandidate): AgentCandidate {
+  const next = { ...candidate };
+  delete next.reason;
+  delete next.nextRequestHint;
+  return next;
 }
 
 function stripUndefinedOptionals(output: Omit<AgentRunOutput, "telemetry">): Omit<AgentRunOutput, "telemetry"> {
@@ -2114,11 +2248,20 @@ function resolveUpdateTarget(metadata: WorkbookMetadata, input: AgentRunInput):
   return resolved;
 }
 
-function inferAgentMode(request: string): AgentRunMode {
-  return /\b(add|update|set|change|replace|write|fill|append|edit|fix|repair|create|insert|delete|remove|clear|rename|format|style|duplicate|copy|template)\b/i.test(request) ? "preview_update" : "answer";
+function intentAction(input: AgentRunInput): AgentIntentAction | undefined {
+  const action = (input.intent as { action?: unknown } | undefined)?.action;
+  return isAgentIntentAction(action) ? action : undefined;
 }
 
-function answerIntent(request: string): "schema" | "values" {
+function answerIntent(input: AgentRunInput): "schema" | "values" {
+  const action = intentAction(input);
+  if (action === "read_schema") {
+    return "schema";
+  }
+  if (action === "read_values") {
+    return "values";
+  }
+  const request = input.request;
   const valueIntent = /\b(actual\s+values?|values?|rows?|records?|data|sample|examples?|first\s+\d+|last\s+\d+|preview|contents?)\b/i.test(request)
     || /[A-Z]{1,3}\d+\s*:\s*[A-Z]{1,3}\d+/i.test(request)
     || /\b(selection|highlighted|active cell|current cell|this cell|this range|this column|selected (?:cell|range|col(?:umn)?)|active column|current column)\b/i.test(request);
@@ -2382,6 +2525,12 @@ function rangesOverlap(left: { startColumn: number; startRow: number; endColumn:
     && left.endColumn >= right.startColumn
     && left.startRow <= right.endRow
     && left.endRow >= right.startRow;
+}
+
+function rangesMayOverlap(leftAddress: string, rightAddress: string): boolean {
+  const left = parseA1Range(leftAddress);
+  const right = parseA1Range(rightAddress);
+  return Boolean(left && right && rangesOverlap(left, right));
 }
 
 function contextResource(workbookContextId: string) {

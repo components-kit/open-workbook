@@ -180,6 +180,10 @@ Environment overrides:
 - `OPEN_WORKBOOK_STYLE_BATCH_CHUNK_SIZE`
 - `OPEN_WORKBOOK_MATRIX_CHUNK_ROWS`
 - `OPEN_WORKBOOK_BACKUP_DIR`
+- `OPEN_WORKBOOK_BACKUP_RETENTION_DAYS`
+- `OPEN_WORKBOOK_BACKUP_RETENTION_COUNT`
+- `OPEN_WORKBOOK_BACKUP_RETENTION_BYTES`
+- `OPEN_WORKBOOK_BACKUP_RETENTION_DISABLED`
 - `OPEN_WORKBOOK_EXPORT_DIR`
 - `OPEN_WORKBOOK_STATE_DIR`
 - `OPEN_WORKBOOK_FILE_BRIDGE_URL`
@@ -293,6 +297,16 @@ All notable changes to Open Workbook will be documented in this file.
 The format is based on Keep a Changelog, and this project follows semantic versioning for published packages.
 
 ## [Unreleased]
+
+### Added
+
+- Added explicit `excel.agent.run` route telemetry, operation-risk telemetry, target fingerprint status, and ambiguity candidate hints so backend orchestration decisions are easier to audit without exposing primitive tools.
+- Added optional caller-provided `intent.action` hints for `excel.agent.run` so the user's existing LLM/client can parse complex requests into structured agent intent while the backend remains deterministic.
+
+### Changed
+
+- Strengthened agent preview/apply protection by storing target-specific fingerprints for pending operations and compacting verbose candidate hints when tight response budgets are requested.
+- Routed structured caller intent through the same target-resolution, preview/apply, risk, stale-check, and validation flow as natural-language-only requests.
 
 ## [0.1.14] - 2026-06-18
 
@@ -1381,7 +1395,7 @@ The full protocol catalog remains available to backend/runtime tests and interna
 
 Default public tool:
 
-- `excel.agent.run`: send workbook intent through `request` and optional `mode`, `workbookContextId`, `target`, `values`, `operationId`, and `confirmationToken`. The backend performs deterministic orchestration over internal Excel capabilities and returns structured compact output. Natural-language targets are resolved against cached sheets, tables, headers, named ranges, registered regions, summary blocks, and formula regions; close matches return `AMBIGUOUS_TARGET` with candidates instead of guessing. Retry with `target.candidateId` from a returned candidate to force that target in a follow-up call. Workbook overview, sheet-count, table-list, named-range, and vague `.xlsx` review questions answer from lightweight structure metadata before deeper reads. Schema/header-only requests can answer from cached metadata; row/value/sample/A1-range requests perform live targeted reads. Explicit two-sheet comparison requests read both targets in one agent call. Raw monthly sheets without Excel Tables can resolve exact sheet/range references and transaction/invoice header blocks. Related range value edits can be grouped with `values.patches`, where each patch has `target.sheetName`, `target.range`, and a 2D `values` matrix; the backend returns one preview operation that should be applied once.
+- `excel.agent.run`: send workbook intent through `request` and optional `mode`, `intent`, `workbookContextId`, `target`, `values`, `operationId`, and `confirmationToken`. The backend performs deterministic orchestration over internal Excel capabilities and returns structured compact output. Natural-language targets are resolved against cached sheets, tables, headers, named ranges, registered regions, summary blocks, and formula regions; close matches return `AMBIGUOUS_TARGET` with candidates instead of guessing. Candidates include retry hints when budget allows; retry with `target.candidateId` from a returned candidate to force that target in a follow-up call. Caller LLMs may provide `intent.action` hints such as `read_values`, `read_schema`, `write_values`, `write_formulas`, `format_range`, `clear_values`, `append_table_rows`, `sort_table`, `filter_range`, `autofit`, `copy_template_sheet`, `calculate`, or `save`; these hints improve routing but never bypass target resolution, preview/apply confirmation, risk policy, stale checks, or validation. Workbook overview, sheet-count, table-list, named-range, and vague `.xlsx` review questions answer from lightweight structure metadata before deeper reads. Schema/header-only requests can answer from cached metadata; row/value/sample/A1-range requests perform live targeted reads. Explicit two-sheet comparison requests read both targets in one agent call. Raw monthly sheets without Excel Tables can resolve exact sheet/range references and transaction/invoice header blocks. Related range value edits can be grouped with `values.patches`, where each patch has `target.sheetName`, `target.range`, and a 2D `values` matrix; the backend returns one preview operation that should be applied once.
 
 Supported modes:
 
@@ -1395,9 +1409,9 @@ Supported modes:
 - `validate`: run compact validation.
 - `rollback`: reserved for conservative rollback orchestration.
 
-Mutation rule: `preview_update` never applies workbook edits. It can preview scoped range value writes, grouped multi-range value patches, formula writes, style updates, template-sheet cleanup, and explicit table-row appends through the default agent tool. `auto` may preview and apply a clearly authorized, scoped value edit when safety checks pass; structural, destructive, broad, sparse, stale, ambiguous, style, formula, template, or table append edits stop before mutation and return `nextAction`. Manual applying requires a second `excel.agent.run` call with `mode: "apply_update"`, the previewed `operationId`, and the matching `confirmationToken`. If a grouped preview succeeds, agents should call `apply_update` once and should not split the patches unless apply returns a hard failure with actionable details.
+Mutation rule: `preview_update` never applies workbook edits. It can preview scoped range value writes, grouped multi-range value patches, formula writes, style updates, template-sheet cleanup, and explicit table-row appends through the default agent tool. `auto` may preview and apply a clearly authorized, scoped value edit when safety checks pass; structural, destructive, broad, sparse, stale, ambiguous, style, formula, template, or table append edits stop before mutation and return `nextAction`. Manual applying requires a second `excel.agent.run` call with `mode: "apply_update"`, the previewed `operationId`, and the matching `confirmationToken`. Pending previews store workbook and target-specific fingerprints; apply returns `STALE_CONTEXT` when sheet, table, named-range, formula-region, selection, or target metadata has drifted after preview. If a grouped preview succeeds, agents should call `apply_update` once and should not split these related patches unless apply returns a hard failure with actionable details.
 
-Agent results include `structuredContent`, a text fallback, compact proof ranges, reusable candidate ids, resource links such as `excel://agent/contexts/{workbook_context_id}` and `excel://agent/operations/{operation_id}`, and telemetry for payload bytes, estimated tokens, elapsed time, cache reuse, metadata cache status, auto-apply decisions, internal read count, full-read cell count, candidate count, resource-link count, and estimated token savings. `budget.maxPayloadBytes`, `budget.maxEstimatedTokens`, and `budget.maxExamples` bound inline agent output; larger context is summarized or moved behind resource links.
+Agent results include `structuredContent`, a text fallback, compact proof ranges, reusable candidate ids, resource links such as `excel://agent/contexts/{workbook_context_id}` and `excel://agent/operations/{operation_id}`, and telemetry for payload bytes, estimated tokens, elapsed time, cache reuse, route decision, caller intent source/action/acceptance, operation risk, target fingerprint status, metadata cache status, auto-apply decisions, internal read count, full-read cell count, candidate count, resource-link count, and estimated token savings. `budget.maxPayloadBytes`, `budget.maxEstimatedTokens`, and `budget.maxExamples` bound inline agent output; larger context is summarized or moved behind resource links.
 
 `excel.runtime.get_capabilities` is the source of truth for the complete catalog, resources, prompts, runtime connection status, and active Excel host capability status. When an add-in is connected, it includes the host platform, Office version when available, Office API-set support such as `ExcelApi` versions, and derived feature statuses for ranges, tables, pivots, charts, and known host-limited paths. Without a connected add-in, it returns a daemon fallback that marks Excel host capabilities as `unknown`.
 
@@ -1616,13 +1630,23 @@ Plans use a target-region strict policy:
 
 ## Retention
 
-Region snapshots are retained for the active session by default. Workbook-copy backups persist until explicit cleanup or configured retention removes them. Normal rollback must not delete backups.
+Region snapshots are retained for the active session by default. Persisted backups are bounded by unified retention so local backup storage does not grow indefinitely. Normal rollback must not delete the backup it just used.
+
+Default persisted-backup retention keeps a balanced rollback window:
+
+- 30 days
+- 20 backups per workbook
+- 1 GiB total persisted backup payloads
+
+Pinned backups are never pruned or deleted. Set `OPEN_WORKBOOK_BACKUP_RETENTION_DAYS`, `OPEN_WORKBOOK_BACKUP_RETENTION_COUNT`, or `OPEN_WORKBOOK_BACKUP_RETENTION_BYTES` to override the defaults. Set `OPEN_WORKBOOK_BACKUP_RETENTION_DISABLED=1` to disable automatic retention.
 
 ## Persistent Snapshot Backups
 
 Workbook-copy backups are persisted as JSON snapshot payloads under `OPEN_WORKBOOK_BACKUP_DIR` when set, otherwise `.open-workbook/backups` under the MCP process working directory.
 
 These backups are restorable through `excel.workbook.restore_backup` because they contain captured range values, formulas, number formats, display text, and basic styles. They are not full `.xlsx` file copies. True workbook export uses the native file bridge when configured or the Excel desktop compressed-file export path; `save_as` still requires the native bridge because Office.js does not expose a local save-as path API.
+
+`excel.backup.list`, `excel.backup.get`, `excel.backup.delete`, and `excel.backup.prune` cover both durable full-file backups and persisted JSON snapshot backups. `excel.backup.prune` supports `dryRun`, `kind`, `maxAgeDays`, `maxBackupsPerWorkbook`, and `maxTotalBytes`.
 
 ## Implemented Rollback
 
@@ -2084,8 +2108,9 @@ Open Workbook separates workbook state safety from local file-system control.
 - `excel.workbook.restore_backup` restores a persistent or in-memory snapshot backup.
 - `excel.workbook.export_copy` creates a persistent snapshot backup, then writes a true `.xlsx` file. If `OPEN_WORKBOOK_FILE_BRIDGE_URL` is configured, the built-in native bridge uses Excel desktop `SaveCopyAs` automation first. If no bridge is configured or the bridge fails, Open Workbook falls back to Office.js compressed workbook slices on supported Excel desktop hosts. If no `targetPath` is provided, the file is written under `.open-workbook/exports` or `OPEN_WORKBOOK_EXPORT_DIR`.
 - `excel.backup.create_file` creates a durable full-file backup manifest with path, size, checksum, source snapshot backup id when available, pin state, verification time, and restore status.
-- `excel.backup.list`, `excel.backup.get`, and `excel.backup.verify` inspect durable file backups and detect missing or checksum-mismatched backup files.
-- `excel.backup.pin`, `excel.backup.unpin`, `excel.backup.prune`, and `excel.backup.delete` manage retention. Pinned backups are not pruned or deleted.
+- `excel.backup.list` and `excel.backup.get` inspect persisted backup records, including full-file backups and JSON snapshot backups.
+- `excel.backup.verify` verifies durable full-file backups and detects missing or checksum-mismatched backup files.
+- `excel.backup.pin`, `excel.backup.unpin`, `excel.backup.prune`, and `excel.backup.delete` manage persisted backup retention. Pinned backups are not pruned or deleted.
 - `excel.backup.restore_file` defaults to safe `open-as-new` recovery. `replace-open-workbook` requires explicit confirmation, verifies the source backup, creates a pinned emergency file backup, then calls the native bridge to close, replace, reopen, and verify through host automation. `restore-into-open-workbook` remains unsupported because it is not deterministic for full workbook fidelity.
 - `excel.workbook.export_local_config` exports versioned JSON metadata for Open Workbook templates, regions, and optional permissions.
 - `excel.workbook.import_local_config` imports that JSON into the local daemon registry.
@@ -2157,7 +2182,9 @@ Durable file backups are separate from snapshot backups. Snapshot backups are us
 
 The built-in bridge uses AppleScript on macOS and PowerShell COM automation on Windows for `replace-open-workbook`. It validates backup and target paths against `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` when configured. Production agents should still prefer snapshot rollback for in-workbook undo and use full-file replace restore only for explicit disaster recovery.
 
-File backup lifecycle operations emit collaboration audit events: `backup.created`, `backup.verified`, `backup.restored`, `backup.deleted`, `backup.pruned`, and `backup.updated`. These events appear in `excel.collab.get_status` so multi-agent clients can show which agent or workflow created, verified, restored, pinned, or removed a file backup.
+Backup lifecycle operations emit collaboration audit events: `backup.created`, `backup.verified`, `backup.restored`, `backup.deleted`, `backup.pruned`, and `backup.updated`. These events appear in `excel.collab.get_status` so multi-agent clients can show which agent or workflow created, verified, restored, pinned, or removed a persisted backup.
+
+`excel.backup.prune` covers both durable full-file backups and persisted JSON snapshot backups. It accepts `kind` (`all`, `file-copy`, or `snapshot-json`), `maxAgeDays`, `maxBackupsPerWorkbook`, `maxTotalBytes`, and `dryRun`. Automatic retention uses balanced defaults of 30 days, 20 backups per workbook, and 1 GiB total payload bytes. Override with `OPEN_WORKBOOK_BACKUP_RETENTION_DAYS`, `OPEN_WORKBOOK_BACKUP_RETENTION_COUNT`, and `OPEN_WORKBOOK_BACKUP_RETENTION_BYTES`; set `OPEN_WORKBOOK_BACKUP_RETENTION_DISABLED=1` to disable automatic pruning.
 
 Set `OPEN_WORKBOOK_FILE_BRIDGE_TIMEOUT_MS` to override the default 30000 ms backend-to-bridge timeout. Set `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` to a path-delimited allowlist of output directories for native Save As and Export Copy. Set `OPEN_WORKBOOK_EXPORT_DIR` to control the default output directory for add-in compressed-file exports.
 

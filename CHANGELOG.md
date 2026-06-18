@@ -6,6 +6,16 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+### Added
+
+- Added explicit `excel.agent.run` route telemetry, operation-risk telemetry, target fingerprint status, and ambiguity candidate hints so backend orchestration decisions are easier to audit without exposing primitive tools.
+- Added optional caller-provided `intent.action` hints for `excel.agent.run` so the user's existing LLM/client can parse complex requests into structured agent intent while the backend remains deterministic.
+
+### Changed
+
+- Strengthened agent preview/apply protection by storing target-specific fingerprints for pending operations and compacting verbose candidate hints when tight response budgets are requested.
+- Routed structured caller intent through the same target-resolution, preview/apply, risk, stale-check, and validation flow as natural-language-only requests.
+
 ## [0.1.14] - 2026-06-18
 
 ### Added

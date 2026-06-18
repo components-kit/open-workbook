@@ -230,6 +230,7 @@ export class RuntimeService {
     this.fileBridge = options.fileBridge ?? new NativeFileBridge();
     this.restoreState();
     this.recoverRuntimeState();
+    void this.applyDefaultBackupRetention("startup");
     this.registerAgent({
       agentId: this.defaultAgentId,
       agentName: process.env.OPEN_WORKBOOK_AGENT_NAME ?? "local-agent",
@@ -2326,27 +2327,28 @@ export class RuntimeService {
       details: { backupId: backup.backupId, filePath, checksum, size: fileStat.size, pinned: backup.pinned }
     });
     this.persistState();
+    void this.applyDefaultBackupRetention("create_file_backup");
     return { ok: true, backup, manifest, export: result };
   }
 
   listFileBackups(workbookId?: WorkbookId) {
     const backups = this.backups
       .dump()
-      .filter((backup) => backup.kind === "file-copy")
+      .filter((backup) => isPersistedBackup(backup))
       .filter((backup) => workbookId === undefined || backup.workbookId === workbookId)
-      .map((backup) => ({ backup, manifest: backup.payload as WorkbookFileBackupManifest | undefined }));
+      .map((backup) => this.describePersistedBackup(backup));
     return { ok: true, backups };
   }
 
   getFileBackup(backupId: BackupId) {
     const backup = this.backups.getBackup(backupId);
-    if (!backup || backup.kind !== "file-copy") {
+    if (!backup || !isPersistedBackup(backup)) {
       return {
         ok: false,
-        error: runtimeError("BACKUP_UNAVAILABLE", `File backup not found: ${backupId}`, { retryable: false })
+        error: runtimeError("BACKUP_UNAVAILABLE", `Persisted backup not found: ${backupId}`, { retryable: false })
       };
     }
-    return { ok: true, backup, manifest: backup.payload as WorkbookFileBackupManifest | undefined };
+    return { ok: true, ...this.describePersistedBackup(backup) };
   }
 
   async verifyFileBackup(backupId: BackupId) {
@@ -2553,38 +2555,38 @@ export class RuntimeService {
       };
   }
 
-  deleteFileBackup(backupId: BackupId) {
+  async deleteFileBackup(backupId: BackupId) {
     const backup = this.backups.getBackup(backupId);
-    if (!backup || backup.kind !== "file-copy") {
+    if (!backup || !isPersistedBackup(backup)) {
       return {
         ok: false,
-        error: runtimeError("BACKUP_UNAVAILABLE", `File backup not found: ${backupId}`, { retryable: false })
+        error: runtimeError("BACKUP_UNAVAILABLE", `Persisted backup not found: ${backupId}`, { retryable: false })
       };
     }
     if (backup.pinned) {
       return {
         ok: false,
         backup,
-        error: runtimeError("PERMISSION_DENIED", `File backup is pinned and cannot be deleted: ${backupId}`, { retryable: false })
+        error: runtimeError("PERMISSION_DENIED", `Persisted backup is pinned and cannot be deleted: ${backupId}`, { retryable: false })
       };
     }
-    void this.unlinkBackupPayloadIfSafe(backup);
+    const payload = await this.unlinkBackupPayloadIfSafe(backup);
     const deleted = this.backups.deleteBackup(backupId);
     this.recordCollabEvent({
       type: "backup.deleted",
       workbookId: backup.workbookId,
-      message: `File backup deleted: ${backupId}`,
-      details: { backupId, filePath: (backup.payload as WorkbookFileBackupManifest | undefined)?.filePath }
+      message: `Persisted backup deleted: ${backupId}`,
+      details: { backupId, kind: backup.kind, payload }
     });
     this.persistState();
-    return { ok: deleted, backupId };
+    return { ok: deleted, backupId, backup, payload };
   }
 
-  pruneFileBackups(input: WorkbookBackupRetentionRequest) {
+  async pruneFileBackups(input: WorkbookBackupRetentionRequest) {
     const now = Date.now();
     const maxAgeMs = input.maxAgeDays !== undefined ? input.maxAgeDays * 24 * 60 * 60 * 1000 : undefined;
     const byWorkbook = new Map<string, BackupRecord[]>();
-    for (const backup of this.backups.dump().filter((item) => item.kind === "file-copy")) {
+    for (const backup of this.backups.dump().filter((item) => isPersistedBackup(item) && backupMatchesRetentionKind(item, input.kind ?? "all"))) {
       if (input.workbookId !== undefined && backup.workbookId !== input.workbookId) {
         continue;
       }
@@ -2592,11 +2594,11 @@ export class RuntimeService {
       list.push(backup);
       byWorkbook.set(backup.workbookId, list);
     }
-    const candidates = new Map<BackupId, BackupRecord>();
+    const candidates = new Map<BackupId, PruneCandidate>();
     for (const backups of byWorkbook.values()) {
       for (const backup of backups) {
         if (!backup.pinned && maxAgeMs !== undefined && now - Date.parse(backup.createdAt) > maxAgeMs) {
-          candidates.set(backup.backupId, backup);
+          addPruneCandidate(candidates, backup, "age");
         }
       }
       if (input.maxBackupsPerWorkbook !== undefined) {
@@ -2605,33 +2607,71 @@ export class RuntimeService {
           .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
           .slice(input.maxBackupsPerWorkbook);
         for (const backup of overflow) {
-          candidates.set(backup.backupId, backup);
+          addPruneCandidate(candidates, backup, "count");
         }
       }
     }
-    if (input.dryRun) {
-      return { ok: true, dryRun: true, candidates: [...candidates.values()] };
+    const groupedBackups = [...byWorkbook.values()].flat();
+    if (input.maxTotalBytes !== undefined) {
+      const sized = await Promise.all(groupedBackups.map(async (backup) => ({ backup, payload: await this.getBackupPayloadInfo(backup) })));
+      let totalBytes = sized.reduce((total, item) => total + (item.payload.bytes ?? 0), 0);
+      const oldestFirst = sized
+        .filter((item) => !item.backup.pinned)
+        .sort((a, b) => Date.parse(a.backup.createdAt) - Date.parse(b.backup.createdAt));
+      for (const item of oldestFirst) {
+        if (totalBytes <= input.maxTotalBytes) {
+          break;
+        }
+        addPruneCandidate(candidates, item.backup, "size", item.payload);
+        totalBytes -= item.payload.bytes ?? 0;
+      }
     }
-    for (const backup of candidates.values()) {
-      void this.unlinkBackupPayloadIfSafe(backup);
-      this.backups.deleteBackup(backup.backupId);
+    for (const candidate of candidates.values()) {
+      if (candidate.bytes === undefined && candidate.payloadPath === undefined) {
+        const payload = await this.getBackupPayloadInfo(candidate.backup);
+        candidate.bytes = payload.bytes;
+        candidate.payloadPath = payload.path;
+        candidate.missingPayload = payload.missing;
+      }
+    }
+    const candidateList = [...candidates.values()].map((candidate) => ({
+      backup: candidate.backup,
+      reasons: candidate.reasons,
+      bytes: candidate.bytes ?? 0,
+      payloadPath: candidate.payloadPath,
+      missingPayload: candidate.missingPayload ?? false
+    }));
+    const skippedPinned = groupedBackups.filter((backup) => backup.pinned).map((backup) => backup.backupId);
+    const reclaimedBytes = candidateList.reduce((total, candidate) => total + candidate.bytes, 0);
+    const missingPayloads = candidateList.filter((candidate) => candidate.missingPayload).map((candidate) => candidate.backup.backupId);
+    if (input.dryRun) {
+      return { ok: true, dryRun: true, candidates: candidateList, skippedPinned, reclaimedBytes, missingPayloads };
+    }
+    if (candidateList.length === 0) {
+      return { ok: true, pruned: [], candidates: candidateList, skippedPinned, reclaimedBytes, missingPayloads };
+    }
+    const pruned: BackupId[] = [];
+    for (const candidate of candidateList) {
+      await this.unlinkBackupPayloadIfSafe(candidate.backup);
+      this.backups.deleteBackup(candidate.backup.backupId);
+      pruned.push(candidate.backup.backupId);
     }
     this.recordCollabEvent({
       type: "backup.pruned",
       ...(input.workbookId !== undefined ? { workbookId: input.workbookId } : {}),
-      message: `File backups pruned: ${candidates.size}`,
-      details: { prunedBackupIds: [...candidates.keys()], criteria: input }
+      message: `Persisted backups pruned: ${pruned.length}`,
+      details: { prunedBackupIds: pruned, criteria: input, reclaimedBytes, missingPayloads }
     });
     this.persistState();
-    return { ok: true, pruned: [...candidates.keys()] };
+    return { ok: true, pruned, candidates: candidateList, skippedPinned, reclaimedBytes, missingPayloads };
   }
 
   pinFileBackup(backupId: BackupId, pinned: boolean) {
     const backup = this.backups.getBackup(backupId);
-    if (!backup || backup.kind !== "file-copy") {
+    if (!backup || !isPersistedBackup(backup)) {
       return {
         ok: false,
-        error: runtimeError("BACKUP_UNAVAILABLE", `File backup not found: ${backupId}`, { retryable: false })
+        error: runtimeError("BACKUP_UNAVAILABLE", `Persisted backup not found: ${backupId}`, { retryable: false })
       };
     }
     const manifest = backup.payload as WorkbookFileBackupManifest | undefined;
@@ -2643,7 +2683,7 @@ export class RuntimeService {
     this.recordCollabEvent({
       type: "backup.updated",
       workbookId: backup.workbookId,
-      message: `File backup ${pinned ? "pinned" : "unpinned"}: ${backupId}`,
+      message: `Persisted backup ${pinned ? "pinned" : "unpinned"}: ${backupId}`,
       details: { backupId, pinned }
     });
     this.persistState();
@@ -4187,6 +4227,7 @@ export class RuntimeService {
     });
     backup.payloadRef = await this.persistBackupPayload(backup.backupId, snapshotResult.snapshot.payload);
     this.persistState();
+    void this.applyDefaultBackupRetention("create_backup");
     return { ok: true, backup };
   }
 
@@ -5801,6 +5842,9 @@ export class RuntimeService {
     };
 
     const result = await client.request<OperationResult>("operation.execute_batch", payload);
+    if (backups.length > 0) {
+      void this.applyDefaultBackupRetention("apply_batch");
+    }
     return {
       ...result,
       backups: [...new Set([...result.backups, ...backups.map((backup) => backup.backupId)])],
@@ -6196,6 +6240,57 @@ export class RuntimeService {
     return path.join(this.getBackupDirectory(), "files", `${sanitizeFileName(workbookId)}-${timestamp}.xlsx`);
   }
 
+  private async applyDefaultBackupRetention(reason: string): Promise<void> {
+    const request = defaultBackupRetentionRequest();
+    if (!request) {
+      return;
+    }
+    try {
+      await this.pruneFileBackups(request);
+    } catch (error) {
+      this.recordCollabEvent({
+        type: "backup.pruned",
+        message: "Automatic backup retention failed.",
+        details: { reason, error: error instanceof Error ? error.message : String(error) }
+      });
+    }
+  }
+
+  private describePersistedBackup(backup: BackupRecord) {
+    const manifest = backup.kind === "file-copy" ? backup.payload as WorkbookFileBackupManifest | undefined : undefined;
+    const payloadPath = this.backupPayloadPath(backup);
+    return {
+      backup,
+      ...(manifest !== undefined ? { manifest } : {}),
+      payload: {
+        kind: backup.kind === "file-copy" ? "file-copy" : "snapshot-json",
+        path: payloadPath,
+        pinned: backup.pinned === true
+      }
+    };
+  }
+
+  private async getBackupPayloadInfo(backup: BackupRecord): Promise<BackupPayloadInfo> {
+    const payloadPath = this.backupPayloadPath(backup);
+    if (!payloadPath) {
+      return {};
+    }
+    try {
+      const fileStat = await stat(payloadPath);
+      return { path: payloadPath, bytes: fileStat.size, missing: false };
+    } catch {
+      return { path: payloadPath, missing: true };
+    }
+  }
+
+  private backupPayloadPath(backup: BackupRecord): string | undefined {
+    if (backup.kind === "file-copy") {
+      const manifest = backup.payload as WorkbookFileBackupManifest | undefined;
+      return manifest?.filePath ?? backup.payloadRef;
+    }
+    return backup.payloadRef?.endsWith(".json") ? backup.payloadRef : undefined;
+  }
+
   private async writeWorkbookFileContent(targetPath: string, content: WorkbookFileContent): Promise<string> {
     const resolved = path.resolve(targetPath);
     await mkdir(path.dirname(resolved), { recursive: true });
@@ -6209,21 +6304,105 @@ export class RuntimeService {
     return `sha256:${hash.digest("hex")}`;
   }
 
-  private async unlinkBackupPayloadIfSafe(backup: BackupRecord): Promise<void> {
-    const manifest = backup.payload as WorkbookFileBackupManifest | undefined;
-    if (!manifest?.filePath) {
-      return;
+  private async unlinkBackupPayloadIfSafe(backup: BackupRecord): Promise<BackupPayloadInfo> {
+    const payload = await this.getBackupPayloadInfo(backup);
+    if (!payload.path) {
+      return payload;
+    }
+    const resolvedPayload = path.resolve(payload.path);
+    const resolvedBackupDir = path.resolve(this.getBackupDirectory());
+    const canDelete = backup.kind === "file-copy" || (backup.payloadRef?.endsWith(".json") === true && isPathInside(resolvedPayload, resolvedBackupDir));
+    if (!canDelete) {
+      return { ...payload, skipped: true };
     }
     try {
-      await unlink(manifest.filePath);
+      await unlink(resolvedPayload);
+      return { ...payload, deleted: true };
     } catch {
       // Missing backup files are reported by verify; deletion should remain idempotent.
+      return { ...payload, missing: true };
     }
   }
 }
 
 function sanitizeFileName(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "workbook";
+}
+
+interface BackupPayloadInfo {
+  path?: string | undefined;
+  bytes?: number | undefined;
+  missing?: boolean | undefined;
+  deleted?: boolean | undefined;
+  skipped?: boolean | undefined;
+}
+
+interface PruneCandidate {
+  backup: BackupRecord;
+  reasons: string[];
+  bytes?: number | undefined;
+  payloadPath?: string | undefined;
+  missingPayload?: boolean | undefined;
+}
+
+function isPersistedBackup(backup: BackupRecord): boolean {
+  return backup.kind === "file-copy" || backup.payloadRef?.endsWith(".json") === true;
+}
+
+function backupMatchesRetentionKind(backup: BackupRecord, kind: NonNullable<WorkbookBackupRetentionRequest["kind"]>): boolean {
+  if (kind === "all") {
+    return true;
+  }
+  if (kind === "file-copy") {
+    return backup.kind === "file-copy";
+  }
+  return backup.kind !== "file-copy" && backup.payloadRef?.endsWith(".json") === true;
+}
+
+function addPruneCandidate(candidates: Map<BackupId, PruneCandidate>, backup: BackupRecord, reason: string, payload?: BackupPayloadInfo): void {
+  const existing = candidates.get(backup.backupId);
+  if (existing) {
+    if (!existing.reasons.includes(reason)) {
+      existing.reasons.push(reason);
+    }
+    if (payload?.bytes !== undefined) existing.bytes = payload.bytes;
+    if (payload?.path !== undefined) existing.payloadPath = payload.path;
+    if (payload?.missing !== undefined) existing.missingPayload = payload.missing;
+    return;
+  }
+  candidates.set(backup.backupId, {
+    backup,
+    reasons: [reason],
+    bytes: payload?.bytes,
+    payloadPath: payload?.path,
+    missingPayload: payload?.missing
+  });
+}
+
+function defaultBackupRetentionRequest(): WorkbookBackupRetentionRequest | undefined {
+  if (process.env.OPEN_WORKBOOK_BACKUP_RETENTION_DISABLED === "1") {
+    return undefined;
+  }
+  return {
+    kind: "all",
+    maxAgeDays: positiveEnvInteger("OPEN_WORKBOOK_BACKUP_RETENTION_DAYS", 30),
+    maxBackupsPerWorkbook: positiveEnvInteger("OPEN_WORKBOOK_BACKUP_RETENTION_COUNT", 20),
+    maxTotalBytes: positiveEnvInteger("OPEN_WORKBOOK_BACKUP_RETENTION_BYTES", 1024 * 1024 * 1024)
+  };
+}
+
+function positiveEnvInteger(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+function isPathInside(child: string, parent: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function pivotOperationCapabilityStatus(

@@ -831,6 +831,135 @@ describe("AgentOrchestrator", () => {
     expect(result.status).toBe("VALIDATION_FAILED");
     expect(runtime.writeBatchCount).toBe(0);
   });
+
+  it("reports explicit route metadata for auto mutation routing", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const result = await agent.run({
+      request: "Update Data B2",
+      target: { sheetName: "Data", range: "B2" },
+      values: { values: [[123]] }
+    });
+
+    expect(result.status).toBe("PREVIEW_READY");
+    expect(result.telemetry.routeMode).toBe("preview_update");
+    expect(result.telemetry.routeMatchedRule).toBe("mutation.keyword");
+    expect(result.telemetry.routeConfidence).toBeGreaterThan(0);
+    expect(result.telemetry.operationRisk).toBe("small_value_write");
+    expect(result.telemetry.targetFingerprintStatus).toBe("matched");
+  });
+
+  it("adds candidate reasons and retry hints for ambiguous targets", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const result = await agent.run({
+      request: "Analyze financial 2026",
+      mode: "answer"
+    });
+
+    expect(result.status).toBe("AMBIGUOUS_TARGET");
+    expect(result.candidates?.[0]?.reason).toContain("match");
+    expect(result.candidates?.[0]?.nextRequestHint).toContain("target.candidateId");
+  });
+
+  it("carries operation risk telemetry through apply", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Format header row on Data",
+      mode: "preview_update",
+      target: { sheetName: "Data", range: "A1:D1" }
+    });
+    const applied = await agent.run({
+      request: "Apply style update",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect(preview.telemetry.operationRisk).toBe("safe_format");
+    expect(applied.status).toBe("SUCCESS");
+    expect(applied.telemetry.operationRisk).toBe("safe_format");
+    expect((applied.answer as any).operationRisk).toBe("safe_format");
+  });
+
+  it("uses caller structured intent to route simple auto requests without backend LLM parsing", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const result = await agent.run({
+      request: "Do this to the selected target",
+      intent: { action: "format_range", confidence: 0.92, reason: "Caller parsed a header-formatting request." },
+      target: { sheetName: "Data", range: "A1:D1" }
+    });
+
+    expect(result.status).toBe("PREVIEW_READY");
+    expect((result.answer as any).kind).toBe("style_preview");
+    expect(result.telemetry.routeMatchedRule).toBe("caller_intent.action");
+    expect(result.telemetry.intentSource).toBe("caller_structured");
+    expect(result.telemetry.intentAction).toBe("format_range");
+    expect(result.telemetry.intentAccepted).toBe(true);
+    expect(result.telemetry.operationRisk).toBe("safe_format");
+    expect(runtime.writeBatchCount).toBe(0);
+  });
+
+  it("uses caller structured intent for schema reads when request text is minimal", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const result = await agent.run({
+      request: "Inspect this",
+      intent: { action: "read_schema", confidence: 0.88 },
+      target: { tableName: "Transactions" }
+    });
+
+    expect(result.status).toBe("SUCCESS");
+    expect((result.answer as any).kind).toBe("table_schema");
+    expect(result.telemetry.routeMode).toBe("answer");
+    expect(result.telemetry.intentAction).toBe("read_schema");
+    expect(result.telemetry.internalReadCount).toBe(0);
+  });
+
+  it("uses caller structured intent for formula previews without relying on request wording", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const result = await agent.run({
+      request: "Put this in the cell",
+      mode: "preview_update",
+      intent: { action: "write_formulas", confidence: 0.9 },
+      target: { sheetName: "Report", range: "B2" },
+      values: { values: [["=SUM(Data!C2:C4)"]] }
+    });
+
+    expect(result.status).toBe("PREVIEW_READY");
+    expect((result.answer as any).kind).toBe("formula_preview");
+    expect(result.telemetry.intentAction).toBe("write_formulas");
+    expect(result.telemetry.operationRisk).toBe("formula_write");
+    expect(runtime.writeBatchCount).toBe(0);
+  });
+
+  it("rejects unsupported structured intent actions before previewing mutations", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const result = await agent.run({
+      request: "Do something unsupported",
+      intent: { action: "make_everything_magic", confidence: 0.9 } as any,
+      target: { sheetName: "Data", range: "A1:D1" }
+    });
+
+    expect(result.status).toBe("VALIDATION_FAILED");
+    expect((result.answer as any).kind).toBe("intent_rejected");
+    expect(result.telemetry.intentSource).toBe("mixed");
+    expect(result.telemetry.intentAccepted).toBe(false);
+    expect(result.telemetry.intentRejectedReason).toBe("unsupported_intent_action");
+    expect(runtime.writeBatchCount).toBe(0);
+  });
 });
 
 class FakeAgentRuntime {

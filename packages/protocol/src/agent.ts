@@ -46,6 +46,29 @@ export interface AgentRunTarget {
   entity?: string;
 }
 
+export type AgentIntentAction =
+  | "read_values"
+  | "read_schema"
+  | "find_target"
+  | "write_values"
+  | "write_formulas"
+  | "format_range"
+  | "clear_values"
+  | "append_table_rows"
+  | "sort_table"
+  | "filter_range"
+  | "autofit"
+  | "copy_template_sheet"
+  | "calculate"
+  | "save";
+
+export interface AgentRunIntent {
+  action: AgentIntentAction;
+  confidence?: number;
+  reason?: string;
+  targetHints?: string[];
+}
+
 export interface AgentRunInput {
   request: string;
   mode?: AgentRunMode;
@@ -53,6 +76,7 @@ export interface AgentRunInput {
   operationId?: AgentOperationId | string;
   transactionId?: string;
   confirmationToken?: string;
+  intent?: AgentRunIntent;
   target?: AgentRunTarget;
   values?: Record<string, unknown> & {
     patches?: Array<{
@@ -78,6 +102,8 @@ export interface AgentCandidate {
   tableName?: string;
   range?: string;
   confidence: number;
+  reason?: string;
+  nextRequestHint?: string;
 }
 
 export interface AgentProofReference {
@@ -134,5 +160,16 @@ export interface AgentRunOutput {
     candidateCount?: number;
     resourceLinkCount?: number;
     estimatedTokensSaved?: number;
+    routeMode?: AgentRunMode;
+    routeMatchedRule?: string;
+    routeConfidence?: number;
+    routeReasons?: string[];
+    operationRisk?: string;
+    autoApplyBlockedReason?: string;
+    targetFingerprintStatus?: "matched" | "changed" | "not_applicable";
+    intentSource?: "caller_structured" | "deterministic_fallback" | "mixed";
+    intentAction?: AgentIntentAction;
+    intentAccepted?: boolean;
+    intentRejectedReason?: string;
   };
 }

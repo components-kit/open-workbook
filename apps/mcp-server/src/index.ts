@@ -346,6 +346,27 @@ function registerAgentTools(mcp: McpServer): void {
         operationId: z.string().optional(),
         transactionId: z.string().optional(),
         confirmationToken: z.string().optional(),
+        intent: z.object({
+          action: z.enum([
+            "read_values",
+            "read_schema",
+            "find_target",
+            "write_values",
+            "write_formulas",
+            "format_range",
+            "clear_values",
+            "append_table_rows",
+            "sort_table",
+            "filter_range",
+            "autofit",
+            "copy_template_sheet",
+            "calculate",
+            "save"
+          ]),
+          confidence: z.number().min(0).max(1).optional(),
+          reason: z.string().optional(),
+          targetHints: z.array(z.string()).optional()
+        }).optional(),
         target: z.object({
           workbookId: z.string().optional(),
           workbookName: z.string().optional(),
@@ -426,7 +447,18 @@ function agentRunOutputSchema() {
       fullReadCellCount: z.number().optional(),
       candidateCount: z.number().optional(),
       resourceLinkCount: z.number().optional(),
-      estimatedTokensSaved: z.number().optional()
+      estimatedTokensSaved: z.number().optional(),
+      routeMode: z.string().optional(),
+      routeMatchedRule: z.string().optional(),
+      routeConfidence: z.number().optional(),
+      routeReasons: z.array(z.string()).optional(),
+      operationRisk: z.string().optional(),
+      autoApplyBlockedReason: z.string().optional(),
+      targetFingerprintStatus: z.enum(["matched", "changed", "not_applicable"]).optional(),
+      intentSource: z.enum(["caller_structured", "deterministic_fallback", "mixed"]).optional(),
+      intentAction: z.string().optional(),
+      intentAccepted: z.boolean().optional(),
+      intentRejectedReason: z.string().optional()
     })
   };
 }
@@ -1536,8 +1568,8 @@ function registerBackupTools(mcp: McpServer): void {
     mcp,
     "excel.backup.list",
     {
-      title: "List file backups",
-      description: "List durable full-file workbook backups.",
+      title: "List persisted backups",
+      description: "List persisted backup records, including full-file backups and JSON snapshot backups.",
       inputSchema: { workbookId: z.string().optional() },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
@@ -1548,8 +1580,8 @@ function registerBackupTools(mcp: McpServer): void {
     mcp,
     "excel.backup.get",
     {
-      title: "Get file backup",
-      description: "Return one durable full-file workbook backup manifest.",
+      title: "Get persisted backup",
+      description: "Return one persisted backup record and its payload metadata when available.",
       inputSchema: { backupId: z.string() },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
@@ -1601,24 +1633,26 @@ function registerBackupTools(mcp: McpServer): void {
     mcp,
     "excel.backup.delete",
     {
-      title: "Delete file backup",
-      description: "Delete an unpinned durable full-file backup and its file payload when possible.",
+      title: "Delete persisted backup",
+      description: "Delete an unpinned persisted backup and its local payload when possible.",
       inputSchema: { backupId: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
     },
-    async ({ backupId }: { backupId: string }) => jsonResult(runtime.deleteFileBackup(backupId as BackupId))
+    async ({ backupId }: { backupId: string }) => jsonResult(await runtime.deleteFileBackup(backupId as BackupId))
   );
 
   registerMcpTool(
     mcp,
     "excel.backup.prune",
     {
-      title: "Prune file backups",
-      description: "Prune unpinned durable file backups by age or per-workbook retention count.",
+      title: "Prune persisted backups",
+      description: "Prune unpinned persisted backups by age, per-workbook count, or total byte budget.",
       inputSchema: {
         workbookId: z.string().optional(),
+        kind: z.enum(["all", "file-copy", "snapshot-json"]).optional(),
         maxAgeDays: z.number().optional(),
         maxBackupsPerWorkbook: z.number().optional(),
+        maxTotalBytes: z.number().int().positive().optional(),
         dryRun: z.boolean().optional()
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }
@@ -1626,10 +1660,12 @@ function registerBackupTools(mcp: McpServer): void {
     async (args: any) => {
       const request: WorkbookBackupRetentionRequest = {};
       if (args.workbookId !== undefined) request.workbookId = args.workbookId as WorkbookId;
+      if (args.kind !== undefined) request.kind = args.kind;
       if (args.maxAgeDays !== undefined) request.maxAgeDays = args.maxAgeDays;
       if (args.maxBackupsPerWorkbook !== undefined) request.maxBackupsPerWorkbook = args.maxBackupsPerWorkbook;
+      if (args.maxTotalBytes !== undefined) request.maxTotalBytes = args.maxTotalBytes;
       if (args.dryRun !== undefined) request.dryRun = args.dryRun;
-      return jsonResult(runtime.pruneFileBackups(request));
+      return jsonResult(await runtime.pruneFileBackups(request));
     }
   );
 
@@ -1637,8 +1673,8 @@ function registerBackupTools(mcp: McpServer): void {
     mcp,
     "excel.backup.pin",
     {
-      title: "Pin file backup",
-      description: "Prevent a durable file backup from being pruned or deleted.",
+      title: "Pin persisted backup",
+      description: "Prevent a persisted backup from being pruned or deleted.",
       inputSchema: { backupId: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
     },
@@ -1649,8 +1685,8 @@ function registerBackupTools(mcp: McpServer): void {
     mcp,
     "excel.backup.unpin",
     {
-      title: "Unpin file backup",
-      description: "Allow a durable file backup to be pruned or deleted.",
+      title: "Unpin persisted backup",
+      description: "Allow a persisted backup to be pruned or deleted.",
       inputSchema: { backupId: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
     },

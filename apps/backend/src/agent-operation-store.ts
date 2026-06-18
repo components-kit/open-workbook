@@ -7,6 +7,7 @@ import {
   type TableSortRequest,
   type WorkbookId
 } from "@components-kit/open-workbook-protocol";
+import type { AgentOperationRisk } from "./agent-action-policy.js";
 
 export type PendingAgentAction =
   | { kind: "batch"; operations: ExcelOperation[] }
@@ -22,7 +23,9 @@ export interface PendingAgentOperation {
   changes: NonNullable<AgentRunOutput["changes"]>;
   createdAt: number;
   summary: string;
+  risk?: AgentOperationRisk;
   sourceFingerprintHash?: string;
+  sourceTargetFingerprintHash?: string;
 }
 
 export class AgentOperationStore {
