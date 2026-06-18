@@ -12,6 +12,7 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 - Added optional caller-provided `intent.action` hints for `excel.agent.run` so the user's existing LLM/client can parse complex requests into structured agent intent while the backend remains deterministic.
 - Added an internal agent action-handler registry and `actionHandlerId` telemetry for preview routing observability.
 - Added fine-grained internal Excel capability grouping and catalog-level agent status classification for future orchestration and test planning.
+- Added an internal capability coverage matrix and report command for tracking covered, unit-contract, future orchestration, host-limited, and deferred capability work.
 
 ### Changed
 

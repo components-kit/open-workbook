@@ -40,7 +40,7 @@ Agent results include `structuredContent`, a text fallback, compact proof ranges
 ## Stable Tool Groups
 
 The groups below describe the internal capability catalog used by backend orchestration and tests. They are not exposed as the normal MCP client surface.
-The backend also tracks whether a capability is the public agent entrypoint, currently backed by an agent action handler, or internal-only. This is classification for future test planning; it does not add new agent orchestration routes.
+The backend also tracks whether a capability is the public agent entrypoint, currently backed by an agent action handler, or internal-only. Capability planning status separates covered routes, unit-contract work, future orchestration candidates, host-limited paths, and deferred capabilities. This classification is for future test planning; it does not add new agent orchestration routes.
 
 - Agent: `excel.agent.run`
 - Runtime: `excel.runtime.get_status`, `excel.runtime.connect_addin`, `excel.runtime.disconnect_addin`, `excel.runtime.ping_addin`, `excel.runtime.get_capabilities`, `excel.runtime.get_active_context`, `excel.runtime.get_selection`, `excel.runtime.set_active_workbook`, `excel.runtime.set_active_sheet`

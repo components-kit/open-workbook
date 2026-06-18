@@ -30,6 +30,7 @@
     "check": "tsc -b --pretty false",
     "test": "corepack pnpm -r test",
     "catalog:check": "node scripts/validate-mcp-catalog.mjs && node scripts/validate-optimized-surface.mjs && node scripts/validate-agent-surface.mjs",
+    "capabilities:report": "node scripts/report-capability-coverage.mjs",
     "llms:generate": "node scripts/generate-llms-full.mjs",
     "skills:check": "node scripts/validate-skills.mjs",
     "docs:check": "node scripts/validate-docs-surface.mjs",

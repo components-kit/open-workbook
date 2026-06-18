@@ -200,6 +200,7 @@ When details would exceed a caller's budget, compact tools can store the full pa
 ```bash
 corepack pnpm check
 corepack pnpm test
+corepack pnpm capabilities:report
 corepack pnpm test:e2e:agent-surface
 corepack pnpm test:e2e:agent-workflow
 corepack pnpm test:e2e:office-agent:behavior
@@ -303,6 +304,7 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 - Added optional caller-provided `intent.action` hints for `excel.agent.run` so the user's existing LLM/client can parse complex requests into structured agent intent while the backend remains deterministic.
 - Added an internal agent action-handler registry and `actionHandlerId` telemetry for preview routing observability.
 - Added fine-grained internal Excel capability grouping and catalog-level agent status classification for future orchestration and test planning.
+- Added an internal capability coverage matrix and report command for tracking covered, unit-contract, future orchestration, host-limited, and deferred capability work.
 
 ### Changed
 
@@ -1381,6 +1383,8 @@ This keeps agents on one deterministic workflow surface while still letting back
 
 Backend capability modules group the internal Excel catalog by operational domain, including runtime, workbook, backup, worksheet, range, lookup, batch, workflow, plan, job, task, collaboration, lock, conflict, transaction, diff, events, snapshot, compact resource, template, formatting, formula, table, pivot, chart, names, region, validation, repair, cleaning, permissions, and agent domains. The grouping is a planning and test inventory; it does not mean every internal capability is currently routable through `excel.agent.run`. MCP is a thin adapter over `excel.agent.run`; primitive Excel capabilities are not registered as MCP tools.
 
+Capability coverage planning is tracked separately from public exposure. Each internal capability has an agent status (`agent_entrypoint`, `agent_action_handler`, or `internal_capability`) and a planning status (`covered`, `needs_unit_contract`, `future_orchestration_candidate`, `host_limited`, or `defer`). Run `corepack pnpm capabilities:report` for a grouped Markdown report. The matrix is for engineering planning only and does not enable additional agent routes.
+
 ## Backend Test Layout
 
 Backend tests are grouped by behavior instead of keeping orchestration and runtime coverage in monolithic files. Agent orchestration tests cover prepare/cache, read/answer routing, target resolution, preview/apply safety, and structured intent routing. Runtime service tests cover persistence, transactions/jobs, capabilities/session readiness, range/table behavior, pivot/chart behavior, backups/native file bridge, and locks/tasks. Shared fake runtimes and helper fixtures live in `*.test-support.ts` files so new tests can target the closest subsystem without adding new public MCP tools or expanding orchestration coverage by accident.
@@ -1431,7 +1435,7 @@ Agent results include `structuredContent`, a text fallback, compact proof ranges
 ## Stable Tool Groups
 
 The groups below describe the internal capability catalog used by backend orchestration and tests. They are not exposed as the normal MCP client surface.
-The backend also tracks whether a capability is the public agent entrypoint, currently backed by an agent action handler, or internal-only. This is classification for future test planning; it does not add new agent orchestration routes.
+The backend also tracks whether a capability is the public agent entrypoint, currently backed by an agent action handler, or internal-only. Capability planning status separates covered routes, unit-contract work, future orchestration candidates, host-limited paths, and deferred capabilities. This classification is for future test planning; it does not add new agent orchestration routes.
 
 - Agent: `excel.agent.run`
 - Runtime: `excel.runtime.get_status`, `excel.runtime.connect_addin`, `excel.runtime.disconnect_addin`, `excel.runtime.ping_addin`, `excel.runtime.get_capabilities`, `excel.runtime.get_active_context`, `excel.runtime.get_selection`, `excel.runtime.set_active_workbook`, `excel.runtime.set_active_sheet`

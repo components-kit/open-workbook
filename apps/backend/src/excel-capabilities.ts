@@ -42,6 +42,7 @@ export type ExcelCapabilityGroup =
   | "permissions";
 
 export type ExcelCapabilityAgentStatus = "agent_entrypoint" | "agent_action_handler" | "internal_capability";
+export type ExcelCapabilityPlanningStatus = "covered" | "needs_unit_contract" | "future_orchestration_candidate" | "host_limited" | "defer";
 
 export interface ExcelCapabilityGroupDefinition {
   group: ExcelCapabilityGroup;
@@ -61,6 +62,25 @@ export interface ExcelCapabilityGroupSummary {
   agentActionHandlers: number;
   internalOnly: number;
   capabilities: ExcelCapabilityDefinition[];
+}
+
+export interface ExcelCapabilityCoverageEntry {
+  capability: ExcelCapabilityDefinition;
+  group: ExcelCapabilityGroup;
+  agentStatus: ExcelCapabilityAgentStatus;
+  planningStatus: ExcelCapabilityPlanningStatus;
+}
+
+export interface ExcelCapabilityCoverageSummary {
+  total: number;
+  byPlanningStatus: Record<ExcelCapabilityPlanningStatus, number>;
+  byGroup: Array<{
+    group: ExcelCapabilityGroup;
+    label: string;
+    total: number;
+    byPlanningStatus: Record<ExcelCapabilityPlanningStatus, number>;
+  }>;
+  entries: ExcelCapabilityCoverageEntry[];
 }
 
 export const EXCEL_CAPABILITY_GROUPS: ExcelCapabilityGroupDefinition[] = [
@@ -99,6 +119,33 @@ export const EXCEL_CAPABILITY_GROUPS: ExcelCapabilityGroupDefinition[] = [
 ];
 
 const AGENT_ACTION_CAPABILITIES = new Set(AGENT_ACTION_HANDLERS.map((handler) => handler.capabilityName));
+const PLANNING_STATUSES: ExcelCapabilityPlanningStatus[] = ["covered", "needs_unit_contract", "future_orchestration_candidate", "host_limited", "defer"];
+const UNIT_CONTRACT_GROUPS = new Set<ExcelCapabilityGroup>([
+  "runtime",
+  "lookup",
+  "batch",
+  "plan",
+  "job",
+  "task",
+  "collaboration",
+  "lock",
+  "conflict",
+  "transaction",
+  "diff",
+  "events",
+  "compact_resource",
+  "permissions"
+]);
+
+const HOST_LIMITED_CAPABILITY_NAMES = new Set([
+  "excel.workbook.save_as",
+  "excel.workbook.export_copy",
+  "excel.formula.find_circular_references",
+  "excel.style.copy_freeze_panes",
+  "excel.style.copy_print_settings",
+  "excel.style.copy_page_layout",
+  "excel.style.copy_hidden_rows_columns"
+]);
 
 export function listExcelCapabilities(options: ToolCatalogOptions = {}): ExcelCapabilityDefinition[] {
   return getInternalCapabilityCatalog(options);
@@ -128,8 +175,59 @@ export function getExcelCapabilityAgentStatus(name: string): ExcelCapabilityAgen
   return "internal_capability";
 }
 
+export function getExcelCapabilityPlanningStatus(capability: ExcelCapabilityDefinition): ExcelCapabilityPlanningStatus {
+  const agentStatus = getExcelCapabilityAgentStatus(capability.name);
+  const group = getExcelCapabilityGroup(capability.name);
+  if (agentStatus !== "internal_capability") {
+    return "covered";
+  }
+  if (capability.status === "planned" || capability.status === "unsupported") {
+    return "defer";
+  }
+  if (group === "pivot" || group === "chart" || HOST_LIMITED_CAPABILITY_NAMES.has(capability.name)) {
+    return "host_limited";
+  }
+  if (group !== undefined && UNIT_CONTRACT_GROUPS.has(group)) {
+    return "needs_unit_contract";
+  }
+  return "future_orchestration_candidate";
+}
+
 export function listExcelCapabilitiesByGroup(group: ExcelCapabilityGroup, options: ToolCatalogOptions = {}): ExcelCapabilityDefinition[] {
   return listExcelCapabilities(options).filter((capability) => getExcelCapabilityGroup(capability.name) === group);
+}
+
+export function listExcelCapabilityCoverage(options: ToolCatalogOptions = {}): ExcelCapabilityCoverageEntry[] {
+  return listExcelCapabilities(options).map((capability) => {
+    const group = getExcelCapabilityGroup(capability.name);
+    if (!group) {
+      throw new Error(`Capability is not assigned to one coverage group: ${capability.name}`);
+    }
+    return {
+      capability,
+      group,
+      agentStatus: getExcelCapabilityAgentStatus(capability.name),
+      planningStatus: getExcelCapabilityPlanningStatus(capability)
+    };
+  });
+}
+
+export function summarizeExcelCapabilityCoverage(options: ToolCatalogOptions = {}): ExcelCapabilityCoverageSummary {
+  const entries = listExcelCapabilityCoverage(options);
+  return {
+    total: entries.length,
+    byPlanningStatus: countByPlanningStatus(entries),
+    byGroup: EXCEL_CAPABILITY_GROUPS.map((definition) => {
+      const groupEntries = entries.filter((entry) => entry.group === definition.group);
+      return {
+        group: definition.group,
+        label: definition.label,
+        total: groupEntries.length,
+        byPlanningStatus: countByPlanningStatus(groupEntries)
+      };
+    }),
+    entries
+  };
 }
 
 export function listExcelCapabilityGroups(options: ToolCatalogOptions = {}): ExcelCapabilityGroupSummary[] {
@@ -148,4 +246,8 @@ export function listExcelCapabilityGroups(options: ToolCatalogOptions = {}): Exc
       capabilities
     };
   });
+}
+
+function countByPlanningStatus(entries: ExcelCapabilityCoverageEntry[]): Record<ExcelCapabilityPlanningStatus, number> {
+  return Object.fromEntries(PLANNING_STATUSES.map((status) => [status, entries.filter((entry) => entry.planningStatus === status).length])) as Record<ExcelCapabilityPlanningStatus, number>;
 }

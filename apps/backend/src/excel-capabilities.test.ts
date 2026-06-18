@@ -7,8 +7,10 @@ import {
   getExcelCapabilityAgentStatus,
   getExcelCapabilityGroup,
   getExcelCapabilitySummary,
+  listExcelCapabilityCoverage,
   listExcelCapabilities,
-  listExcelCapabilityGroups
+  listExcelCapabilityGroups,
+  summarizeExcelCapabilityCoverage
 } from "./excel-capabilities.js";
 
 describe("excel capabilities", () => {
@@ -77,5 +79,23 @@ describe("excel capabilities", () => {
     expect(getExcelCapabilityAgentStatus("excel.range.read_compact")).toBe("internal_capability");
     expect(agentActionHandlerCount).toBe(handlerCapabilities.size);
     expect(grouped.reduce((total, group) => total + group.agentEntrypoint, 0)).toBe(1);
+  });
+
+  it("assigns every internal capability a coverage planning status", () => {
+    const capabilities = listExcelCapabilities();
+    const coverage = listExcelCapabilityCoverage();
+    const summary = summarizeExcelCapabilityCoverage();
+
+    expect(coverage.length).toBe(capabilities.length);
+    expect(summary.total).toBe(capabilities.length);
+    expect(summary.byPlanningStatus.covered).toBe(new Set(AGENT_ACTION_HANDLERS.map((handler) => handler.capabilityName)).size + 1);
+    expect(summary.byPlanningStatus.future_orchestration_candidate).toBeGreaterThan(0);
+    expect(summary.byPlanningStatus.needs_unit_contract).toBeGreaterThan(0);
+    expect(summary.byPlanningStatus.host_limited).toBeGreaterThan(0);
+    expect(summary.byGroup.reduce((total, group) => total + group.total, 0)).toBe(capabilities.length);
+    expect(coverage.find((entry) => entry.capability.name === "excel.range.write_values")?.planningStatus).toBe("covered");
+    expect(coverage.find((entry) => entry.capability.name === "excel.range.copy")?.planningStatus).toBe("future_orchestration_candidate");
+    expect(coverage.find((entry) => entry.capability.name === "excel.runtime.get_status")?.planningStatus).toBe("needs_unit_contract");
+    expect(coverage.find((entry) => entry.capability.name === "excel.pivot.update_source")?.planningStatus).toBe("host_limited");
   });
 });

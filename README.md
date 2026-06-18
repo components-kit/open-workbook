@@ -172,6 +172,7 @@ When details would exceed a caller's budget, compact tools can store the full pa
 ```bash
 corepack pnpm check
 corepack pnpm test
+corepack pnpm capabilities:report
 corepack pnpm test:e2e:agent-surface
 corepack pnpm test:e2e:agent-workflow
 corepack pnpm test:e2e:office-agent:behavior
