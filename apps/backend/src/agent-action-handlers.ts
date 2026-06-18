@@ -14,6 +14,7 @@ export type AgentActionHandlerId =
 
 export interface AgentActionHandlerDefinition {
   id: AgentActionHandlerId;
+  capabilityName: string;
   intentAction?: AgentIntentAction;
   requiresResolvedTarget: boolean;
   riskKind:
@@ -28,6 +29,7 @@ export interface AgentActionHandlerDefinition {
 export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
   {
     id: "save_workbook",
+    capabilityName: "excel.workbook.save",
     intentAction: "save",
     requiresResolvedTarget: false,
     riskKind: "destructive",
@@ -35,6 +37,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
   },
   {
     id: "calculate_workbook",
+    capabilityName: "excel.workbook.calculate",
     intentAction: "calculate",
     requiresResolvedTarget: false,
     riskKind: "read_only",
@@ -42,6 +45,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
   },
   {
     id: "copy_template_sheet",
+    capabilityName: "excel.template.create_sheet_from_template",
     intentAction: "copy_template_sheet",
     requiresResolvedTarget: false,
     riskKind: "structure_change",
@@ -49,12 +53,14 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
   },
   {
     id: "first_open_reviewed",
+    capabilityName: "excel.range.write_values",
     requiresResolvedTarget: false,
     riskKind: "broad_range_write",
     matches: (input) => !input.values && /\bfirst\s+open\b/i.test(input.request) && /\breviewed\b/i.test(input.request)
   },
   {
     id: "sort_table",
+    capabilityName: "excel.table.sort",
     intentAction: "sort_table",
     requiresResolvedTarget: false,
     riskKind: "broad_range_write",
@@ -62,6 +68,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
   },
   {
     id: "filter_range",
+    capabilityName: "excel.table.apply_filters",
     intentAction: "filter_range",
     requiresResolvedTarget: true,
     riskKind: "safe_format",
@@ -69,6 +76,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
   },
   {
     id: "autofit_columns",
+    capabilityName: "excel.range.autofit_columns",
     intentAction: "autofit",
     requiresResolvedTarget: true,
     riskKind: "safe_format",
@@ -76,6 +84,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
   },
   {
     id: "clear_values",
+    capabilityName: "excel.range.clear_values_keep_format",
     intentAction: "clear_values",
     requiresResolvedTarget: true,
     riskKind: "destructive",
@@ -83,6 +92,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
   },
   {
     id: "format_range",
+    capabilityName: "excel.range.write_styles",
     intentAction: "format_range",
     requiresResolvedTarget: true,
     riskKind: "safe_format",

@@ -168,6 +168,8 @@ export interface AgentRunOutput {
     actionHandlerId?: string;
     autoApplyBlockedReason?: string;
     targetFingerprintStatus?: "matched" | "changed" | "not_applicable";
+    targetHintCount?: number;
+    targetHintUsed?: boolean;
     intentSource?: "caller_structured" | "deterministic_fallback" | "mixed";
     intentAction?: AgentIntentAction;
     intentAccepted?: boolean;

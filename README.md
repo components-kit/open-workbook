@@ -175,7 +175,6 @@ corepack pnpm test
 corepack pnpm test:e2e:agent-surface
 corepack pnpm test:e2e:agent-workflow
 corepack pnpm test:e2e:office-agent:behavior
-corepack pnpm test:e2e:fast
 corepack pnpm test:e2e:agent:quality:compare
 corepack pnpm test:e2e:agent:quality:gate
 corepack pnpm build

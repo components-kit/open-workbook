@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import { getExposedToolCatalog } from "../packages/protocol/dist/tools.js";
+import { getInternalCapabilityCatalog } from "../packages/protocol/dist/tools.js";
 
 const toolSurface = readFileSync(new URL("../docs/tool-surface.md", import.meta.url), "utf8");
 const skill = readFileSync(new URL("../skills/open-workbook-excel/SKILL.md", import.meta.url), "utf8");
 const packagedSkill = readFileSync(new URL("../packages/cli/assets/instructions/open-workbook-excel/SKILL.md", import.meta.url), "utf8");
-const catalogTools = getExposedToolCatalog({ includePreview: true }).map((tool) => tool.name).sort();
+const catalogTools = getInternalCapabilityCatalog({ includePreview: true }).map((tool) => tool.name).sort();
 const missing = catalogTools.filter((name) => !toolSurface.includes(`\`${name}\``));
 
 if (missing.length > 0) {
@@ -36,4 +36,4 @@ if (forbiddenMatches.length > 0) {
   process.exit(1);
 }
 
-console.log(`Docs surface check passed: ${catalogTools.length} stable/preview catalog tool(s) documented.`);
+console.log(`Docs surface check passed: ${catalogTools.length} stable/preview internal capability(s) documented.`);

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { getExposedToolCatalog } from "../packages/protocol/dist/tools.js";
+import { getExposedToolCatalog, getInternalCapabilityCatalog } from "../packages/protocol/dist/tools.js";
 
 const exposedTools = new Set(getExposedToolCatalog({ includePreview: true }).map((tool) => tool.name));
+const internalCapabilities = new Set(getInternalCapabilityCatalog({ includePreview: true }).map((tool) => tool.name));
 
 const required = [
   "excel.workflow.prepare_session",
@@ -46,18 +47,22 @@ const forbidden = [
   "excel.sort.preserve_from_template"
 ];
 
-const missing = required.filter((name) => !exposedTools.has(name));
-const leaked = forbidden.filter((name) => exposedTools.has(name));
+const publicLeak = [...exposedTools].filter((name) => name !== "excel.agent.run");
+const missing = required.filter((name) => !internalCapabilities.has(name));
+const leaked = forbidden.filter((name) => internalCapabilities.has(name));
 
-if (missing.length > 0 || leaked.length > 0) {
-  console.error("Internal tool catalog validation failed.");
+if (publicLeak.length > 0 || missing.length > 0 || leaked.length > 0) {
+  console.error("Internal capability catalog validation failed.");
+  if (publicLeak.length > 0) {
+    console.error(`Public MCP tools leaked beyond excel.agent.run:\n${publicLeak.map((name) => `- ${name}`).join("\n")}`);
+  }
   if (missing.length > 0) {
-    console.error(`Missing required optimized tools:\n${missing.map((name) => `- ${name}`).join("\n")}`);
+    console.error(`Missing required internal capabilities:\n${missing.map((name) => `- ${name}`).join("\n")}`);
   }
   if (leaked.length > 0) {
-    console.error(`Raw/full or duplicate tools leaked into the optimized surface:\n${leaked.map((name) => `- ${name}`).join("\n")}`);
+    console.error(`Raw/full or duplicate capabilities leaked into the optimized internal catalog:\n${leaked.map((name) => `- ${name}`).join("\n")}`);
   }
   process.exit(1);
 }
 
-console.log(`Internal tool catalog check passed: ${exposedTools.size} stable capabilities, ${forbidden.length} raw/full or duplicate tools excluded.`);
+console.log(`Internal capability catalog check passed: ${internalCapabilities.size} backend capabilities, ${exposedTools.size} public MCP tool.`);

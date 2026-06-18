@@ -6,7 +6,7 @@ It contains:
 
 - workbook, range, operation, snapshot, template, table, chart, pivot, and permission types
 - JSON-RPC envelope types
-- tool catalog and exposure rules
+- public MCP tool catalog and internal Excel capability metadata
 - MCP resource catalog
 - prompt catalog
 - runtime error helpers

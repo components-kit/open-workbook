@@ -56,6 +56,11 @@ interface CandidateSource {
   baseScore?: number | undefined;
 }
 
+interface CandidateScore {
+  confidence: number;
+  matchedTargetHint: boolean;
+}
+
 const A1_RANGE_PATTERN = /\b\$?[A-Z]{1,3}\$?\d+(?:\s*:\s*\$?[A-Z]{1,3}\$?\d+)?\b/i;
 
 export type AgentTargetResolution = {
@@ -74,8 +79,9 @@ export type AgentTargetResolution = {
 
 export function findAgentCandidates(metadata: WorkbookMetadata, input: AgentRunInput): AgentCandidate[] {
   const query = queryText(input);
+  const targetHints = targetHintTexts(input);
   return candidateSources(metadata)
-    .map((source) => toCandidate(source, scoreSource(query, source)))
+    .map((source) => toCandidate(source, scoreSource(query, targetHints, source)))
     .filter((candidate) => candidate.confidence > 0)
     .sort((left, right) => right.confidence - left.confidence || rankKind(left.kind) - rankKind(right.kind));
 }
@@ -154,7 +160,7 @@ export function resolveAgentUpdateTarget(metadata: WorkbookMetadata, input: Agen
 function bestExplicitSheetCandidate(metadata: WorkbookMetadata, sheetName: string): AgentCandidate | undefined {
   const candidates = candidateSources(metadata)
     .filter((source) => source.kind === "sheet")
-    .map((source) => toCandidate(source, scoreSource(sheetName, source)))
+    .map((source) => toCandidate(source, scoreTextAgainstSource(sheetName, source)))
     .filter((candidate) => candidate.confidence > 0)
     .sort((left, right) => right.confidence - left.confidence);
   const best = candidates[0];
@@ -554,8 +560,9 @@ function resolveMentionedTable(
   return undefined;
 }
 
-function toCandidate(source: CandidateSource, confidence: number): AgentCandidate {
-  const boundedConfidence = Number(Math.min(1, Math.max(0, confidence)).toFixed(3));
+function toCandidate(source: CandidateSource, confidence: number | CandidateScore): AgentCandidate {
+  const score = typeof confidence === "number" ? { confidence, matchedTargetHint: false } : confidence;
+  const boundedConfidence = Number(Math.min(1, Math.max(0, score.confidence)).toFixed(3));
   return {
     id: source.id,
     kind: source.kind,
@@ -564,15 +571,16 @@ function toCandidate(source: CandidateSource, confidence: number): AgentCandidat
     ...(source.sheetName !== undefined ? { sheetName: source.sheetName } : {}),
     ...(source.tableName !== undefined ? { tableName: source.tableName } : {}),
     ...(source.range !== undefined ? { range: source.range } : {}),
-    reason: candidateReason(source, boundedConfidence),
+    reason: candidateReason(source, boundedConfidence, score.matchedTargetHint),
     nextRequestHint: candidateNextRequestHint(source)
   };
 }
 
-function candidateReason(source: CandidateSource, confidence: number): string {
+function candidateReason(source: CandidateSource, confidence: number, matchedTargetHint: boolean): string {
   const location = source.sheetName ? ` on sheet "${source.sheetName}"` : "";
   const scope = source.range ? ` at ${source.range}` : "";
-  return `${source.kind} match "${source.label}"${location}${scope} scored ${confidence}.`;
+  const hint = matchedTargetHint ? " using a caller target hint" : "";
+  return `${source.kind} match "${source.label}"${location}${scope}${hint} scored ${confidence}.`;
 }
 
 function candidateNextRequestHint(source: CandidateSource): string {
@@ -586,7 +594,17 @@ function candidateNextRequestHint(source: CandidateSource): string {
     : `Retry with target.candidateId "${source.id}".`;
 }
 
-function scoreSource(query: string, source: CandidateSource): number {
+function scoreSource(query: string, targetHints: string[], source: CandidateSource): CandidateScore {
+  const requestScore = scoreTextAgainstSource(query, source);
+  const hintScore = targetHints.reduce((best, hint) => Math.max(best, scoreTextAgainstSource(hint, source)), 0);
+  const boundedHintScore = hintScore > 0 ? Math.min(0.9, hintScore * 0.94) : 0;
+  if (boundedHintScore > requestScore) {
+    return { confidence: boundedHintScore, matchedTargetHint: true };
+  }
+  return { confidence: requestScore, matchedTargetHint: false };
+}
+
+function scoreTextAgainstSource(query: string, source: CandidateSource): number {
   const queryTokens = meaningfulTokens(query);
   if (queryTokens.length === 0) {
     return 0.1 + (source.baseScore ?? 0);
@@ -813,6 +831,13 @@ function queryText(input: AgentRunInput): string {
     input.target?.tableName,
     input.target?.column
   ].filter((value): value is string => typeof value === "string" && value.trim() !== "").join(" ");
+}
+
+function targetHintTexts(input: AgentRunInput): string[] {
+  const hints = (input.intent as { targetHints?: unknown } | undefined)?.targetHints;
+  return Array.isArray(hints)
+    ? hints.filter((hint): hint is string => typeof hint === "string" && hint.trim() !== "").slice(0, 8)
+    : [];
 }
 
 function meaningfulTokens(value: string): string[] {

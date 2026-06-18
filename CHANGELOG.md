@@ -11,12 +11,18 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 - Added explicit `excel.agent.run` route telemetry, operation-risk telemetry, target fingerprint status, and ambiguity candidate hints so backend orchestration decisions are easier to audit without exposing primitive tools.
 - Added optional caller-provided `intent.action` hints for `excel.agent.run` so the user's existing LLM/client can parse complex requests into structured agent intent while the backend remains deterministic.
 - Added an internal agent action-handler registry and `actionHandlerId` telemetry for preview routing observability.
+- Added fine-grained internal Excel capability grouping and catalog-level agent status classification for future orchestration and test planning.
 
 ### Changed
 
 - Strengthened agent preview/apply protection by storing target-specific fingerprints for pending operations and compacting verbose candidate hints when tight response budgets are requested.
 - Routed structured caller intent through the same target-resolution, preview/apply, risk, stale-check, and validation flow as natural-language-only requests.
 - Refactored agent preview intent dispatch through registered handlers while preserving existing preview/apply behavior.
+- Used caller-provided `intent.targetHints` as a bounded deterministic target-ranking signal and added target-hint telemetry to `excel.agent.run`.
+- Refactored catalog reporting so MCP exposes only `excel.agent.run` while the full Excel catalog is reported as internal backend capabilities.
+- Removed inactive primitive MCP tool registration groups from the MCP server path and grouped internal Excel capabilities for backend orchestration.
+- Slimmed the default E2E gate to the supported one-tool public agent surface and removed the obsolete primitive-tool fake-host sweep.
+- Split monolithic backend orchestration and runtime tests into behavior-focused suites with shared test-support fixtures.
 
 ## [0.1.14] - 2026-06-18
 

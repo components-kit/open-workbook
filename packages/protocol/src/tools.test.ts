@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getExposedToolCatalog, ToolCatalog } from "./tools.js";
+import { getExposedToolCatalog, getInternalCapabilityCatalog, getInternalCapabilityCatalogSummary, ToolCatalog } from "./tools.js";
 import { PromptCatalog } from "./prompts.js";
 import { ResourceCatalog } from "./resources.js";
 
@@ -30,8 +30,14 @@ describe("tool catalog", () => {
     expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.rollback_validate")).toBe(true);
   });
 
-  it("keeps the internal compact and workflow capabilities in the stable catalog", () => {
+  it("exposes only the public agent tool through the MCP catalog", () => {
     const exposed = getExposedToolCatalog();
+    expect(exposed.map((tool) => tool.name)).toEqual(["excel.agent.run"]);
+    expect(exposed.every((tool) => tool.status === "stable")).toBe(true);
+  });
+
+  it("keeps compact and workflow capabilities in the internal backend catalog", () => {
+    const exposed = getInternalCapabilityCatalog();
     const exposedNames = new Set(exposed.map((tool) => tool.name));
     expect(exposed.every((tool) => tool.status === "stable")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.runtime.get_status")).toBe(true);
@@ -113,13 +119,14 @@ describe("tool catalog", () => {
     }
   });
 
-  it("can include preview status without exposing planned or unsupported tools", () => {
+  it("summarizes public tools separately from internal backend capabilities", () => {
     const exposed = getExposedToolCatalog({ includePreview: true });
-    expect(exposed.some((tool) => tool.name === "excel.runtime.get_capabilities")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.runtime.connect_addin" && tool.status === "stable")).toBe(true);
-    expect(exposed.every((tool) => tool.status === "stable" || tool.status === "preview")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.workbook.get_workbook_map" && tool.status === "stable")).toBe(true);
-    expect(exposed.some((tool) => tool.name === "excel.range.read_compact" && tool.status === "stable")).toBe(true);
+    const internalSummary = getInternalCapabilityCatalogSummary({ includePreview: true });
+    expect(exposed.map((tool) => tool.name)).toEqual(["excel.agent.run"]);
+    expect(internalSummary.total).toBe(ToolCatalog.length);
+    expect(internalSummary.exposed).toBe(0);
+    expect(internalSummary.capabilities.length).toBe(ToolCatalog.length);
+    expect(internalSummary.capabilities.some((tool) => tool.name === "excel.runtime.get_capabilities")).toBe(true);
     expect(ToolCatalog.some((tool) => tool.status === "planned")).toBe(false);
   });
 

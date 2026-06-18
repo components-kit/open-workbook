@@ -708,10 +708,16 @@ export const ToolCatalog: ToolContract[] = TOOL_NAMES.map((name) => {
   };
 });
 
+export const InternalCapabilityCatalog = ToolCatalog;
+export const PublicToolCatalog = ToolCatalog.filter((tool) => tool.name === "excel.agent.run");
 export const InitialToolContracts = getExposedToolCatalog();
 
-export function getExposedToolCatalog(options: ToolCatalogOptions = {}): ToolContract[] {
-  return ToolCatalog.filter((tool) => {
+export function getExposedToolCatalog(_options: ToolCatalogOptions = {}): ToolContract[] {
+  return PublicToolCatalog;
+}
+
+export function getInternalCapabilityCatalog(options: ToolCatalogOptions = {}): ToolContract[] {
+  return InternalCapabilityCatalog.filter((tool) => {
     if (tool.status === "stable") {
       return true;
     }
@@ -728,18 +734,32 @@ export function getExposedToolCatalog(options: ToolCatalogOptions = {}): ToolCon
 export function getToolCatalogSummary(options: ToolCatalogOptions = {}) {
   const exposed = getExposedToolCatalog(options);
   return {
-    total: ToolCatalog.length,
+    total: PublicToolCatalog.length,
     exposed: exposed.length,
-    stable: ToolCatalog.filter((tool) => tool.status === "stable").length,
-    preview: ToolCatalog.filter((tool) => tool.status === "preview").length,
-    planned: ToolCatalog.filter((tool) => tool.status === "planned").length,
-    unsupported: ToolCatalog.filter((tool) => tool.status === "unsupported").length,
-    tools: ToolCatalog
+    stable: PublicToolCatalog.filter((tool) => tool.status === "stable").length,
+    preview: PublicToolCatalog.filter((tool) => tool.status === "preview").length,
+    planned: PublicToolCatalog.filter((tool) => tool.status === "planned").length,
+    unsupported: PublicToolCatalog.filter((tool) => tool.status === "unsupported").length,
+    tools: PublicToolCatalog,
+    internalCapabilities: getInternalCapabilityCatalogSummary(options)
   };
 }
 
 export function isToolExposed(name: string, options: ToolCatalogOptions = {}): boolean {
   return getExposedToolCatalog(options).some((tool) => tool.name === name);
+}
+
+export function getInternalCapabilityCatalogSummary(options: ToolCatalogOptions = {}) {
+  const capabilities = getInternalCapabilityCatalog(options);
+  return {
+    total: InternalCapabilityCatalog.length,
+    exposed: 0,
+    stable: InternalCapabilityCatalog.filter((tool) => tool.status === "stable").length,
+    preview: InternalCapabilityCatalog.filter((tool) => tool.status === "preview").length,
+    planned: InternalCapabilityCatalog.filter((tool) => tool.status === "planned").length,
+    unsupported: InternalCapabilityCatalog.filter((tool) => tool.status === "unsupported").length,
+    capabilities
+  };
 }
 
 function getNamespace(name: string): ToolNamespace {

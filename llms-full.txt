@@ -203,7 +203,6 @@ corepack pnpm test
 corepack pnpm test:e2e:agent-surface
 corepack pnpm test:e2e:agent-workflow
 corepack pnpm test:e2e:office-agent:behavior
-corepack pnpm test:e2e:fast
 corepack pnpm test:e2e:agent:quality:compare
 corepack pnpm test:e2e:agent:quality:gate
 corepack pnpm build
@@ -303,12 +302,18 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 - Added explicit `excel.agent.run` route telemetry, operation-risk telemetry, target fingerprint status, and ambiguity candidate hints so backend orchestration decisions are easier to audit without exposing primitive tools.
 - Added optional caller-provided `intent.action` hints for `excel.agent.run` so the user's existing LLM/client can parse complex requests into structured agent intent while the backend remains deterministic.
 - Added an internal agent action-handler registry and `actionHandlerId` telemetry for preview routing observability.
+- Added fine-grained internal Excel capability grouping and catalog-level agent status classification for future orchestration and test planning.
 
 ### Changed
 
 - Strengthened agent preview/apply protection by storing target-specific fingerprints for pending operations and compacting verbose candidate hints when tight response budgets are requested.
 - Routed structured caller intent through the same target-resolution, preview/apply, risk, stale-check, and validation flow as natural-language-only requests.
 - Refactored agent preview intent dispatch through registered handlers while preserving existing preview/apply behavior.
+- Used caller-provided `intent.targetHints` as a bounded deterministic target-ranking signal and added target-hint telemetry to `excel.agent.run`.
+- Refactored catalog reporting so MCP exposes only `excel.agent.run` while the full Excel catalog is reported as internal backend capabilities.
+- Removed inactive primitive MCP tool registration groups from the MCP server path and grouped internal Excel capabilities for backend orchestration.
+- Slimmed the default E2E gate to the supported one-tool public agent surface and removed the obsolete primitive-tool fake-host sweep.
+- Split monolithic backend orchestration and runtime tests into behavior-focused suites with shared test-support fixtures.
 
 ## [0.1.14] - 2026-06-18
 
@@ -1365,14 +1370,20 @@ Engine adapters must report capabilities. The Office.js add-in reports host plat
 
 ## Catalog Policy
 
-The protocol package owns the full tool, resource, and prompt catalog. MCP registration is capability-gated:
+The protocol package owns the public MCP tool contract and the internal backend capability catalog:
 
-- stable tools are registered by default
-- preview tools, when present, require `OPEN_WORKBOOK_PREVIEW_TOOLS=1`
-- unfinished tools are omitted from catalogs until their contract and implementation are ready
-- unsupported host-specific capabilities are reported honestly by the relevant stable tools
+- MCP registers only `excel.agent.run` as a tool.
+- The Excel capability catalog remains available to backend orchestration and tests.
+- Unfinished capabilities are omitted from catalogs until their contract and implementation are ready.
+- Unsupported host-specific capabilities are reported honestly by backend capability metadata and agent outputs.
 
-This keeps agents from calling incomplete tools while still letting stable tools report host limitations explicitly.
+This keeps agents on one deterministic workflow surface while still letting backend orchestration compose Excel capabilities internally.
+
+Backend capability modules group the internal Excel catalog by operational domain, including runtime, workbook, backup, worksheet, range, lookup, batch, workflow, plan, job, task, collaboration, lock, conflict, transaction, diff, events, snapshot, compact resource, template, formatting, formula, table, pivot, chart, names, region, validation, repair, cleaning, permissions, and agent domains. The grouping is a planning and test inventory; it does not mean every internal capability is currently routable through `excel.agent.run`. MCP is a thin adapter over `excel.agent.run`; primitive Excel capabilities are not registered as MCP tools.
+
+## Backend Test Layout
+
+Backend tests are grouped by behavior instead of keeping orchestration and runtime coverage in monolithic files. Agent orchestration tests cover prepare/cache, read/answer routing, target resolution, preview/apply safety, and structured intent routing. Runtime service tests cover persistence, transactions/jobs, capabilities/session readiness, range/table behavior, pivot/chart behavior, backups/native file bridge, and locks/tasks. Shared fake runtimes and helper fixtures live in `*.test-support.ts` files so new tests can target the closest subsystem without adding new public MCP tools or expanding orchestration coverage by accident.
 
 ---
 
@@ -1380,12 +1391,12 @@ Source: docs/tool-surface.md
 
 ## Tool Surface
 
-The full namespace is represented in the protocol catalog, but MCP only exposes capability-gated tools.
+The full namespace is represented in the internal capability catalog, but MCP exposes only the public agent workflow tool.
 
 ## Status Model
 
-- `stable`: implemented catalog capability; only `excel.agent.run` is public in normal MCP `tools/list`.
-- `preview`: exposed only with `OPEN_WORKBOOK_PREVIEW_TOOLS=1`.
+- `stable`: implemented catalog capability; only `excel.agent.run` is public in MCP `tools/list`.
+- `preview`: reserved for future internal capability metadata; preview capabilities are not exposed as MCP tools.
 - `planned`: not shipped in the current catalog; unfinished names stay out of the tool surface until their contract and implementation are ready.
 - `unsupported`: listed by capabilities only when a host or adapter cannot provide a deterministic implementation.
 
@@ -1397,7 +1408,7 @@ The full protocol catalog remains available to backend/runtime tests and interna
 
 Default public tool:
 
-- `excel.agent.run`: send workbook intent through `request` and optional `mode`, `intent`, `workbookContextId`, `target`, `values`, `operationId`, and `confirmationToken`. The backend performs deterministic orchestration over internal Excel capabilities and returns structured compact output. Natural-language targets are resolved against cached sheets, tables, headers, named ranges, registered regions, summary blocks, and formula regions; close matches return `AMBIGUOUS_TARGET` with candidates instead of guessing. Candidates include retry hints when budget allows; retry with `target.candidateId` from a returned candidate to force that target in a follow-up call. Caller LLMs may provide `intent.action` hints such as `read_values`, `read_schema`, `write_values`, `write_formulas`, `format_range`, `clear_values`, `append_table_rows`, `sort_table`, `filter_range`, `autofit`, `copy_template_sheet`, `calculate`, or `save`; these hints improve routing but never bypass target resolution, preview/apply confirmation, risk policy, stale checks, or validation. Workbook overview, sheet-count, table-list, named-range, and vague `.xlsx` review questions answer from lightweight structure metadata before deeper reads. Schema/header-only requests can answer from cached metadata; row/value/sample/A1-range requests perform live targeted reads. Explicit two-sheet comparison requests read both targets in one agent call. Raw monthly sheets without Excel Tables can resolve exact sheet/range references and transaction/invoice header blocks. Related range value edits can be grouped with `values.patches`, where each patch has `target.sheetName`, `target.range`, and a 2D `values` matrix; the backend returns one preview operation that should be applied once.
+- `excel.agent.run`: send workbook intent through `request` and optional `mode`, `intent`, `workbookContextId`, `target`, `values`, `operationId`, and `confirmationToken`. The backend performs deterministic orchestration over internal Excel capabilities and returns structured compact output. Natural-language targets are resolved against cached sheets, tables, headers, named ranges, registered regions, summary blocks, and formula regions; close matches return `AMBIGUOUS_TARGET` with candidates instead of guessing. Candidates include retry hints when budget allows; retry with `target.candidateId` from a returned candidate to force that target in a follow-up call. Caller LLMs may provide `intent.action` hints such as `read_values`, `read_schema`, `write_values`, `write_formulas`, `format_range`, `clear_values`, `append_table_rows`, `sort_table`, `filter_range`, `autofit`, `copy_template_sheet`, `calculate`, or `save`; these hints improve routing but never bypass target resolution, preview/apply confirmation, risk policy, stale checks, or validation. Caller LLMs may also provide `intent.targetHints`; those hints are a bounded scoring signal for candidate ranking, not an exact target override, so explicit targets and ambiguity checks still win. Workbook overview, sheet-count, table-list, named-range, and vague `.xlsx` review questions answer from lightweight structure metadata before deeper reads. Schema/header-only requests can answer from cached metadata; row/value/sample/A1-range requests perform live targeted reads. Explicit two-sheet comparison requests read both targets in one agent call. Raw monthly sheets without Excel Tables can resolve exact sheet/range references and transaction/invoice header blocks. Related range value edits can be grouped with `values.patches`, where each patch has `target.sheetName`, `target.range`, and a 2D `values` matrix; the backend returns one preview operation that should be applied once.
 
 Supported modes:
 
@@ -1413,13 +1424,14 @@ Supported modes:
 
 Mutation rule: `preview_update` never applies workbook edits. It can preview scoped range value writes, grouped multi-range value patches, formula writes, style updates, template-sheet cleanup, and explicit table-row appends through the default agent tool. `auto` may preview and apply a clearly authorized, scoped value edit when safety checks pass; structural, destructive, broad, sparse, stale, ambiguous, style, formula, template, or table append edits stop before mutation and return `nextAction`. Manual applying requires a second `excel.agent.run` call with `mode: "apply_update"`, the previewed `operationId`, and the matching `confirmationToken`. Pending previews store workbook and target-specific fingerprints; apply returns `STALE_CONTEXT` when sheet, table, named-range, formula-region, selection, or target metadata has drifted after preview. If a grouped preview succeeds, agents should call `apply_update` once and should not split these related patches unless apply returns a hard failure with actionable details.
 
-Agent results include `structuredContent`, a text fallback, compact proof ranges, reusable candidate ids, resource links such as `excel://agent/contexts/{workbook_context_id}` and `excel://agent/operations/{operation_id}`, and telemetry for payload bytes, estimated tokens, elapsed time, cache reuse, route decision, caller intent source/action/acceptance, matched action handler, operation risk, target fingerprint status, metadata cache status, auto-apply decisions, internal read count, full-read cell count, candidate count, resource-link count, and estimated token savings. `budget.maxPayloadBytes`, `budget.maxEstimatedTokens`, and `budget.maxExamples` bound inline agent output; larger context is summarized or moved behind resource links.
+Agent results include `structuredContent`, a text fallback, compact proof ranges, reusable candidate ids, resource links such as `excel://agent/contexts/{workbook_context_id}` and `excel://agent/operations/{operation_id}`, and telemetry for payload bytes, estimated tokens, elapsed time, cache reuse, route decision, caller intent source/action/acceptance, target hint count/usage, matched action handler, operation risk, target fingerprint status, metadata cache status, auto-apply decisions, internal read count, full-read cell count, candidate count, resource-link count, and estimated token savings. `budget.maxPayloadBytes`, `budget.maxEstimatedTokens`, and `budget.maxExamples` bound inline agent output; larger context is summarized or moved behind resource links.
 
-`excel.runtime.get_capabilities` is the source of truth for the complete catalog, resources, prompts, runtime connection status, and active Excel host capability status. When an add-in is connected, it includes the host platform, Office version when available, Office API-set support such as `ExcelApi` versions, and derived feature statuses for ranges, tables, pivots, charts, and known host-limited paths. Without a connected add-in, it returns a daemon fallback that marks Excel host capabilities as `unknown`.
+`excel.runtime.get_capabilities` is available internally through agent status/capability flows. Its public catalog view reports only `excel.agent.run`; backend capability metadata reports the internal Excel capability catalog separately. When an add-in is connected, runtime capability data includes the host platform, Office version when available, Office API-set support such as `ExcelApi` versions, and derived feature statuses for ranges, tables, pivots, charts, and known host-limited paths. Without a connected add-in, it returns a daemon fallback that marks Excel host capabilities as `unknown`.
 
 ## Stable Tool Groups
 
 The groups below describe the internal capability catalog used by backend orchestration and tests. They are not exposed as the normal MCP client surface.
+The backend also tracks whether a capability is the public agent entrypoint, currently backed by an agent action handler, or internal-only. This is classification for future test planning; it does not add new agent orchestration routes.
 
 - Agent: `excel.agent.run`
 - Runtime: `excel.runtime.get_status`, `excel.runtime.connect_addin`, `excel.runtime.disconnect_addin`, `excel.runtime.ping_addin`, `excel.runtime.get_capabilities`, `excel.runtime.get_active_context`, `excel.runtime.get_selection`, `excel.runtime.set_active_workbook`, `excel.runtime.set_active_sheet`
@@ -2583,7 +2595,8 @@ Capability-unavailable responses are preferred over simulated success when Offic
 ## Release Gates
 
 - `corepack pnpm verify` passes. This runs build, tests, and synthetic core benchmarks.
-- `corepack pnpm test:e2e` passes before release-gate E2E claims. This runs the generated E2E report, default agent surface smoke, default agent workflow smoke, deterministic fake-host MCP sweep, and `test:e2e:agent:core`.
+- `corepack pnpm test:e2e` passes before release-gate E2E claims. This runs the default agent surface smoke, default agent workflow smoke, and `test:e2e:agent:core`.
+- `corepack pnpm test:e2e:report` is reviewed when changing E2E coverage policy. It documents release, quality, and live-host lanes but is not part of the default gate.
 - `corepack pnpm test:e2e:agent-surface` passes before default MCP exposure claims. It validates that default `tools/list` exposes only `excel.agent.run` and that status mode returns structured telemetry without Excel.
 - `corepack pnpm test:e2e:agent-workflow` passes before token-saving agent workflow claims. It validates metadata cache reuse, bounded find payloads, targeted answer reads, preview confirmation tokens, apply, and validate on a fake Excel host.
 - `corepack pnpm test:e2e:office-agent:behavior` is reviewed before changing default-surface office workflow guidance. It is logging-first and produces behavior reports from the production office-agent scenario fixture, covering connection, workbook overview, targeting, sheet/table reads, comparisons, formula safety, edits, token guards, multilingual prompts, and multi-step workflows without acting as a release gate.
@@ -2943,6 +2956,7 @@ corepack pnpm verify
 
 ```bash
 corepack pnpm test:e2e
+corepack pnpm test:e2e:report
 corepack pnpm test:e2e:agent-surface
 corepack pnpm test:e2e:agent-workflow
 corepack pnpm test:e2e:office-agent:behavior
@@ -3170,7 +3184,7 @@ It contains:
 
 - workbook, range, operation, snapshot, template, table, chart, pivot, and permission types
 - JSON-RPC envelope types
-- tool catalog and exposure rules
+- public MCP tool catalog and internal Excel capability metadata
 - MCP resource catalog
 - prompt catalog
 - runtime error helpers

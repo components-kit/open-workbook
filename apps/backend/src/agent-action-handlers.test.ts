@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AGENT_ACTION_HANDLERS, findAgentActionHandler } from "./agent-action-handlers.js";
 import type { AgentRunInput } from "@components-kit/open-workbook-protocol";
+import { getExcelCapability } from "./excel-capabilities.js";
 
 describe("agent action handlers", () => {
   it("declares stable handler metadata", () => {
@@ -8,6 +9,7 @@ describe("agent action handlers", () => {
     for (const handler of AGENT_ACTION_HANDLERS) {
       expect(handler.id).toMatch(/^[a-z0-9_]+$/);
       expect(handler.riskKind).toBeTruthy();
+      expect(getExcelCapability(handler.capabilityName), handler.capabilityName).toBeTruthy();
       expect(typeof handler.matches).toBe("function");
     }
   });

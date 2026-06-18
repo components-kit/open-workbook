@@ -35,7 +35,8 @@ Capability-unavailable responses are preferred over simulated success when Offic
 ## Release Gates
 
 - `corepack pnpm verify` passes. This runs build, tests, and synthetic core benchmarks.
-- `corepack pnpm test:e2e` passes before release-gate E2E claims. This runs the generated E2E report, default agent surface smoke, default agent workflow smoke, deterministic fake-host MCP sweep, and `test:e2e:agent:core`.
+- `corepack pnpm test:e2e` passes before release-gate E2E claims. This runs the default agent surface smoke, default agent workflow smoke, and `test:e2e:agent:core`.
+- `corepack pnpm test:e2e:report` is reviewed when changing E2E coverage policy. It documents release, quality, and live-host lanes but is not part of the default gate.
 - `corepack pnpm test:e2e:agent-surface` passes before default MCP exposure claims. It validates that default `tools/list` exposes only `excel.agent.run` and that status mode returns structured telemetry without Excel.
 - `corepack pnpm test:e2e:agent-workflow` passes before token-saving agent workflow claims. It validates metadata cache reuse, bounded find payloads, targeted answer reads, preview confirmation tokens, apply, and validate on a fake Excel host.
 - `corepack pnpm test:e2e:office-agent:behavior` is reviewed before changing default-surface office workflow guidance. It is logging-first and produces behavior reports from the production office-agent scenario fixture, covering connection, workbook overview, targeting, sheet/table reads, comparisons, formula safety, edits, token guards, multilingual prompts, and multi-step workflows without acting as a release gate.

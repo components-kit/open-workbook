@@ -28,11 +28,17 @@ Engine adapters must report capabilities. The Office.js add-in reports host plat
 
 ## Catalog Policy
 
-The protocol package owns the full tool, resource, and prompt catalog. MCP registration is capability-gated:
+The protocol package owns the public MCP tool contract and the internal backend capability catalog:
 
-- stable tools are registered by default
-- preview tools, when present, require `OPEN_WORKBOOK_PREVIEW_TOOLS=1`
-- unfinished tools are omitted from catalogs until their contract and implementation are ready
-- unsupported host-specific capabilities are reported honestly by the relevant stable tools
+- MCP registers only `excel.agent.run` as a tool.
+- The Excel capability catalog remains available to backend orchestration and tests.
+- Unfinished capabilities are omitted from catalogs until their contract and implementation are ready.
+- Unsupported host-specific capabilities are reported honestly by backend capability metadata and agent outputs.
 
-This keeps agents from calling incomplete tools while still letting stable tools report host limitations explicitly.
+This keeps agents on one deterministic workflow surface while still letting backend orchestration compose Excel capabilities internally.
+
+Backend capability modules group the internal Excel catalog by operational domain, including runtime, workbook, backup, worksheet, range, lookup, batch, workflow, plan, job, task, collaboration, lock, conflict, transaction, diff, events, snapshot, compact resource, template, formatting, formula, table, pivot, chart, names, region, validation, repair, cleaning, permissions, and agent domains. The grouping is a planning and test inventory; it does not mean every internal capability is currently routable through `excel.agent.run`. MCP is a thin adapter over `excel.agent.run`; primitive Excel capabilities are not registered as MCP tools.
+
+## Backend Test Layout
+
+Backend tests are grouped by behavior instead of keeping orchestration and runtime coverage in monolithic files. Agent orchestration tests cover prepare/cache, read/answer routing, target resolution, preview/apply safety, and structured intent routing. Runtime service tests cover persistence, transactions/jobs, capabilities/session readiness, range/table behavior, pivot/chart behavior, backups/native file bridge, and locks/tasks. Shared fake runtimes and helper fixtures live in `*.test-support.ts` files so new tests can target the closest subsystem without adding new public MCP tools or expanding orchestration coverage by accident.

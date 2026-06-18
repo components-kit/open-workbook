@@ -2,23 +2,35 @@
 import { readFileSync } from "node:fs";
 
 const source = readFileSync(new URL("../apps/mcp-server/src/index.ts", import.meta.url), "utf8");
+const deprecatedInternalSurfaceEnv = "OPEN_WORKBOOK_" + "INTERNAL_TOOL_SURFACE";
+const deprecatedInternalSurfaceFlag = "expose" + "InternalToolSurface";
+const registeredToolNames = [...source.matchAll(/\bregisterMcpTool\(\s*mcp,\s*"([^"]+)"/g)].map((match) => match[1]);
+const forbiddenPrimitiveRegistrations = ["Runtime", "Workbook", "Range"].map((name) => `register${name}Tools(server)`);
 
 const checks = [
   {
-    ok: source.includes('const exposeInternalToolSurface = process.env.OPEN_WORKBOOK_INTERNAL_TOOL_SURFACE === "1"'),
-    message: "Internal primitive tool exposure must be gated by OPEN_WORKBOOK_INTERNAL_TOOL_SURFACE."
+    ok: !source.includes(deprecatedInternalSurfaceEnv) && !source.includes(deprecatedInternalSurfaceFlag),
+    message: "MCP must not include an internal primitive tool exposure gate."
   },
   {
     ok: source.includes('name === "excel.agent.run"'),
     message: "Public agent surface must expose only excel.agent.run."
   },
   {
-    ok: source.includes('exposeInternalToolSurface') && source.includes('["excel.agent.run"]'),
-    message: "Runtime capabilities must report only excel.agent.run unless internal tooling is enabled."
+    ok: source.includes('return ["excel.agent.run"]'),
+    message: "Runtime capabilities must report only excel.agent.run as exposed MCP tools."
   },
   {
     ok: source.includes("registerAgentTools(server)") && source.includes('"excel.agent.run"'),
     message: "excel.agent.run must be registered with the MCP server."
+  },
+  {
+    ok: registeredToolNames.length === 1 && registeredToolNames[0] === "excel.agent.run",
+    message: `MCP must register exactly one tool; found ${registeredToolNames.join(", ") || "none"}.`
+  },
+  {
+    ok: forbiddenPrimitiveRegistrations.every((snippet) => !source.includes(snippet)),
+    message: "Primitive MCP tool registration groups must not be registered."
   }
 ];
 

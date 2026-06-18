@@ -10,7 +10,6 @@ const report = {
   title: "Open Workbook MCP E2E Test Report",
   generatedAt: new Date().toISOString(),
   releaseTarget: {
-    fastGateBudgetMs: Number(process.env.OPEN_WORKBOOK_E2E_FAST_BUDGET_MS ?? 300_000),
     codexModel: process.env.OPEN_WORKBOOK_E2E_CODEX_MODEL ?? "gpt-5.4-mini",
     codexReasoning: process.env.OPEN_WORKBOOK_E2E_CODEX_REASONING ?? "low",
     apiKeyRequired: false,
@@ -18,7 +17,7 @@ const report = {
   },
   prerequisites: [
     {
-      lane: "fast",
+      lane: "agent-surface",
       required: ["Built MCP server at apps/mcp-server/dist/index.js", "Node.js >=20.11"],
       notRequired: ["Excel", "Codex", "OpenAI API key"]
     },
@@ -78,48 +77,6 @@ const report = {
       ],
       gaps: [
         "This lane uses a deterministic fake host; live Excel fidelity remains covered by live gates."
-      ]
-    },
-    {
-      name: "test:e2e:fast",
-      command: "pnpm run test:e2e:fast",
-      status: scriptExists("scripts/e2e-fast.mjs") ? "implemented" : "missing",
-      startsServices: ["Open Workbook MCP stdio server", "Fake Excel add-in WebSocket client"],
-      coverage: [
-        "MCP initialize/tools/resources/prompts protocol sweep",
-        "Runtime status, active context, capabilities, workbook map",
-        "Context-aware internal compact routes reuse workbookContextId after agent prepare",
-        "Sheet create",
-        "Range values/formulas/number formats/copy/clear/read",
-        "Large table create/read window/reorder/filter/sort",
-        "Workbook backup and restore",
-        "Transaction listing",
-        "Manual lock conflict, guidance, release, retry",
-        "Templates: detect/register/get/list/infer/create/fill/validate",
-        "Styles: fingerprint/compare/apply/copy/repair",
-        "Formulas: read patterns/dependency graph/trace/validate/explain/copy/fill/repair",
-        "Names and regions: create/list/get/update/register/detect/fill",
-        "Cleaning: header detect, trim, parse numbers, fill missing, dedupe, split, merge, outliers, fuzzy match",
-        "Pivots/charts: create/list/get/validate/fingerprint/refresh/update",
-        "Snapshots/diffs/events/permissions"
-      ],
-      fixtureSizes: [
-        { name: "small", sheets: 3, tables: 1, rows: 5 },
-        { name: "large", sheets: 1, tables: 1, rows: 5000, boundedReads: true }
-      ],
-      reliabilityAssertions: [
-        "Every mutating range path returns transaction metadata",
-        "Context-aware workbook/sheet/range/table compact routes resolve workbook and targets without rediscovery",
-        "Table mutation paths create backup metadata",
-        "Large table reads use row windows",
-        "Overlapping write is blocked while a manual lock is active",
-        "Retry succeeds after lock release",
-        "Suite fails if total runtime exceeds configured budget"
-      ],
-      gaps: [
-        "The sweep is representative by stable tool group, not one assertion per individual stable tool.",
-        "Live Office.js fidelity still requires macOS and Windows Excel gates.",
-        "Pivot/chart fake-host assertions validate deterministic metadata paths; deep host-specific rendering remains live-gated."
       ]
     },
     {
@@ -223,7 +180,6 @@ const report = {
     "pnpm run test:e2e:report",
     "pnpm run test:e2e:agent-surface",
     "pnpm run test:e2e:agent-workflow",
-    "pnpm run test:e2e:fast",
     "pnpm run test:e2e:agent:core",
     "pnpm run test:e2e:agent:quality",
     "pnpm run test:e2e:agent:quality:compare",
@@ -231,7 +187,7 @@ const report = {
     "pnpm run test:e2e:live:windows"
   ],
   releaseGatePolicy: [
-    "Fast E2E must pass before every release candidate.",
+    "Default one-tool public-surface E2E must pass before every release candidate.",
     "Codex core signed-in E2E must pass before customer-facing large-workbook and multi-agent safety claims.",
     "Codex quality E2E is report-only by default and should be reviewed before claiming complex workflow quality.",
     "Both live Excel gates must pass before declaring desktop host production readiness.",
@@ -259,7 +215,7 @@ function renderMarkdown(data) {
   lines.push("");
   lines.push("## Release Target");
   lines.push("");
-  lines.push(`- Fast gate budget: ${data.releaseTarget.fastGateBudgetMs} ms`);
+  lines.push("- Default E2E gate: one-tool public agent surface");
   lines.push(`- Codex agent model: ${data.releaseTarget.codexModel}`);
   lines.push(`- Codex reasoning: ${data.releaseTarget.codexReasoning}`);
   lines.push(`- OpenAI API key required: ${data.releaseTarget.apiKeyRequired ? "yes" : "no"}`);

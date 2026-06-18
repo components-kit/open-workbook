@@ -6,7 +6,7 @@
     "outDir": "dist"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts", "src/**/*.test-support.ts"],
   "references": [
     { "path": "../../packages/protocol" },
     { "path": "../../packages/excel-core" },

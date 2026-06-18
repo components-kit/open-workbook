@@ -48,8 +48,8 @@ async function main() {
     assertAgentTelemetrySchema(listed.tools[0].outputSchema);
 
     const status = await callTool(mcp, "excel.agent.run", { request: "Check Open Workbook status", mode: "status" });
-    assert(status.status === "SUCCESS", `agent status should succeed: ${JSON.stringify(status)}`);
-    assert(status.nextAction === "manual_review", "status without add-in should tell the agent to request manual review");
+    assert(status.status === "NEEDS_INPUT", `agent status without Excel should request setup: ${JSON.stringify(status)}`);
+    assert(status.nextAction === "ask_user", "status without add-in should tell the agent to ask for Excel setup");
     assert(status.telemetry?.payloadBytes > 0 && status.telemetry?.estimatedTokens > 0, "agent run should include payload and token telemetry");
 
     const resources = await mcp.request("resources/list", {});
@@ -98,6 +98,8 @@ function assertAgentTelemetrySchema(outputSchema) {
     "actionHandlerId",
     "autoApplyBlockedReason",
     "targetFingerprintStatus",
+    "targetHintCount",
+    "targetHintUsed",
     "intentSource",
     "intentAction",
     "intentAccepted",

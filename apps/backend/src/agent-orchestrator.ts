@@ -53,6 +53,8 @@ export class AgentOrchestrator {
       const targetFingerprintStatus = isTargetFingerprintStatus(outputMetrics?.targetFingerprintStatus) ? outputMetrics.targetFingerprintStatus : runMetrics.targetFingerprintStatus;
       const preBudgetPayloadBytes = Buffer.byteLength(JSON.stringify(output));
       const budgeted = applyOutputBudget(output, input);
+      const targetHintCount = runMetrics.intent.targetHints?.length ?? 0;
+      const targetHintUsed = targetHintCount > 0 && outputUsedCallerTargetHint(output);
       const payloadBytes = Buffer.byteLength(JSON.stringify(budgeted));
       return {
         ...budgeted,
@@ -80,6 +82,7 @@ export class AgentOrchestrator {
           ...(actionHandlerId !== undefined ? { actionHandlerId } : {}),
           ...(autoApplyBlockedReason !== undefined ? { autoApplyBlockedReason } : {}),
           ...(targetFingerprintStatus !== undefined ? { targetFingerprintStatus } : {}),
+          ...(targetHintCount > 0 ? { targetHintCount, targetHintUsed } : {}),
           intentSource: runMetrics.intent.source,
           ...(runMetrics.intent.action !== undefined ? { intentAction: runMetrics.intent.action } : {}),
           intentAccepted: runMetrics.intent.accepted,
@@ -2209,6 +2212,20 @@ function compactCandidate(candidate: AgentCandidate): AgentCandidate {
   delete next.reason;
   delete next.nextRequestHint;
   return next;
+}
+
+function outputUsedCallerTargetHint(output: Omit<AgentRunOutput, "telemetry">): boolean {
+  const hinted = output.candidates?.filter((candidate) => candidate.reason?.includes("caller target hint")) ?? [];
+  if (hinted.length === 0) {
+    return false;
+  }
+  if (output.proof.length === 0) {
+    return output.status === "SUCCESS" && output.nextAction === "answer_now" && hinted[0]?.id === output.candidates?.[0]?.id;
+  }
+  return hinted.some((candidate) => output.proof.some((proof) =>
+    proof.sheetName === candidate.sheetName &&
+    (!proof.range || !candidate.range || proof.range === candidate.range)
+  ));
 }
 
 function withActionHandlerMetric(output: Omit<AgentRunOutput, "telemetry">, actionHandlerId: AgentActionHandlerId): Omit<AgentRunOutput, "telemetry"> {
