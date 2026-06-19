@@ -1,4 +1,5 @@
 import { chunkMatrixRows, createRangeFingerprint, createWorkbookFingerprint, formatA1Cell, hashStable, matrixCellCount, parseA1Address, stripSheetName } from "@components-kit/open-workbook-excel-core";
+import { OPEN_WORKBOOK_VERSION } from "@components-kit/open-workbook-protocol";
 import type {
   AddinExecuteBatchRequest,
   AddinTemplateRepairRequest,
@@ -82,7 +83,7 @@ interface ExecutionCounters {
 }
 
 const ENGINE_NAME = "office-js-addin";
-const ENGINE_VERSION = "0.1.14";
+const ENGINE_VERSION = OPEN_WORKBOOK_VERSION;
 const CHUNK_CELL_LIMIT = 50_000;
 const OPEN_WORKBOOK_CUSTOM_XML_NAMESPACE = "https://open-workbook.dev/schema/local-config/1";
 const EXCEL_API_VERSIONS = ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17"] as const;

@@ -5,6 +5,7 @@ import type {
   RuntimeCapabilities,
   WorkbookRef
 } from "@components-kit/open-workbook-protocol";
+import { OPEN_WORKBOOK_VERSION } from "@components-kit/open-workbook-protocol";
 
 export interface ExcelEngine {
   readonly name: string;
@@ -28,7 +29,7 @@ export const DefaultOfficeJsEngineOptions: OfficeJsEngineOptions = {
 
 export class OfficeJsEngine implements ExcelEngine {
   readonly name = "office-js";
-  readonly version = "0.1.14";
+  readonly version = OPEN_WORKBOOK_VERSION;
 
   constructor(private readonly options: OfficeJsEngineOptions = DefaultOfficeJsEngineOptions) {}
 

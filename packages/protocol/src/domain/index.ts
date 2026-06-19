@@ -5,5 +5,5 @@ export * from "../errors.js";
 export * from "../ids.js";
 export * from "../json-rpc.js";
 export * from "../resources.js";
+export * from "../version.js";
 export * from "../workbook.js";
-

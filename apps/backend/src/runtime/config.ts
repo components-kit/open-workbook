@@ -1,7 +1,7 @@
-import type { LockLeasePolicy, RuntimeCapabilities } from "@components-kit/open-workbook-protocol";
+import { OPEN_WORKBOOK_VERSION, type LockLeasePolicy, type RuntimeCapabilities } from "@components-kit/open-workbook-protocol";
 
 export function runtimeVersion(): string {
-  return process.env.OPEN_WORKBOOK_VERSION ?? "0.1.14";
+  return process.env.OPEN_WORKBOOK_VERSION ?? OPEN_WORKBOOK_VERSION;
 }
 
 export function addinStaleTtlMs(): number {

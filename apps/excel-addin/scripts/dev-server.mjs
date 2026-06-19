@@ -134,12 +134,23 @@ function generateManifest() {
   const backendUrl = process.env.OPEN_WORKBOOK_BACKEND_URL ?? `ws://${process.env.OPEN_WORKBOOK_HOST ?? "127.0.0.1"}:${process.env.OPEN_WORKBOOK_PORT ?? 37845}${process.env.OPEN_WORKBOOK_ADDIN_PATH ?? "/addin"}`;
   const taskpaneUrl = `${addinUrl}/taskpane.html?backendUrl=${encodeURIComponent(backendUrl)}`;
   return readFileSync(join(root, "manifest.xml"), "utf8")
+    .replace(/<Version>[^<]+<\/Version>/, `<Version>${officeManifestVersion(runtimeVersion)}</Version>`)
     .replaceAll("http://localhost:37846/taskpane.html", taskpaneUrl)
     .replaceAll("http://localhost:37846", addinUrl);
 }
 
 function trimTrailingSlash(value) {
   return value.endsWith("/") ? value.slice(0, -1) : value;
+}
+
+function officeManifestVersion(version) {
+  const [major = "0", minor = "0", patch = "0"] = String(version).split("-", 1)[0]?.split(".") ?? [];
+  return `${toOfficeVersionPart(major)}.${toOfficeVersionPart(minor)}.${toOfficeVersionPart(patch)}.0`;
+}
+
+function toOfficeVersionPart(value) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? String(parsed) : "0";
 }
 
 function readPackageVersion() {

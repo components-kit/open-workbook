@@ -8,6 +8,8 @@ import { createServer } from "node:http";
 const cli = "packages/cli/dist/index.js";
 const tempDir = mkdtempSync(join(tmpdir(), "open-workbook-cli-smoke-"));
 const manifestPath = join(tempDir, "open-workbook.xml");
+const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
+const expectedOfficeManifestVersion = officeManifestVersion(packageVersion);
 
 const checks = [
   {
@@ -83,7 +85,11 @@ const checks = [
         return false;
       }
       const manifest = readFileSync(manifestPath, "utf8");
-      return manifest.includes("taskpane.html?backendUrl=") && manifest.includes("ws%3A%2F%2F127.0.0.1%3A37845%2Faddin");
+      return (
+        manifest.includes(`<Version>${expectedOfficeManifestVersion}</Version>`) &&
+        manifest.includes("taskpane.html?backendUrl=") &&
+        manifest.includes("ws%3A%2F%2F127.0.0.1%3A37845%2Faddin")
+      );
     }
   },
   {
@@ -347,4 +353,14 @@ async function fetchText(url) {
     throw new Error(`${url} returned ${response.status}`);
   }
   return response.text();
+}
+
+function officeManifestVersion(version) {
+  const [major = "0", minor = "0", patch = "0"] = String(version).split("-", 1)[0]?.split(".") ?? [];
+  return `${toOfficeVersionPart(major)}.${toOfficeVersionPart(minor)}.${toOfficeVersionPart(patch)}.0`;
+}
+
+function toOfficeVersionPart(value) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? String(parsed) : "0";
 }

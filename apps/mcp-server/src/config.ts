@@ -1,3 +1,5 @@
+import { OPEN_WORKBOOK_VERSION } from "@components-kit/open-workbook-protocol";
+
 export interface McpServerConfig {
   host: string;
   port: number;
@@ -19,7 +21,7 @@ export function readConfig(): McpServerConfig {
     daemonUrl: trimTrailingSlash(readArg("--daemon-url") ?? process.env.OPEN_WORKBOOK_DAEMON_URL ?? `http://${host}:${port}`),
     agentName: readArg("--agent-name") ?? process.env.OPEN_WORKBOOK_AGENT_NAME,
     standalone: hasArg("--standalone") || process.env.OPEN_WORKBOOK_MCP_STANDALONE === "1",
-    runtimeVersion: process.env.OPEN_WORKBOOK_VERSION ?? "0.1.14"
+    runtimeVersion: process.env.OPEN_WORKBOOK_VERSION ?? OPEN_WORKBOOK_VERSION
   };
 }
 

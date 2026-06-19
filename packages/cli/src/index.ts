@@ -5,13 +5,14 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { OPEN_WORKBOOK_VERSION } from "@components-kit/open-workbook-protocol";
 import { defaultServiceCommand, defaultServiceTarget, generateServiceManifest, normalizeServiceName, normalizeServiceTarget } from "./commands/service.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../../..");
 const packageRoot = resolve(__dirname, "..");
 const publicPackageName = "@components-kit/open-workbook";
-const currentVersion = readPackageVersion([join(packageRoot, "package.json"), join(repoRoot, "package.json")]) ?? "0.1.14";
+const currentVersion = readPackageVersion([join(packageRoot, "package.json"), join(repoRoot, "package.json")]) ?? OPEN_WORKBOOK_VERSION;
 const instructionFileName = "open-workbook-excel.md";
 const developmentManifestId = "6f2d2ac1-69b0-4eb6-a256-0a1fcb00d3e1";
 const sourcePaths = {
@@ -552,9 +553,20 @@ function generateManifest(options: { addinUrl: string; backendUrl: string; varia
   const addinUrl = trimTrailingSlash(options.addinUrl);
   const taskpaneUrl = `${addinUrl}/taskpane.html?backendUrl=${encodeURIComponent(options.backendUrl)}`;
   const manifest = readFileSync(manifestPath, "utf8")
+    .replace(/<Version>[^<]+<\/Version>/, `<Version>${officeManifestVersion(currentVersion)}</Version>`)
     .replaceAll("http://localhost:37846/taskpane.html", taskpaneUrl)
     .replaceAll("http://localhost:37846", addinUrl);
   return options.variant === "development" ? applyDevelopmentManifestIdentity(manifest) : manifest;
+}
+
+function officeManifestVersion(version: string): string {
+  const [major = "0", minor = "0", patch = "0"] = version.split("-", 1)[0]?.split(".") ?? [];
+  return `${toOfficeVersionPart(major)}.${toOfficeVersionPart(minor)}.${toOfficeVersionPart(patch)}.0`;
+}
+
+function toOfficeVersionPart(value: string): string {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? String(parsed) : "0";
 }
 
 function applyDevelopmentManifestIdentity(manifest: string): string {

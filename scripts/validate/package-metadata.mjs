@@ -4,6 +4,7 @@ import { join, relative } from "node:path";
 
 const rootPackage = readJson("package.json");
 const rootVersion = requiredString(rootPackage.version, "package.json version");
+const rootOfficeManifestVersion = officeManifestVersion(rootVersion);
 const repositoryUrl = requiredString(rootPackage.repository?.url, "package.json repository.url");
 const bugsUrl = requiredString(rootPackage.bugs?.url, "package.json bugs.url");
 const homepage = requiredString(rootPackage.homepage, "package.json homepage");
@@ -85,6 +86,8 @@ for (const packageDir of privatePackages) {
 }
 
 compareDirectoryFiles("skills/open-workbook-excel", "packages/cli/assets/instructions/open-workbook-excel");
+validateRuntimeVersionSource(rootVersion);
+validateExcelManifestTemplate(rootOfficeManifestVersion);
 
 if (errors.length > 0) {
   console.error("Package metadata validation failed.");
@@ -135,6 +138,34 @@ function compareDirectoryFiles(sourceDir, generatedDir) {
   for (const file of generatedFiles) {
     expect(sourceSet.has(file), `${generatedDir} contains stale generated file ${file}`);
   }
+}
+
+function validateRuntimeVersionSource(expectedVersion) {
+  const versionSource = readFileSync("packages/protocol/src/version.ts", "utf8");
+  expect(
+    versionSource.includes(`OPEN_WORKBOOK_VERSION = "${expectedVersion}"`),
+    `packages/protocol/src/version.ts OPEN_WORKBOOK_VERSION must match root ${expectedVersion}`
+  );
+}
+
+function validateExcelManifestTemplate(expectedVersion) {
+  const manifest = readFileSync("apps/excel-addin/manifest.xml", "utf8");
+  expect(manifest.includes("<Version>0.0.0.0</Version>"), "apps/excel-addin/manifest.xml must keep a neutral template version");
+  const generated = manifest.replace(/<Version>[^<]+<\/Version>/, `<Version>${expectedVersion}</Version>`);
+  expect(
+    generated.includes(`<Version>${expectedVersion}</Version>`),
+    `Generated Excel manifest version must be ${expectedVersion}`
+  );
+}
+
+function officeManifestVersion(version) {
+  const [major = "0", minor = "0", patch = "0"] = String(version).split("-", 1)[0]?.split(".") ?? [];
+  return `${toOfficeVersionPart(major)}.${toOfficeVersionPart(minor)}.${toOfficeVersionPart(patch)}.0`;
+}
+
+function toOfficeVersionPart(value) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? String(parsed) : "0";
 }
 
 function listFiles(dir, prefix = "") {
