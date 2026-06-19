@@ -4,8 +4,9 @@ import path from "node:path";
 import { findRepoRoot } from "../lib/repo-root.mjs";
 
 const repoRoot = findRepoRoot(import.meta.url);
-const protocolToolsPath = path.join(repoRoot, "packages/protocol/src/tools.ts");
-const backendCapabilitiesPath = path.join(repoRoot, "apps/backend/src/excel-capabilities.ts");
+const protocolToolsPath = path.join(repoRoot, "packages/protocol/src/catalog/index.ts");
+const backendCapabilitiesPath = path.join(repoRoot, "apps/backend/src/capabilities/registry.ts");
+const backendCapabilityDomainsPath = path.join(repoRoot, "apps/backend/src/capabilities/domains/metadata.ts");
 const agentHandlersPath = path.join(repoRoot, "apps/backend/src/agent-action-handlers.ts");
 
 const args = process.argv.slice(2);
@@ -15,10 +16,11 @@ const outPath = outIndex >= 0 ? args[outIndex + 1] : undefined;
 
 const toolsSource = readFileSync(protocolToolsPath, "utf8");
 const capabilitiesSource = readFileSync(backendCapabilitiesPath, "utf8");
+const domainsSource = readFileSync(backendCapabilityDomainsPath, "utf8");
 const handlersSource = readFileSync(agentHandlersPath, "utf8");
 
 const capabilityNames = parseToolNames(toolsSource);
-const groups = parseGroups(capabilitiesSource);
+const groups = parseGroups(domainsSource);
 const handlerCapabilities = new Set([...handlersSource.matchAll(/capabilityName:\s*"([^"]+)"/g)].map((match) => match[1]));
 const orchestratedCapabilities = parseOrchestratedCapabilities(capabilitiesSource, handlerCapabilities);
 const unitContractGroups = new Set([
@@ -191,7 +193,7 @@ function parseToolNames(source) {
 }
 
 function parseGroups(source) {
-  return [...source.matchAll(/\{ group: "([^"]+)", label: "([^"]+)", description: "[^"]+", prefixes: \[([^\]]+)\] \}/g)].map((match) => ({
+  return [...source.matchAll(/\{ group: "([^"]+)", label: "([^"]+)", description: "[^"]+", prefixes: \[([^\]]+)\][^}]*\}/g)].map((match) => ({
     group: match[1],
     label: match[2],
     prefixes: [...match[3].matchAll(/"([^"]+)"/g)].map((prefix) => prefix[1])
