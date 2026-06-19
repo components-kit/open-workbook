@@ -301,6 +301,19 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+## [0.1.17] - 2026-06-19
+
+### Added
+
+- Added compact MCP result resources, continuation metadata, and brief default result text so large workbook answers stay retrievable without being duplicated into model context.
+- Added backend aggregate answers for unique/count-style range questions so agents can get compact value counts without reading every cell into context.
+
+### Changed
+
+- Reduced default `excel.agent.run` payloads by compacting schemas, profiles, sparse rows, candidates, and MCP tool text while keeping full detail available through result resources.
+- Improved read target resolution so semantic column names can correct conflicting single-column ranges before live reads.
+- Tightened broad workbook/range read guards and header detection to avoid accidental full-sheet dumps and false headers from data rows.
+
 ## [0.1.16] - 2026-06-19
 
 ### Added
@@ -1936,6 +1949,16 @@ Structured table operations use native Office.js table APIs instead of range-onl
 - Create, resize, reorder columns, append rows, update rows, clear constants while keeping formulas, set total row, set style, and copy table structure.
 - Apply, clear, and validate table filters through Office.js filter criteria.
 - Apply and clear table sort state through Office.js sort fields.
+
+For `excel.agent.run`, table filter previews use `values.filters`. The canonical filter shape is:
+
+```json
+{ "column": "Status", "criteria": { "filterOn": "Values", "values": ["Open"] } }
+```
+
+The agent surface also normalizes common shorthand shapes such as `{ "column": "Status", "value": "Open" }`, `{ "column": "Status", "criterion": "Open" }`, and `{ "column": "Status", "filterType": "text", "value": "Open" }` before calling the Office.js table filter API.
+
+Structured table sort previews accept `values.sortBy` or `values.column` plus `values.direction` or `values.ascending`; text-only amount sort inference remains a fallback.
 
 ## Safety
 

@@ -6,6 +6,19 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+## [0.1.17] - 2026-06-19
+
+### Added
+
+- Added compact MCP result resources, continuation metadata, and brief default result text so large workbook answers stay retrievable without being duplicated into model context.
+- Added backend aggregate answers for unique/count-style range questions so agents can get compact value counts without reading every cell into context.
+
+### Changed
+
+- Reduced default `excel.agent.run` payloads by compacting schemas, profiles, sparse rows, candidates, and MCP tool text while keeping full detail available through result resources.
+- Improved read target resolution so semantic column names can correct conflicting single-column ranges before live reads.
+- Tightened broad workbook/range read guards and header detection to avoid accidental full-sheet dumps and false headers from data rows.
+
 ## [0.1.16] - 2026-06-19
 
 ### Added
