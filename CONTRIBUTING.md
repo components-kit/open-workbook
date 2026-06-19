@@ -27,6 +27,6 @@ node packages/cli/dist/index.js addin serve
 ## Pull Request Expectations
 
 - Include tests for protocol, planning, backup, template, or engine behavior touched by the change.
-- Document new public tools or resources in `docs/tool-surface.md`.
+- Do not add public MCP tools without an explicit product decision; document backend capabilities, resources, and `excel.agent.run` routing changes in the relevant docs.
 - Include performance notes for new read/write paths.
 - Update package README files when changing module responsibilities or public exports.

@@ -8,7 +8,7 @@ const OUTPUT_FILE = join(ROOT, "llms-full.txt");
 
 const HEADER = `# Open Workbook
 
-> Local-first MCP runtime for fast, reversible, template-aware Excel automation through Office.js, a local backend, and any MCP-capable agent UI.
+> Local Excel agent runtime that gives any MCP-capable agent one safe tool, \`excel.agent.run\`, for live desktop Excel workbooks.
 
 This file is generated for LLM and agent context. It combines the project README, core documentation, and workspace package READMEs into one reference.
 

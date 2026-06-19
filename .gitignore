@@ -6,6 +6,7 @@ coverage/
 .turbo/
 .open-workbook/
 .DS_Store
+AGENTS.md
 *.log
 *.tsbuildinfo
 .env

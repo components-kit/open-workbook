@@ -1,24 +1,23 @@
 # Open Workbook
 
-Open Workbook is a local-first MCP runtime for fast, reversible, template-aware Excel automation. It connects any MCP-capable agent UI to live desktop Excel workbooks through an Office.js add-in and a local TypeScript backend, so teams can use their preferred agent without being locked into one client or model vendor.
+Open Workbook is a local Excel agent runtime. It gives any MCP-capable agent one safe tool, `excel.agent.run`, for live desktop Excel workbooks while a local TypeScript backend handles workbook discovery, target resolution, previews, validation, backups, rollback, and multi-agent coordination.
 
 ## Why
 
-Daily spreadsheet work usually does not need the largest model available, but it does need reliable workbook handling. Open Workbook focuses on the parts generic agents often break:
+Daily spreadsheet work needs more than raw cell writes. Open Workbook focuses on the parts generic agents often break:
 
-- preserving templates, headers, formulas, filters, tables, print layout, and styling
-- batching reads and writes through Office.js instead of slow per-cell automation
-- creating backups and rollback paths before changing workbooks
-- keeping workbook data local unless a user explicitly sends it elsewhere
-- exposing clear capability status for unsupported or host-limited Excel operations
+- one public MCP tool instead of hundreds of spreadsheet primitives
+- live Office.js reads and writes through the open desktop workbook
+- preview/apply safety with permissions, fingerprints, backups, validation, and rollback
+- compact workbook context so agents can work without flooding the model with cells
+- multi-agent coordination through a shared daemon, locks, tasks, transactions, and conflict guidance
+- honest host capability results when Excel cannot safely perform an operation
 
 ## Current Status
 
-The project is being prepared for npm distribution as `@components-kit/open-workbook`. It is not a Microsoft AppSource add-in and does not attempt to install itself into Excel without user or admin trust approval.
+Open Workbook is tagged for releases as `@components-kit/open-workbook`; npm publishing is a separate release step. It is not a Microsoft AppSource add-in and does not install itself into Excel without user or admin trust approval.
 
-Stable areas include runtime connection, workbook/sheet/range operations, compact workbook/table/range discovery, workbook-wide lookup/search, compact paged reads with token telemetry, reversible batches, combined session-prep, formula-sheet, formula-repair, risky-edit, template-report, and pivot-chart workflows, snapshots, rollback, templates, style fidelity, formula patterns and dependency tracing, tables, filters, sorting, named ranges, regions, validation, repair, cleaning, PivotTables, charts, multi-agent scheduling, permissions, packaging, generic MCP setup, and agent instructions. Host-limited paths return explicit capability-unavailable results instead of pretending to work.
-
-The simple flow is MCP-owned: `npx ... mcp` starts the MCP adapter, the local add-in taskpane server, and an embedded backend when no shared daemon is running. Agents see one public workflow tool, `excel.agent.run`, instead of hundreds of Excel primitives; Open Workbook handles workbook discovery, cached metadata, target resolution, preview/apply, validation, rollback, and compact proof internally. The full operation catalog remains backend capability for deterministic orchestration and test coverage. The shared `owb daemon` remains available for multi-client coordination.
+Packaged MCP clients see only `excel.agent.run`. The internal backend catalog covers workbook, sheet, range, table, formula, style, template, validation, repair, cleaning, backup, snapshot, transaction, permission, and collaboration capabilities for deterministic orchestration and tests.
 
 ## Architecture
 
@@ -29,7 +28,7 @@ MCP client / agent
 apps/mcp-server  -- stdio MCP server
        |
        v
-apps/backend     -- local WebSocket broker, plans, backups, snapshots
+apps/backend     -- local broker, orchestration, safety, snapshots, transactions
        |
        v
 apps/excel-addin -- Office.js taskpane loaded by desktop Excel
@@ -40,8 +39,8 @@ Excel workbook
 
 Shared packages:
 
-- `packages/protocol`: tool catalog, JSON-RPC contracts, resources, prompts, errors, and workbook types
-- `packages/excel-core`: range parsing, planning, backups, snapshots, templates, permissions, fingerprints, and diffs
+- `packages/protocol`: public agent schema and internal backend capability catalog
+- `packages/excel-core`: range parsing, planning, backups, snapshots, templates, permissions, locks, fingerprints, and diffs
 - `packages/office-js-engine`: Office.js execution interface and defaults
 - `packages/cli`: `owb` CLI for setup, running MCP, serving the add-in, generating manifests, sideloading, fallback instructions, and diagnostics
 
@@ -60,7 +59,7 @@ Run setup:
 npx -y @components-kit/open-workbook setup
 ```
 
-Setup prepares the Excel add-in manifest and prints the MCP launch command to add to your agent UI's local stdio MCP configuration.
+Setup prepares the Excel add-in manifest and prints the MCP launch command for your agent UI.
 For an existing install, refresh local setup assets after a package update with:
 
 ```bash
@@ -73,13 +72,7 @@ Install the agent skill with skills.sh:
 npx skills add components-kit/open-workbook --skill open-workbook-excel
 ```
 
-Use the printed MCP launch command in your agent UI:
-
-```bash
-npx -y @components-kit/open-workbook@latest mcp
-```
-
-Start the MCP adapter with the public agent workflow surface:
+Use the printed MCP launch command in your agent UI. It will look like:
 
 ```bash
 npx -y @components-kit/open-workbook@latest mcp
@@ -161,11 +154,22 @@ Environment overrides:
 - `OPEN_WORKBOOK_FILE_BRIDGE_URL`
 - `OPEN_WORKBOOK_FILE_BRIDGE_PORT`
 
-## Token-Saving Reads
+## Agent Flow
 
-Open Workbook exposes `excel.agent.run` so agents can send workbook intent without manually choosing discovery, lookup, read, write, validation, and rollback primitives. The backend builds a workbook metadata cache, resolves natural-language targets across sheets, tables, headers, named ranges, regions, summaries, and formulas, performs targeted compact reads internally, and returns compact structured answers, previews, proof ranges, telemetry, and resource links. Use explicit modes for deterministic workflows: `status`, `prepare`, `find`, `answer`, `preview_update`, `apply_update`, `validate`, and `rollback`. Omitted mode or `auto` remains compatible for casual prompts and can apply clearly scoped low-risk value edits after preview checks, while ambiguous, broad, formula-sensitive, structural, or destructive edits stop for review. Close matches return candidates instead of guessing; retry with `target.candidateId` from the chosen candidate to continue on the one-tool surface. Schema/header-only requests return cached table or range metadata when possible; requests for rows, samples, explicit A1 ranges, raw monthly sheets, or actual values perform a live read. Range metadata requests can inspect hyperlinks, comments, notes, merged cells, data validation, conditional formatting, blanks, search hits, and errors without exposing primitive tools. Raw monthly transaction/invoice sections can resolve from detected header blocks even when no Excel Table exists. Table append, template registry/repair, range structure edits, workbook backup restore, local config, and workbook close requests preview/apply through the same agent tool while preserving their specialized backend paths internally. With the shared daemon, status and prepare responses also include compact collaboration state for multiple MCP agents, including counts and bounded samples for active agents, open tasks, locks, queued/applying transactions, conflicts, and recent events.
+Agents call `excel.agent.run` with natural language plus optional structured fields:
 
-When details would exceed a caller's budget, compact reads can store the full payload locally and return an `excel://compact/{resource_id}` resource link through `excel.agent.run`. Compact summary/schema cache entries are invalidated after workbook mutations. Use `excel.validate.compact` internally for validation proof that returns counts and examples inline while keeping the full issue report behind a resource handle.
+- `status`: check Excel/add-in readiness and collaboration state
+- `prepare`: cache workbook structure and return `workbookContextId`
+- `find`: locate sheets, tables, headers, named ranges, regions, and candidate targets
+- `answer`: read live values or answer from cached metadata when enough
+- `preview_update`: prepare a scoped change and return a confirmation token
+- `apply_update`: apply a previewed change
+- `validate`: validate workbook, sheet, table, formula, style, or template state
+- `rollback`: recover through stored backup/transaction guidance
+
+The backend keeps verbose workbook context local and returns compact proof, resource links, telemetry, warnings, and next actions. Caller LLMs may provide canonical `intent.action`, `intent.targetHints`, explicit `target`, and structured `values`, but the backend still owns ambiguity checks, stale-context checks, permissions, locks, backups, validation, and rollback metadata.
+
+With the shared daemon, multiple MCP sessions get distinct trusted agent identities. `status` and `prepare` include compact collaboration summaries for active agents, open tasks, locks, queued/applying transactions, conflicts, and recent events.
 
 ## Common Commands
 
