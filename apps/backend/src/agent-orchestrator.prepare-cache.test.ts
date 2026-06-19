@@ -44,6 +44,25 @@ describe("AgentOrchestrator Prepare Cache", () => {
       expect(runtime.readBatchCount).toBe(readCallsAfterFirstPrepare);
     });
 
+  it("reuses workbook context from continuation metadata", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const prepared = await agent.run({ request: "Prepare workbook", mode: "prepare" });
+      const answered = await agent.run({
+        request: "How many sheets are in this workbook?",
+        mode: "answer",
+        continuation: prepared.continuation
+      });
+
+      expect(prepared.continuation).toMatchObject({ workbookContextId: prepared.workbookContextId, responseMode: "brief" });
+      expect(answered.status).toBe("SUCCESS");
+      expect(answered.workbookContextId).toBe(prepared.workbookContextId);
+      expect(answered.telemetry.cacheHit).toBe(true);
+      expect(answered.telemetry.internalReadCount).toBe(0);
+      expect((answered.answer as any).sheetCount).toBe(sheets.length);
+    });
+
   it("prepares workbook discovery metadata through internal workbook, sheet, table, name, and region capabilities", async () => {
       const runtime = new FakeAgentRuntime();
       runtime.collaborationStatus = {
@@ -116,7 +135,7 @@ describe("AgentOrchestrator Prepare Cache", () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
 
-      const result = await agent.run({ request: "Find the input region and revenue total", mode: "find" });
+      const result = await agent.run({ request: "Find the input region and revenue total", mode: "find", budget: { maxExamples: 10 } });
 
       expect(result.status).toBe("SUCCESS");
       expect(result.candidates?.map((candidate) => candidate.id)).toContain("name:InputRegion");

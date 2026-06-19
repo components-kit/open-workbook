@@ -229,13 +229,14 @@ async function callTool(client, name, args, outputSchema) {
   const raw = await client.request("tools/call", { name, arguments: args });
   const wallMs = Math.round(performance.now() - started);
   const text = raw.content?.find((item) => item.type === "text")?.text;
-  const parsed = text ? JSON.parse(text) : raw.structuredContent;
+  const parsed = raw.structuredContent;
   const event = {
     at: new Date().toISOString(),
     tool: name,
     args,
     wallMs,
     isError: raw.isError === true,
+    text,
     telemetry: parsed?.telemetry,
     status: parsed?.status,
     nextAction: parsed?.nextAction,

@@ -1,4 +1,4 @@
-import type { AgentId, WorkbookId } from "./ids.js";
+import type { AgentId, TransactionId, WorkbookId } from "./ids.js";
 
 export type WorkbookContextId = string & { readonly __brand: "WorkbookContextId" };
 export type AgentOperationId = string & { readonly __brand: "AgentOperationId" };
@@ -231,6 +231,7 @@ export interface AgentRunInput {
   operationId?: AgentOperationId | string;
   transactionId?: string;
   confirmationToken?: string;
+  continuation?: AgentContinuation;
   intent?: AgentRunIntent;
   target?: AgentRunTarget;
   values?: Record<string, unknown> & {
@@ -281,6 +282,16 @@ export interface AgentResourceLink {
   mimeType: "application/json";
 }
 
+export interface AgentContinuation {
+  workbookContextId?: WorkbookContextId | string;
+  operationId?: AgentOperationId | string;
+  transactionId?: TransactionId | string;
+  resultUri?: string;
+  fullResultUri?: string;
+  nextRequest?: string;
+  responseMode?: "brief" | "standard" | "verbose";
+}
+
 export interface AgentChangePreview {
   sheetName: string;
   range?: string;
@@ -295,6 +306,7 @@ export interface AgentRunOutput {
   mode: AgentRunMode;
   workbookContextId?: WorkbookContextId | string;
   operationId?: AgentOperationId | string;
+  transactionId?: TransactionId | string;
   confirmationToken?: string;
   summary: string;
   answer?: unknown;
@@ -303,6 +315,7 @@ export interface AgentRunOutput {
   candidates?: AgentCandidate[];
   proof: AgentProofReference[];
   resourceLinks: AgentResourceLink[];
+  continuation?: AgentContinuation;
   nextAction: AgentNextAction;
   warnings: string[];
   telemetry: {

@@ -1418,6 +1418,10 @@ export class RuntimeService {
     return this.agent.getOperationResource(operationId);
   }
 
+  getAgentResultResource(resultId: string, options?: { view?: "summary" | "full"; maxBytes?: number }) {
+    return this.agent.getResultResource(resultId, options);
+  }
+
   async getStatusWithFileBridgeProbe() {
     const status = this.getStatus();
     return {

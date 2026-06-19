@@ -56,6 +56,7 @@ import {
   matrixCellCount,
   numberToColumnName as numberToColumn,
   rangesOverlap as rangesOverlapAddresses,
+  hashStable,
   stripSheetName,
   tryParseA1Address
 } from "@components-kit/open-workbook-excel-core";
@@ -69,16 +70,89 @@ import { routeAgentRequest, type IntentRoute } from "./agent-routing.js";
 import { isAgentIntentAction, normalizeAgentIntent, type AgentIntentAction, type NormalizedAgentIntent } from "./agent-intent.js";
 import { findAgentActionHandler, type AgentActionHandlerDefinition, type AgentActionHandlerId } from "./agent-action-handlers.js";
 
+const AGENT_RESULT_TTL_MS = 60 * 60 * 1000;
+const AGENT_LARGE_RANGE_CELL_LIMIT = 10_000;
+
+type AgentResponseMode = NonNullable<AgentRunInput["responseMode"]>;
+
+interface StoredAgentResult {
+  resultId: string;
+  resourceUri: string;
+  fullResourceUri: string;
+  workbookContextId?: string | undefined;
+  kind?: string | undefined;
+  summary: string;
+  hash: string;
+  answer: unknown;
+  createdAt: number;
+  expiresAt: number;
+}
+
+class AgentResultStore {
+  private readonly results = new Map<string, StoredAgentResult>();
+
+  create(input: { workbookContextId?: string | undefined; summary: string; answer: unknown }): StoredAgentResult {
+    this.clearExpired();
+    const resultId = makeId("agentres");
+    const now = Date.now();
+    const kind = typeof input.answer === "object" && input.answer !== null && typeof (input.answer as { kind?: unknown }).kind === "string"
+      ? (input.answer as { kind: string }).kind
+      : undefined;
+    const result: StoredAgentResult = {
+      resultId,
+      resourceUri: resultResource(resultId).uri,
+      fullResourceUri: resultResource(resultId, "full").uri,
+      ...(input.workbookContextId !== undefined ? { workbookContextId: input.workbookContextId } : {}),
+      ...(kind !== undefined ? { kind } : {}),
+      summary: input.summary,
+      hash: hashStable(input.answer),
+      answer: input.answer,
+      createdAt: now,
+      expiresAt: now + AGENT_RESULT_TTL_MS
+    };
+    this.results.set(resultId, result);
+    return result;
+  }
+
+  get(resultId: string, options?: { view?: "summary" | "full"; maxBytes?: number }): StoredAgentResult | Record<string, unknown> | undefined {
+    const result = this.results.get(resultId);
+    if (!result) {
+      return undefined;
+    }
+    if (Date.now() > result.expiresAt) {
+      this.results.delete(resultId);
+      return undefined;
+    }
+    if (options?.view === "summary") {
+      return compactStoredResult(result);
+    }
+    if (options?.maxBytes !== undefined && options.maxBytes > 0) {
+      return enforceStoredResultByteBudget(result, options.maxBytes);
+    }
+    return result;
+  }
+
+  private clearExpired(now = Date.now()): void {
+    for (const [resultId, result] of this.results.entries()) {
+      if (now > result.expiresAt) {
+        this.results.delete(resultId);
+      }
+    }
+  }
+}
+
 export class AgentOrchestrator {
   readonly metadataCache = new WorkbookMetadataCache();
   private readonly operations = new AgentOperationStore();
+  private readonly results = new AgentResultStore();
   private readonly metadataBuilder: WorkbookMetadataBuilder;
 
   constructor(private readonly runtime: RuntimeService) {
     this.metadataBuilder = new WorkbookMetadataBuilder(runtime, this.metadataCache);
   }
 
-  async run(input: AgentRunInput, context?: AgentRunExecutionContext): Promise<AgentRunOutput> {
+  async run(rawInput: AgentRunInput, context?: AgentRunExecutionContext): Promise<AgentRunOutput> {
+    const input = applyContinuationInput(rawInput);
     const startedAt = Date.now();
     let internalCallCount = 0;
     const intent = normalizeAgentIntent(input);
@@ -92,7 +166,7 @@ export class AgentOrchestrator {
       const autoApplyBlockedReason = typeof outputMetrics?.autoApplyBlockedReason === "string" ? outputMetrics.autoApplyBlockedReason : runMetrics.autoApplyBlockedReason;
       const targetFingerprintStatus = isTargetFingerprintStatus(outputMetrics?.targetFingerprintStatus) ? outputMetrics.targetFingerprintStatus : runMetrics.targetFingerprintStatus;
       const preBudgetPayloadBytes = Buffer.byteLength(JSON.stringify(output));
-      const budgeted = applyOutputBudget(output, input);
+      const budgeted = applyOutputBudget(output, input, this.results);
       const targetHintCount = runMetrics.intent.targetHints?.length ?? 0;
       const targetHintUsed = targetHintCount > 0 && outputUsedCallerTargetHint(output);
       const payloadBytes = Buffer.byteLength(JSON.stringify(budgeted));
@@ -397,6 +471,14 @@ export class AgentOrchestrator {
     };
   }
 
+  getResultResource(resultId: string, options?: { view?: "summary" | "full"; maxBytes?: number }) {
+    const result = this.results.get(resultId, options);
+    if (!result) {
+      return { ok: false, error: runtimeError("NOT_FOUND", "Agent result was not found or expired.", { retryable: true }) };
+    }
+    return { ok: true, ...result };
+  }
+
   invalidateWorkbook(workbookId: WorkbookId | string): void {
     this.metadataCache.deleteByWorkbookId(workbookId);
   }
@@ -456,6 +538,10 @@ export class AgentOrchestrator {
     if (workflowAnswer) {
       return workflowAnswer;
     }
+    const workbookDumpGuard = workbookDumpGuardOutput(metadata, input, requestedMode);
+    if (workbookDumpGuard) {
+      return workbookDumpGuard;
+    }
     const workbookAnswer = workbookOverviewAnswer(metadata, input, requestedMode);
     if (workbookAnswer) {
       return workbookAnswer;
@@ -512,6 +598,10 @@ export class AgentOrchestrator {
     const normalizedRange = normalizeOperationRange(metadata, resolved.sheetName, resolved.range);
     if (isFormulaReadIntentAction(intentAction(input))) {
       return this.formulaAnswerOutput(metadata, input, requestedMode, normalizedRange, resolved, runMetrics);
+    }
+    const largeRangeGuard = largeRangeGuardOutput(metadata, input, requestedMode, resolved.sheetName, normalizedRange, resolved.candidate.label);
+    if (largeRangeGuard) {
+      return largeRangeGuard;
     }
     const rangeMetadataAnswer = await this.rangeMetadataAnswerOutput(metadata, input, requestedMode, normalizedRange, resolved, runMetrics);
     if (rangeMetadataAnswer) {
@@ -3987,7 +4077,24 @@ function hasWorkbookOverviewIntent(intent: ReturnType<typeof detectWorkbookOverv
   return intent.aboutIntent || intent.tableIntent || intent.namedRangeIntent || intent.blankIntent || intent.sheetCountIntent || intent.sheetListIntent;
 }
 
+function isWorkbookDumpRequest(requestText: string): boolean {
+  const request = requestText.toLowerCase();
+  return isEveryCellDumpRequest(requestText)
+    || /\b(show|print|dump|list|read|return)\b.*\b(entire|whole|full|all)\b.*\b(workbook|excel file|file)\b/.test(request)
+    || /\b(entire|whole|full|all)\b.*\b(workbook|excel file|file)\b.*\b(show|print|dump|list|read|return)\b/.test(request);
+}
+
+function isEveryCellDumpRequest(requestText: string): boolean {
+  const request = requestText.toLowerCase();
+  return /\b(print|dump|show|return|list|read)\b.*\bevery\s+cell\b/.test(request)
+    || /\bevery\s+cell\b.*\b(print|dump|show|return|list|read)\b/.test(request)
+    || /\ball\s+cells?\b.*\b(all|every)\s+sheets?\b/.test(request);
+}
+
 function shouldBuildSampledMetadata(input: AgentRunInput, effectiveMode: AgentRunMode, overviewIntent: ReturnType<typeof detectWorkbookOverviewIntent>): boolean {
+  if (isWorkbookDumpRequest(input.request) || isLargeTargetRangeRequest(input)) {
+    return false;
+  }
   if (/\b(sections?|blocks?|areas?)\b/i.test(input.request)) {
     return true;
   }
@@ -3998,6 +4105,15 @@ function shouldBuildSampledMetadata(input: AgentRunInput, effectiveMode: AgentRu
     return false;
   }
   return true;
+}
+
+function isLargeTargetRangeRequest(input: AgentRunInput): boolean {
+  const range = input.target?.range;
+  if (!range) {
+    return false;
+  }
+  const requestedCells = cellCountFromAddress(range);
+  return requestedCells !== undefined && requestedCells > AGENT_LARGE_RANGE_CELL_LIMIT;
 }
 
 function workbookOverviewAnswer(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> | undefined {
@@ -4039,6 +4155,92 @@ function workbookOverviewAnswer(metadata: WorkbookMetadata, input: AgentRunInput
     resourceLinks: [contextResource(metadata.workbookContextId)],
     nextAction: "answer_now",
     warnings: []
+  };
+}
+
+function workbookDumpGuardOutput(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> | undefined {
+  if (!isWorkbookDumpRequest(input.request)) {
+    return undefined;
+  }
+  const summary = workbookCompactSummary(metadata);
+  const askToNarrow = isEveryCellDumpRequest(input.request);
+  return {
+    status: askToNarrow ? "NEEDS_INPUT" : "SUCCESS",
+    mode: requestedMode,
+    workbookContextId: metadata.workbookContextId,
+    summary: askToNarrow
+      ? "Full workbook cell dumps are not returned inline. Choose a sheet, table, or range, or ask for a compact workbook summary."
+      : `Returned a compact workbook summary for ${metadata.workbook.name} instead of dumping every cell.`,
+    answer: {
+      kind: "workbook_dump_guard",
+      source: "cached_metadata",
+      workbook: metadata.workbook,
+      sheetCount: metadata.sheets.length,
+      tableCount: metadata.tables.length,
+      namedRangeCount: metadata.namedRanges.length,
+      sectionCount: metadata.sections.length,
+      sheets: summary.sheets,
+      alternatives: ["summary", "specific sheet", "specific range"],
+      refusedFullCellDump: true
+    },
+    metrics: { source: "cached_metadata", sheetCount: metadata.sheets.length, tableCount: metadata.tables.length, fullReadCellCount: 0 },
+    proof: metadata.sheets.slice(0, 5).flatMap((sheet) => sheet.usedRange ? [{ sheetName: sheet.name, range: sheet.usedRange, label: "used range" }] : []),
+    resourceLinks: [contextResource(metadata.workbookContextId)],
+    nextAction: askToNarrow ? "ask_user" : "answer_now",
+    warnings: ["Full workbook cell dumps are intentionally blocked to avoid excessive context; use workbookContextId or a scoped target for follow-up reads."]
+  };
+}
+
+function largeRangeGuardOutput(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput,
+  requestedMode: AgentRunMode,
+  sheetName: string,
+  range: string,
+  label: string
+): Omit<AgentRunOutput, "telemetry"> | undefined {
+  const requestedCells = cellCountFromAddress(range);
+  if (requestedCells === undefined || requestedCells <= AGENT_LARGE_RANGE_CELL_LIMIT) {
+    return undefined;
+  }
+  const sheet = metadata.sheets.find((candidate) => candidate.name === sheetName);
+  return {
+    status: "SUCCESS",
+    mode: requestedMode,
+    workbookContextId: metadata.workbookContextId,
+    summary: `Returned a compact summary for ${sheetName}!${range}; the requested ${requestedCells.toLocaleString()} cells exceed the inline read limit.`,
+    answer: {
+      kind: "large_range_guard",
+      source: "cached_metadata",
+      sheetName,
+      range,
+      requestedCells,
+      inlineCellLimit: AGENT_LARGE_RANGE_CELL_LIMIT,
+      usedRange: sheet?.usedRange,
+      rowCount: sheet?.rowCount,
+      columnCount: sheet?.columnCount,
+      recommendation: "Ask for a smaller range, a table, specific columns, or a compact schema/profile."
+    },
+    metrics: { source: "cached_metadata", requestedCells, inlineCellLimit: AGENT_LARGE_RANGE_CELL_LIMIT, fullReadCellCount: 0 },
+    candidates: findAgentCandidates(metadata, input).slice(0, 5),
+    proof: [{ sheetName, range: sheet?.usedRange ?? range, label }],
+    resourceLinks: [contextResource(metadata.workbookContextId)],
+    nextAction: "answer_now",
+    warnings: ["Large range read was summarized from cached metadata without reading cell values."]
+  };
+}
+
+function workbookCompactSummary(metadata: WorkbookMetadata): { sheets: Array<Record<string, unknown>> } {
+  return {
+    sheets: metadata.sheets.map((sheet) => stripUndefinedRecord({
+      name: sheet.name,
+      kind: sheet.kind,
+      usedRange: sheet.usedRange,
+      rowCount: sheet.rowCount,
+      columnCount: sheet.columnCount,
+      tableCount: sheet.tableIds.length,
+      sectionCount: sheet.sectionIds.length
+    }))
   };
 }
 
@@ -4460,6 +4662,7 @@ function profileValues(values: CellMatrix, address?: string) {
     metrics: {
       nonEmptyCount: flattened.length,
       numericCount: numeric.length,
+      measureColumns: measureColumnMetrics(values),
       ...(numeric.length > 0 ? { sum, min: Math.min(...numeric), max: Math.max(...numeric), average: sum / numeric.length } : {})
     },
     sample,
@@ -4468,6 +4671,55 @@ function profileValues(values: CellMatrix, address?: string) {
     ...(includeRows && !sparseRows && nonEmptyRows.length > 0 ? { rows: nonEmptyRows.map((entry) => trimTrailingEmptyCells(entry.row)) } : {}),
     warning: flattened.length === 0 ? "No non-empty cells were found in the targeted range." : undefined
   };
+}
+
+function measureColumnMetrics(values: CellMatrix): Array<Record<string, unknown>> | undefined {
+  const headers = values[0] ?? [];
+  if (headers.length === 0 || values.length <= 1) {
+    return undefined;
+  }
+  const metrics = headers
+    .map((header, index) => ({ header: String(header ?? "").trim(), index }))
+    .filter((entry) => isMeasureColumnName(entry.header))
+    .map((entry): Record<string, unknown> | undefined => {
+      const numeric = values.slice(1)
+        .map((row) => numericCellValue(row[entry.index]))
+        .filter((value): value is number => value !== undefined);
+      if (numeric.length === 0) {
+        return undefined;
+      }
+      const sum = numeric.reduce((total, value) => total + value, 0);
+      return stripUndefinedRecord({
+        name: entry.header,
+        letter: numberToColumn(entry.index + 1),
+        count: numeric.length,
+        sum,
+        min: Math.min(...numeric),
+        max: Math.max(...numeric),
+        average: sum / numeric.length
+      });
+    })
+    .filter((entry): entry is Record<string, unknown> => entry !== undefined);
+  return metrics.length > 0 ? metrics : undefined;
+}
+
+function numericCellValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = Number(value.replace(/[$,]/g, ""));
+  return Number.isFinite(normalized) ? normalized : undefined;
+}
+
+function isMeasureColumnName(name: string): boolean {
+  const normalized = normalizeComparableText(name);
+  if (!normalized || /\b(id|no|number|date|booking|container|truck|account|ref|filename|size|status|type|direction)\b/.test(normalized)) {
+    return false;
+  }
+  return /\b(amount|price|cost|fee|total|gross|net|collect|revenue|expense|spend|cash|tax|balance|profit|loss|thb)\b/.test(normalized);
 }
 
 function compactTablePayloadFromResult(result: unknown): {
@@ -5291,15 +5543,26 @@ function dedupeBy<T>(values: T[], keyFor: (value: T) => string): T[] {
   });
 }
 
-function applyOutputBudget(output: Omit<AgentRunOutput, "telemetry">, input: AgentRunInput): Omit<AgentRunOutput, "telemetry"> {
-  const maxExamples = Math.max(0, input.budget?.maxExamples ?? 10);
-  const maxPayloadBytes = input.budget?.maxPayloadBytes;
-  const maxEstimatedTokens = input.budget?.maxEstimatedTokens;
+function applyOutputBudget(output: Omit<AgentRunOutput, "telemetry">, input: AgentRunInput, results: AgentResultStore): Omit<AgentRunOutput, "telemetry"> {
+  const responseMode = responseModeFromInput(input);
+  const defaults = defaultResponseBudget(responseMode);
+  const maxExamples = Math.max(0, input.budget?.maxExamples ?? defaults.maxExamples);
+  const maxPayloadBytes = input.budget?.maxPayloadBytes ?? defaults.maxPayloadBytes;
+  const maxEstimatedTokens = input.budget?.maxEstimatedTokens ?? defaults.maxEstimatedTokens;
+  const stored = responseMode === "verbose" || !answerNeedsResultResource(output.answer)
+    ? undefined
+    : results.create({ workbookContextId: output.workbookContextId === undefined ? undefined : String(output.workbookContextId), summary: output.summary, answer: output.answer });
+  const resourceLinks = stored ? appendUniqueResource(output.resourceLinks, resultResource(stored.resultId)) : output.resourceLinks;
+  const answer = responseMode === "verbose" ? output.answer : compactAnswerForResponseMode(output.answer, responseMode, stored?.resourceUri, stored?.fullResourceUri);
+  const continuation = continuationForOutput(output, responseMode, stored);
   const budgeted = stripUndefinedOptionals({
     ...output,
+    ...(answer !== undefined ? { answer } : { answer: undefined }),
+    resourceLinks,
+    ...(continuation !== undefined ? { continuation } : {}),
     proof: output.proof.slice(0, Math.min(output.proof.length, Math.max(1, maxExamples))),
     warnings: output.warnings.slice(0, Math.max(5, maxExamples)),
-    ...(output.candidates ? { candidates: output.candidates.slice(0, maxExamples) } : {}),
+    ...(output.candidates ? { candidates: output.candidates.slice(0, maxExamples).map((candidate) => responseMode === "verbose" ? candidate : compactCandidate(candidate)) } : {}),
     ...(output.changes ? { changes: output.changes.slice(0, maxExamples) } : {})
   });
   if (budgeted.answer && typeof budgeted.answer === "object" && "sample" in budgeted.answer && Array.isArray((budgeted.answer as { sample?: unknown[] }).sample)) {
@@ -5311,23 +5574,301 @@ function applyOutputBudget(output: Omit<AgentRunOutput, "telemetry">, input: Age
   let compact = stripUndefinedOptionals(budgeted);
   const byteBudget = maxPayloadBytes ?? (maxEstimatedTokens ? maxEstimatedTokens * 4 : undefined);
   if (byteBudget && Buffer.byteLength(JSON.stringify(compact)) > byteBudget) {
+    const compactContinuation = compactContinuationForBudget(compact.continuation);
+    const { continuation: _continuation, ...compactWithoutContinuation } = compact;
     compact = stripUndefinedOptionals({
-      ...compact,
+      ...compactWithoutContinuation,
       ...(compact.answer && compact.workbookContextId ? { answer: { resource: contextResource(String(compact.workbookContextId)).uri } } : {}),
       ...(compact.candidates ? { candidates: compact.candidates.slice(0, Math.min(compact.candidates.length, 3)).map(compactCandidate) } : {}),
       proof: compact.proof.slice(0, Math.min(compact.proof.length, 3)),
       ...(compact.changes ? { changes: compact.changes.slice(0, Math.min(compact.changes.length, 3)) } : {}),
+      ...(compactContinuation !== undefined ? { continuation: compactContinuation } : {}),
       warnings: [...compact.warnings, "Agent response was compacted to satisfy the requested payload/token budget."]
     });
   }
   if (byteBudget && Buffer.byteLength(JSON.stringify(compact)) > byteBudget && compact.answer !== undefined) {
+    const compactContinuation = compactContinuationForBudget(compact.continuation, true);
+    const { continuation: _continuation, ...compactWithoutContinuation } = compact;
     compact = stripUndefinedOptionals({
-      ...compact,
+      ...compactWithoutContinuation,
       answer: undefined,
+      ...(compactContinuation !== undefined ? { continuation: compactContinuation } : {}),
       warnings: [...compact.warnings, "Answer details were omitted from the inline response; use resourceLinks for cached context."]
     });
   }
   return stripUndefinedOptionals(compact);
+}
+
+function responseModeFromInput(input: AgentRunInput): AgentResponseMode {
+  return input.responseMode ?? "brief";
+}
+
+function applyContinuationInput(input: AgentRunInput): AgentRunInput {
+  const continuation = input.continuation;
+  if (!continuation) {
+    return input;
+  }
+  return stripUndefinedInput({
+    ...input,
+    ...(input.workbookContextId !== undefined || continuation.workbookContextId !== undefined ? { workbookContextId: input.workbookContextId ?? continuation.workbookContextId } : {}),
+    ...(input.operationId !== undefined || continuation.operationId !== undefined ? { operationId: input.operationId ?? continuation.operationId } : {}),
+    ...(input.transactionId !== undefined || continuation.transactionId !== undefined ? { transactionId: input.transactionId ?? continuation.transactionId } : {}),
+    ...(input.responseMode !== undefined || continuation.responseMode !== undefined ? { responseMode: input.responseMode ?? continuation.responseMode } : {})
+  });
+}
+
+function stripUndefinedInput(input: AgentRunInput): AgentRunInput {
+  const next = { ...input };
+  if (next.workbookContextId === undefined) delete next.workbookContextId;
+  if (next.operationId === undefined) delete next.operationId;
+  if (next.transactionId === undefined) delete next.transactionId;
+  if (next.responseMode === undefined) delete next.responseMode;
+  return next;
+}
+
+function defaultResponseBudget(responseMode: AgentResponseMode): { maxExamples: number; maxPayloadBytes?: number; maxEstimatedTokens?: number } {
+  if (responseMode === "verbose") {
+    return { maxExamples: 10 };
+  }
+  if (responseMode === "standard") {
+    return { maxExamples: 5, maxPayloadBytes: 12_000, maxEstimatedTokens: 3_000 };
+  }
+  return { maxExamples: 3, maxPayloadBytes: 6_000, maxEstimatedTokens: 1_500 };
+}
+
+function appendUniqueResource(resources: AgentRunOutput["resourceLinks"], resource: AgentRunOutput["resourceLinks"][number]): AgentRunOutput["resourceLinks"] {
+  return resources.some((entry) => entry.uri === resource.uri) ? resources : [...resources, resource];
+}
+
+function answerNeedsResultResource(answer: unknown): boolean {
+  if (!answer || typeof answer !== "object") {
+    return false;
+  }
+  const text = JSON.stringify(answer);
+  const typed = answer as Record<string, unknown>;
+  return text.length > 2_000
+    || ["headers", "values", "formulas", "text", "numberFormat", "sample", "sparseRows", "rows"].some((key) => typed[key] !== undefined)
+    || Object.values(typed).some((value) => value && typeof value === "object" && ["headers", "values", "sample", "sparseRows", "rows"].some((key) => (value as Record<string, unknown>)[key] !== undefined));
+}
+
+function compactAnswerForResponseMode(answer: unknown, responseMode: AgentResponseMode, resultUri?: string, fullResultUri?: string): unknown {
+  if (!answer || typeof answer !== "object") {
+    return answer;
+  }
+  if (responseMode === "verbose") {
+    return answer;
+  }
+  const typed = answer as Record<string, unknown>;
+  const kind = typeof typed.kind === "string" ? typed.kind : undefined;
+  if (kind === "range_schema") {
+    return compactRangeSchemaAnswer(typed, responseMode, resultUri, fullResultUri);
+  }
+  if (kind === "table_schema") {
+    return compactTableSchemaAnswer(typed, responseMode, resultUri, fullResultUri);
+  }
+  if (kind === "range_profile") {
+    return compactRangeProfileAnswer(typed, resultUri, fullResultUri);
+  }
+  if (kind === "table_compact_read") {
+    return compactTableReadAnswer(typed, responseMode, resultUri, fullResultUri);
+  }
+  if (kind === "comparison_profile") {
+    return compactComparisonAnswer(typed, resultUri, fullResultUri);
+  }
+  return compactGenericAnswer(typed, resultUri, fullResultUri);
+}
+
+function compactRangeSchemaAnswer(answer: Record<string, unknown>, responseMode: AgentResponseMode, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  const headers = Array.isArray(answer.headers) ? answer.headers as HeaderMetadata[] : [];
+  const selected = headers.slice(0, responseMode === "standard" ? 3 : 1);
+  const columns = selected.flatMap((header) => Array.isArray(header.columns) ? header.columns : []);
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    source: answer.source,
+    sheetName: answer.sheetName,
+    range: answer.range,
+    schemaSummary: schemaSummary(columns, responseMode === "standard" ? 16 : 10),
+    headerCount: headers.length,
+    resultUri,
+    fullResultUri
+  });
+}
+
+function compactTableSchemaAnswer(answer: Record<string, unknown>, responseMode: AgentResponseMode, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  const columns = Array.isArray(answer.columns) ? answer.columns : [];
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    source: answer.source,
+    tableName: answer.tableName,
+    sheetName: answer.sheetName,
+    range: answer.range,
+    headerRange: answer.headerRange,
+    dataRange: answer.dataRange,
+    schemaSummary: schemaSummary(columns, responseMode === "standard" ? 16 : 10),
+    resultUri,
+    fullResultUri
+  });
+}
+
+function compactRangeProfileAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    source: answer.source,
+    sheetName: answer.sheetName,
+    range: answer.range,
+    shape: answer.shape,
+    metrics: compactProfileMetrics(answer.metrics),
+    resultUri,
+    fullResultUri
+  });
+}
+
+function compactTableReadAnswer(answer: Record<string, unknown>, responseMode: AgentResponseMode, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  const schema = Array.isArray(answer.schema) ? answer.schema : [];
+  const projectedColumns = Array.isArray(answer.projectedColumns) ? answer.projectedColumns : [];
+  const profile = answer.profile && typeof answer.profile === "object" ? answer.profile as Record<string, unknown> : undefined;
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    source: answer.source,
+    tableName: answer.tableName,
+    sheetName: answer.sheetName,
+    range: answer.range,
+    dataRange: answer.dataRange,
+    rowOffset: answer.rowOffset,
+    rowLimit: answer.rowLimit,
+    projectedColumns,
+    truncated: answer.truncated,
+    nextPage: answer.nextPage,
+    schemaSummary: schemaSummary(schema, responseMode === "standard" ? 16 : 10),
+    shape: profile?.shape,
+    metrics: compactProfileMetrics(profile?.metrics),
+    resultUri,
+    fullResultUri
+  });
+}
+
+function compactComparisonAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  const sheets = Array.isArray(answer.sheets)
+    ? answer.sheets.map((sheet) => {
+        const typed = sheet as Record<string, unknown>;
+        return stripUndefinedRecord({
+          sheetName: typed.sheetName,
+          range: typed.range,
+          shape: typed.shape,
+          metrics: compactProfileMetrics(typed.metrics)
+        });
+      })
+    : undefined;
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    source: answer.source,
+    request: answer.request,
+    sheets,
+    numericComparison: answer.numericComparison,
+    resultUri,
+    fullResultUri
+  });
+}
+
+function compactGenericAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  const next = { ...answer };
+  for (const key of ["headers", "values", "formulas", "text", "numberFormat", "sample", "sparseRows", "rows", "emptySummary", "schema", "profile"]) {
+    delete next[key];
+  }
+  if (resultUri) {
+    next.resultUri = resultUri;
+  }
+  if (fullResultUri) {
+    next.fullResultUri = fullResultUri;
+  }
+  return stripUndefinedRecord(next);
+}
+
+function continuationForOutput(
+  output: Omit<AgentRunOutput, "telemetry">,
+  responseMode: AgentResponseMode,
+  stored?: StoredAgentResult
+): AgentRunOutput["continuation"] | undefined {
+  const nextRequest = nextContinuationRequest(output, stored);
+  const continuation = stripUndefinedRecord({
+    ...(output.workbookContextId !== undefined ? { workbookContextId: output.workbookContextId } : {}),
+    ...(output.operationId !== undefined ? { operationId: output.operationId } : {}),
+    ...(output.transactionId !== undefined ? { transactionId: output.transactionId } : {}),
+    ...(stored?.resourceUri !== undefined ? { resultUri: stored.resourceUri } : {}),
+    ...(stored?.fullResourceUri !== undefined ? { fullResultUri: stored.fullResourceUri } : {}),
+    responseMode: responseMode === "verbose" ? "brief" : responseMode,
+    ...(nextRequest !== undefined ? { nextRequest } : {})
+  });
+  return Object.keys(continuation).length > 0 ? continuation : undefined;
+}
+
+function nextContinuationRequest(output: Omit<AgentRunOutput, "telemetry">, stored?: StoredAgentResult): string | undefined {
+  if (output.operationId && output.confirmationToken) {
+    return "Continue with mode apply_update, operationId, and confirmationToken after user confirmation.";
+  }
+  if (stored?.resourceUri) {
+    return "Reuse workbookContextId and read resultUri only when full detail is needed.";
+  }
+  if (output.workbookContextId) {
+    return "Reuse workbookContextId on the next excel.agent.run call.";
+  }
+  return undefined;
+}
+
+function compactContinuationForBudget(
+  continuation: AgentRunOutput["continuation"] | undefined,
+  omitContextOnly = false
+): AgentRunOutput["continuation"] | undefined {
+  if (!continuation) {
+    return undefined;
+  }
+  if (omitContextOnly && !continuation.operationId && !continuation.resultUri && !continuation.fullResultUri) {
+    return undefined;
+  }
+  const compact = stripUndefinedRecord({
+    ...(continuation.operationId !== undefined ? { operationId: continuation.operationId } : {}),
+    ...(continuation.resultUri !== undefined ? { resultUri: continuation.resultUri } : {}),
+    ...(continuation.fullResultUri !== undefined ? { fullResultUri: continuation.fullResultUri } : {})
+  });
+  return Object.keys(compact).length > 0 ? compact : undefined;
+}
+
+function schemaSummary(columns: unknown[], maxColumns: number): Record<string, unknown> {
+  const compactColumns = columns
+    .filter((column): column is Record<string, unknown> => Boolean(column && typeof column === "object"))
+    .slice(0, maxColumns)
+    .map((column) => stripUndefinedRecord({
+      name: column.name,
+      letter: column.letter,
+      inferredType: column.inferredType
+    }));
+  return {
+    columnCount: columns.length,
+    columns: compactColumns,
+    ...(columns.length > compactColumns.length ? { truncated: true } : {})
+  };
+}
+
+function compactProfileMetrics(metrics: unknown): unknown {
+  if (!metrics || typeof metrics !== "object") {
+    return metrics;
+  }
+  const typed = metrics as Record<string, unknown>;
+  return stripUndefinedRecord({
+    nonEmptyCount: typed.nonEmptyCount,
+    numericCount: typed.numericCount,
+    measureColumns: typed.measureColumns
+  });
+}
+
+function stripUndefinedRecord<T extends Record<string, unknown>>(value: T): T {
+  const next = { ...value };
+  for (const key of Object.keys(next)) {
+    if (next[key] === undefined) {
+      delete next[key];
+    }
+  }
+  return next;
 }
 
 function compactCandidate(candidate: AgentCandidate): AgentCandidate {
@@ -5367,6 +5908,7 @@ function stripUndefinedOptionals(output: Omit<AgentRunOutput, "telemetry">): Omi
   if (next.metrics === undefined) delete next.metrics;
   if (next.changes === undefined) delete next.changes;
   if (next.candidates === undefined) delete next.candidates;
+  if (next.continuation === undefined) delete next.continuation;
   if (next.confirmationToken === undefined) delete next.confirmationToken;
   if (next.operationId === undefined) delete next.operationId;
   if (next.workbookContextId === undefined) delete next.workbookContextId;
@@ -5763,8 +6305,24 @@ function resolveSchemaHeaders(metadata: WorkbookMetadata, resolved: Extract<Agen
   if (!sheet) {
     return [];
   }
-  const matching = sheet.headers.filter((header) => header.range === resolved.range);
-  return matching.length > 0 ? matching : sheet.headers;
+  const matching = sheet.headers.filter((header) => normalizeAddressForCompare(header.range) === normalizeAddressForCompare(resolved.range));
+  if (matching.length > 0) {
+    return matching;
+  }
+  const overlapping = sheet.headers
+    .filter((header) => rangesOverlapAddresses(normalizeAddressForCompare(header.range), normalizeAddressForCompare(resolved.range)))
+    .sort((left, right) => right.confidence - left.confidence || left.row - right.row);
+  if (overlapping.length > 0) {
+    return overlapping.slice(0, 3);
+  }
+  return sheet.headers
+    .filter((header) => header.confidence >= 0.75 && header.row <= 3)
+    .sort((left, right) => right.confidence - left.confidence || left.row - right.row)
+    .slice(0, 3);
+}
+
+function normalizeAddressForCompare(address: string): string {
+  return stripSheetName(address).replace(/\$/g, "");
 }
 
 function headerAnswer(header: HeaderMetadata) {
@@ -6312,4 +6870,38 @@ function contextResource(workbookContextId: string) {
 
 function operationResource(operationId: string) {
   return { uri: `excel://agent/operations/${operationId}`, name: "pending operation", description: "Pending previewed workbook update.", mimeType: "application/json" as const };
+}
+
+function resultResource(resultId: string, view?: "summary" | "full") {
+  const suffix = view ? `?view=${view}` : "";
+  return { uri: `excel://agent/results/${resultId}${suffix}`, name: "agent result", description: "Stored agent answer detail.", mimeType: "application/json" as const };
+}
+
+function compactStoredResult(result: StoredAgentResult): Record<string, unknown> {
+  return stripUndefinedRecord({
+    resultId: result.resultId,
+    resourceUri: result.resourceUri,
+    fullResourceUri: result.fullResourceUri,
+    workbookContextId: result.workbookContextId,
+    kind: result.kind,
+    summary: result.summary,
+    hash: result.hash,
+    createdAt: result.createdAt,
+    expiresAt: result.expiresAt,
+    answer: compactAnswerForResponseMode(result.answer, "brief", result.resourceUri, result.fullResourceUri)
+  });
+}
+
+function enforceStoredResultByteBudget(result: StoredAgentResult, maxBytes: number): StoredAgentResult | Record<string, unknown> {
+  const fullBytes = Buffer.byteLength(JSON.stringify(result));
+  if (fullBytes <= maxBytes) {
+    return result;
+  }
+  return {
+    ...compactStoredResult(result),
+    truncated: true,
+    fullBytes,
+    maxBytes,
+    warning: "Full stored result exceeds requested byte budget; use fullResourceUri with a larger budget if required."
+  };
 }

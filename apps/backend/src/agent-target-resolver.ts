@@ -456,11 +456,12 @@ function candidateSources(metadata: WorkbookMetadata): CandidateSource[] {
       sheetName: section.sheetName,
       range: section.range,
       searchValues: [
+        section.sheetName,
         section.label,
         section.kind,
         ...section.columns.map((column) => column.name)
       ],
-      baseScore: 0.06
+      baseScore: /\binvoice|billed|booking|container|collect\b/i.test(section.label) ? 0.1 : 0.06
     })),
     ...metadata.summaryBlocks.map((block) => ({
       kind: "range" as const,
@@ -676,10 +677,11 @@ function resolveExactSheetHeaderBlock(
   }
   const section = isRawMonthlySheet(matchedSheet.name, matchedSheet.usedRange)
     ? undefined
-    : metadata.sections.find((candidate) =>
-      candidate.sheetName === matchedSheet.name &&
-      sectionMatchesRequestedKind(candidate, requestedKind)
-    );
+    : metadata.sections
+      .filter((candidate) => candidate.sheetName === matchedSheet.name)
+      .map((candidate) => ({ section: candidate, score: sectionRequestedKindScore(candidate, requestedKind) }))
+      .filter((candidate) => candidate.score > 0)
+      .sort((left, right) => right.score - left.score || left.section.range.localeCompare(right.section.range))[0]?.section;
   if (section) {
     return exactSourceResolution({
       kind: "region",
@@ -711,15 +713,28 @@ function sectionMatchesRequestedKind(
   section: WorkbookMetadata["sections"][number],
   requestedKind: "invoice" | "transaction"
 ): boolean {
+  return sectionRequestedKindScore(section, requestedKind) > 0;
+}
+
+function sectionRequestedKindScore(
+  section: WorkbookMetadata["sections"][number],
+  requestedKind: "invoice" | "transaction"
+): number {
   const text = normalizeHeaderName([
     section.label,
     section.kind,
     ...section.columns.map((column) => column.name)
   ].join(" "));
+  const headerText = normalizeHeaderName(section.columns.map((column) => column.name).join(" "));
+  let score = 0;
   if (requestedKind === "invoice") {
-    return /invoice|billed|booking|container|gross|withholding|collect/.test(text);
+    if (/invoice|billed|booking|container|gross|withholding|collect/.test(headerText)) score += 4;
+    if (/invoice|billed|booking|container|gross|withholding|collect/.test(text)) score += 1;
+    return score;
   }
-  return /transaction|cash|actual|payment|reconciliation|truck|proof/.test(text);
+  if (/transaction|cash|actual|payment|reconciliation|truck|proof/.test(headerText)) score += 4;
+  if (/transaction|cash|actual|payment|reconciliation|truck|proof/.test(text)) score += 1;
+  return score;
 }
 
 function isRawMonthlySheet(sheetName: string, usedRange: string | undefined): boolean {

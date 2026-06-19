@@ -284,12 +284,11 @@ function sheetMetadataFromMap(
 
 function detectHeaders(sheetName: string, sample: CellMatrix): HeaderMetadata[] {
   const candidates = sample.slice(0, 20).map((row, rowIndex) => {
-    const nonEmpty = row.filter((value) => value !== null && value !== undefined && String(value).trim() !== "");
-    const textLike = nonEmpty.filter((value) => typeof value === "string" && !/^\d+([.,]\d+)?$/.test(value.trim()));
-    return { row, rowIndex, nonEmpty, textLike, confidence: nonEmpty.length >= 3 ? textLike.length / nonEmpty.length : 0 };
-  }).filter((candidate) => candidate.nonEmpty.length >= 3 && candidate.confidence >= 0.6);
+    const quality = headerRowQuality(row, rowIndex);
+    return { row, rowIndex, quality };
+  }).filter((candidate) => candidate.quality.accepted && candidate.quality.nonEmptyCount >= 3);
   return candidates
-    .sort((left, right) => left.rowIndex - right.rowIndex || right.confidence - left.confidence)
+    .sort((left, right) => left.rowIndex - right.rowIndex || right.quality.confidence - left.quality.confidence)
     .map((candidate) => {
       const columns = candidate.row.map((value, index) => ({ value, index }))
         .filter((entry) => entry.value !== null && entry.value !== undefined && String(entry.value).trim() !== "")
@@ -300,9 +299,64 @@ function detectHeaders(sheetName: string, sample: CellMatrix): HeaderMetadata[] 
         row: candidate.rowIndex + 1,
         range: `${columnLetter(columns[0]?.index ?? 0)}${candidate.rowIndex + 1}:${columnLetter(columns.at(-1)?.index ?? candidate.row.length - 1)}${candidate.rowIndex + 1}`,
         columns,
-        confidence: Number(candidate.confidence.toFixed(3))
+        confidence: Number(candidate.quality.confidence.toFixed(3))
       };
     });
+}
+
+function headerRowQuality(row: unknown[], rowIndex: number): {
+  accepted: boolean;
+  confidence: number;
+  nonEmptyCount: number;
+} {
+  const cells = row
+    .map((value) => String(value ?? "").trim())
+    .filter((value) => value !== "");
+  if (cells.length < 2) {
+    return { accepted: false, confidence: 0, nonEmptyCount: cells.length };
+  }
+  const normalized = cells.map(normalizeHeaderName);
+  const uniqueRatio = new Set(normalized.filter(Boolean)).size / Math.max(1, normalized.length);
+  const formulaRatio = cells.filter((value) => value.startsWith("=")).length / cells.length;
+  const numericRatio = cells.filter(isDataLikeNumber).length / cells.length;
+  const longTextRatio = cells.filter((value) => value.length > 80).length / cells.length;
+  const transactionValueRatio = cells.filter(isTransactionLikeValue).length / cells.length;
+  const headerTermRatio = normalized.filter(isHeaderLikeName).length / cells.length;
+  const summaryTermRatio = normalized.filter((value) => /summary|metric|amount|view|notes|total|revenue|expense|profit|cash|spend/.test(value)).length / cells.length;
+  const topRowBonus = rowIndex <= 1 ? 0.12 : 0;
+  const confidence = Math.max(0, Math.min(1,
+    headerTermRatio * 0.7 +
+    summaryTermRatio * 0.25 +
+    uniqueRatio * 0.15 +
+    topRowBonus -
+    formulaRatio * 0.5 -
+    numericRatio * 0.35 -
+    longTextRatio * 0.4 -
+    transactionValueRatio * 0.3
+  ));
+  const accepted = confidence >= 0.45
+    && uniqueRatio >= 0.7
+    && formulaRatio === 0
+    && numericRatio <= 0.35
+    && longTextRatio <= 0.15
+    && transactionValueRatio <= 0.35
+    && (headerTermRatio >= 0.2 || (rowIndex <= 1 && headerTermRatio >= 0.12) || summaryTermRatio >= 0.35);
+  return { accepted, confidence, nonEmptyCount: cells.length };
+}
+
+function isDataLikeNumber(value: string): boolean {
+  const normalized = value.replace(/[$,]/g, "");
+  return /^\d+(\.\d+)?$/.test(normalized) || /^\d{5}$/.test(normalized);
+}
+
+function isTransactionLikeValue(value: string): boolean {
+  return /^\d{4}-\d{4,}$/.test(value)
+    || /^[A-Z]{3,4}\d{5,}$/i.test(value)
+    || /\b(ref|scb|x\d{3,}|paid|transferred|cash transferred|wrong account|driver|refund)\b/i.test(value);
+}
+
+function isHeaderLikeName(value: string): boolean {
+  return /date|month|year|period|id|no|number|account|customer|client|vendor|description|type|direction|status|amount|price|cost|fee|total|gross|net|tax|collect|payment|variance|note|proof|filename|invoice|booking|job|container|size|billed|lifting|category|metric|view/.test(value);
 }
 
 function detectSections(sheet: any, sample: CellMatrix, sheetIndex: number): SectionMetadata[] {
@@ -370,10 +424,10 @@ function buildSection(
 function detectSectionHeader(matrix: CellMatrix, rowOffset: number, columnOffset: number): { row: number; range: string; columns: ColumnMetadata[] } | undefined {
   const candidates = matrix.slice(0, Math.min(matrix.length, 5)).map((row, localRowIndex) => {
     const nonEmpty = row.map((value, index) => ({ value, index })).filter((entry) => isNonEmptyCell(entry.value));
-    const textLike = nonEmpty.filter((entry) => typeof entry.value === "string" && !/^\d+([.,]\d+)?$/.test(entry.value.trim()));
-    return { row, localRowIndex, nonEmpty, confidence: nonEmpty.length >= 2 ? textLike.length / nonEmpty.length : 0 };
-  }).filter((candidate) => candidate.nonEmpty.length >= 2 && candidate.confidence >= 0.6);
-  const best = candidates.sort((left, right) => right.confidence - left.confidence || left.localRowIndex - right.localRowIndex)[0];
+    const quality = headerRowQuality(row, rowOffset + localRowIndex);
+    return { row, localRowIndex, nonEmpty, quality };
+  }).filter((candidate) => candidate.nonEmpty.length >= 2 && candidate.quality.accepted);
+  const best = candidates.sort((left, right) => right.quality.confidence - left.quality.confidence || left.localRowIndex - right.localRowIndex)[0];
   if (!best) {
     return undefined;
   }

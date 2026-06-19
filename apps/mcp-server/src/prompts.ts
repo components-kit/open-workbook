@@ -19,6 +19,7 @@ export function registerPrompts(mcp: McpServer): void {
     (args) => [
       "Create a next-period worksheet without damaging formulas, formatting, filters, tables, print layout, or named regions.",
       promptContext(args),
+      tokenDiscipline(),
       "Use `excel.agent.run` with `mode: \"prepare\"` to collect workbook context, then preview a template or sheet-copy workflow with `mode: \"preview_update\"`.",
       "Prefer a registered template. If no template is clear, ask the user to confirm the source sheet before previewing.",
       "Apply only with a follow-up `excel.agent.run` `mode: \"apply_update\"` using the returned operationId and confirmationToken.",
@@ -35,6 +36,7 @@ export function registerPrompts(mcp: McpServer): void {
     (args) => [
       "Clean the current worksheet conservatively. Do not overwrite formulas, templates, filters, styling, or hidden layout areas.",
       promptContext(args),
+      tokenDiscipline(),
       "Use `excel.agent.run` `mode: \"find\"` or `mode: \"answer\"` to identify the data-entry region.",
       "Preview cleaning with `mode: \"preview_update\"`; prefer table, region, or scoped range targets.",
       "Apply once with the returned operationId and confirmationToken, then validate the affected area."
@@ -50,6 +52,7 @@ export function registerPrompts(mcp: McpServer): void {
     (args) => [
       "Fix formula errors without converting formulas to values unless the user explicitly asks.",
       promptContext(args),
+      tokenDiscipline(),
       "Use `excel.agent.run` to find formula errors, inspect patterns/dependencies, and preview a formula repair.",
       "Never repair formulas by writing formula strings as plain values.",
       "Apply only after preview, recalculate, and validate formula errors again."
@@ -65,6 +68,7 @@ export function registerPrompts(mcp: McpServer): void {
     (args) => [
       "Make the target sheet look like the template while preserving current data values.",
       promptContext(args),
+      tokenDiscipline(),
       "Use `excel.agent.run` to compare style/template consistency and preview a scoped style repair.",
       "Ask before changing structure-level layout such as hidden rows/columns, freeze panes, print settings, or page layout.",
       "Validate styles, formulas, tables, filters, and print layout after applying."
@@ -80,6 +84,7 @@ export function registerPrompts(mcp: McpServer): void {
     (args) => [
       "Validate the report before saving. Do not save if validation finds material formula, reference, template, or unintended-change issues.",
       promptContext(args),
+      tokenDiscipline(),
       "Use `excel.agent.run` `mode: \"validate\"` for workbook, sheet, formula, style, table, filter, and unintended-change validation.",
       "Repair only with explicit scoped previews and backups.",
       "Save through `excel.agent.run` only when errors are clean or the user confirms known warnings."
@@ -95,6 +100,7 @@ export function registerPrompts(mcp: McpServer): void {
     (args) => [
       "Create a summary report from existing workbook data without disturbing source sheets.",
       promptContext(args),
+      tokenDiscipline(),
       "Use `excel.agent.run` `mode: \"prepare\"` to map workbook context and ask the user for missing metrics/groupings/date ranges.",
       "Preview report creation through `mode: \"preview_update\"`; keep writes scoped to the target report sheet or regions.",
       "Apply once, then validate formulas, style consistency, tables, charts, and no unintended source changes."
@@ -131,4 +137,8 @@ function registerWorkflowPrompt(
 function promptContext(args: Record<string, unknown>): string {
   const entries = Object.entries(args).filter(([, value]) => value !== undefined && value !== "");
   return entries.length === 0 ? "" : `Context: ${entries.map(([key, value]) => `${key}=${String(value)}`).join(", ")}`;
+}
+
+function tokenDiscipline(): string {
+  return "Keep `responseMode` brief by default, reuse workbookContextId/operationId/resultUri from continuation, and read fullResultUri only when full row/detail payloads are necessary.";
 }

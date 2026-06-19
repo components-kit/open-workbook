@@ -116,8 +116,10 @@ async function callTool(client, name, args) {
   }
   const text = result.content?.find((item) => item.type === "text")?.text;
   assert(text, `${name} returned no text content`);
-  const parsed = JSON.parse(text);
-  transcript.push({ tool: name, args, result: parsed });
+  const parsed = result.structuredContent;
+  assert(parsed, `${name} returned no structuredContent`);
+  assert(text.includes(parsed.status), `${name} text content should summarize structured status`);
+  transcript.push({ tool: name, args, text, result: parsed });
   return parsed;
 }
 

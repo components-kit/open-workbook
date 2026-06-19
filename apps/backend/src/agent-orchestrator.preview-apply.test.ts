@@ -1632,7 +1632,9 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).rowOffset).toBe(1);
       expect((result.answer as any).rowLimit).toBe(1);
-      expect((result.answer as any).values).toEqual([["2026-06-02", "A-101", 456, "Closed"]]);
+      expect((result.answer as any).values).toBeUndefined();
+      const resultId = String((result.answer as any).resultUri).split("/").pop()!;
+      expect((agent.getResultResource(resultId) as any).answer.values).toEqual([["2026-06-02", "A-101", 456, "Closed"]]);
     });
 
   it("normalizes structured table sort values", async () => {

@@ -131,8 +131,11 @@ async function main() {
     assert(selectedRows.status === "SUCCESS", "candidateId row request should read live values");
     assert(selectedRows.answer?.kind === "table_compact_read", "row request should return compact table data");
     assert(selectedRows.answer?.source === "runtime_table_read", "row request should report runtime table read source");
-    assert(selectedRows.answer?.profile?.kind === "range_profile", "row request should include a live range profile");
-    assert(selectedRows.answer?.profile?.source === "live_read", "row request profile should report live_read source");
+    assert(selectedRows.answer?.resultUri, "row request should expose compact result resource");
+    assert(selectedRows.answer?.fullResultUri, "row request should expose full result resource");
+    const selectedRowsDetail = await readJsonResource(mcp, `${selectedRows.answer.fullResultUri}&maxBytes=100000`);
+    assert(selectedRowsDetail.answer?.profile?.kind === "range_profile", "row request full resource should include a live range profile");
+    assert(selectedRowsDetail.answer?.profile?.source === "live_read", "row request full resource profile should report live_read source");
     assert(selectedRows.telemetry?.internalReadCount === 1, "row request should perform one internal read");
 
     const appendPreview = await agentRun(mcp, {
@@ -220,6 +223,15 @@ async function agentRun(client, args, outputSchema) {
   return callTool(client, "excel.agent.run", args, outputSchema);
 }
 
+async function readJsonResource(client, uri) {
+  const result = await client.request("resources/read", { uri });
+  const text = result.contents?.find((item) => item.mimeType === "application/json" || item.text)?.text;
+  assert(text, `resource ${uri} returned no JSON text`);
+  const parsed = JSON.parse(text);
+  transcript.push({ resource: uri, result: parsed });
+  return parsed;
+}
+
 async function callTool(client, name, args, outputSchema) {
   const result = await client.request("tools/call", { name, arguments: args });
   if (result.isError) {
@@ -229,9 +241,9 @@ async function callTool(client, name, args, outputSchema) {
   assertTelemetryKeysDeclared(result.structuredContent, outputSchema);
   const text = result.content?.find((item) => item.type === "text")?.text;
   assert(text, `${name} returned no text content`);
-  const parsed = JSON.parse(text);
-  assert(JSON.stringify(parsed) === JSON.stringify(result.structuredContent), `${name} text content should mirror structuredContent`);
-  transcript.push({ tool: name, args, telemetry: parsed.telemetry, result: parsed });
+  const parsed = result.structuredContent;
+  assert(text.includes(parsed.status), `${name} text content should summarize structured status`);
+  transcript.push({ tool: name, args, telemetry: parsed.telemetry, text, result: parsed });
   return parsed;
 }
 

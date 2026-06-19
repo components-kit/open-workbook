@@ -23,6 +23,7 @@ describe("AgentOrchestrator Target Resolution", () => {
       const result = await agent.run({
         request: "Read headers and first 5 rows from Data A1:D4",
         mode: "answer",
+        responseMode: "verbose",
         target: { sheetName: "Data", range: "A1:D4" }
       });
 
@@ -62,8 +63,13 @@ describe("AgentOrchestrator Target Resolution", () => {
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).kind).toBe("range_profile");
       expect((result.answer as any).rows).toBeUndefined();
-      expect((result.answer as any).emptySummary.emptyCells).toBe(97);
-      expect((result.answer as any).sparseRows).toEqual([
+      expect((result.answer as any).emptySummary).toBeUndefined();
+      expect((result.answer as any).sparseRows).toBeUndefined();
+      expect((result.answer as any).resultUri).toMatch(/^excel:\/\/agent\/results\/agentres_/);
+      const resultId = String((result.answer as any).resultUri).split("/").pop()!;
+      const stored = agent.getResultResource(resultId) as any;
+      expect(stored.answer.emptySummary.emptyCells).toBe(97);
+      expect(stored.answer.sparseRows).toEqual([
         { row: 1, cells: [{ column: "A", address: "A1", value: "Owner" }, { column: "J", address: "J1", value: "Status" }] },
         { row: 10, cells: [{ column: "J", address: "J10", value: "Ready" }] }
       ]);
@@ -79,8 +85,8 @@ describe("AgentOrchestrator Target Resolution", () => {
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "B3", label: "selected cell" });
       expect((result.answer as any).rows).toBeUndefined();
-      expect((result.answer as any).emptySummary).toMatchObject({ sourceCells: 1, nonEmptyCells: 0, emptyCells: 1 });
-      expect((result.answer as any).warning).toContain("No non-empty cells");
+      expect((result.answer as any).emptySummary).toBeUndefined();
+      expect(result.warnings[0]).toContain("No non-empty cells");
     });
 
   it("resolves exact raw sheet targets to the used range when no table exists", async () => {
@@ -107,6 +113,7 @@ describe("AgentOrchestrator Target Resolution", () => {
 
       const result = await agent.run({
         request: "Read 'Apr 2026'!O1:AE3 actual values",
+        responseMode: "verbose",
         mode: "answer"
       });
 
@@ -251,7 +258,9 @@ describe("AgentOrchestrator Target Resolution", () => {
 
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "B2", label: "selected cell" });
-      expect((result.answer as any).rows).toEqual([["A-100"]]);
+      expect((result.answer as any).rows).toBeUndefined();
+      const resultId = String((result.answer as any).resultUri).split("/").pop()!;
+      expect((agent.getResultResource(resultId) as any).answer.rows).toEqual([["A-100"]]);
       expect(result.telemetry.internalReadCount).toBe(1);
     });
 
@@ -297,7 +306,7 @@ describe("AgentOrchestrator Target Resolution", () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
 
-      const result = await agent.run({ request: "Can you compare Mar and Apr, how our company perform", mode: "answer" });
+      const result = await agent.run({ request: "Can you compare Mar and Apr, how our company perform", mode: "answer", responseMode: "verbose" });
 
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).kind).toBe("comparison_profile");
@@ -313,7 +322,7 @@ describe("AgentOrchestrator Target Resolution", () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
 
-      const result = await agent.run({ request: "Read all data from columns AG to AJ in the Apr 2026 sheet.", mode: "answer" });
+      const result = await agent.run({ request: "Read all data from columns AG to AJ in the Apr 2026 sheet.", mode: "answer", responseMode: "verbose" });
 
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]?.sheetName).toBe("Apr 2026");
@@ -413,7 +422,7 @@ describe("AgentOrchestrator Target Resolution", () => {
       expect(resolved.status).toBe("SUCCESS");
       expect((resolved.answer as any).kind).toBe("table_schema");
       expect((resolved.answer as any).range).toBe("F1:I4");
-      expect((resolved.answer as any).columns.map((column: any) => column.name)).toEqual(["Date", "Account", "Amount", "Status"]);
+      expect((resolved.answer as any).schemaSummary.columns.map((column: any) => column.name)).toEqual(["Date", "Account", "Amount", "Status"]);
       expect(resolved.telemetry.internalReadCount).toBe(0);
     });
 
@@ -470,7 +479,8 @@ describe("AgentOrchestrator Target Resolution", () => {
 
       const result = await agent.run({
         request: "Analyze financial 2026",
-        mode: "answer"
+        mode: "answer",
+        responseMode: "verbose"
       });
 
       expect(result.status).toBe("AMBIGUOUS_TARGET");
@@ -485,6 +495,7 @@ describe("AgentOrchestrator Target Resolution", () => {
       const result = await agent.run({
         request: "Analyze financial 2026",
         mode: "answer",
+        responseMode: "verbose",
         intent: { action: "read_values", targetHints: ["Financials - June 2026"] }
       });
 

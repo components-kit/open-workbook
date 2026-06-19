@@ -38,6 +38,40 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(result.telemetry.internalReadCount).toBe(1);
     });
 
+  it("summarizes large range requests without reading cell values", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Read Data!A1:XFD1048576",
+        mode: "answer",
+        target: { sheetName: "Data", range: "A1:XFD1048576" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("large_range_guard");
+      expect((result.answer as any).requestedCells).toBeGreaterThan(10000);
+      expect(result.warnings[0]).toContain("Large range read was summarized");
+      expect(result.telemetry.internalReadCount).toBe(0);
+      expect(result.telemetry.fullReadCellCount).toBe(0);
+      expect(runtime.readBatchCount).toBe(0);
+    });
+
+  it("asks callers to narrow full workbook cell dumps", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({ request: "Print every cell in every sheet.", mode: "answer" });
+
+      expect(result.status).toBe("NEEDS_INPUT");
+      expect(result.nextAction).toBe("ask_user");
+      expect((result.answer as any).kind).toBe("workbook_dump_guard");
+      expect((result.answer as any).refusedFullCellDump).toBe(true);
+      expect((result.answer as any).alternatives).toContain("specific range");
+      expect(result.telemetry.internalReadCount).toBe(0);
+      expect(runtime.readBatchCount).toBe(0);
+    });
+
   it("uses compact table reads for table-target value answers", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -61,10 +95,49 @@ describe("AgentOrchestrator Read Answer Routing", () => {
 
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).kind).toBe("table_compact_read");
-      expect((result.answer as any).values).toEqual([[123, "Open"], [456, "Closed"]]);
+      expect((result.answer as any).values).toBeUndefined();
+      expect((result.answer as any).resultUri).toMatch(/^excel:\/\/agent\/results\/agentres_/);
+      expect((result.answer as any).fullResultUri).toMatch(/\?view=full$/);
+      expect(result.continuation).toMatchObject({
+        workbookContextId: metadata.workbookContextId,
+        resultUri: (result.answer as any).resultUri,
+        fullResultUri: (result.answer as any).fullResultUri,
+        responseMode: "brief"
+      });
       expect((result.answer as any).projectedColumns.map((column: any) => column.name)).toEqual(["Amount", "Status"]);
+      const resultId = String((result.answer as any).resultUri).split("/").pop()!;
+      expect((agent.getResultResource(resultId) as any).answer.values).toEqual([[123, "Open"], [456, "Closed"]]);
+      const summary = agent.getResultResource(resultId, { view: "summary" }) as any;
+      expect(summary.answer.values).toBeUndefined();
+      expect(summary.answer.resultUri).toBe((result.answer as any).resultUri);
       expect(result.telemetry.internalReadCount).toBe(1);
       expect(runtime.runtimeMethodCalls["table.read"]).toBe(1);
       expect(runtime.readBatchCount).toBe(0);
+    });
+
+  it("preserves compact table row details in verbose mode", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_table_read_verbose");
+      metadata.tables[0]!.columns = [
+        { index: 0, letter: "A", name: "Date", normalizedName: "date", inferredType: "date" },
+        { index: 1, letter: "B", name: "Account", normalizedName: "account", inferredType: "text" },
+        { index: 2, letter: "C", name: "Amount", normalizedName: "amount", inferredType: "number" },
+        { index: 3, letter: "D", name: "Status", normalizedName: "status", inferredType: "status" }
+      ];
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Read the first two Amount and Status rows from Transactions",
+        mode: "answer",
+        responseMode: "verbose",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "read_values" },
+        target: { tableName: "Transactions" },
+        values: { columns: ["Amount", "Status"], rowLimit: 2 }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).values).toEqual([[123, "Open"], [456, "Closed"]]);
     });
 });

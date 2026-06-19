@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
-import { AGENT_INTENT_ACTIONS, type AgentRunExecutionContext, type AgentRunInput } from "@components-kit/open-workbook-protocol";
+import { type AgentRunExecutionContext, type AgentRunInput } from "@components-kit/open-workbook-protocol";
 import type { RuntimeFacade } from "../runtime-facade.js";
 import { agentJsonResult } from "../results.js";
 
@@ -43,8 +43,17 @@ function agentRunInputSchema() {
     operationId: z.string().optional(),
     transactionId: z.string().optional(),
     confirmationToken: z.string().optional(),
+    continuation: z.object({
+      workbookContextId: z.string().optional(),
+      operationId: z.string().optional(),
+      transactionId: z.string().optional(),
+      resultUri: z.string().optional(),
+      fullResultUri: z.string().optional(),
+      nextRequest: z.string().optional(),
+      responseMode: z.enum(["brief", "standard", "verbose"]).optional()
+    }).optional(),
     intent: z.object({
-      action: z.enum(AGENT_INTENT_ACTIONS).optional(),
+      action: z.string().optional().describe("Optional internal action hint, such as read_values, write_values, validate_workbook, or create_pivot_chart_summary. Invalid hints are ignored by the backend."),
       confidence: z.number().min(0).max(1).optional(),
       reason: z.string().optional(),
       targetHints: z.array(z.string()).optional()
@@ -82,6 +91,15 @@ function agentRunOutputSchema() {
     candidates: z.array(z.any()).optional(),
     proof: z.array(z.any()),
     resourceLinks: z.array(z.any()),
+    continuation: z.object({
+      workbookContextId: z.string().optional(),
+      operationId: z.string().optional(),
+      transactionId: z.string().optional(),
+      resultUri: z.string().optional(),
+      fullResultUri: z.string().optional(),
+      nextRequest: z.string().optional(),
+      responseMode: z.enum(["brief", "standard", "verbose"]).optional()
+    }).optional(),
     nextAction: z.string(),
     warnings: z.array(z.string()),
     telemetry: z.object({
