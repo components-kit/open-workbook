@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { performance } from "node:perf_hooks";
-import { BatchCompiler, chunkMatrixRows } from "../packages/excel-core/dist/index.js";
+import { BatchCompiler, chunkMatrixRows } from "../../packages/excel-core/dist/index.js";
 
 const workbookId = "workbook_benchmark";
 const scenarios = [

@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 CLI="$ROOT_DIR/packages/cli/dist/index.js"
 START_FILE_BRIDGE=1
 SIDELOAD_MAC=0

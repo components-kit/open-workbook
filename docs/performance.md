@@ -87,7 +87,7 @@ Run:
 corepack pnpm benchmark:synthetic
 ```
 
-This builds the repo, then runs `scripts/benchmark-synthetic.mjs` against compiled core modules. The benchmark emits JSON for:
+This builds the repo, then runs `tests/benchmarks/synthetic.mjs` against compiled core modules. The benchmark emits JSON for:
 
 - large value matrix chunking
 - large formula matrix chunking

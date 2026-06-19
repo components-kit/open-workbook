@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-const repoRoot = path.resolve(import.meta.dirname, "..");
+const repoRoot = path.resolve(import.meta.dirname, "../..");
 const baseArtifactDir = readArg("--artifact-dir") ?? process.env.OPEN_WORKBOOK_E2E_AGENT_MATRIX_DIR ?? path.join(tmpdir(), "open-workbook-e2e-agent-matrix");
 const scenarios = readArg("--scenarios") ?? process.env.OPEN_WORKBOOK_E2E_AGENT_MATRIX_SCENARIOS ?? "quality";
 const reasoning = readArg("--reasoning") ?? process.env.OPEN_WORKBOOK_E2E_CODEX_REASONING ?? "low";
@@ -59,7 +59,7 @@ function runProfile(profile) {
   const artifactDir = path.join(baseArtifactDir, profile.label);
   mkdirSync(artifactDir, { recursive: true });
   const args = [
-    "scripts/e2e-codex-agent.mjs",
+    "tests/e2e/codex-agent.mjs",
     "--scenarios",
     scenarios,
     "--report-only",

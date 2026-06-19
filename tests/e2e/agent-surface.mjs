@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const tempRoot = mkdtempSync(path.join(tmpdir(), "open-workbook-e2e-agent-surface-"));
 const artifactsDir = path.join(tempRoot, "artifacts");
 mkdirSync(artifactsDir, { recursive: true });

@@ -36,7 +36,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node -e \"require('node:fs').chmodSync('dist/index.js', 0o755)\"",
     "check": "tsc -p tsconfig.json --noEmit",
-    "prepack": "node ../../scripts/package-cli-assets.mjs",
+    "package:assets": "node scripts/package-assets.mjs",
+    "prepack": "node scripts/package-assets.mjs",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {

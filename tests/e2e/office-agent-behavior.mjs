@@ -6,13 +6,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const tempRoot = mkdtempSync(path.join(tmpdir(), "open-workbook-office-agent-behavior-"));
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const defaultRepoArtifactsDir = path.join(repoRoot, ".open-workbook", "office-agent-behavior", runId, "artifacts");
 const artifactsDir = readArg("--artifact-dir") ?? process.env.OPEN_WORKBOOK_OFFICE_AGENT_BEHAVIOR_DIR ?? defaultRepoArtifactsDir;
 mkdirSync(artifactsDir, { recursive: true });
-const productionScenariosPath = path.join(repoRoot, "scripts", "fixtures", "office-agent-production-scenarios.json");
+const productionScenariosPath = path.join(repoRoot, "tests", "e2e", "fixtures", "office-agent-production-scenarios.json");
 
 const workbookId = "workbook_office_behavior";
 const backendPort = Number(readArg("--port") ?? process.env.OPEN_WORKBOOK_OFFICE_AGENT_BEHAVIOR_PORT ?? 39880 + Math.floor(Math.random() * 300));
@@ -1096,7 +1096,7 @@ class McpClient {
 
 class FakeAddin {
   static async connect(url, workbook) {
-    const { WebSocket } = await import("../apps/backend/node_modules/ws/wrapper.mjs");
+    const { WebSocket } = await import("../../apps/backend/node_modules/ws/wrapper.mjs");
     const socket = new WebSocket(url);
     const addin = new FakeAddin(socket, workbook);
     await new Promise((resolve, reject) => {

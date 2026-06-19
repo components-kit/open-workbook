@@ -1,9 +1,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { findRepoRoot } from "../lib/repo-root.mjs";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(__dirname, "..");
+const ROOT = findRepoRoot(import.meta.url);
 const OUTPUT_FILE = join(ROOT, "llms-full.txt");
 
 const HEADER = `# Open Workbook

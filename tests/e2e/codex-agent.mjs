@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-const repoRoot = path.resolve(import.meta.dirname, "..");
+const repoRoot = path.resolve(import.meta.dirname, "../..");
 const tempRoot = mkdtempSync(path.join(tmpdir(), "open-workbook-e2e-codex-"));
 const artifactsDir = process.env.OPEN_WORKBOOK_E2E_AGENT_ARTIFACT_DIR ?? path.join(tempRoot, "artifacts");
 mkdirSync(artifactsDir, { recursive: true });
@@ -788,7 +788,7 @@ function columnToNumber(column) {
 
 class MinimalFakeAddin {
   static async connect(url, scenarioId) {
-    const { WebSocket } = await import("../apps/backend/node_modules/ws/wrapper.mjs");
+    const { WebSocket } = await import("../../apps/backend/node_modules/ws/wrapper.mjs");
     const socket = new WebSocket(url);
     const addin = new MinimalFakeAddin(socket, scenarioId);
     await new Promise((resolve, reject) => {

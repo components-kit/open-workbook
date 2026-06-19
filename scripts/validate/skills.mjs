@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, join, relative } from "node:path";
+import { findRepoRoot } from "../lib/repo-root.mjs";
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT = findRepoRoot(import.meta.url);
 const SKILLS_DIR = join(ROOT, "skills");
 const REQUIRED_PRIMARY_TERMS = [
   "excel.agent.run",

@@ -1,8 +1,8 @@
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { findRepoRoot } from "../../../scripts/lib/repo-root.mjs";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const root = findRepoRoot(import.meta.url);
 const out = join(root, "packages/cli/assets");
 
 const copies = [

@@ -99,7 +99,7 @@ Before publishing:
 8. Confirm `@components-kit/open-workbook-excel-addin` remains private.
 9. Confirm npm publish access is public for publishable scoped packages.
 
-`corepack pnpm verify` runs `scripts/validate-package-metadata.mjs`, which enforces the package version, repository, public/private publish intent, `dist` entrypoints, README presence, and publish access rules above. Use pnpm for packing/publishing so workspace dependencies are rewritten to publishable semver ranges.
+`corepack pnpm verify` runs `scripts/validate/package-metadata.mjs`, which enforces the package version, repository, public/private publish intent, `dist` entrypoints, README presence, and publish access rules above. Use pnpm for packing/publishing so workspace dependencies are rewritten to publishable semver ranges.
 
 ## End-User Install Shape
 

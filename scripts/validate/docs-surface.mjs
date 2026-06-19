@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import { getInternalCapabilityCatalog } from "../packages/protocol/dist/tools.js";
+import { getInternalCapabilityCatalog } from "../../packages/protocol/dist/tools.js";
 
-const toolSurface = readFileSync(new URL("../docs/tool-surface.md", import.meta.url), "utf8");
-const skill = readFileSync(new URL("../skills/open-workbook-excel/SKILL.md", import.meta.url), "utf8");
-const packagedSkill = readFileSync(new URL("../packages/cli/assets/instructions/open-workbook-excel/SKILL.md", import.meta.url), "utf8");
+const toolSurface = readFileSync(new URL("../../docs/tool-surface.md", import.meta.url), "utf8");
+const skill = readFileSync(new URL("../../skills/open-workbook-excel/SKILL.md", import.meta.url), "utf8");
+const packagedSkill = readFileSync(new URL("../../packages/cli/assets/instructions/open-workbook-excel/SKILL.md", import.meta.url), "utf8");
 const catalogTools = getInternalCapabilityCatalog({ includePreview: true }).map((tool) => tool.name).sort();
 const missing = catalogTools.filter((name) => !toolSurface.includes(`\`${name}\``));
 

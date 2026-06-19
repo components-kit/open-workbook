@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { findRepoRoot } from "../lib/repo-root.mjs";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = findRepoRoot(import.meta.url);
 const protocolToolsPath = path.join(repoRoot, "packages/protocol/src/tools.ts");
 const backendCapabilitiesPath = path.join(repoRoot, "apps/backend/src/excel-capabilities.ts");
 const agentHandlersPath = path.join(repoRoot, "apps/backend/src/agent-action-handlers.ts");

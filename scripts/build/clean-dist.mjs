@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 import { rmSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { findRepoRoot } from "../lib/repo-root.mjs";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const root = findRepoRoot(import.meta.url);
 const distDirs = [
   "apps/backend/dist",
   "apps/excel-addin/dist",

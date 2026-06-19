@@ -129,7 +129,7 @@ function compareDirectoryFiles(sourceDir, generatedDir) {
     if (generatedSet.has(file)) {
       const source = readFileSync(join(sourceDir, file), "utf8");
       const generated = readFileSync(join(generatedDir, file), "utf8");
-      expect(generated === source, `${generatedDir}/${file} is stale; run pnpm run build or node scripts/package-cli-assets.mjs`);
+      expect(generated === source, `${generatedDir}/${file} is stale; run pnpm run build or corepack pnpm --filter @components-kit/open-workbook package:assets`);
     }
   }
   for (const file of generatedFiles) {

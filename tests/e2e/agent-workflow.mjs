@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const tempRoot = mkdtempSync(path.join(tmpdir(), "open-workbook-e2e-agent-workflow-"));
 const artifactsDir = path.join(tempRoot, "artifacts");
 mkdirSync(artifactsDir, { recursive: true });
@@ -327,7 +327,7 @@ class McpClient {
 
 class FakeAddin {
   static async connect(url, workbook) {
-    const { WebSocket } = await import("../apps/backend/node_modules/ws/wrapper.mjs");
+    const { WebSocket } = await import("../../apps/backend/node_modules/ws/wrapper.mjs");
     const socket = new WebSocket(url);
     const addin = new FakeAddin(socket, workbook);
     await new Promise((resolve, reject) => {

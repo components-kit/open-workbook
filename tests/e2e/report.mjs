@@ -36,7 +36,7 @@ const report = {
     {
       name: "test:e2e:agent-surface",
       command: "pnpm run test:e2e:agent-surface",
-      status: scriptExists("scripts/e2e-agent-surface.mjs") ? "implemented" : "missing",
+      status: scriptExists("tests/e2e/agent-surface.mjs") ? "implemented" : "missing",
       startsServices: ["Open Workbook MCP stdio server"],
       coverage: [
         "Default MCP tools/list exposes only excel.agent.run",
@@ -55,7 +55,7 @@ const report = {
     {
       name: "test:e2e:agent-workflow",
       command: "pnpm run test:e2e:agent-workflow",
-      status: scriptExists("scripts/e2e-agent-workflow.mjs") ? "implemented" : "missing",
+      status: scriptExists("tests/e2e/agent-workflow.mjs") ? "implemented" : "missing",
       startsServices: ["Open Workbook MCP stdio server", "Fake Excel add-in WebSocket client"],
       coverage: [
         "Default MCP tools/list exposes only excel.agent.run while connected to a workbook",
@@ -82,7 +82,7 @@ const report = {
     {
       name: "test:e2e:agent:core",
       command: "pnpm run test:e2e:agent:core",
-      status: scriptExists("scripts/e2e-codex-agent.mjs") ? "implemented" : "missing",
+      status: scriptExists("tests/e2e/codex-agent.mjs") ? "implemented" : "missing",
       startsServices: ["Codex exec", "Open Workbook MCP via temporary Codex config", "Scenario fake Excel add-in"],
       coverage: [
         "Signed-in Codex CLI can initialize Open Workbook MCP",
@@ -110,7 +110,7 @@ const report = {
     {
       name: "test:e2e:agent:quality",
       command: "pnpm run test:e2e:agent:quality",
-      status: scriptExists("scripts/e2e-codex-agent.mjs") ? "implemented" : "missing",
+      status: scriptExists("tests/e2e/codex-agent.mjs") ? "implemented" : "missing",
       startsServices: ["Codex exec", "Open Workbook MCP via temporary Codex config", "Scenario fake Excel add-in"],
       coverage: [
         "Natural-language agent decisions for sheet/range/formula creation",
@@ -132,7 +132,7 @@ const report = {
     {
       name: "test:e2e:agent:quality:compare",
       command: "pnpm run test:e2e:agent:quality:compare",
-      status: scriptExists("scripts/e2e-agent-model-matrix.mjs") ? "implemented" : "missing",
+      status: scriptExists("tests/e2e/agent-model-matrix.mjs") ? "implemented" : "missing",
       startsServices: ["Sequential Codex agent quality runs per configured model profile"],
       coverage: [
         "Report-only comparison between cheap and frontier model profiles",
@@ -151,7 +151,7 @@ const report = {
     {
       name: "test:e2e:live:mac",
       command: "pnpm run test:e2e:live:mac",
-      status: scriptExists("scripts/e2e-live-smoke.mjs") ? "opt-in connectivity smoke" : "missing",
+      status: scriptExists("tests/e2e/live-smoke.mjs") ? "opt-in connectivity smoke" : "missing",
       startsServices: ["Expected: desktop Excel with add-in and local backend"],
       coverage: [
         "Backend /status reachability",
@@ -164,7 +164,7 @@ const report = {
     {
       name: "test:e2e:live:windows",
       command: "pnpm run test:e2e:live:windows",
-      status: scriptExists("scripts/e2e-live-smoke.mjs") ? "opt-in connectivity smoke" : "missing",
+      status: scriptExists("tests/e2e/live-smoke.mjs") ? "opt-in connectivity smoke" : "missing",
       startsServices: ["Expected: desktop Excel with add-in and local backend"],
       coverage: [
         "Backend /status reachability",
