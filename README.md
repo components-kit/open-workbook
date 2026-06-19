@@ -222,7 +222,7 @@ Mutating operations should follow the same lifecycle:
 - [Installation](docs/installation.md)
 - [MCP Clients](docs/mcp-clients.md)
 - [Generic Instructions](docs/instructions.md)
-- [Advanced Runtime](docs/advanced-runtime.md)
+- [Runtime Configuration](docs/advanced-runtime.md)
 - [Architecture](docs/architecture.md)
 - [Tool Surface](docs/tool-surface.md)
 - [Backup Lifecycle](docs/backup-lifecycle.md)
@@ -232,7 +232,7 @@ Mutating operations should follow the same lifecycle:
 - [Tables, Filters, and Sorts](docs/table-filter-sort.md)
 - [Names and Regions](docs/names-regions.md)
 - [PivotTables and Charts](docs/pivot-chart.md)
-- [Advanced Range Reads](docs/advanced-range-reads.md)
+- [Range Metadata Reads](docs/advanced-range-reads.md)
 - [Validation and Repair](docs/validation-repair.md)
 - [Permissions and Cleaning](docs/permissions-cleaning.md)
 - [Workbook File Lifecycle](docs/workbook-file-lifecycle.md)
@@ -244,7 +244,6 @@ Mutating operations should follow the same lifecycle:
 - [Packaging and Publishing](docs/packaging.md)
 - [Release Process](docs/release.md)
 - [Sideloading](docs/sideloading.md)
-- [Roadmap](docs/roadmap.md)
 
 ## Changelog
 

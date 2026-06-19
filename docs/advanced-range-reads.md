@@ -1,6 +1,6 @@
-# Advanced Range Reads
+# Range Metadata Reads
 
-Advanced range reads expose metadata that agents need before editing a workbook.
+Range metadata reads expose workbook details that the backend may use before editing a workbook. Normal MCP clients should request these through `excel.agent.run` with `mode: "answer"` and a concrete target; the range-specific capabilities remain backend-owned.
 
 ## Implemented
 

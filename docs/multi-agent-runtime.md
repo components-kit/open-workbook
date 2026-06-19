@@ -97,7 +97,7 @@ Agent identity is assigned by the daemon/MCP adapter, not by user prompt text. M
 
 ## Safe Plan Refresh
 
-Plans store target range fingerprints during preview. Before an old plan is applied, agents can call `excel.plan.refresh_preview` or `excel.plan.rebase`.
+Plans store target range fingerprints during preview. Before an old plan is applied, normal agents should ask `excel.agent.run` for a fresh preview or rebase-style recovery; internally this routes through plan refresh/rebase checks.
 
 - If the planned target ranges are unchanged, Open Workbook refreshes the preview fingerprints and the plan can continue to the normal transaction apply path.
 - If any target range changed after preview, refresh/rebase is blocked with `TARGET_REGION_CHANGED`.
@@ -110,9 +110,9 @@ Rollback is transaction-aware. Before a transaction rollback applies, Open Workb
 - If no later applied transaction overlaps the rollback scope, rollback can proceed through the plan rollback path.
 - If later work overlaps, rollback is blocked with `ROLLBACK_CONFLICT`.
 - If the transaction has no plan rollback metadata, rollback is blocked with `ROLLBACK_UNAVAILABLE` and the user should use backup repair or manual recovery.
-- Rollback previews are exposed through `excel.transaction.preview_rollback` so agents can explain risk before changing Excel.
-- When later related transactions must also be reverted, `excel.transaction.preview_rollback_chain` returns a newest-first rollback order and a confirmation token.
-- `excel.transaction.rollback_chain` applies that order only after the exact confirmation token is supplied, and stops if any step fails.
+- Rollback previews are exposed through `excel.agent.run` rollback flows so agents can explain risk before changing Excel.
+- When later related transactions must also be reverted, the backend can return a newest-first rollback order and a confirmation token.
+- Rollback chains apply only after the exact confirmation token is supplied, and stop if any step fails.
 
 ## Task Progress And Blockers
 
@@ -124,13 +124,13 @@ Tasks expose `progress`, `currentStep`, and `blockers` so agent status can be vi
 
 ## Task Scheduling
 
-`excel.task.evaluate_schedule` checks each task against explicit task dependencies, open blocking blockers, and active lock conflicts for the task's allowed scopes.
+Task schedule evaluation checks each task against explicit task dependencies, open blocking blockers, and active lock conflicts for the task's allowed scopes.
 
 - Ready tasks return `state: "ready"` with `suggestedAction` of `start` or `resume`.
 - Tasks waiting on incomplete dependencies return `state: "waiting_dependencies"`.
 - Tasks blocked by active locks return `state: "waiting_locks"`.
 - Lock-wait decisions include `nextRetryAt` when the active conflicting lock expiry is known.
-- `excel.task.resume_ready` applies the scheduler result and moves blocked tasks whose waits cleared back to `open` or `claimed`.
+- Ready-task resume applies the scheduler result and moves blocked tasks whose waits cleared back to `open` or `claimed`.
 
 ## Lock Lease Policy
 
@@ -160,14 +160,14 @@ Conflict records include structured guidance for agents and UI surfaces.
 - Structure conflicts stay blocked behind manual review.
 - Rollback conflicts point agents toward rollback-chain preview or backup/template repair.
 
-Use `excel.conflict.get_guidance` for recent runtime conflicts, or `excel.conflict.explain` to explain a supplied conflict record.
+Use `excel.agent.run` status/prepare results for recent runtime conflicts. Backend conflict guidance can also explain a supplied conflict record.
 
 ## Conflict Telemetry
 
 Conflict telemetry records each persisted runtime conflict and tracks whether lock waits clear when the blocking lock is released.
 
-- `excel.conflict.get_telemetry` summarizes conflict counts, open/cleared counts, hot scopes, hot tasks, hot agents, codes, and primary actions.
-- `excel.conflict.clear_telemetry` clears telemetry for one workbook or the whole runtime.
+- Conflict telemetry summarizes conflict counts, open/cleared counts, hot scopes, hot tasks, hot agents, codes, and primary actions.
+- Conflict telemetry can be cleared for one workbook or the whole runtime by backend-owned maintenance flows.
 - Telemetry is persisted with daemon state and capped to the most recent runtime records.
 
 ## Remaining Production Hardening

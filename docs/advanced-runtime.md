@@ -1,4 +1,4 @@
-# Advanced Runtime
+# Runtime Configuration
 
 The default technical-user flow is:
 

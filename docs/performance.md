@@ -9,16 +9,16 @@ Open Workbook treats speed as a correctness requirement because slow workbook au
 - Do not call `context.sync()` inside per-cell loops.
 - Use 2D array assignments for values and formulas.
 - Load only requested Office.js properties.
-- Start unknown target discovery with lookup tools: `excel.lookup.search_workbook` or `excel.lookup.resolve_range`.
+- Start unknown target discovery through `excel.agent.run` `mode: "find"`; the backend can route internally to lookup capabilities such as `excel.lookup.search_workbook` or `excel.lookup.resolve_range`.
 - On the default agent surface, let `excel.agent.run` choose lightweight structure metadata, targeted reads, and compact proof.
 - Internally, start known-scope large workbook reads with compact context: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, or `excel.range.get_summary`.
 - Internally, prefer `excel.table.read_compact` and `excel.range.read_compact` for exploratory reads, broad used ranges, and large tables; page or project only the rows/columns needed for the task.
-- Use `excel.validate.compact` when validation counts and examples are enough; fetch the returned compact resource only when full details are needed.
+- Use `excel.agent.run` `mode: "validate"` when validation counts and examples are enough; the backend can route internally to `excel.validate.compact` and return resource links for full details.
 - Reserve full reads for explicit user requests, audits, exports, or exact-data tasks that genuinely need every cell or facet.
 - Group operations by workbook, sheet, and contiguous range.
 - Chunk large payloads before Office.js limits.
 - On the public agent surface, describe large generated batches through `excel.agent.run`; the backend preflights them and decides whether to apply directly, submit to the queue, or chunk safely.
-- Use `excel.range.write_styles_many` for grouped report styling instead of many parallel single-range style writes; large style entry lists are split into queued parent jobs.
+- Describe grouped report styling through one `excel.agent.run` preview instead of many parallel single-range style writes; internally, large style entry lists can route to `excel.range.write_styles_many` and queued parent jobs.
 - Surface queued or long-running mutations through transaction progress instead of hiding them behind parallel write calls.
 - For chunked work, surface returned job progress so the user sees one update with chunk progress.
 - Suspend calculation and screen updating only around large operations.
@@ -57,7 +57,7 @@ Snapshot creation and mutation results can contain full before/after workbook pa
 
 For retry-prone mutation paths, pass a stable `idempotencyKey`. Replays with the same key and payload return `idempotentReplay: true` without applying the edit again; the same key with a different payload is rejected. Successful compact mutations also invalidate stale workbook-local compact resources and report `invalidatedContextIds`, preventing old read or validation context from being reused after an edit.
 
-Lookup tools are cheaper than workbook scans when the agent does not know where data lives. They return ranked sheet/table/column/header/entity/range candidates and encoded `matchId` values; use `excel.lookup.inspect_match` on one candidate before falling back to `excel.range.read_compact`.
+Lookup capabilities are cheaper than workbook scans when the backend does not know where data lives. They return ranked sheet/table/column/header/entity/range candidates and encoded `matchId` values; normal agents should ask through `excel.agent.run` `mode: "find"` or retry with a returned candidate instead of calling lookup primitives directly.
 
 Initial releases collect telemetry first, then set hard SLOs from real workbook tests.
 
@@ -65,19 +65,19 @@ Initial releases collect telemetry first, then set hard SLOs from real workbook 
 
 Compact workflows should usually cut large workbook context by 80-99%:
 
-- Use `excel.table.get_schema` plus a 50-row `excel.table.read_compact` page instead of sending a 10,000-row table.
-- Use `excel.range.get_summary` plus projected `excel.range.read_compact` facets instead of `excel.range.read_full` over a used range.
-- Let `excel.range.read_compact` use `cellOutput: "auto"` for sparse worksheets; mostly empty ranges return `sparseRows` and `emptySummary` instead of a large rectangular matrix.
-- Use `excel.lookup.resolve_range` instead of reading every sheet's first 100 rows to find a target column.
-- Use `excel.validate.compact` or `excel.snapshot.compare_compact` internally when issue/diff counts and examples are enough; fetch the returned `resourceUri` only for full detail review.
+- Let `excel.agent.run` answer table questions from schema plus a compact page instead of sending a 10,000-row table.
+- Let `excel.agent.run` answer used-range questions from summaries plus projected compact facets instead of full used-range matrices.
+- Let internal compact range reads use sparse output for mostly empty worksheets instead of large rectangular matrices.
+- Use `mode: "find"` instead of reading every sheet's first 100 rows to find a target column.
+- Use validation or snapshot comparison through `excel.agent.run`; fetch returned resource links only for full detail review.
 
 ## Model Routing
 
 Compact discovery, schema inspection, deterministic table/range mutations, validation proof, and rollback reporting are good candidates for cheaper models because Open Workbook handles the Excel mechanics locally. Escalate to larger models when the task requires ambiguous business reasoning, complex transformation design, or user-facing narrative synthesis from multiple compact evidence sources.
 
-Use `excel.workflow.inspect_analyze` when the user asks for deterministic workbook facts such as totals, counts, missing values, duplicates, column profiling, or basic numeric summaries. The MCP server computes those locally and returns compact proof plus `contextId` instead of sending raw rows to the model.
+Use `excel.agent.run` for deterministic workbook facts such as totals, counts, missing values, duplicates, column profiling, or basic numeric summaries. The backend can route internally to analysis workflows and return compact proof plus `contextId` instead of sending raw rows to the model.
 
-Use `excel.workflow.rollback_validate` for recovery tasks that should rollback or restore, recalculate, validate, and return compact proof in one call.
+Use `excel.agent.run` `mode: "rollback"` for recovery tasks that should roll back or restore, recalculate, validate, and return compact proof in one call.
 
 ## Synthetic Core Benchmark
 

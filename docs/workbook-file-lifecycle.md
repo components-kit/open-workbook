@@ -91,7 +91,7 @@ Backup lifecycle operations emit collaboration audit events: `backup.created`, `
 
 Set `OPEN_WORKBOOK_FILE_BRIDGE_TIMEOUT_MS` to override the default 30000 ms backend-to-bridge timeout. Set `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` to a path-delimited allowlist of output directories for native Save As and Export Copy. Set `OPEN_WORKBOOK_EXPORT_DIR` to control the default output directory for add-in compressed-file exports.
 
-`excel.runtime.get_status` and `excel.runtime.get_capabilities` include `fileBridge` status, including the configured URL and route path, so agents can check whether native Save As or Export Copy is configured before requesting it. Pass `probeFileBridge: true` to `excel.runtime.get_status` when an agent needs a live `/status` health check with reachability, route, adapter platform, and supported-operation metadata.
+Runtime status and capability data include `fileBridge` status, including the configured URL and route path. Normal agents should request this through `excel.agent.run` `mode: "status"` or `mode: "prepare"` before native Save As or Export Copy workflows; backend diagnostics can probe the bridge route for reachability, adapter platform, and supported-operation metadata.
 
 ## Real Host Smoke
 

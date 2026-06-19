@@ -39,7 +39,9 @@ Agent instruction source:
 ## Docs
 
 - [Full LLM Reference](https://raw.githubusercontent.com/components-kit/open-workbook/main/llms-full.txt): Complete generated project reference in one file
-- [Agent Skill: Open Workbook Excel](https://github.com/components-kit/open-workbook/tree/main/skills/open-workbook-excel): Skill source for fast, reliable live Excel automation through Open Workbook MCP
+- [Agent Skill: Open Workbook Excel](https://github.com/components-kit/open-workbook/tree/main/skills/open-workbook-excel): Router skill for fast, reliable live Excel automation through Open Workbook MCP
+- [Agent Run Reference](https://github.com/components-kit/open-workbook/blob/main/skills/open-workbook-excel/references/agent-run.md): `excel.agent.run` modes, structured intent, preview/apply, multilingual routing, and proof handling
+- [Capability Map](https://github.com/components-kit/open-workbook/blob/main/skills/open-workbook-excel/references/capability-map.md): Backend-owned action groups used behind the one public tool
 - [README](https://github.com/components-kit/open-workbook/blob/main/README.md): Project overview, architecture, setup, and safety contract
 - [Installation](https://github.com/components-kit/open-workbook/blob/main/docs/installation.md): npx setup, MCP launch command, and Excel add-in startup flow
 - [MCP Clients](https://github.com/components-kit/open-workbook/blob/main/docs/mcp-clients.md): Generic MCP client configuration

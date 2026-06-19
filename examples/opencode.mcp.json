@@ -1,9 +1,0 @@
-{
-  "mcp": {
-    "open-workbook": {
-      "type": "local",
-      "command": ["npx", "-y", "@components-kit/open-workbook@latest", "mcp"],
-      "enabled": true
-    }
-  }
-}

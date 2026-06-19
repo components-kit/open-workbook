@@ -27,18 +27,18 @@ On the public surface, use `excel.agent.run` with `mode: "preview_update"` and t
 1. Resolve workbook, sheet, and target address.
 2. Preview non-trivial changes instead of applying blindly.
 3. Apply only with the returned confirmation token.
-4. Validate the target with `excel.validate.no_unintended_changes`, `excel.validate.no_formula_errors`, or a scoped validator.
+4. Validate the target through `excel.agent.run` `mode: "validate"` for unintended changes, formula errors, or a scoped validator.
 5. Return transaction IDs, backup IDs, warnings, and rollback options.
 
 For a one-range value update, keep the call on `excel.agent.run`; the backend may route internally to range write capabilities.
 
-For new sheets with formulas and number formats, prefer `excel.workflow.create_formula_sheet`.
+For new sheets with formulas and number formats, describe a formula-sheet request through `excel.agent.run`; the backend may route to its formula-sheet workflow.
 
 Combined mutating workflows return an internal `preflight` payload with runtime status, active context, capabilities, workbook map, and collaboration state before they mutate. On the public surface, use `excel.agent.run` preview/apply modes and let the backend select the matched workflow.
 
 ## Create A New Period Sheet From Template
 
-Prefer `excel.workflow.create_template_report` for standard template report creation.
+For standard template report creation, describe the report through `excel.agent.run`; the backend may route to its template-report workflow.
 
 1. Use `prepare`/`find` to identify the template and target period.
 2. Use `preview_update` with a clear template-sheet request.
@@ -50,7 +50,7 @@ Do not replace this workflow with `excel.sheet.copy` unless the user asks for a 
 
 ## Repair Formulas Or Styles
 
-Prefer `excel.workflow.repair_formula_errors` for ordinary formula error repairs when you can identify the error range plus a source formula or explicit formula matrix.
+For ordinary formula error repairs, use `excel.agent.run` with the error range plus a source formula or explicit formula matrix when known.
 
 1. Use `answer`/`find` to identify the error range or style target.
 2. Use `preview_update` with `intent.action: "write_formulas"` or `format_range` when the repair is clear.
@@ -85,7 +85,7 @@ Avoid full-table rewrites for layout changes such as column reorder; they are sl
 
 ## Create Or Update Pivots And Charts
 
-For a standard summary PivotTable plus chart, prefer `excel.workflow.create_pivot_chart_summary`.
+For a standard summary PivotTable plus chart, describe the source, pivot fields, and chart goal through `excel.agent.run`; the backend may route to its pivot/chart summary workflow.
 
 1. Use `prepare`/`find` to identify source tables/ranges and existing objects.
 2. Use `preview_update` for the requested pivot/chart summary workflow.
@@ -96,7 +96,7 @@ When Office.js cannot expose deterministic pivot/chart dimensions, return the ca
 
 ## Snapshot, Diff, And Rollback Preview
 
-Use `excel.workflow.preview_risky_edit` after discovery when the requested edit is scoped and the user expects proof, diff, and rollback preview. Pass a non-empty minimal operation list and leave `apply` enabled unless the user asked for preview only. It creates the before snapshot, plan preview, scoped apply, after snapshot, diff, and rollback preview in one response.
+Use `excel.agent.run` `mode: "preview_update"` after discovery when the requested edit is scoped and the user expects proof, diff, and rollback preview. The backend may route to its risky-edit workflow to create the before snapshot, plan preview, scoped apply, after snapshot, diff, and rollback preview.
 
 If the combined workflow is unavailable:
 

@@ -1,6 +1,6 @@
 # Validation and Repair
 
-Open Workbook exposes validation and repair tools so agents can check workbook integrity before and after writes, then recover safely when template-backed repair is available.
+Open Workbook exposes validation and repair capabilities so agents can check workbook integrity before and after writes, then recover safely when template-backed repair is available. Normal MCP clients request these through `excel.agent.run`; primitive names below describe backend-owned capability groups.
 
 ## Validation Reports
 
@@ -49,10 +49,10 @@ These return `CAPABILITY_UNAVAILABLE` until the add-in has safe, deterministic O
 
 ## Agent Flow
 
-Recommended lifecycle for risky workbook changes:
+Recommended lifecycle for risky workbook changes through `excel.agent.run`:
 
-1. Run `excel.validate.workbook` or scoped validators.
-2. Create a snapshot with `excel.snapshot.create`.
-3. Apply plan or batch changes.
-4. Run `excel.validate.no_unintended_changes`, `excel.validate.no_formula_errors`, and template-specific validators.
-5. Use template-backed repairs or `excel.plan.rollback` / `excel.workbook.restore_backup` if validation fails.
+1. Ask for `mode: "validate"` or a scoped preview before risky edits.
+2. Let the backend create snapshots/backups during preview or apply.
+3. Apply only with the returned confirmation token.
+4. Run `mode: "validate"` for unintended changes, formula errors, and template-specific checks.
+5. Use `mode: "rollback"` or template-backed repair guidance if validation fails.
