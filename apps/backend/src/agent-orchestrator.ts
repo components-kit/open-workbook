@@ -858,8 +858,8 @@ export class AgentOrchestrator {
   ): Promise<Omit<AgentRunOutput, "telemetry">> {
     const tableName = table.name ?? resolved.candidate.tableName ?? resolved.candidate.label;
     const values = input.values as Record<string, unknown> | undefined;
-    const rowOffset = nonNegativeInteger(values?.rowOffset) ?? 0;
-    const rowLimit = compactTableRowLimit(input, table.columns.length);
+    const rowOffset = tableReadRowOffset(input);
+    const rowLimit = compactTableRowLimit(input, table.columns.length, rowOffset);
     const columns = tableReadColumnsFromInput(input);
     const request: TableReadRequest = {
       workbookId: metadata.workbook.workbookId as WorkbookId,
@@ -2717,18 +2717,26 @@ export class AgentOrchestrator {
     if (!table?.name && !table?.id) {
       return undefined;
     }
+    const sortSpec = tableSortSpecFromInput(input, table);
     const amountColumn = table.columns.find((column) => /amount/i.test(column.name));
-    const key = amountColumn?.index ?? table.columns.findIndex((column) => /amount/i.test(column.name));
+    const key = sortSpec?.key ?? amountColumn?.index ?? table.columns.findIndex((column) => /amount/i.test(column.name));
     if (key < 0) {
       return undefined;
     }
     const tableName = table.name ?? table.id;
+    const sortColumn = table.columns.find((column) => column.index === key) ?? amountColumn;
     const request: TableSortRequest = {
       workbookId: metadata.workbook.workbookId as WorkbookId,
       tableName,
-      fields: [{ key, ascending: !/\b(highest|descending|desc|largest|lowest to highest)\b/i.test(input.request) }]
+      fields: [{
+        key,
+        ascending: sortSpec?.ascending ?? !/\b(highest|descending|desc|largest|lowest to highest)\b/i.test(input.request),
+        ...(sortSpec?.sortOn ? { sortOn: sortSpec.sortOn } : {}),
+        ...(sortSpec?.color ? { color: sortSpec.color } : {}),
+        ...(sortSpec?.dataOption ? { dataOption: sortSpec.dataOption } : {})
+      }]
     };
-    const changes: NonNullable<AgentRunOutput["changes"]> = [{ sheetName: table.sheetName, range: table.range, after: `sorted ${tableName} by ${amountColumn?.name ?? "Amount"}` }];
+    const changes: NonNullable<AgentRunOutput["changes"]> = [{ sheetName: table.sheetName, range: table.range, after: `sorted ${tableName} by ${sortColumn?.name ?? "Amount"}` }];
     const pending = this.createPendingOperation(metadata, {
       action: { kind: "table.sort", request },
       changes,
@@ -2741,7 +2749,7 @@ export class AgentOrchestrator {
       operationId: pending.operationId,
       confirmationToken: pending.confirmationToken,
       summary: pending.summary,
-      answer: { kind: "table_sort_preview", tableName, sheetName: table.sheetName, sortField: amountColumn?.name ?? "Amount", ascending: request.fields[0]?.ascending !== false },
+      answer: { kind: "table_sort_preview", tableName, sheetName: table.sheetName, sortField: sortColumn?.name ?? "Amount", ascending: request.fields[0]?.ascending !== false },
       metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
       changes,
       proof: [{ sheetName: table.sheetName, range: table.range, label: tableName }],
@@ -2890,18 +2898,18 @@ export class AgentOrchestrator {
   ): Omit<AgentRunOutput, "telemetry"> {
     const table = tableFromResolution(metadata, resolved);
     const tableName = table?.name ?? resolved.candidate.tableName ?? resolved.candidate.label;
-    const filters = Array.isArray(input.values?.filters) ? input.values.filters as TableApplyFiltersRequest["filters"] : [];
-    if (filters.length === 0) {
-      return tableNeedsInput(metadata, requestedMode, resolved, "Table filter previews need values.filters.");
+    const filters = tableFiltersFromInput(input);
+    if (!filters.ok) {
+      return tableNeedsInput(metadata, requestedMode, resolved, filters.summary);
     }
-    const request: TableApplyFiltersRequest = { workbookId: metadata.workbook.workbookId as WorkbookId, tableName, filters };
+    const request: TableApplyFiltersRequest = { workbookId: metadata.workbook.workbookId as WorkbookId, tableName, filters: filters.filters };
     return this.previewTablePendingAction(metadata, requestedMode, {
       action: { kind: "table.apply_filters", request },
       tableName,
       sheetName: resolved.sheetName,
       range: resolved.range,
-      summary: `Prepared ${filters.length} table filter(s) for ${tableName}.`,
-      answer: { kind: "table_apply_filters_preview", tableName, filterCount: filters.length },
+      summary: `Prepared ${filters.filters.length} table filter(s) for ${tableName}.`,
+      answer: { kind: "table_apply_filters_preview", tableName, filterCount: filters.filters.length },
       after: "applied table filters"
     });
   }
@@ -5122,6 +5130,99 @@ function tableColumnOrderFromInput(input: AgentRunInput): TableReorderColumnsReq
     : [];
 }
 
+function tableFiltersFromInput(input: AgentRunInput): { ok: true; filters: TableApplyFiltersRequest["filters"] } | { ok: false; summary: string } {
+  const raw = input.values?.filters;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { ok: false, summary: "Table filter previews need values.filters, for example [{ column: \"Status\", value: \"Open\" }]." };
+  }
+  const filters = raw.flatMap((filter) => {
+    const normalized = normalizeTableFilterSpec(filter);
+    return normalized ? [normalized] : [];
+  });
+  if (filters.length !== raw.length) {
+    return { ok: false, summary: "Table filter previews need each filter to include column plus criteria, criterion, or value." };
+  }
+  return { ok: true, filters };
+}
+
+function normalizeTableFilterSpec(filter: unknown): TableApplyFiltersRequest["filters"][number] | undefined {
+  if (!filter || typeof filter !== "object" || Array.isArray(filter)) {
+    return undefined;
+  }
+  const candidate = filter as Record<string, unknown>;
+  const column = typeof candidate.column === "string" || typeof candidate.column === "number" ? candidate.column : undefined;
+  if (column === undefined) {
+    return undefined;
+  }
+  if (candidate.criteria && typeof candidate.criteria === "object") {
+    return { column, criteria: candidate.criteria };
+  }
+  const raw = Object.prototype.hasOwnProperty.call(candidate, "criterion")
+    ? candidate.criterion
+    : Object.prototype.hasOwnProperty.call(candidate, "value")
+      ? candidate.value
+      : undefined;
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  const values = Array.isArray(raw) ? raw : [raw];
+  if (values.length === 0) {
+    return undefined;
+  }
+  return { column, criteria: { filterOn: "Values", values } };
+}
+
+function tableSortSpecFromInput(input: AgentRunInput, table: TableMetadata): TableSortRequest["fields"][number] | undefined {
+  const values = input.values as Record<string, unknown> | undefined;
+  const rawColumn = values?.sortBy ?? values?.column ?? values?.key;
+  const key = tableSortKey(table, rawColumn);
+  if (key === undefined) {
+    return undefined;
+  }
+  return {
+    key,
+    ascending: sortAscendingFromInput(values, input.request),
+    ...(isTableSortOn(values?.sortOn) ? { sortOn: values.sortOn } : {}),
+    ...(typeof values?.color === "string" ? { color: values.color } : {}),
+    ...(isTableSortDataOption(values?.dataOption) ? { dataOption: values.dataOption } : {})
+  };
+}
+
+function tableSortKey(table: TableMetadata, rawColumn: unknown): number | undefined {
+  if (typeof rawColumn === "number" && Number.isInteger(rawColumn) && rawColumn >= 0) {
+    return rawColumn;
+  }
+  const column = stringValue(rawColumn);
+  if (!column) {
+    return undefined;
+  }
+  const normalized = normalizeAgentLookup(column);
+  return table.columns.find((candidate) => normalizeAgentLookup(candidate.name) === normalized)?.index
+    ?? table.columns.find((candidate) => normalizeComparableText(candidate.name).includes(normalizeComparableText(column)))?.index;
+}
+
+function sortAscendingFromInput(values: Record<string, unknown> | undefined, request: string): boolean {
+  if (typeof values?.ascending === "boolean") {
+    return values.ascending;
+  }
+  const direction = stringValue(values?.direction ?? values?.order);
+  if (direction && /\b(desc|descending|high|highest|largest|z-a)\b/i.test(direction)) {
+    return false;
+  }
+  if (direction && /\b(asc|ascending|low|lowest|smallest|a-z)\b/i.test(direction)) {
+    return true;
+  }
+  return !/\b(highest|descending|desc|largest|lowest to highest)\b/i.test(request);
+}
+
+function isTableSortOn(value: unknown): value is NonNullable<TableSortRequest["fields"][number]["sortOn"]> {
+  return value === "Value" || value === "CellColor" || value === "FontColor" || value === "Icon";
+}
+
+function isTableSortDataOption(value: unknown): value is NonNullable<TableSortRequest["fields"][number]["dataOption"]> {
+  return value === "Normal" || value === "TextAsNumber";
+}
+
 function tableReadColumnsFromInput(input: AgentRunInput): Array<string | number> {
   const raw = input.values?.columns ?? input.values?.projectedColumns;
   return Array.isArray(raw)
@@ -5129,8 +5230,22 @@ function tableReadColumnsFromInput(input: AgentRunInput): Array<string | number>
     : [];
 }
 
-function compactTableRowLimit(input: AgentRunInput, columnCount: number): number {
+function tableReadRowOffset(input: AgentRunInput): number {
   const values = input.values as Record<string, unknown> | undefined;
+  const explicit = nonNegativeInteger(values?.rowOffset);
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  const rowStart = positiveIntegerValue(values?.rowStart);
+  return rowStart !== undefined && rowStart > 0 ? rowStart - 1 : 0;
+}
+
+function compactTableRowLimit(input: AgentRunInput, columnCount: number, rowOffset = 0): number {
+  const values = input.values as Record<string, unknown> | undefined;
+  const rowEnd = positiveIntegerValue(values?.rowEnd);
+  if (rowEnd !== undefined && rowEnd > rowOffset) {
+    return rowEnd - rowOffset;
+  }
   const requested = nonNegativeInteger(values?.rowLimit ?? values?.maxRows ?? input.budget?.maxExamples);
   if (requested !== undefined && requested > 0) {
     return requested;

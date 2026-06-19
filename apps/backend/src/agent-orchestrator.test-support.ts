@@ -327,6 +327,9 @@ export class FakeAgentRuntime {
 
   async applyTableFilters(request: any) {
     this.tableMethodCalls.push({ method: "table.apply_filters", request });
+    if (!Array.isArray(request.filters) || request.filters.some((filter: any) => !filter?.criteria)) {
+      return { ok: false, error: { code: "INVALID_ARGUMENT", message: "Filter criteria are required." }, warnings: [], telemetry: {} };
+    }
     return { ok: true, backups: [], warnings: [], telemetry: { filtersApplied: request.filters?.length ?? 0 } };
   }
 
@@ -1266,7 +1269,19 @@ export function createCachedMetadata(workbookContextId: string): WorkbookMetadat
       { id: "sheet:0", name: "Data", index: 0, usedRange: "A1:D4", rowCount: 4, columnCount: 4, kind: "transaction", headers: [], tableIds: ["table:Transactions"], sectionIds: [], summaryBlockIds: [], formulaRegionIds: [] },
       { id: "sheet:1", name: "Report", index: 1, usedRange: "A1:B20", rowCount: 20, columnCount: 2, kind: "summary", headers: [], tableIds: [], sectionIds: [], summaryBlockIds: [], formulaRegionIds: ["formula:manual"] }
     ],
-    tables: [{ id: "table:Transactions", sheetName: "Data", name: "Transactions", range: "A1:D4", columns: [] }],
+    tables: [{
+      id: "table:Transactions",
+      sheetName: "Data",
+      name: "Transactions",
+      range: "A1:D4",
+      dataRange: "A2:D4",
+      columns: [
+        { name: "Date", normalizedName: "date", inferredType: "date", index: 0, letter: "A" },
+        { name: "Account", normalizedName: "account", inferredType: "text", index: 1, letter: "B" },
+        { name: "Amount", normalizedName: "amount", inferredType: "currency", index: 2, letter: "C" },
+        { name: "Status", normalizedName: "status", inferredType: "text", index: 3, letter: "D" }
+      ]
+    }],
     namedRanges: [],
     sections: [],
     summaryBlocks: [],

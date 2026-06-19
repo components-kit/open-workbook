@@ -1559,4 +1559,105 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
       expect(applied.telemetry.operationRisk).toBe("safe_format");
       expect((applied.answer as any).operationRisk).toBe("safe_format");
     });
+
+  it("normalizes agent-friendly table filter shorthands before apply", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      agent.metadataCache.set(createCachedMetadata("wbctx_filter_alias"));
+
+      const preview = await agent.run({
+        request: "Filter the Transactions table to Status Open",
+        mode: "preview_update",
+        workbookContextId: "wbctx_filter_alias",
+        intent: { action: "filter_range" },
+        target: { tableName: "Transactions" },
+        values: { filters: [{ column: "Status", filterType: "text", value: "Open" }] }
+      });
+      const applied = await agent.run({
+        request: "Apply filter",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.tableMethodCalls.at(-1)).toEqual({
+        method: "table.apply_filters",
+        request: {
+          workbookId: "workbook_agent_unit",
+          tableName: "Transactions",
+          filters: [{ column: "Status", criteria: { filterOn: "Values", values: ["Open"] } }]
+        }
+      });
+    });
+
+  it("normalizes criterion table filters before apply", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      agent.metadataCache.set(createCachedMetadata("wbctx_filter_criterion"));
+
+      const preview = await agent.run({
+        request: "Filter the Transactions table to Status Open",
+        mode: "preview_update",
+        workbookContextId: "wbctx_filter_criterion",
+        intent: { action: "filter_range" },
+        target: { tableName: "Transactions" },
+        values: { filters: [{ column: "Status", criterion: "Open" }] }
+      });
+      const applied = await agent.run({
+        request: "Apply filter",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.tableMethodCalls.at(-1)?.request.filters[0].criteria).toEqual({ filterOn: "Values", values: ["Open"] });
+    });
+
+  it("accepts rowStart and rowEnd aliases for compact table reads", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      agent.metadataCache.set(createCachedMetadata("wbctx_table_page_alias"));
+
+      const result = await agent.run({
+        request: "Read rows 2 through 2 from Transactions",
+        mode: "answer",
+        workbookContextId: "wbctx_table_page_alias",
+        target: { tableName: "Transactions" },
+        values: { rowStart: 2, rowEnd: 2 }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).rowOffset).toBe(1);
+      expect((result.answer as any).rowLimit).toBe(1);
+      expect((result.answer as any).values).toEqual([["2026-06-02", "A-101", 456, "Closed"]]);
+    });
+
+  it("normalizes structured table sort values", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      agent.metadataCache.set(createCachedMetadata("wbctx_sort_alias"));
+
+      const preview = await agent.run({
+        request: "Sort Transactions by status descending",
+        mode: "preview_update",
+        workbookContextId: "wbctx_sort_alias",
+        intent: { action: "sort_table" },
+        target: { tableName: "Transactions" },
+        values: { sortBy: "Status", direction: "descending" }
+      });
+      const applied = await agent.run({
+        request: "Apply sort",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).sortField).toBe("Status");
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.tableMethodCalls.at(-1)?.request.fields).toEqual([{ key: 3, ascending: false }]);
+    });
 });

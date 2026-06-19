@@ -2782,7 +2782,12 @@
         "filters": [
           {
             "column": "Status",
-            "criterion": "Open"
+            "criteria": {
+              "filterOn": "Values",
+              "values": [
+                "Open"
+              ]
+            }
           }
         ]
       }

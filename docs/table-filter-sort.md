@@ -10,6 +10,16 @@ Structured table operations use native Office.js table APIs instead of range-onl
 - Apply, clear, and validate table filters through Office.js filter criteria.
 - Apply and clear table sort state through Office.js sort fields.
 
+For `excel.agent.run`, table filter previews use `values.filters`. The canonical filter shape is:
+
+```json
+{ "column": "Status", "criteria": { "filterOn": "Values", "values": ["Open"] } }
+```
+
+The agent surface also normalizes common shorthand shapes such as `{ "column": "Status", "value": "Open" }`, `{ "column": "Status", "criterion": "Open" }`, and `{ "column": "Status", "filterType": "text", "value": "Open" }` before calling the Office.js table filter API.
+
+Structured table sort previews accept `values.sortBy` or `values.column` plus `values.direction` or `values.ascending`; text-only amount sort inference remains a fallback.
+
 ## Safety
 
 Mutating table/filter/sort tools create a backup before execution. The backend backs up the current table range when mutating an existing table, or the target range when creating/copying a structure.

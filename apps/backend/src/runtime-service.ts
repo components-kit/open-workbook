@@ -4374,6 +4374,15 @@ export class RuntimeService {
           return backup;
         }
         const result = await client.request(method, request);
+        if ((result as { ok?: boolean }).ok === false) {
+          return {
+            ok: false,
+            backup: backup.backup,
+            warnings: (result as { warnings?: OperationWarning[] }).warnings ?? [],
+            error: (result as { error?: ReturnType<typeof runtimeError> }).error ?? runtimeError("OPERATION_FAILED", `Table operation ${method} failed.`, { retryable: false }),
+            result
+          };
+        }
         return { ok: true, backup: backup.backup, result };
       }
     );
