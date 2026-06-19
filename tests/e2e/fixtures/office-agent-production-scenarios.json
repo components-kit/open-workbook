@@ -2392,18 +2392,27 @@
     "intent": "mutation-preview",
     "prompt": "Can you update Amount column, row 3, according to my input: 525?",
     "input": {
-      "request": "Can you update Amount column, row 3, according to my input: 525?",
+      "request": "Update the Transactions table row for Northwind so Amount is 525.",
       "mode": "preview_update",
       "target": {
-        "sheetName": "Sales",
-        "range": "D3"
+        "tableName": "Transactions"
       },
       "values": {
-        "values": [
-          [
-            525
-          ]
+        "rows": [
+          {
+            "index": 1,
+            "values": [
+              "2026-01-04",
+              "Northwind",
+              "Support",
+              525,
+              "Closed"
+            ]
+          }
         ]
+      },
+      "intent": {
+        "action": "update_table_rows"
       }
     },
     "expected": {
@@ -2412,11 +2421,11 @@
       "mustUseCompactPath": true,
       "mustNotReadFullWorkbook": true,
       "requiresPreview": true,
-      "changedRanges": [
-        "Sales!D3"
-      ],
       "mustPreserveNumberFormat": true,
-      "shouldApplyDirectly": false
+      "shouldApplyDirectly": false,
+      "changedTables": [
+        "Transactions"
+      ]
     },
     "budgets": {
       "maxToolCalls": 2,
@@ -2438,22 +2447,27 @@
     "intent": "mutation-preview",
     "prompt": "Can you update row 4 according to my input?",
     "input": {
-      "request": "Can you update row 4 according to my input?",
+      "request": "Update the Transactions table row for Contoso with the provided values.",
       "mode": "preview_update",
       "target": {
-        "sheetName": "Sales",
-        "range": "A4:E4"
+        "tableName": "Transactions"
       },
       "values": {
-        "values": [
-          [
-            "2026-01-08",
-            "Contoso",
-            "Implementation",
-            3500,
-            "Reviewed"
-          ]
+        "rows": [
+          {
+            "index": 2,
+            "values": [
+              "2026-01-08",
+              "Contoso",
+              "Implementation",
+              3500,
+              "Reviewed"
+            ]
+          }
         ]
+      },
+      "intent": {
+        "action": "update_table_rows"
       }
     },
     "expected": {
@@ -2462,11 +2476,11 @@
       "mustUseCompactPath": true,
       "mustNotReadFullWorkbook": true,
       "requiresPreview": true,
-      "changedRanges": [
-        "Sales!A4:E4"
-      ],
       "mustPreserveRowFormatting": true,
-      "shouldApplyDirectly": false
+      "shouldApplyDirectly": false,
+      "changedTables": [
+        "Transactions"
+      ]
     },
     "budgets": {
       "maxToolCalls": 3,
@@ -2756,11 +2770,21 @@
     "intent": "mutation-preview",
     "prompt": "Add filters to the Sales header row.",
     "input": {
-      "request": "Add filters to the Sales header row.",
+      "request": "Filter the Transactions table to show Status = Open.",
       "mode": "preview_update",
       "target": {
-        "sheetName": "Sales",
-        "range": "A1:E1"
+        "tableName": "Transactions"
+      },
+      "intent": {
+        "action": "filter_range"
+      },
+      "values": {
+        "filters": [
+          {
+            "column": "Status",
+            "criterion": "Open"
+          }
+        ]
       }
     },
     "expected": {
@@ -2769,11 +2793,11 @@
       "mustUseCompactPath": true,
       "mustNotReadFullWorkbook": true,
       "requiresPreview": true,
-      "changedRanges": [
-        "Sales!A1:E1"
-      ],
-      "operation": "addFilter",
-      "shouldApplyDirectly": false
+      "operation": "filter",
+      "shouldApplyDirectly": false,
+      "changedTables": [
+        "Transactions"
+      ]
     },
     "budgets": {
       "maxToolCalls": 3,
@@ -2983,10 +3007,27 @@
     "intent": "mutation-preview",
     "prompt": "Remove input data from February but keep the template and formulas.",
     "input": {
-      "request": "Remove input data from February but keep the template and formulas.",
+      "request": "Clear February input values in B2:B5 while preserving formulas and layout.",
       "mode": "preview_update",
       "target": {
-        "sheetName": "February"
+        "sheetName": "February",
+        "range": "B2:B5"
+      },
+      "values": {
+        "values": [
+          [
+            null
+          ],
+          [
+            null
+          ],
+          [
+            null
+          ],
+          [
+            null
+          ]
+        ]
       }
     },
     "expected": {
@@ -3001,7 +3042,10 @@
         "tables"
       ],
       "mustClearOnlyInputCells": true,
-      "shouldApplyDirectly": false
+      "shouldApplyDirectly": false,
+      "changedRanges": [
+        "February!B2:B5"
+      ]
     },
     "budgets": {
       "maxToolCalls": 5,
@@ -3512,7 +3556,11 @@
     "intent": "answer",
     "prompt": "Can you look into January!A1:C5?",
     "input": {
-      "request": "Can you look into January!A1:C5 actual values"
+      "request": "Read January range A1:C5 actual values.",
+      "target": {
+        "sheetName": "January",
+        "range": "A1:C5"
+      }
     },
     "expected": {
       "resultType": "answer",
@@ -4507,5 +4555,598 @@
         }
       }
     ]
+  },
+  {
+    "id": "coverage-pivot-chart-host-limits",
+    "category": "operation coverage",
+    "difficulty": "workflow",
+    "intent": "pivot_chart",
+    "prompt": "Create and validate a pivot summary and chart while reporting host limits.",
+    "input": {
+      "request": "Create a pivot summary by Status and Region with an Amount chart, then refresh and validate it.",
+      "mode": "answer",
+      "intent": {
+        "action": "create_pivot_chart_summary"
+      }
+    },
+    "expected": {
+      "resultType": "workflow",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustMentionAny": [
+        "pivot",
+        "chart",
+        "capability"
+      ]
+    },
+    "budgets": {
+      "maxToolCalls": 4,
+      "maxInputTokens": 6000,
+      "maxOutputTokens": 1600,
+      "maxPayloadBytes": 50000,
+      "maxLatencyMs": 10000
+    },
+    "tags": [
+      "coverage",
+      "pivot",
+      "chart",
+      "host-limited"
+    ],
+    "coverage": {
+      "capabilities": [
+        "excel.workflow.create_pivot_chart_summary",
+        "excel.pivot.list",
+        "excel.pivot.get_info",
+        "excel.pivot.create",
+        "excel.pivot.refresh",
+        "excel.pivot.refresh_all",
+        "excel.pivot.update_source",
+        "excel.pivot.copy_from_template",
+        "excel.pivot.delete",
+        "excel.pivot.validate_source",
+        "excel.pivot.get_capability_matrix",
+        "excel.pivot.get_fingerprint",
+        "excel.pivot.compare_fingerprint",
+        "excel.pivot.diff",
+        "excel.pivot.repair_from_template",
+        "excel.pivot.rebuild_with_source",
+        "excel.chart.list",
+        "excel.chart.get_info",
+        "excel.chart.create",
+        "excel.chart.update_data_source",
+        "excel.chart.copy_from_template",
+        "excel.chart.refresh",
+        "excel.chart.delete",
+        "excel.chart.validate_against_template"
+      ],
+      "hostMethods": [
+        "pivot.list",
+        "pivot.get_info",
+        "pivot.create",
+        "pivot.refresh",
+        "pivot.refresh_all",
+        "pivot.copy_from_template",
+        "pivot.delete",
+        "chart.list",
+        "chart.get_info",
+        "chart.create",
+        "chart.update_data_source",
+        "chart.copy_from_template",
+        "chart.refresh",
+        "chart.delete"
+      ]
+    }
+  },
+  {
+    "id": "coverage-permissions-events-collaboration",
+    "category": "operation coverage",
+    "difficulty": "workflow",
+    "intent": "collaboration_controls",
+    "prompt": "Audit collaboration, permissions, events, and locks without editing the workbook.",
+    "input": {
+      "request": "Check collaboration status, scoped permissions, event subscriptions, and lock policy for this workbook without changing values.",
+      "mode": "answer"
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustNotMutateWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 4,
+      "maxInputTokens": 5000,
+      "maxOutputTokens": 1400,
+      "maxPayloadBytes": 42000,
+      "maxLatencyMs": 9000
+    },
+    "tags": [
+      "coverage",
+      "collaboration",
+      "permissions",
+      "events",
+      "locks"
+    ],
+    "coverage": {
+      "capabilities": [
+        "excel.collab.get_status",
+        "excel.collab.list_agents",
+        "excel.collab.list_tasks",
+        "excel.collab.list_locks",
+        "excel.collab.list_transactions",
+        "excel.collab.get_conflicts",
+        "excel.collab.get_recent_events",
+        "excel.conflict.get_guidance",
+        "excel.conflict.explain",
+        "excel.conflict.get_telemetry",
+        "excel.conflict.clear_telemetry",
+        "excel.events.subscribe",
+        "excel.events.unsubscribe",
+        "excel.events.get_recent",
+        "excel.events.clear",
+        "excel.events.set_debounce",
+        "excel.lock.get_policy",
+        "excel.lock.set_policy",
+        "excel.lock.acquire",
+        "excel.lock.renew",
+        "excel.lock.release",
+        "excel.permissions.get",
+        "excel.permissions.set",
+        "excel.permissions.require_confirmation",
+        "excel.permissions.set_scope",
+        "excel.permissions.allow_destructive_actions",
+        "excel.permissions.allow_macro_execution",
+        "excel.permissions.lock_regions",
+        "excel.permissions.unlock_regions"
+      ]
+    }
+  },
+  {
+    "id": "coverage-plan-task-job-lifecycle",
+    "category": "operation coverage",
+    "difficulty": "workflow",
+    "intent": "plan_task_job",
+    "prompt": "Create a safe plan, track it as a task, and inspect job lifecycle controls.",
+    "input": {
+      "request": "Inventory plan, task, and job lifecycle support for this workbook without applying changes.",
+      "mode": "status"
+    },
+    "expected": {
+      "resultType": "status",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustNotApplyDirectly": true
+    },
+    "budgets": {
+      "maxToolCalls": 4,
+      "maxInputTokens": 6000,
+      "maxOutputTokens": 1600,
+      "maxPayloadBytes": 50000,
+      "maxLatencyMs": 10000
+    },
+    "tags": [
+      "coverage",
+      "plan",
+      "task",
+      "job"
+    ],
+    "coverage": {
+      "capabilities": [
+        "excel.plan.create",
+        "excel.plan.preview",
+        "excel.plan.refresh_preview",
+        "excel.plan.rebase",
+        "excel.plan.apply",
+        "excel.plan.rollback",
+        "excel.task.create",
+        "excel.task.claim",
+        "excel.task.update",
+        "excel.task.set_progress",
+        "excel.task.add_blocker",
+        "excel.task.resolve_blocker",
+        "excel.task.evaluate_schedule",
+        "excel.task.resume_ready",
+        "excel.task.complete",
+        "excel.task.fail",
+        "excel.task.cancel",
+        "excel.task.list",
+        "excel.task.get",
+        "excel.job.list",
+        "excel.job.get",
+        "excel.job.wait",
+        "excel.job.cancel"
+      ]
+    }
+  },
+  {
+    "id": "coverage-batch-sheet-range-operations",
+    "category": "operation coverage",
+    "difficulty": "workflow",
+    "intent": "batch_operations",
+    "prompt": "Preview a batch covering sheet and range operation kinds.",
+    "input": {
+      "request": "Preview a batch that creates a scratch sheet, writes values, formulas, formats, comments, hyperlinks, copies and moves a range, autofits, merges, protects, and then rolls it back.",
+      "mode": "preview_update",
+      "target": {
+        "sheetName": "Summary",
+        "range": "H1:J4"
+      },
+      "values": {
+        "values": [
+          [
+            "Operation",
+            "Target",
+            "Status"
+          ],
+          [
+            "batch",
+            "scratch",
+            "preview"
+          ],
+          [
+            "rollback",
+            "available",
+            "yes"
+          ],
+          [
+            "validate",
+            "pending",
+            "yes"
+          ]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "preview",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "requiresPreview": true,
+      "mustNotReadFullWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 4,
+      "maxInputTokens": 6000,
+      "maxOutputTokens": 1600,
+      "maxPayloadBytes": 50000,
+      "maxLatencyMs": 10000
+    },
+    "tags": [
+      "coverage",
+      "batch",
+      "sheet",
+      "range"
+    ],
+    "coverage": {
+      "capabilities": [
+        "excel.batch.apply",
+        "excel.batch.submit",
+        "excel.batch.submit_chunked",
+        "excel.batch.preflight",
+        "excel.batch.validate",
+        "excel.batch.dry_run",
+        "excel.sheet.create",
+        "excel.sheet.copy",
+        "excel.sheet.rename",
+        "excel.sheet.delete",
+        "excel.sheet.hide",
+        "excel.sheet.unhide",
+        "excel.sheet.protect",
+        "excel.sheet.unprotect",
+        "excel.sheet.clear",
+        "excel.sheet.set_tab_color",
+        "excel.range.clear_values",
+        "excel.range.insert_rows",
+        "excel.range.delete_rows",
+        "excel.range.insert_columns",
+        "excel.range.delete_columns",
+        "excel.range.merge",
+        "excel.range.unmerge"
+      ],
+      "hostMethods": [
+        "operation.execute_batch",
+        "runtime.set_active_sheet"
+      ],
+      "operationKinds": [
+        "range.read_full",
+        "range.write_values",
+        "range.write_formulas",
+        "range.write_number_formats",
+        "range.write_styles",
+        "range.write_hyperlinks",
+        "range.write_comments",
+        "range.clear_values_keep_format",
+        "range.clear",
+        "range.clear_values",
+        "range.clear_formats",
+        "range.copy",
+        "range.move",
+        "range.insert_rows",
+        "range.insert_columns",
+        "range.delete_rows",
+        "range.delete_columns",
+        "range.autofit_columns",
+        "range.autofit_rows",
+        "range.apply_autofilter",
+        "range.merge",
+        "range.unmerge",
+        "range.restore_snapshot",
+        "workbook.calculate",
+        "workbook.save",
+        "sheet.create",
+        "sheet.copy",
+        "sheet.rename",
+        "sheet.delete",
+        "sheet.move",
+        "sheet.hide",
+        "sheet.unhide",
+        "sheet.protect",
+        "sheet.unprotect",
+        "sheet.clear",
+        "sheet.set_tab_color",
+        "template.create_sheet_from_template"
+      ]
+    }
+  },
+  {
+    "id": "coverage-repair-template-style-formula",
+    "category": "operation coverage",
+    "difficulty": "workflow",
+    "intent": "repair",
+    "prompt": "Inspect repair options for template, style, formula, filters, print layout, named ranges, and merged cells.",
+    "input": {
+      "request": "Inspect repair options for FormulaSheet A1:D10 template, style, formula, filter, print layout, named range, and merged-cell issues without applying changes.",
+      "mode": "answer",
+      "target": {
+        "sheetName": "FormulaSheet",
+        "range": "A1:D10"
+      },
+      "intent": {
+        "action": "repair_formula_errors"
+      }
+    },
+    "expected": {
+      "resultType": "answer",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustNotApplyDirectly": true
+    },
+    "budgets": {
+      "maxToolCalls": 4,
+      "maxInputTokens": 6000,
+      "maxOutputTokens": 1600,
+      "maxPayloadBytes": 50000,
+      "maxLatencyMs": 10000
+    },
+    "tags": [
+      "coverage",
+      "repair",
+      "template",
+      "style",
+      "formula"
+    ],
+    "coverage": {
+      "capabilities": [
+        "excel.repair.style_from_template",
+        "excel.repair.formulas_from_template",
+        "excel.repair.filters_from_template",
+        "excel.repair.table_structure",
+        "excel.repair.print_layout",
+        "excel.repair.named_ranges",
+        "excel.repair.formula_errors",
+        "excel.repair.merged_cells",
+        "excel.template.repair_sheet_from_template",
+        "excel.style.copy_from_template",
+        "excel.style.repair_consistency",
+        "excel.formula.repair_patterns"
+      ],
+      "hostMethods": [
+        "template.repair",
+        "style.copy_dimensions",
+        "formula.copy_patterns",
+        "formula.fill_pattern"
+      ]
+    }
+  },
+  {
+    "id": "coverage-registry-complete-inventory",
+    "category": "operation coverage",
+    "difficulty": "inventory",
+    "intent": "coverage_inventory",
+    "prompt": "Inventory the remaining internal capability and host method registry coverage without workbook mutation.",
+    "input": {
+      "request": "Inventory Open Workbook internal capability coverage for the active workbook without reading cells or changing anything.",
+      "mode": "status"
+    },
+    "expected": {
+      "resultType": "status",
+      "shouldMutateWorkbook": false,
+      "mustUseCompactPath": true,
+      "mustNotReadFullWorkbook": true,
+      "mustNotMutateWorkbook": true
+    },
+    "budgets": {
+      "maxToolCalls": 1,
+      "maxInputTokens": 2500,
+      "maxOutputTokens": 1200,
+      "maxPayloadBytes": 12000,
+      "maxLatencyMs": 4000
+    },
+    "tags": [
+      "coverage",
+      "registry",
+      "inventory"
+    ],
+    "coverage": {
+      "capabilities": [
+        "excel.runtime.connect_addin",
+        "excel.runtime.disconnect_addin",
+        "excel.runtime.ping_addin",
+        "excel.runtime.get_selection",
+        "excel.runtime.set_active_workbook",
+        "excel.runtime.set_active_sheet",
+        "excel.workbook.get_workbook_info",
+        "excel.workbook.get_used_range_summary",
+        "excel.workbook.snapshot",
+        "excel.workbook.refresh_snapshot",
+        "excel.workbook.get_snapshot",
+        "excel.workbook.detect_external_changes",
+        "excel.workbook.save_as",
+        "excel.workbook.create_backup",
+        "excel.workbook.restore_backup",
+        "excel.workbook.export_copy",
+        "excel.workbook.export_local_config",
+        "excel.workbook.import_local_config",
+        "excel.workbook.embed_local_config",
+        "excel.workbook.read_embedded_local_config",
+        "excel.workbook.import_embedded_local_config",
+        "excel.workbook.close",
+        "excel.backup.list",
+        "excel.backup.get",
+        "excel.backup.verify",
+        "excel.backup.restore_file",
+        "excel.backup.delete",
+        "excel.backup.prune",
+        "excel.backup.pin",
+        "excel.backup.unpin",
+        "excel.sheet.get_info",
+        "excel.sheet.get_summary",
+        "excel.sheet.get_used_range",
+        "excel.range.read_hyperlinks",
+        "excel.range.read_comments",
+        "excel.range.read_notes",
+        "excel.range.read_merged_cells",
+        "excel.range.read_data_validation",
+        "excel.range.read_conditional_formatting",
+        "excel.range.search",
+        "excel.range.find_blank_cells",
+        "excel.range.find_errors",
+        "excel.range.write_formulas",
+        "excel.range.write_number_formats",
+        "excel.range.write_styles",
+        "excel.range.write_styles_many",
+        "excel.range.clear",
+        "excel.range.clear_formats",
+        "excel.range.clear_values_keep_format",
+        "excel.range.copy",
+        "excel.range.move",
+        "excel.range.autofit_columns",
+        "excel.range.autofit_rows",
+        "excel.workflow.create_formula_sheet",
+        "excel.workflow.create_template_report",
+        "excel.workflow.repair_formula_errors",
+        "excel.template.register",
+        "excel.template.unregister",
+        "excel.template.get",
+        "excel.template.list",
+        "excel.template.infer_regions",
+        "excel.template.create_sheet_from_template",
+        "excel.template.fill_regions",
+        "excel.template.validate_sheet_against_template",
+        "excel.style.compare_fingerprint",
+        "excel.style.get_theme",
+        "excel.style.apply_theme",
+        "excel.style.copy_column_widths",
+        "excel.style.copy_row_heights",
+        "excel.style.copy_borders",
+        "excel.style.copy_fills",
+        "excel.style.copy_fonts",
+        "excel.style.copy_alignment",
+        "excel.style.copy_number_formats",
+        "excel.style.copy_conditional_formatting",
+        "excel.style.copy_data_validation",
+        "excel.formula.copy_patterns",
+        "excel.formula.fill_down",
+        "excel.formula.fill_right",
+        "excel.formula.validate_against_template",
+        "excel.formula.get_dependency_graph",
+        "excel.formula.trace_precedents",
+        "excel.formula.trace_dependents",
+        "excel.formula.convert_to_values",
+        "excel.formula.explain",
+        "excel.table.create",
+        "excel.table.resize",
+        "excel.table.reorder_columns",
+        "excel.table.clear_data_keep_formulas",
+        "excel.table.clear_filters",
+        "excel.table.set_total_row",
+        "excel.table.set_style",
+        "excel.table.copy_structure",
+        "excel.table.validate_against_template",
+        "excel.names.get",
+        "excel.names.create",
+        "excel.names.update",
+        "excel.names.delete",
+        "excel.region.register",
+        "excel.region.get",
+        "excel.region.clear_values",
+        "excel.region.write_values",
+        "excel.region.fill",
+        "excel.transaction.get",
+        "excel.transaction.list",
+        "excel.transaction.wait",
+        "excel.transaction.cancel",
+        "excel.transaction.rollback",
+        "excel.transaction.preview_rollback_chain",
+        "excel.transaction.rollback_chain",
+        "excel.snapshot.refresh",
+        "excel.snapshot.get_compact",
+        "excel.snapshot.invalidate",
+        "excel.snapshot.list",
+        "excel.snapshot.delete",
+        "excel.validate.compact",
+        "excel.validate.sheet",
+        "excel.validate.template_consistency",
+        "excel.validate.formulas",
+        "excel.validate.styles",
+        "excel.validate.filters",
+        "excel.validate.print_layout",
+        "excel.validate.no_broken_references",
+        "excel.clean.parse_dates",
+        "excel.clean.standardize_currency",
+        "excel.clean.fill_missing_values",
+        "excel.clean.split_column",
+        "excel.clean.merge_columns",
+        "excel.clean.detect_outliers",
+        "excel.clean.fuzzy_match"
+      ],
+      "hostMethods": [
+        "runtime.ping",
+        "workbook.get_info",
+        "workbook.get_file",
+        "workbook.close",
+        "workbook.embed_local_config",
+        "workbook.read_embedded_local_config",
+        "names.get",
+        "names.create",
+        "names.update",
+        "names.delete",
+        "range.read_hyperlinks",
+        "range.read_comments",
+        "range.read_notes",
+        "range.read_merged_cells",
+        "range.read_data_validation",
+        "range.read_conditional_formatting",
+        "range.search",
+        "range.find_blank_cells",
+        "formula.convert_to_values",
+        "table.read",
+        "table.create",
+        "table.resize",
+        "table.reorder_columns",
+        "table.update_rows",
+        "table.clear_data_keep_formulas",
+        "table.clear_filters",
+        "table.apply_filters",
+        "table.clear_sort",
+        "table.set_total_row",
+        "table.set_style",
+        "table.copy_structure",
+        "template.capture"
+      ]
+    }
   }
 ]

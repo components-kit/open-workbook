@@ -2,13 +2,23 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  assertOperationCoverageReport,
+  buildOperationCoverageReport,
+  renderOperationCoverageMarkdown
+} from "./lib/operation-coverage.mjs";
 
+const repoRoot = path.resolve(import.meta.dirname, "../..");
 const artifactDir = process.env.OPEN_WORKBOOK_E2E_REPORT_DIR ?? path.join(tmpdir(), "open-workbook-e2e-reports");
 mkdirSync(artifactDir, { recursive: true });
+const scenarioFile = path.join(repoRoot, "tests", "e2e", "fixtures", "office-agent-production-scenarios.json");
+const operationCoverage = await buildOperationCoverageReport({ repoRoot, scenarioFile });
+assertOperationCoverageReport(operationCoverage);
 
 const report = {
   title: "Open Workbook MCP E2E Test Report",
   generatedAt: new Date().toISOString(),
+  operationCoverage,
   releaseTarget: {
     codexModel: process.env.OPEN_WORKBOOK_E2E_CODEX_MODEL ?? "gpt-5.4-mini",
     codexReasoning: process.env.OPEN_WORKBOOK_E2E_CODEX_REASONING ?? "low",
@@ -196,12 +206,17 @@ const report = {
 };
 
 const markdown = renderMarkdown(report);
+const operationCoverageMarkdown = renderOperationCoverageMarkdown(operationCoverage);
 const markdownPath = path.join(artifactDir, "e2e-report.md");
 const jsonPath = path.join(artifactDir, "e2e-report.json");
+const operationCoverageMarkdownPath = path.join(artifactDir, "operation-coverage.md");
+const operationCoverageJsonPath = path.join(artifactDir, "operation-coverage.json");
 writeFileSync(markdownPath, markdown);
 writeFileSync(jsonPath, JSON.stringify(report, null, 2));
+writeFileSync(operationCoverageMarkdownPath, operationCoverageMarkdown);
+writeFileSync(operationCoverageJsonPath, JSON.stringify(operationCoverage, null, 2));
 console.log(markdown);
-console.log(`\nSaved E2E report artifacts:\n- ${markdownPath}\n- ${jsonPath}`);
+console.log(`\nSaved E2E report artifacts:\n- ${markdownPath}\n- ${jsonPath}\n- ${operationCoverageMarkdownPath}\n- ${operationCoverageJsonPath}`);
 
 function scriptExists(file) {
   return existsSync(file);
@@ -220,6 +235,17 @@ function renderMarkdown(data) {
   lines.push(`- Codex reasoning: ${data.releaseTarget.codexReasoning}`);
   lines.push(`- OpenAI API key required: ${data.releaseTarget.apiKeyRequired ? "yes" : "no"}`);
   lines.push(`- Live Excel release hosts: ${data.releaseTarget.liveExcelReleaseHosts.join(", ")}`);
+  lines.push("");
+  lines.push("## Operation Coverage");
+  lines.push("");
+  lines.push(`- Scenario fixture: \`${data.operationCoverage.scenarioFile}\``);
+  lines.push(`- Scenario count: ${data.operationCoverage.scenarioCount}`);
+  lines.push(`- Capabilities represented: ${data.operationCoverage.covered.capabilities}/${data.operationCoverage.totals.capabilities}`);
+  lines.push(`- Host methods represented: ${data.operationCoverage.covered.hostMethods}/${data.operationCoverage.totals.hostMethods}`);
+  lines.push(`- Batch operation kinds represented: ${data.operationCoverage.covered.operationKinds}/${data.operationCoverage.totals.operationKinds}`);
+  lines.push(`- Capability gaps: ${data.operationCoverage.uncoveredCapabilities.length}`);
+  lines.push(`- Host method gaps: ${data.operationCoverage.uncoveredHostMethods.length}`);
+  lines.push(`- Operation kind gaps: ${data.operationCoverage.uncoveredOperationKinds.length}`);
   lines.push("");
   lines.push("## Lanes");
   for (const lane of data.lanes) {
