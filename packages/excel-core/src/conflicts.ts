@@ -279,7 +279,7 @@ function guidanceSteps(conflict: ConflictRecord, primaryAction: ConflictResoluti
 }
 
 function canSuggestSplit(conflict: ConflictRecord): boolean {
-  return conflict.scopes.some((scope) => scope.type === "range" || scope.type === "table") && conflict.code !== "STRUCTURE_CONFLICT";
+  return Array.isArray(conflict.scopes) && conflict.scopes.some((scope) => scope.type === "range" || scope.type === "table") && conflict.code !== "STRUCTURE_CONFLICT";
 }
 
 function dedupeSteps(steps: ConflictResolutionStep[]): ConflictResolutionStep[] {

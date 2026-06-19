@@ -8,6 +8,7 @@ import { startBackendServer } from "@components-kit/open-workbook-backend/server
 import type {
   A1Range,
   AgentId,
+  AgentRunExecutionContext,
   AgentRunInput,
   BackupId,
   BatchRequest,
@@ -156,13 +157,10 @@ const STYLE_COPY_TOOL_DIMENSIONS: Record<string, StyleDimension> = {
   "excel.style.copy_alignment": "alignment",
   "excel.style.copy_number_formats": "numberFormats",
   "excel.style.copy_conditional_formatting": "conditionalFormatting",
-  "excel.style.copy_data_validation": "dataValidation",
-  "excel.style.copy_freeze_panes": "freezePanes",
-  "excel.style.copy_print_settings": "printSettings",
-  "excel.style.copy_page_layout": "pageLayout",
-  "excel.style.copy_hidden_rows_columns": "hiddenRowsColumns"
+  "excel.style.copy_data_validation": "dataValidation"
 };
 
+let agentExecutionContext: AgentRunExecutionContext | undefined;
 const runtime = await createRuntimeFacade();
 const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.14";
 const COMPACT_RESOURCE_LIMIT = 100;
@@ -242,15 +240,20 @@ async function createRuntimeFacade(): Promise<RuntimeFacade> {
   if (!standalone && await daemonAvailable(daemonUrl)) {
     const proxy = createDaemonRuntimeProxy(daemonUrl) as RuntimeFacade;
     const registration = await proxy.registerAgent({ agentName, clientType: "mcp", pid: process.pid });
-    const registeredAgent = (registration as { agent?: { agentId?: string } }).agent;
+    const registeredAgent = (registration as { agent?: { agentId?: string; agentName?: string } }).agent;
+    const registeredAgentName = registeredAgent?.agentName ?? agentName;
+    agentExecutionContext = registeredAgent?.agentId
+      ? { agentId: registeredAgent.agentId, ...(registeredAgentName !== undefined ? { agentName: registeredAgentName } : {}), clientType: "mcp" }
+      : undefined;
     console.error(`open-workbook MCP adapter connected to ${daemonUrl}${registeredAgent?.agentId ? ` as ${registeredAgent.agentId}` : ""}`);
     return proxy;
   }
 
   const localRuntime = new RuntimeService() as RuntimeFacade;
-  if (agentName !== undefined) {
-    localRuntime.registerAgent({ agentName, clientType: "mcp", pid: process.pid });
-  }
+  const registration = localRuntime.registerAgent({ agentName, clientType: "mcp", pid: process.pid });
+  agentExecutionContext = registration.agent?.agentId
+    ? { agentId: registration.agent.agentId, ...(registration.agent.agentName !== undefined ? { agentName: registration.agent.agentName } : {}), clientType: "mcp" }
+    : undefined;
   await startBackendServer(localRuntime, { host, port, addinPath });
   console.error(`open-workbook MCP standalone backend listening on ws://${host}:${port}${addinPath}`);
   return localRuntime;
@@ -313,16 +316,168 @@ function registerAgentTools(mcp: McpServer): void {
           action: z.enum([
             "read_values",
             "read_schema",
+            "list_open_workbooks",
+            "get_workbook_info",
+            "refresh_workbook_snapshot",
+            "get_workbook_snapshot",
+            "detect_external_changes",
+            "restore_workbook_backup",
+            "export_local_config",
+            "import_local_config",
+            "embed_local_config",
+            "read_embedded_local_config",
+            "import_embedded_local_config",
+            "close_workbook",
+            "prepare_session",
+            "create_formula_sheet",
+            "create_template_report",
+            "create_pivot_chart_summary",
+            "preview_risky_edit",
+            "inspect_analyze",
+            "rollback_validate",
+            "read_formula_patterns",
+            "get_formula_dependency_graph",
+            "trace_formula_precedents",
+            "trace_formula_dependents",
+            "validate_formula_range",
+            "validate_formula_against_template",
+            "find_formula_errors",
+            "explain_formula",
+            "copy_formula_patterns",
+            "fill_formula_down",
+            "fill_formula_right",
+            "repair_formula_patterns",
+            "convert_formulas_to_values",
+            "recalculate_formulas",
+            "read_named_item",
+            "create_name",
+            "update_name",
+            "delete_name",
+            "read_region",
+            "register_region",
+            "clear_region_values",
+            "write_region_values",
+            "fill_region",
             "find_target",
             "write_values",
             "write_formulas",
+            "write_number_formats",
             "format_range",
+            "read_range_compact",
+            "get_range_summary",
+            "read_hyperlinks",
+            "read_comments",
+            "read_notes",
+            "read_merged_cells",
+            "read_data_validation",
+            "read_conditional_formatting",
+            "search_range",
+            "find_blank_cells",
+            "find_range_errors",
+            "write_styles_many",
+            "read_style_fingerprint",
+            "compare_style_fingerprint",
+            "get_theme",
+            "apply_theme",
+            "copy_style_from_template",
+            "repair_style_consistency",
+            "repair_style_from_template",
+            "repair_formulas_from_template",
+            "repair_filters_from_template",
+            "repair_table_structure",
+            "repair_print_layout",
+            "repair_named_ranges",
+            "repair_formula_errors",
+            "repair_merged_cells",
+            "detect_header_row",
+            "normalize_headers",
+            "trim_whitespace",
+            "remove_duplicates",
+            "parse_dates",
+            "parse_numbers",
+            "standardize_currency",
+            "fill_missing_values",
+            "split_column",
+            "merge_columns",
+            "detect_outliers",
+            "fuzzy_match",
+            "clear_range",
             "clear_values",
+            "clear_values_raw",
+            "clear_formats",
+            "copy_range",
+            "move_range",
+            "insert_rows",
+            "delete_rows",
+            "insert_columns",
+            "delete_columns",
+            "merge_range",
+            "unmerge_range",
             "append_table_rows",
+            "update_table_rows",
+            "create_table",
+            "resize_table",
+            "reorder_table_columns",
+            "clear_table_data",
+            "clear_table_filters",
             "sort_table",
             "filter_range",
+            "set_table_total_row",
+            "set_table_style",
+            "copy_table_structure",
+            "validate_table_against_template",
+            "create_sheet",
+            "copy_sheet",
+            "rename_sheet",
+            "delete_sheet",
+            "hide_sheet",
+            "unhide_sheet",
+            "protect_sheet",
+            "unprotect_sheet",
+            "clear_sheet",
+            "set_sheet_tab_color",
             "autofit",
+            "autofit_rows",
             "copy_template_sheet",
+            "detect_templates",
+            "register_template",
+            "unregister_template",
+            "read_template",
+            "list_templates",
+            "infer_template_regions",
+            "clear_template_data_regions",
+            "fill_template_regions",
+            "validate_sheet_against_template",
+            "repair_sheet_from_template",
+            "create_snapshot",
+            "create_backup",
+            "list_snapshots",
+            "read_snapshot",
+            "compare_snapshots",
+            "refresh_snapshot",
+            "invalidate_snapshot",
+            "delete_snapshot",
+            "list_backups",
+            "read_backup",
+            "verify_backup",
+            "create_file_backup",
+            "restore_file_backup",
+            "prune_backups",
+            "pin_backup",
+            "unpin_backup",
+            "delete_backup",
+            "validate_compact",
+            "validate_workbook",
+            "validate_sheet",
+            "validate_template_consistency",
+            "validate_formulas",
+            "validate_styles",
+            "validate_tables",
+            "validate_filters",
+            "validate_print_layout",
+            "validate_no_broken_references",
+            "validate_no_formula_errors",
+            "validate_no_unintended_changes",
             "calculate",
             "save"
           ]),
@@ -374,7 +529,7 @@ function registerAgentTools(mcp: McpServer): void {
         openWorldHint: false
       }
     },
-    async (args: AgentRunInput) => agentJsonResult(await runtime.runAgent(args))
+    async (args: AgentRunInput) => agentJsonResult(await runtime.runAgent(args, agentExecutionContext))
   );
 }
 
@@ -2199,7 +2354,7 @@ async function resolveAgentWorkbookContext(workbookContextId: string): Promise<{
       }
     };
   }
-  const refreshed = await runtime.runAgent({ request: "Refresh workbook context", mode: "prepare", workbookContextId });
+  const refreshed = await runtime.runAgent({ request: "Refresh workbook context", mode: "prepare", workbookContextId }, agentExecutionContext);
   const refreshedId = refreshed.workbookContextId ? String(refreshed.workbookContextId) : workbookContextId;
   const resource = runtime.getAgentContextResource(refreshedId) as AgentWorkbookContextResource | { ok: false; error?: unknown };
   if (!resource.ok) {
@@ -5138,14 +5293,12 @@ function enforceCompactResultBudget(toolName: string, result: unknown) {
   }
   if (
     toolName === "excel.agent.run" ||
-    toolName === "excel.compact.get_resource" ||
     toolName === "excel.runtime.get_capabilities" ||
     toolName === "excel.range.read_compact" ||
     toolName === "excel.table.read_compact" ||
     toolName === "excel.validate.compact" ||
     toolName === "excel.snapshot.get_compact" ||
-    toolName === "excel.snapshot.compare_compact" ||
-    toolName === "excel.diff.get_compact"
+    toolName === "excel.snapshot.compare_compact"
   ) {
     return result;
   }
@@ -5229,7 +5382,7 @@ function agentJsonResult(value: unknown) {
 
 function isWorkbookMutatingMcpTool(name: string): boolean {
   const namespace = name.split(".")[1];
-  if (!namespace || name.startsWith("excel.compact.")) {
+  if (!namespace) {
     return false;
   }
   if (namespace === "workbook") {

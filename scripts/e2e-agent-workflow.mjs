@@ -129,8 +129,10 @@ async function main() {
       target: { candidateId: archiveCandidateId }
     }, agentOutputSchema);
     assert(selectedRows.status === "SUCCESS", "candidateId row request should read live values");
-    assert(selectedRows.answer?.kind === "range_profile", "row request should return a live range profile");
-    assert(selectedRows.answer?.source === "live_read", "row request should report live_read source");
+    assert(selectedRows.answer?.kind === "table_compact_read", "row request should return compact table data");
+    assert(selectedRows.answer?.source === "runtime_table_read", "row request should report runtime table read source");
+    assert(selectedRows.answer?.profile?.kind === "range_profile", "row request should include a live range profile");
+    assert(selectedRows.answer?.profile?.source === "live_read", "row request profile should report live_read source");
     assert(selectedRows.telemetry?.internalReadCount === 1, "row request should perform one internal read");
 
     const appendPreview = await agentRun(mcp, {
@@ -178,11 +180,11 @@ async function main() {
       target: { sheetName: "Data", range: "C2" },
       values: { values: [[321]] }
     }, agentOutputSchema);
-    assert(autoApplied.status === "SUCCESS", "auto mode should apply clear scoped value edits");
-    assert(autoApplied.mode === "auto", "auto-applied result should preserve auto mode");
-    assert(autoApplied.confirmationToken === undefined, "auto-applied result should not expose a confirmation token");
-    assert(autoApplied.telemetry?.autoApplied === true, "auto-applied result should report telemetry.autoApplied");
-    assert(autoApplied.telemetry?.safetyDecision === "auto_apply:scoped_value_edit", "auto-applied result should report safe scoped decision");
+    assert(autoApplied.status === "PREVIEW_READY", "auto mode should preview scoped value edits when auto-apply is disabled");
+    assert(autoApplied.mode === "auto", "auto preview result should preserve auto mode");
+    assert(autoApplied.confirmationToken, "auto preview result should expose a confirmation token");
+    assert(autoApplied.telemetry?.autoApplied !== true, "auto preview result should not report telemetry.autoApplied");
+    assert(autoApplied.telemetry?.safetyDecision === "manual_review:auto_apply_disabled", "auto preview result should report disabled auto-apply decision");
 
     const formulaBlocked = await agentRun(mcp, {
       request: "Fix formula in Report A10",

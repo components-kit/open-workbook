@@ -37,4 +37,34 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "C1:C4", label: "selected column" });
       expect(result.telemetry.internalReadCount).toBe(1);
     });
+
+  it("uses compact table reads for table-target value answers", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_table_read");
+      metadata.tables[0]!.columns = [
+        { index: 0, letter: "A", name: "Date", normalizedName: "date", inferredType: "date" },
+        { index: 1, letter: "B", name: "Account", normalizedName: "account", inferredType: "text" },
+        { index: 2, letter: "C", name: "Amount", normalizedName: "amount", inferredType: "number" },
+        { index: 3, letter: "D", name: "Status", normalizedName: "status", inferredType: "status" }
+      ];
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Read the first two Amount and Status rows from Transactions",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "read_values" },
+        target: { tableName: "Transactions" },
+        values: { columns: ["Amount", "Status"], rowLimit: 2 }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("table_compact_read");
+      expect((result.answer as any).values).toEqual([[123, "Open"], [456, "Closed"]]);
+      expect((result.answer as any).projectedColumns.map((column: any) => column.name)).toEqual(["Amount", "Status"]);
+      expect(result.telemetry.internalReadCount).toBe(1);
+      expect(runtime.runtimeMethodCalls["table.read"]).toBe(1);
+      expect(runtime.readBatchCount).toBe(0);
+    });
 });

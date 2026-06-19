@@ -4,7 +4,7 @@ Open Workbook coordinates multiple agents through the shared `owb daemon`. Multi
 
 ## Start
 
-1. Start with `excel.agent.run` `mode: "prepare"` or `status` to establish workbook context.
+1. Start with `excel.agent.run` `mode: "status"` or `mode: "prepare"` to establish workbook context and read the returned `collaboration` summary.
 2. Describe substantial work and guarded scopes clearly in the request.
 3. Use `preview_update` before scoped workbook changes.
 4. Respect returned lock, task, transaction, or conflict guidance.
@@ -17,7 +17,7 @@ Use specific scopes: workbook, sheet, range, table, named range, chart, pivot, o
 - Surface blockers when waiting on locks, dependencies, user decisions, or manual review.
 - Do not hide waits as generic failures.
 
-Backend task capabilities are internal unless the public surface returns task metadata.
+Backend task capabilities are internal unless the public surface returns task metadata. Do not call or assume separate task, lock, transaction, or collaboration tools on the normal MCP surface.
 
 ## Locks
 
@@ -26,6 +26,8 @@ Backend task capabilities are internal unless the public surface returns task me
 - Let the backend handle lock acquisition, renewal, release, and conflict reporting.
 
 If locks conflict, follow returned guidance: wait, split scope, or hand off.
+
+Multiple sheets in one workbook can proceed in parallel when scopes do not overlap. Same-sheet work can proceed when ranges or objects do not conflict; otherwise the backend queues, blocks, or returns conflict guidance.
 
 ## Transactions
 

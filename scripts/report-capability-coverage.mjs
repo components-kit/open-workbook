@@ -20,15 +20,7 @@ const handlersSource = readFileSync(agentHandlersPath, "utf8");
 const capabilityNames = parseToolNames(toolsSource);
 const groups = parseGroups(capabilitiesSource);
 const handlerCapabilities = new Set([...handlersSource.matchAll(/capabilityName:\s*"([^"]+)"/g)].map((match) => match[1]));
-const hostLimitedCapabilities = new Set([
-  "excel.workbook.save_as",
-  "excel.workbook.export_copy",
-  "excel.formula.find_circular_references",
-  "excel.style.copy_freeze_panes",
-  "excel.style.copy_print_settings",
-  "excel.style.copy_page_layout",
-  "excel.style.copy_hidden_rows_columns"
-]);
+const orchestratedCapabilities = parseOrchestratedCapabilities(capabilitiesSource, handlerCapabilities);
 const unitContractGroups = new Set([
   "runtime",
   "lookup",
@@ -40,10 +32,113 @@ const unitContractGroups = new Set([
   "lock",
   "conflict",
   "transaction",
-  "diff",
   "events",
-  "compact_resource",
+  "pivot",
+  "chart",
   "permissions"
+]);
+const unitContractCapabilities = new Set([
+  "excel.workbook.save_as",
+  "excel.workbook.export_copy"
+]);
+const contractTestedCapabilities = new Set([
+  "excel.runtime.connect_addin",
+  "excel.runtime.disconnect_addin",
+  "excel.runtime.ping_addin",
+  "excel.runtime.get_capabilities",
+  "excel.runtime.set_active_workbook",
+  "excel.runtime.set_active_sheet",
+  "excel.workbook.save_as",
+  "excel.workbook.export_copy",
+  "excel.batch.apply",
+  "excel.batch.submit",
+  "excel.batch.submit_chunked",
+  "excel.batch.preflight",
+  "excel.batch.validate",
+  "excel.batch.dry_run",
+  "excel.plan.create",
+  "excel.plan.preview",
+  "excel.plan.refresh_preview",
+  "excel.plan.rebase",
+  "excel.plan.apply",
+  "excel.plan.rollback",
+  "excel.task.create",
+  "excel.task.claim",
+  "excel.task.update",
+  "excel.task.set_progress",
+  "excel.task.add_blocker",
+  "excel.task.resolve_blocker",
+  "excel.task.evaluate_schedule",
+  "excel.task.resume_ready",
+  "excel.task.complete",
+  "excel.task.fail",
+  "excel.task.cancel",
+  "excel.task.list",
+  "excel.task.get",
+  "excel.collab.get_status",
+  "excel.collab.list_agents",
+  "excel.collab.list_tasks",
+  "excel.collab.list_locks",
+  "excel.collab.list_transactions",
+  "excel.collab.get_conflicts",
+  "excel.collab.get_recent_events",
+  "excel.lock.get_policy",
+  "excel.lock.set_policy",
+  "excel.lock.acquire",
+  "excel.lock.renew",
+  "excel.lock.release",
+  "excel.conflict.get_guidance",
+  "excel.conflict.explain",
+  "excel.conflict.get_telemetry",
+  "excel.conflict.clear_telemetry",
+  "excel.transaction.get",
+  "excel.transaction.list",
+  "excel.transaction.wait",
+  "excel.transaction.cancel",
+  "excel.transaction.preview_rollback",
+  "excel.transaction.rollback",
+  "excel.transaction.preview_rollback_chain",
+  "excel.transaction.rollback_chain",
+  "excel.job.list",
+  "excel.job.get",
+  "excel.job.wait",
+  "excel.job.cancel",
+  "excel.events.subscribe",
+  "excel.events.unsubscribe",
+  "excel.events.get_recent",
+  "excel.events.clear",
+  "excel.events.set_debounce",
+  "excel.pivot.list",
+  "excel.pivot.get_info",
+  "excel.pivot.create",
+  "excel.pivot.refresh",
+  "excel.pivot.refresh_all",
+  "excel.pivot.update_source",
+  "excel.pivot.copy_from_template",
+  "excel.pivot.delete",
+  "excel.pivot.validate_source",
+  "excel.pivot.get_capability_matrix",
+  "excel.pivot.get_fingerprint",
+  "excel.pivot.compare_fingerprint",
+  "excel.pivot.diff",
+  "excel.pivot.repair_from_template",
+  "excel.pivot.rebuild_with_source",
+  "excel.chart.list",
+  "excel.chart.get_info",
+  "excel.chart.create",
+  "excel.chart.update_data_source",
+  "excel.chart.copy_from_template",
+  "excel.chart.refresh",
+  "excel.chart.delete",
+  "excel.chart.validate_against_template",
+  "excel.permissions.get",
+  "excel.permissions.set",
+  "excel.permissions.require_confirmation",
+  "excel.permissions.set_scope",
+  "excel.permissions.allow_destructive_actions",
+  "excel.permissions.allow_macro_execution",
+  "excel.permissions.lock_regions",
+  "excel.permissions.unlock_regions"
 ]);
 const statuses = ["covered", "needs_unit_contract", "future_orchestration_candidate", "host_limited", "defer"];
 
@@ -52,7 +147,7 @@ const entries = capabilityNames.map((name) => {
   if (!group) {
     return { name, group: "unclassified", agentStatus: "internal_capability", planningStatus: "defer" };
   }
-  const agentStatus = name === "excel.agent.run" ? "agent_entrypoint" : handlerCapabilities.has(name) ? "agent_action_handler" : "internal_capability";
+  const agentStatus = name === "excel.agent.run" ? "agent_entrypoint" : orchestratedCapabilities.has(name) ? "agent_action_handler" : "internal_capability";
   return { name, group: group.group, agentStatus, planningStatus: planningStatus(name, group.group, agentStatus) };
 });
 
@@ -103,6 +198,17 @@ function parseGroups(source) {
   }));
 }
 
+function parseOrchestratedCapabilities(source, handlerCapabilities) {
+  const match = source.match(/const AGENT_ORCHESTRATED_CAPABILITIES = new Set\(\[([\s\S]*?)\]\);/);
+  if (!match) {
+    return handlerCapabilities;
+  }
+  return new Set([
+    ...handlerCapabilities,
+    ...[...match[1].matchAll(/"([^"]+)"/g)].map((item) => item[1])
+  ]);
+}
+
 function resolveGroup(name, groups) {
   const matches = groups.filter((group) => group.prefixes.some((prefix) => name.startsWith(prefix)));
   return matches.length === 1 ? matches[0] : undefined;
@@ -110,8 +216,8 @@ function resolveGroup(name, groups) {
 
 function planningStatus(name, group, agentStatus) {
   if (agentStatus !== "internal_capability") return "covered";
-  if (group === "pivot" || group === "chart" || hostLimitedCapabilities.has(name)) return "host_limited";
-  if (unitContractGroups.has(group)) return "needs_unit_contract";
+  if (contractTestedCapabilities.has(name)) return "covered";
+  if (unitContractGroups.has(group) || unitContractCapabilities.has(name)) return "needs_unit_contract";
   return "future_orchestration_candidate";
 }
 

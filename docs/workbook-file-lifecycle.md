@@ -85,7 +85,7 @@ Durable file backups are separate from snapshot backups. Snapshot backups are us
 
 The built-in bridge uses AppleScript on macOS and PowerShell COM automation on Windows for `replace-open-workbook`. It validates backup and target paths against `OPEN_WORKBOOK_FILE_BRIDGE_ALLOWED_DIRS` when configured. Production agents should still prefer snapshot rollback for in-workbook undo and use full-file replace restore only for explicit disaster recovery.
 
-Backup lifecycle operations emit collaboration audit events: `backup.created`, `backup.verified`, `backup.restored`, `backup.deleted`, `backup.pruned`, and `backup.updated`. These events appear in `excel.collab.get_status` so multi-agent clients can show which agent or workflow created, verified, restored, pinned, or removed a persisted backup.
+Backup lifecycle operations emit collaboration audit events: `backup.created`, `backup.verified`, `backup.restored`, `backup.deleted`, `backup.pruned`, and `backup.updated`. These events appear in the compact collaboration summary returned by `excel.agent.run` status or prepare calls so multi-agent clients can show which agent or workflow created, verified, restored, pinned, or removed a persisted backup.
 
 `excel.backup.prune` covers both durable full-file backups and persisted JSON snapshot backups. It accepts `kind` (`all`, `file-copy`, or `snapshot-json`), `maxAgeDays`, `maxBackupsPerWorkbook`, `maxTotalBytes`, and `dryRun`. Automatic retention uses balanced defaults of 30 days, 20 backups per workbook, and 1 GiB total payload bytes. Override with `OPEN_WORKBOOK_BACKUP_RETENTION_DAYS`, `OPEN_WORKBOOK_BACKUP_RETENTION_COUNT`, and `OPEN_WORKBOOK_BACKUP_RETENTION_BYTES`; set `OPEN_WORKBOOK_BACKUP_RETENTION_DISABLED=1` to disable automatic pruning.
 

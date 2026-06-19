@@ -17,40 +17,109 @@ export class FakeAgentRuntime {
   readBatchCount = 0;
   writeBatchCount = 0;
   appendTableRowCount = 0;
+  runtimeMethodCalls: Record<string, number> = {};
+  tableMethodCalls: Array<{ method: string; request: any }> = [];
   returnDataOnly = false;
   omitOkOnWrite = false;
+  validationResult: any;
+  lastBatchOperations: BatchRequest["operations"] = [];
+  lastBatchRequest: BatchRequest | undefined;
   lastWriteOperations: Array<Extract<BatchRequest["operations"][number], { target: any }>> = [];
   selection: any;
   readiness: any;
+  agentExecutionContext: any;
+  collaborationStatus: any;
 
   sessions = { getActive: () => ({ activeWorkbook }) };
 
+  currentAgentExecutionContext() {
+    return this.agentExecutionContext;
+  }
+
+  runWithAgentExecutionContext<T>(context: any, work: () => T): T {
+    const previous = this.agentExecutionContext;
+    this.agentExecutionContext = context;
+    try {
+      return work();
+    } finally {
+      this.agentExecutionContext = previous;
+    }
+  }
+
+  private recordRuntimeCall(method: string) {
+    this.runtimeMethodCalls[method] = (this.runtimeMethodCalls[method] ?? 0) + 1;
+  }
+
   getStatus() {
+    this.recordRuntimeCall("runtime.get_status");
     return { activeAddinConnected: true, connectionState: "ready", activeWorkbookAvailable: true, activeWorkbook };
   }
 
+  getCollaborationStatus(requestWorkbookId?: WorkbookId) {
+    this.recordRuntimeCall("runtime.get_collaboration_status");
+    if (this.collaborationStatus) return this.collaborationStatus;
+    const agentId = this.agentExecutionContext?.agentId;
+    return {
+      ok: true,
+      workbookId: requestWorkbookId ?? workbookId,
+      agents: agentId ? [{
+        agentId,
+        agentName: this.agentExecutionContext?.agentName,
+        clientType: this.agentExecutionContext?.clientType ?? "mcp",
+        status: "active",
+        lastSeenAt: "2026-06-18T00:00:00.000Z"
+      }] : [],
+      tasks: [],
+      locks: [],
+      transactions: [],
+      conflicts: [],
+      events: []
+    };
+  }
+
   async getConnectionReadiness() {
+    this.recordRuntimeCall("runtime.get_connection_readiness");
     if (this.readiness) return this.readiness;
     return { ok: true, connectionState: "ready", activeWorkbook, status: this.getStatus() };
   }
 
   async getActiveContext() {
+    this.recordRuntimeCall("runtime.get_active_context");
     return { ok: true, activeWorkbook };
   }
 
   async getSelection() {
+    this.recordRuntimeCall("runtime.get_selection");
     return this.selection ? { workbook: activeWorkbook, selection: this.selection } : { ok: false };
   }
 
   async getWorkbookMap() {
+    this.recordRuntimeCall("workbook.get_workbook_map");
     return { ok: true, map: { workbook: activeWorkbook, activeSheet: "Data", sheets } };
   }
 
+  listOpenWorkbooks() {
+    this.recordRuntimeCall("workbook.list_open_workbooks");
+    return { ok: true, workbooks: [activeWorkbook] };
+  }
+
+  async getWorkbookInfo() {
+    this.recordRuntimeCall("workbook.get_workbook_info");
+    return { ok: true, info: { workbook: activeWorkbook, sheetCount: sheets.length } };
+  }
+
+  async closeWorkbook(requestWorkbookId: any, closeBehavior?: any) {
+    this.recordRuntimeCall("workbook.close");
+    return { ok: true, workbookId: requestWorkbookId, closeBehavior };
+  }
+
   async listTables() {
+    this.recordRuntimeCall("table.list");
     return { ok: true, tables: [{ name: "Transactions" }] };
   }
 
   async getTableInfo() {
+    this.recordRuntimeCall("table.get_info");
     return {
       ok: true,
       info: {
@@ -64,18 +133,135 @@ export class FakeAgentRuntime {
     };
   }
 
+  async readTable(request: any) {
+    this.recordRuntimeCall("table.read");
+    const rows = [
+      ["2026-06-01", "A-100", 123, "Open"],
+      ["2026-06-02", "A-101", 456, "Closed"],
+      ["2026-06-03", "A-102", 789, "Open"]
+    ];
+    const headers = ["Date", "Account", "Amount", "Status"];
+    const columnIndexes = Array.isArray(request.columns) && request.columns.length > 0
+      ? request.columns.map((column: string | number) => typeof column === "number" ? column : headers.indexOf(column)).filter((index: number) => index >= 0)
+      : headers.map((_header, index) => index);
+    const offset = request.rowOffset ?? 0;
+    const limit = request.rowLimit ?? rows.length;
+    const values = rows.slice(offset, offset + limit).map((row) => columnIndexes.map((index: number) => row[index]));
+    return {
+      ok: true,
+      table: {
+        tableName: request.tableName,
+        headers: columnIndexes.map((index: number) => headers[index]),
+        values
+      }
+    };
+  }
+
+  async readRangeMetadata(method: string, request: any) {
+    this.recordRuntimeCall(method);
+    return { ok: true, method, request, data: { address: request.address, count: method === "range.search" ? 1 : 0 } };
+  }
+
   async listNames() {
-    return { ok: true, names: [{ workbookId, name: "RevenueTotal", scope: "workbook", address: "Report!B2" }] };
+    this.recordRuntimeCall("names.list");
+    return { ok: true, names: [{ workbookId, name: "RevenueTotal", scope: "workbook", sheetName: "Report", address: "Report!B2" }] };
   }
 
   listRegions() {
+    this.recordRuntimeCall("region.list");
     return { ok: true, regions: [{ name: "InputRegion", sheetName: "Report", address: "B1:B3" }] };
   }
 
+  async getName(request: any) {
+    this.recordRuntimeCall("names.get");
+    return {
+      ok: true,
+      name: {
+        workbookId,
+        name: request.name,
+        scope: request.sheetName ? "worksheet" : "workbook",
+        ...(request.sheetName !== undefined ? { sheetName: request.sheetName } : { sheetName: "Report" }),
+        address: request.name === "InputRegion" ? "Report!B1:B3" : "Report!B2",
+        formula: request.name === "InputRegion" ? "=Report!$B$1:$B$3" : "=Report!$B$2"
+      }
+    };
+  }
+
+  async createName(request: any) {
+    this.recordRuntimeCall("names.create");
+    return { ok: true, result: { name: request.name, reference: request.reference, formula: request.formula } };
+  }
+
+  async updateName(request: any) {
+    this.recordRuntimeCall("names.update");
+    return { ok: true, result: { name: request.name, reference: request.reference, formula: request.formula } };
+  }
+
+  async deleteName(request: any) {
+    this.recordRuntimeCall("names.delete");
+    return { ok: true, result: { name: request.name } };
+  }
+
+  async getRegion(request: any) {
+    this.recordRuntimeCall("region.get");
+    return {
+      ok: true,
+      region: {
+        workbookId,
+        regionId: `region_${request.regionName}`,
+        name: request.regionName,
+        sheetName: "Report",
+        address: request.regionName === "InputRegion" ? "B1:B3" : "B2",
+        kind: "data",
+        source: "manual",
+        createdAt: "2026-06-18T00:00:00.000Z",
+        updatedAt: "2026-06-18T00:00:00.000Z"
+      }
+    };
+  }
+
+  async registerRegion(request: any) {
+    this.recordRuntimeCall("region.register");
+    return {
+      ok: true,
+      region: {
+        workbookId,
+        regionId: `region_${request.name}`,
+        name: request.name,
+        sheetName: request.sheetName,
+        address: request.address,
+        kind: request.kind ?? "data",
+        source: request.createNamedRange ? "named-range" : "manual",
+        createdAt: "2026-06-18T00:00:00.000Z",
+        updatedAt: "2026-06-18T00:00:00.000Z"
+      }
+    };
+  }
+
+  async clearRegionValues(request: any) {
+    this.recordRuntimeCall("region.clear_values");
+    return { ok: true, backups: [], warnings: [], telemetry: { regionName: request.regionName } };
+  }
+
+  async writeRegionValues(request: any) {
+    this.recordRuntimeCall("region.write_values");
+    return { ok: true, backups: [], warnings: [], telemetry: { rowsWritten: request.values?.length ?? 0 } };
+  }
+
+  async fillRegion(request: any) {
+    this.recordRuntimeCall("region.fill");
+    return { ok: true, backups: [], warnings: [], telemetry: { rowsWritten: request.values?.length ?? 0, clearFirst: request.clearFirst ?? false } };
+  }
+
   async applyBatch(request: BatchRequest) {
-    if (request.operations.every((operation) => operation.kind === "range.read_full")) {
+    const effectiveRequest: BatchRequest = request.agentId === undefined && this.agentExecutionContext?.agentId
+      ? { ...request, agentId: this.agentExecutionContext.agentId }
+      : request;
+    this.lastBatchRequest = effectiveRequest;
+    this.lastBatchOperations = effectiveRequest.operations;
+    if (effectiveRequest.operations.every((operation) => operation.kind === "range.read_full")) {
       this.readBatchCount += 1;
-      const readData = request.operations.map((operation) => {
+      const readData = effectiveRequest.operations.map((operation) => {
         const sheetName = operation.target.sheetName;
         const address = operation.target.address;
         return {
@@ -90,11 +276,11 @@ export class FakeAgentRuntime {
       return {
         ok: true,
         ...(this.returnDataOnly ? { data: readData } : { readData }),
-        telemetry: { cellsRead: request.operations.reduce((total, operation) => total + valuesFor(operation.target.sheetName, operation.target.address).flat().length, 0) }
+        telemetry: { cellsRead: effectiveRequest.operations.reduce((total, operation) => total + valuesFor(operation.target.sheetName, operation.target.address).flat().length, 0) }
       };
     }
     this.writeBatchCount += 1;
-    this.lastWriteOperations = request.operations.filter((operation): operation is Extract<BatchRequest["operations"][number], { target: any }> => "target" in operation);
+    this.lastWriteOperations = effectiveRequest.operations.filter((operation): operation is Extract<BatchRequest["operations"][number], { target: any }> => "target" in operation);
     return {
       ...(this.omitOkOnWrite ? {} : { ok: true }),
       backups: [],
@@ -103,13 +289,776 @@ export class FakeAgentRuntime {
     };
   }
 
-  async appendTableRows() {
+  async appendTableRows(request: any) {
     this.appendTableRowCount += 1;
+    this.tableMethodCalls.push({ method: "table.append_rows", request });
     return { ok: true, backups: [], warnings: [], telemetry: { rowsWritten: 1 } };
   }
 
+  async updateTableRows(request: any) {
+    this.tableMethodCalls.push({ method: "table.update_rows", request });
+    return { ok: true, backups: [], warnings: [], telemetry: { rowsWritten: request.rows?.length ?? 0 } };
+  }
+
+  async createTable(request: any) {
+    this.tableMethodCalls.push({ method: "table.create", request });
+    return { ok: true, backups: [], warnings: [], telemetry: {} };
+  }
+
+  async resizeTable(request: any) {
+    this.tableMethodCalls.push({ method: "table.resize", request });
+    return { ok: true, backups: [], warnings: [], telemetry: {} };
+  }
+
+  async reorderTableColumns(request: any) {
+    this.tableMethodCalls.push({ method: "table.reorder_columns", request });
+    return { ok: true, backups: [], warnings: [], telemetry: {} };
+  }
+
+  async clearTableDataKeepFormulas(request: any) {
+    this.tableMethodCalls.push({ method: "table.clear_data_keep_formulas", request });
+    return { ok: true, backups: [], warnings: [], telemetry: {} };
+  }
+
+  async clearTableFilters(request: any) {
+    this.tableMethodCalls.push({ method: "table.clear_filters", request });
+    return { ok: true, backups: [], warnings: [], telemetry: {} };
+  }
+
+  async applyTableFilters(request: any) {
+    this.tableMethodCalls.push({ method: "table.apply_filters", request });
+    return { ok: true, backups: [], warnings: [], telemetry: { filtersApplied: request.filters?.length ?? 0 } };
+  }
+
+  async sortTable(request: any) {
+    this.tableMethodCalls.push({ method: "table.sort", request });
+    return { ok: true, backups: [], warnings: [], telemetry: {} };
+  }
+
+  async setTableTotalRow(request: any) {
+    this.tableMethodCalls.push({ method: "table.set_total_row", request });
+    return { ok: true, backups: [], warnings: [], telemetry: {} };
+  }
+
+  async setTableStyle(request: any) {
+    this.tableMethodCalls.push({ method: "table.set_style", request });
+    return { ok: true, backups: [], warnings: [], telemetry: {} };
+  }
+
+  async copyTableStructure(request: any) {
+    this.tableMethodCalls.push({ method: "table.copy_structure", request });
+    return { ok: true, backups: [], warnings: [], telemetry: {} };
+  }
+
   async validateWorkbook() {
+    this.recordRuntimeCall("validate.workbook");
+    if (this.validationResult) return this.validationResult;
     return { ok: true, issues: [] };
+  }
+
+  async validateSheet(request: any) {
+    this.recordRuntimeCall("validate.sheet");
+    return validationReport("sheet", request);
+  }
+
+  async validateTemplateConsistency(request: any) {
+    this.recordRuntimeCall("validate.template_consistency");
+    return validationReport("template_consistency", request);
+  }
+
+  async validateFormulas(request: any) {
+    this.recordRuntimeCall("validate.formulas");
+    return validationReport("formulas", request);
+  }
+
+  getTemplate(requestTemplateId: any) {
+    this.recordRuntimeCall("template.get");
+    return {
+      ok: true,
+      template: {
+        templateId: requestTemplateId,
+        name: "Unit Template",
+        scope: "workbook",
+        version: 1,
+        sourceSheetName: "Report",
+        dataRegions: ["B2:B3"],
+        fingerprint: {},
+        fingerprintPayload: {},
+        createdAt: "2026-06-18T00:00:00.000Z",
+        updatedAt: "2026-06-18T00:00:00.000Z"
+      }
+    };
+  }
+
+  listTemplates() {
+    this.recordRuntimeCall("template.list");
+    return [{
+      templateId: "template_unit",
+      name: "Unit Template",
+      scope: "workbook",
+      workbookId,
+      sourceSheetName: "Report",
+      dataRegions: ["B2:B3"],
+      fingerprintPayload: {},
+      createdAt: "2026-06-18T00:00:00.000Z",
+      updatedAt: "2026-06-18T00:00:00.000Z"
+    }];
+  }
+
+  async detectTemplates() {
+    this.recordRuntimeCall("template.detect");
+    return { ok: true, candidates: [{ workbookId, sheetName: "Report", usedRange: { address: "A1:B20" }, score: 1, reason: "Sheet has a used range." }] };
+  }
+
+  inferTemplateRegions(requestTemplateId: any) {
+    this.recordRuntimeCall("template.infer_regions");
+    return { ok: true, templateId: requestTemplateId, dataRegions: ["B2:B3"], inferredRegions: [{ address: "B2:B3", kind: "data-entry" }] };
+  }
+
+  async validateSheetAgainstTemplate(request: any) {
+    this.recordRuntimeCall("template.validate_sheet");
+    return { ok: true, sheetName: request.targetSheetName, templateId: request.templateId, issueCount: 0, issues: [], fingerprintPayload: {} };
+  }
+
+  async registerTemplate(request: any) {
+    this.recordRuntimeCall("template.register");
+    return { templateId: "template_registered", ...request, fingerprintPayload: {}, createdAt: "2026-06-18T00:00:00.000Z", updatedAt: "2026-06-18T00:00:00.000Z" };
+  }
+
+  unregisterTemplate(requestTemplateId: any) {
+    this.recordRuntimeCall("template.unregister");
+    return { ok: true, templateId: requestTemplateId };
+  }
+
+  async repairSheetFromTemplate(request: any) {
+    this.recordRuntimeCall("template.repair_sheet");
+    return { ok: true, result: { repaired: request.repair ?? ["styles", "formulas", "dataRegions"] }, validation: { ok: true, issueCount: 0, issues: [] } };
+  }
+
+  async compareFormulaPatterns(request: any) {
+    this.recordRuntimeCall("formula.validate_against_template");
+    return {
+      ok: true,
+      issueCount: 0,
+      issues: [],
+      sourcePatterns: { workbookId: request.workbookId, sheetName: request.sourceSheetName, address: request.sourceAddress ?? "A1:B20", formulas: [], patternMatrix: [], patterns: [], cells: [], warnings: [] },
+      targetPatterns: { workbookId: request.workbookId, sheetName: request.targetSheetName, address: request.targetAddress ?? "A1:B20", formulas: [], patternMatrix: [], patterns: [], cells: [], warnings: [] }
+    };
+  }
+
+  async validateStyles(request: any) {
+    this.recordRuntimeCall("validate.styles");
+    return validationReport("styles", request);
+  }
+
+  async getStyleFingerprint(request: any) {
+    this.recordRuntimeCall("style.get_fingerprint");
+    return { ok: true, fingerprint: { workbookId: request.workbookId, sheetName: request.sheetName, address: request.address ?? "A1:B20", dimensions: { fills: { hash: "fills" }, fonts: { hash: "fonts" } }, warnings: [] } };
+  }
+
+  async compareStyleFingerprints(request: any) {
+    this.recordRuntimeCall("style.compare_fingerprint");
+    return {
+      ok: true,
+      issueCount: 0,
+      issues: [],
+      sourceFingerprint: { workbookId: request.workbookId, sheetName: request.sourceSheetName, address: request.sourceAddress ?? "A1:B20", dimensions: {}, warnings: [] },
+      targetFingerprint: { workbookId: request.workbookId, sheetName: request.targetSheetName, address: request.targetAddress ?? "A1:B20", dimensions: {}, warnings: [] }
+    };
+  }
+
+  getTheme(requestWorkbookId: any) {
+    this.recordRuntimeCall("style.get_theme");
+    return { ok: false, workbookId: requestWorkbookId, operation: "get_theme", capabilityStatus: { capability: "excel.style.get_theme", status: "unsupported" }, warnings: [{ code: "THEME_READ_UNAVAILABLE", message: "Theme read unavailable." }] };
+  }
+
+  applyTheme(request: any) {
+    this.recordRuntimeCall("style.apply_theme");
+    return { ok: false, workbookId: request.workbookId, operation: "apply_theme", capabilityStatus: { capability: "excel.style.apply_theme", status: "unsupported" }, warnings: [{ code: "THEME_APPLY_UNAVAILABLE", message: "Theme apply unavailable." }] };
+  }
+
+  async copyStyleDimensions(request: any) {
+    this.recordRuntimeCall("style.copy_dimensions");
+    return { ok: true, result: { copied: request.dimensions }, validation: { ok: true, issueCount: 0, issues: [] } };
+  }
+
+  async repairStyleFromTemplate(request: any) {
+    this.recordRuntimeCall("style.repair_consistency");
+    return { ok: true, workbookId: request.workbookId, repair: "style_from_template", result: { templateId: request.templateId, targetSheetName: request.targetSheetName }, issueCount: 0, issues: [] };
+  }
+
+  async cleanDetectHeaderRow(request: any) {
+    this.recordRuntimeCall("clean.detect_header_row");
+    return cleaningReport("detect_header_row", request, 0, { headerRowIndex: 0, headers: ["Date", "Account", "Amount"] });
+  }
+
+  async cleanDetectOutliers(request: any) {
+    this.recordRuntimeCall("clean.detect_outliers");
+    return cleaningReport("detect_outliers", request, 0, { outliers: [] });
+  }
+
+  async cleanFuzzyMatch(request: any) {
+    this.recordRuntimeCall("clean.fuzzy_match");
+    return cleaningReport("fuzzy_match", request, 0, { matches: [] });
+  }
+
+  async cleanNormalizeHeaders(request: any) {
+    this.recordRuntimeCall("clean.normalize_headers");
+    return cleaningReport("normalize_headers", request, 3);
+  }
+
+  async cleanTrimWhitespace(request: any) {
+    this.recordRuntimeCall("clean.trim_whitespace");
+    return cleaningReport("trim_whitespace", request, 2);
+  }
+
+  async cleanRemoveDuplicates(request: any) {
+    this.recordRuntimeCall("clean.remove_duplicates");
+    return cleaningReport("remove_duplicates", request, 1);
+  }
+
+  async cleanParseDates(request: any) {
+    this.recordRuntimeCall("clean.parse_dates");
+    return cleaningReport("parse_dates", request, 2);
+  }
+
+  async cleanParseNumbers(request: any) {
+    this.recordRuntimeCall("clean.parse_numbers");
+    return cleaningReport("parse_numbers", request, 2);
+  }
+
+  async cleanStandardizeCurrency(request: any) {
+    this.recordRuntimeCall("clean.standardize_currency");
+    return cleaningReport("standardize_currency", request, 2);
+  }
+
+  async cleanFillMissingValues(request: any) {
+    this.recordRuntimeCall("clean.fill_missing_values");
+    return cleaningReport("fill_missing_values", request, 2);
+  }
+
+  async cleanSplitColumn(request: any) {
+    this.recordRuntimeCall("clean.split_column");
+    return cleaningReport("split_column", request, 4);
+  }
+
+  async cleanMergeColumns(request: any) {
+    this.recordRuntimeCall("clean.merge_columns");
+    return cleaningReport("merge_columns", request, 4);
+  }
+
+  async validateTables(request: any) {
+    this.recordRuntimeCall("validate.tables");
+    return validationReport("tables", request);
+  }
+
+  async validateTableAgainstTemplate(request: any) {
+    this.recordRuntimeCall("table.validate_against_template");
+    return { ok: true, table: { tableName: request.tableName }, templateTables: [] };
+  }
+
+  async validateFilters(request: any) {
+    this.recordRuntimeCall("validate.filters");
+    return validationReport("filters", request);
+  }
+
+  validatePrintLayout(request: any) {
+    this.recordRuntimeCall("validate.print_layout");
+    return validationReport("print_layout", request);
+  }
+
+  async validateNoBrokenReferences(request: any) {
+    this.recordRuntimeCall("validate.no_broken_references");
+    return validationReport("no_broken_references", request);
+  }
+
+  async validateNoFormulaErrors(request: any) {
+    this.recordRuntimeCall("validate.no_formula_errors");
+    return validationReport("no_formula_errors", request);
+  }
+
+  async validateNoUnintendedChanges(request: any) {
+    this.recordRuntimeCall("validate.no_unintended_changes");
+    return validationReport("no_unintended_changes", request);
+  }
+
+  async readFormulaPatterns(request: any) {
+    this.recordRuntimeCall("formula.read_patterns");
+    return {
+      ok: true,
+      patterns: {
+        workbookId: request.workbookId,
+        sheetName: request.sheetName,
+        address: request.address,
+        capturedAt: "2026-06-18T00:00:00.000Z",
+        rowCount: 1,
+        columnCount: 1,
+        formulaCount: 1,
+        formulas: [["=SUM(Data!C2:C4)"]],
+        patternMatrix: [["hash_sum_data"]],
+        patterns: [{ patternHash: "hash_sum_data", formulaR1C1: "=SUM(Data!R2C3:R4C3)", count: 1, cells: [{ rowIndex: 0, columnIndex: 0 }] }],
+        cells: [{ rowIndex: 0, columnIndex: 0, formula: "=SUM(Data!C2:C4)", formulaR1C1: "=SUM(Data!R2C3:R4C3)", patternHash: "hash_sum_data" }],
+        warnings: []
+      }
+    };
+  }
+
+  async getFormulaDependencyGraph(request: any) {
+    this.recordRuntimeCall("formula.get_dependency_graph");
+    return {
+      ok: true,
+      graph: {
+        workbookId: request.workbookId,
+        sheetName: request.sheetName,
+        address: request.address,
+        capturedAt: "2026-06-18T00:00:00.000Z",
+        nodes: [
+          { id: "formula:Report!B2", workbookId: request.workbookId, kind: "range", sheetName: request.sheetName, address: request.address, formula: "=SUM(Data!C2:C4)" },
+          { id: "range:Data!C2:C4", workbookId: request.workbookId, kind: "range", sheetName: "Data", address: "C2:C4" }
+        ],
+        edges: [{
+          from: { id: "formula:Report!B2", workbookId: request.workbookId, kind: "range", sheetName: request.sheetName, address: request.address, formula: "=SUM(Data!C2:C4)" },
+          to: { id: "range:Data!C2:C4", workbookId: request.workbookId, kind: "range", sheetName: "Data", address: "C2:C4" },
+          kind: "precedent",
+          confidence: "parsed"
+        }],
+        warnings: []
+      }
+    };
+  }
+
+  async traceFormulaPrecedents(request: any) {
+    this.recordRuntimeCall("formula.trace_precedents");
+    return {
+      ok: true,
+      workbookId: request.workbookId,
+      sheetName: request.sheetName,
+      address: request.address,
+      direction: "precedents",
+      nodes: [
+        { id: "formula:Report!B2", workbookId: request.workbookId, kind: "range", sheetName: request.sheetName, address: request.address },
+        { id: "range:Data!C2:C4", workbookId: request.workbookId, kind: "range", sheetName: "Data", address: "C2:C4" }
+      ],
+      edges: [{
+        from: { id: "formula:Report!B2", workbookId: request.workbookId, kind: "range", sheetName: request.sheetName, address: request.address },
+        to: { id: "range:Data!C2:C4", workbookId: request.workbookId, kind: "range", sheetName: "Data", address: "C2:C4" },
+        kind: "precedent",
+        confidence: "parsed"
+      }],
+      warnings: []
+    };
+  }
+
+  async traceFormulaDependents(request: any) {
+    this.recordRuntimeCall("formula.trace_dependents");
+    return {
+      ok: true,
+      workbookId: request.workbookId,
+      sheetName: request.sheetName,
+      address: request.address,
+      direction: "dependents",
+      nodes: [
+        { id: "range:Data!C2:C4", workbookId: request.workbookId, kind: "range", sheetName: request.sheetName, address: request.address },
+        { id: "formula:Report!B2", workbookId: request.workbookId, kind: "range", sheetName: "Report", address: "B2" }
+      ],
+      edges: [{
+        from: { id: "range:Data!C2:C4", workbookId: request.workbookId, kind: "range", sheetName: request.sheetName, address: request.address },
+        to: { id: "formula:Report!B2", workbookId: request.workbookId, kind: "range", sheetName: "Report", address: "B2" },
+        kind: "dependent",
+        confidence: "parsed"
+      }],
+      warnings: []
+    };
+  }
+
+  async copyFormulaPatterns(request: any) {
+    this.recordRuntimeCall("formula.copy_patterns");
+    return {
+      ok: true,
+      backup: { backupId: "backup_formula_copy", workbookId: request.workbookId },
+      result: { ok: true, formulasChanged: 3, warnings: [] },
+      validation: { ok: true, issueCount: 0, issues: [] }
+    };
+  }
+
+  async fillFormulaPattern(request: any) {
+    this.recordRuntimeCall(request.direction === "right" ? "formula.fill_right" : "formula.fill_down");
+    return {
+      ok: true,
+      backup: { backupId: `backup_formula_fill_${request.direction}`, workbookId: request.workbookId },
+      result: { ok: true, formulasChanged: 3, warnings: [] }
+    };
+  }
+
+  async repairFormulasFromTemplate(request: any) {
+    this.recordRuntimeCall("formula.repair_patterns");
+    return {
+      ok: true,
+      backups: ["backup_formula_repair"],
+      validation: { ok: true, issueCount: 0, issues: [] },
+      result: { ok: true, formulasChanged: 3, warnings: [] },
+      warnings: []
+    };
+  }
+
+  repairFiltersFromTemplate(request: any) {
+    this.recordRuntimeCall("repair.filters_from_template");
+    return repairReport("filters_from_template", request, false);
+  }
+
+  repairPrintLayout(request: any) {
+    this.recordRuntimeCall("repair.print_layout");
+    return repairReport("print_layout", request, false);
+  }
+
+  repairNamedRanges(request: any) {
+    this.recordRuntimeCall("repair.named_ranges");
+    return repairReport("named_ranges", request, false);
+  }
+
+  repairFormulaErrors(request: any) {
+    this.recordRuntimeCall("repair.formula_errors");
+    return repairReport("formula_errors", request, false);
+  }
+
+  repairMergedCells(request: any) {
+    this.recordRuntimeCall("repair.merged_cells");
+    return repairReport("merged_cells", request, false);
+  }
+
+  async convertFormulasToValues(request: any) {
+    this.recordRuntimeCall("formula.convert_to_values");
+    return {
+      ok: true,
+      backup: { backupId: "backup_formula_convert", workbookId: request.workbookId },
+      result: { ok: true, formulasChanged: 1, warnings: [] }
+    };
+  }
+
+  async createWorkbookSnapshot(request: any) {
+    this.recordRuntimeCall("workbook.snapshot");
+    return {
+      ok: true,
+      snapshot: {
+        snapshotId: "snapshot_agent_unit",
+        workbookId: request.workbookId,
+        reason: request.reason,
+        affectedRanges: request.ranges ?? [{ workbookId: request.workbookId, sheetName: "Data", address: "A1:D4" }],
+        payload: { rangeSnapshots: [] },
+        createdAt: "2026-06-18T00:00:00.000Z"
+      }
+    };
+  }
+
+  async createWorkbookBackup(request: any) {
+    this.recordRuntimeCall("workbook.create_backup");
+    return {
+      ok: true,
+      backup: {
+        backupId: "backup_agent_unit",
+        workbookId: request.workbookId,
+        reason: request.reason,
+        affectedRanges: request.ranges ?? [{ workbookId: request.workbookId, sheetName: "Data", address: "A1:D4" }],
+        kind: "workbook-copy",
+        createdAt: "2026-06-18T00:00:00.000Z"
+      }
+    };
+  }
+
+  async restoreBackup(requestBackupId: any) {
+    this.recordRuntimeCall("workbook.restore_backup");
+    return { ok: true, backups: [], warnings: [], telemetry: {}, backupId: requestBackupId };
+  }
+
+  async restoreWorkbookBackup(requestBackupId: any) {
+    return this.restoreBackup(requestBackupId);
+  }
+
+  exportWorkbookLocalConfig(requestWorkbookId: any, options: any = {}) {
+    this.recordRuntimeCall("workbook.export_local_config");
+    return {
+      ok: true,
+      workbookId: requestWorkbookId,
+      config: { version: 1, workbookId: requestWorkbookId, exportedAt: "2026-06-18T00:00:00.000Z", source: "open-workbook-local-config", templates: [], regions: [] },
+      counts: { templates: 0, regions: 0, permissions: options.includePermissions ?? true }
+    };
+  }
+
+  importWorkbookLocalConfig(request: any) {
+    this.recordRuntimeCall("workbook.import_local_config");
+    return { ok: true, workbookId: request.workbookId, imported: { templates: 0, regions: 0, permissions: false }, skipped: { templates: 0, regions: 0 } };
+  }
+
+  async embedWorkbookLocalConfig(requestWorkbookId: any, options: any = {}) {
+    this.recordRuntimeCall("workbook.embed_local_config");
+    return { ok: true, workbookId: requestWorkbookId, embedded: true, options };
+  }
+
+  async readWorkbookEmbeddedLocalConfig(requestWorkbookId: any) {
+    this.recordRuntimeCall("workbook.read_embedded_local_config");
+    return { ok: true, workbookId: requestWorkbookId, embedded: true, config: { version: 1, workbookId: requestWorkbookId, exportedAt: "2026-06-18T00:00:00.000Z", source: "open-workbook-local-config", templates: [], regions: [] } };
+  }
+
+  async importWorkbookEmbeddedLocalConfig(request: any) {
+    this.recordRuntimeCall("workbook.import_embedded_local_config");
+    return { ok: true, workbookId: request.workbookId, imported: { templates: 0, regions: 0, permissions: false }, skipped: { templates: 0, regions: 0 } };
+  }
+
+  async createFileBackup(request: any) {
+    this.recordRuntimeCall("backup.create_file");
+    return {
+      ok: true,
+      backup: { backupId: "backup_file_unit", workbookId: request.workbookId, kind: "file-copy" },
+      manifest: { backupId: "backup_file_unit", workbookId: request.workbookId, filePath: request.targetPath ?? "/tmp/Agent Unit backup.xlsx", restoreStatus: "available", pinned: request.pin ?? false }
+    };
+  }
+
+  async restoreFileBackup(request: any) {
+    this.recordRuntimeCall("backup.restore_file");
+    return {
+      ok: true,
+      workbookId: request.workbookId,
+      backupId: request.backupId,
+      mode: request.mode ?? "open-as-new",
+      filePath: "/tmp/Agent Unit backup.xlsx"
+    };
+  }
+
+  async pruneFileBackups(request: any) {
+    this.recordRuntimeCall("backup.prune");
+    return {
+      ok: true,
+      pruned: ["backup_old_unit"],
+      candidates: [],
+      skippedPinned: [],
+      reclaimedBytes: 1024,
+      request
+    };
+  }
+
+  listSnapshots(workbookId: any) {
+    this.recordRuntimeCall("snapshot.list");
+    return {
+      ok: true,
+      snapshots: [{
+        snapshotId: "snapshot_agent_unit",
+        workbookId,
+        reason: "Agent unit snapshot",
+        affectedRanges: [{ workbookId, sheetName: "Data", address: "A1:D4" }],
+        payload: {
+          rangeSnapshots: [{
+            fingerprint: {
+              range: { workbookId, sheetName: "Data", address: "A1:D4" },
+              hash: "hash_snapshot_agent_unit",
+              cellCount: 16,
+              capturedAt: "2026-06-18T00:00:00.000Z"
+            }
+          }]
+        },
+        createdAt: "2026-06-18T00:00:00.000Z"
+      }]
+    };
+  }
+
+  getSnapshot(snapshotId: any) {
+    this.recordRuntimeCall("snapshot.get_compact");
+    return {
+      ok: true,
+      snapshot: {
+        snapshotId,
+        workbookId,
+        reason: "Agent unit snapshot",
+        affectedRanges: [{ workbookId, sheetName: "Data", address: "A1:D4" }],
+        payload: {
+          rangeSnapshots: [{
+            fingerprint: {
+              range: { workbookId, sheetName: "Data", address: "A1:D4" },
+              hash: "hash_snapshot_agent_unit",
+              cellCount: 16,
+              capturedAt: "2026-06-18T00:00:00.000Z"
+            }
+          }]
+        },
+        createdAt: "2026-06-18T00:00:00.000Z"
+      }
+    };
+  }
+
+  getWorkbookSnapshot(snapshotId: any) {
+    this.recordRuntimeCall("workbook.get_snapshot");
+    return {
+      ok: true,
+      snapshot: {
+        snapshotId,
+        workbookId,
+        reason: "Agent unit snapshot",
+        affectedRanges: [{ workbookId, sheetName: "Data", address: "A1:D4" }],
+        payload: { rangeSnapshots: [] },
+        createdAt: "2026-06-18T00:00:00.000Z"
+      }
+    };
+  }
+
+  compareSnapshots(leftSnapshotId: any, rightSnapshotId: any) {
+    this.recordRuntimeCall("snapshot.compare_compact");
+    return {
+      ok: true,
+      diff: {
+        leftSnapshotId,
+        rightSnapshotId,
+        changedRanges: [{ workbookId, sheetName: "Data", address: "A1:D4" }],
+        cellsChanged: 4,
+        summary: "1 range changed"
+      }
+    };
+  }
+
+  async detectExternalChanges(request: any) {
+    this.recordRuntimeCall("workbook.detect_external_changes");
+    return { ok: true, diff: { leftSnapshotId: request.snapshotId, rightSnapshotId: "snapshot_current_unit", changedRanges: [], cellsChanged: 0, summary: "No external changes" } };
+  }
+
+  async refreshSnapshot(request: any) {
+    this.recordRuntimeCall("snapshot.refresh");
+    return {
+      ok: true,
+      snapshot: {
+        snapshotId: "snapshot_refreshed_unit",
+        workbookId,
+        reason: request.reason,
+        affectedRanges: [{ workbookId, sheetName: "Data", address: "A1:D4" }],
+        payload: { rangeSnapshots: [] },
+        createdAt: "2026-06-18T00:00:00.000Z"
+      }
+    };
+  }
+
+  async refreshWorkbookSnapshot(request: any) {
+    this.recordRuntimeCall("workbook.refresh_snapshot");
+    return {
+      ok: true,
+      snapshot: {
+        snapshotId: "snapshot_refreshed_unit",
+        workbookId,
+        reason: request.reason,
+        affectedRanges: [{ workbookId, sheetName: "Data", address: "A1:D4" }],
+        payload: { rangeSnapshots: [] },
+        createdAt: "2026-06-18T00:00:00.000Z"
+      }
+    };
+  }
+
+  invalidateSnapshot(snapshotId: any) {
+    this.recordRuntimeCall("snapshot.invalidate");
+    return {
+      ok: true,
+      snapshot: {
+        snapshotId,
+        workbookId,
+        reason: "Agent unit snapshot",
+        affectedRanges: [{ workbookId, sheetName: "Data", address: "A1:D4" }],
+        payload: { rangeSnapshots: [] },
+        createdAt: "2026-06-18T00:00:00.000Z",
+        invalidatedAt: "2026-06-18T00:01:00.000Z"
+      }
+    };
+  }
+
+  deleteSnapshot(snapshotId: any) {
+    this.recordRuntimeCall("snapshot.delete");
+    return { ok: true, snapshotId };
+  }
+
+  listFileBackups(workbookId: any) {
+    this.recordRuntimeCall("backup.list");
+    return {
+      ok: true,
+      backups: [{
+        backup: {
+          backupId: "backup_agent_unit",
+          workbookId,
+          kind: "workbook-copy",
+          reason: "Agent unit backup",
+          affectedRanges: [{ workbookId, sheetName: "Data", address: "A1:D4" }],
+          retention: "persistent",
+          createdAt: "2026-06-18T00:00:00.000Z"
+        },
+        payload: {
+          kind: "snapshot-json",
+          path: "/tmp/open-workbook-backups/backup_agent_unit.json",
+          pinned: false
+        }
+      }]
+    };
+  }
+
+  getFileBackup(backupId: any) {
+    this.recordRuntimeCall("backup.get");
+    return {
+      ok: true,
+      backup: {
+        backupId,
+        workbookId,
+        kind: "workbook-copy",
+        reason: "Agent unit backup",
+        affectedRanges: [{ workbookId, sheetName: "Data", address: "A1:D4" }],
+        retention: "persistent",
+        createdAt: "2026-06-18T00:00:00.000Z"
+      },
+      payload: {
+        kind: "snapshot-json",
+        path: "/tmp/open-workbook-backups/backup_agent_unit.json",
+        pinned: false
+      }
+    };
+  }
+
+  async verifyFileBackup(backupId: any) {
+    this.recordRuntimeCall("backup.verify");
+    return {
+      ok: true,
+      backup: {
+        backupId,
+        workbookId,
+        kind: "file-copy",
+        reason: "Agent unit backup",
+        affectedRanges: [{ workbookId, sheetName: "Data", address: "A1:D4" }],
+        retention: "persistent",
+        verifiedAt: "2026-06-18T00:02:00.000Z",
+        restoreStatus: "available",
+        createdAt: "2026-06-18T00:00:00.000Z"
+      },
+      manifest: {
+        backupId,
+        workbookId,
+        filePath: "/tmp/open-workbook-backups/backup_agent_unit.xlsx",
+        checksum: "checksum_agent_unit",
+        restoreStatus: "available",
+        verifiedAt: "2026-06-18T00:02:00.000Z"
+      }
+    };
+  }
+
+  pinFileBackup(backupId: any, pinned: boolean) {
+    this.recordRuntimeCall(pinned ? "backup.pin" : "backup.unpin");
+    return {
+      ok: true,
+      backup: {
+        backupId,
+        workbookId,
+        kind: "workbook-copy",
+        reason: "Agent unit backup",
+        affectedRanges: [{ workbookId, sheetName: "Data", address: "A1:D4" }],
+        retention: "persistent",
+        pinned,
+        createdAt: "2026-06-18T00:00:00.000Z"
+      }
+    };
+  }
+
+  async deleteFileBackup(backupId: any) {
+    this.recordRuntimeCall("backup.delete");
+    return { ok: true, backupId };
   }
 }
 
@@ -270,6 +1219,40 @@ function padToSummary(left: unknown[], summary: unknown[]) {
 function formulasFor(sheetName: string, address: string) {
   const values = valuesFor(sheetName, address);
   return values.map((row) => row.map((value) => typeof value === "string" && value.startsWith("=") ? value : null));
+}
+
+function validationReport(scope: string, request: any) {
+  return {
+    ok: true,
+    workbookId,
+    scope,
+    issues: [],
+    data: { request }
+  };
+}
+
+function cleaningReport(action: string, request: any, changedCells: number, data?: unknown) {
+  return {
+    ok: true,
+    workbookId,
+    target: { workbookId, sheetName: request.sheetName, address: request.address },
+    action,
+    changedCells,
+    ...(data !== undefined ? { data } : {}),
+    warnings: []
+  };
+}
+
+function repairReport(repair: string, request: any, ok = true) {
+  return {
+    ok,
+    workbookId,
+    repair,
+    repairedAt: "2026-06-18T00:00:00.000Z",
+    issues: ok ? [] : [{ code: "CAPABILITY_UNAVAILABLE", severity: "warning", message: `${repair} repair is unavailable in fake runtime.` }],
+    result: { request },
+    warnings: []
+  };
 }
 
 export function createCachedMetadata(workbookContextId: string): WorkbookMetadata {

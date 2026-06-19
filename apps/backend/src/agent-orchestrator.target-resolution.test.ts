@@ -165,6 +165,25 @@ describe("AgentOrchestrator Target Resolution", () => {
       expect((result.answer as any).sections.map((section: any) => section.label)).toContain("invoice section");
     });
 
+  it("samples offset used ranges from their true top-left cell", async () => {
+      sheets.push({ workbookId: "workbook_agent_unit" as any, worksheetId: "sheet_Offset", name: "Offset", usedRange: { address: "E5001:AN5100", rowCount: 100, columnCount: 36 }, tables: [] });
+      try {
+        const runtime = new FakeAgentRuntime();
+        const agent = new AgentOrchestrator(runtime as any);
+
+        const result = await agent.run({
+          request: "What sections are on the Offset sheet?",
+          mode: "answer",
+          target: { sheetName: "Offset" }
+        });
+
+        expect(result.status).toBe("SUCCESS");
+        expect(runtime.lastBatchOperations.some((operation) => operation.target?.sheetName === "Offset" && operation.target.address === "E5001:AN5020")).toBe(true);
+      } finally {
+        sheets.pop();
+      }
+    });
+
   it("targets one section on an unstructured worksheet instead of reading the whole used range", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);

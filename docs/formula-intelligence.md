@@ -41,6 +41,6 @@ Formula writes use parsed local dependencies during pre-commit lock checks. If a
 
 ## Current Limits
 
-`excel.formula.find_circular_references` is exposed as a deterministic capability-status tool until circular-reference enumeration can be normalized safely across Excel hosts.
+Circular-reference enumeration is not advertised as an internal capability until Excel host support can be normalized safely.
 
 `excel.formula.explain` is intentionally lightweight. It summarizes functions, references, structured references, external references, and volatile functions; it is not a full Excel formula parser.

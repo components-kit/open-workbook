@@ -501,14 +501,26 @@ export function inferSheetKind(sheetName: string, columns: ColumnMetadata[], tab
 }
 
 function sampleAddress(address: string, rowCount?: number, columnCount?: number): string {
-  const start = /^'?[^'!]+(?:'!)?([A-Z]+\d+)/i.exec(address)?.[1] ?? "A1";
+  const start = /^([A-Z]+)(\d+)/i.exec(stripSheetName(address)) ?? /^([A-Z]+)(\d+)/i.exec("A1");
+  const startColumn = columnIndex(start?.[1] ?? "A");
+  const startRow = Number.parseInt(start?.[2] ?? "1", 10);
   const rows = Math.max(1, Math.min(rowCount ?? 20, 20));
   const cols = Math.max(1, Math.min(columnCount ?? 40, 40));
-  return `${start}:${columnLetter(cols - 1)}${rows}`;
+  const endColumn = startColumn + cols - 1;
+  const endRow = startRow + rows - 1;
+  return `${columnLetter(startColumn)}${startRow}:${columnLetter(endColumn)}${endRow}`;
 }
 
 function stripSheetName(address: string): string {
   return address.includes("!") ? address.split("!").pop() ?? address : address;
+}
+
+function columnIndex(column: string): number {
+  let value = 0;
+  for (const char of column.toUpperCase()) {
+    value = value * 26 + char.charCodeAt(0) - 64;
+  }
+  return Math.max(0, value - 1);
 }
 
 function groupBy<T>(items: T[], keyFn: (item: T) => string): Map<string, T[]> {

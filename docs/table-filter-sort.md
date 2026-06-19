@@ -7,8 +7,8 @@ Structured table operations use native Office.js table APIs instead of range-onl
 - Read table metadata, headers, values, formulas, text, number formats, filters, and sort state.
 - Project table reads by selected columns, row offset/limit, and requested facets to keep large-table payloads small.
 - Create, resize, reorder columns, append rows, update rows, clear constants while keeping formulas, set total row, set style, and copy table structure.
-- Apply, clear, preserve, and validate table filters through Office.js filter criteria.
-- Apply, clear, and preserve table sort state through Office.js sort fields.
+- Apply, clear, and validate table filters through Office.js filter criteria.
+- Apply and clear table sort state through Office.js sort fields.
 
 ## Safety
 

@@ -12,7 +12,9 @@ const forbiddenActiveRegistrations = ["Runtime", "Workbook", "Range", "Batch", "
   .filter((snippet) => source.includes(snippet));
 const internalCapabilities = getInternalCapabilityCatalog({ includePreview: true });
 
-if (missing.length > 0 || forbiddenActiveRegistrations.length > 0 || internalCapabilities.length <= 300) {
+const expectedInternalCapabilityCount = 294;
+
+if (missing.length > 0 || forbiddenActiveRegistrations.length > 0 || internalCapabilities.length !== expectedInternalCapabilityCount) {
   console.error("MCP tool catalog drift detected.");
   if (missing.length > 0) {
     console.error(`Missing public MCP registrations:\n${missing.map((name) => `- ${name}`).join("\n")}`);
@@ -20,8 +22,8 @@ if (missing.length > 0 || forbiddenActiveRegistrations.length > 0 || internalCap
   if (forbiddenActiveRegistrations.length > 0) {
     console.error(`Primitive MCP registration groups must not be active:\n${forbiddenActiveRegistrations.map((name) => `- ${name}`).join("\n")}`);
   }
-  if (internalCapabilities.length <= 300) {
-    console.error(`Internal capability catalog is unexpectedly small: ${internalCapabilities.length}`);
+  if (internalCapabilities.length !== expectedInternalCapabilityCount) {
+    console.error(`Internal capability catalog count changed: expected ${expectedInternalCapabilityCount}, got ${internalCapabilities.length}`);
   }
   process.exit(1);
 }

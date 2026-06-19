@@ -21,15 +21,80 @@ export interface AgentActionDefinition {
 export const AGENT_ACTION_REGISTRY: AgentActionDefinition[] = [
   { kind: "range.write_values", risk: "small_value_write", previewRequired: true, confirmationRequired: true },
   { kind: "range.write_formulas", risk: "formula_write", previewRequired: true, confirmationRequired: true },
+  { kind: "range.write_number_formats", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "range.write_styles", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "range.clear", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "range.clear_values", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "range.clear_formats", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "range.clear_values_keep_format", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "range.insert_rows", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "range.delete_rows", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "range.insert_columns", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "range.delete_columns", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "range.merge", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "range.unmerge", risk: "structure_change", previewRequired: true, confirmationRequired: true },
   { kind: "range.autofit_columns", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "range.autofit_rows", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "range.copy", risk: "broad_range_write", previewRequired: true, confirmationRequired: true },
+  { kind: "range.move", risk: "destructive", previewRequired: true, confirmationRequired: true },
   { kind: "range.apply_autofilter", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "sheet.copy", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "sheet.create", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "sheet.rename", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "sheet.delete", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "sheet.hide", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "sheet.unhide", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "sheet.protect", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "sheet.unprotect", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "sheet.clear", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "sheet.set_tab_color", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "workbook.calculate", risk: "read_only", previewRequired: true, confirmationRequired: true },
   { kind: "workbook.save", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "workbook.snapshot", risk: "read_only", previewRequired: true, confirmationRequired: true },
+  { kind: "workbook.create_backup", risk: "read_only", previewRequired: true, confirmationRequired: true },
+  { kind: "snapshot.refresh", risk: "read_only", previewRequired: true, confirmationRequired: true },
+  { kind: "snapshot.invalidate", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "snapshot.delete", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "backup.create_file", risk: "read_only", previewRequired: true, confirmationRequired: true },
+  { kind: "backup.restore_file", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "backup.prune", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "backup.pin", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "backup.unpin", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "backup.delete", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "workbook.restore_backup", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "workbook.import_local_config", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "workbook.embed_local_config", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "workbook.import_embedded_local_config", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "workbook.close", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "formula.copy_patterns", risk: "formula_write", previewRequired: true, confirmationRequired: true },
+  { kind: "formula.fill_pattern", risk: "formula_write", previewRequired: true, confirmationRequired: true },
+  { kind: "formula.repair_patterns", risk: "formula_write", previewRequired: true, confirmationRequired: true },
+  { kind: "formula.convert_to_values", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "names.create", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "names.update", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "names.delete", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "region.register", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "region.clear_values", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "region.write_values", risk: "broad_range_write", previewRequired: true, confirmationRequired: true },
+  { kind: "region.fill", risk: "broad_range_write", previewRequired: true, confirmationRequired: true },
   { kind: "table.append_rows", risk: "table_append", previewRequired: true, confirmationRequired: true },
-  { kind: "table.sort", risk: "broad_range_write", previewRequired: true, confirmationRequired: true }
+  { kind: "table.update_rows", risk: "broad_range_write", previewRequired: true, confirmationRequired: true },
+  { kind: "table.create", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "table.resize", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "table.reorder_columns", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "table.clear_data_keep_formulas", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "table.clear_filters", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "table.apply_filters", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "table.sort", risk: "broad_range_write", previewRequired: true, confirmationRequired: true },
+  { kind: "table.set_total_row", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "table.set_style", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "table.copy_structure", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "template.register", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "template.unregister", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "template.repair_sheet", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "style.copy_dimensions", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "style.repair_consistency", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "clean.transform", risk: "broad_range_write", previewRequired: true, confirmationRequired: true }
 ];
 
 const RISK_RANK: Record<AgentOperationRisk, number> = {
@@ -50,7 +115,54 @@ export function classifyAgentActionRisk(action: PendingAgentAction): AgentOperat
   return highestRisk(kinds.map(riskForOperationKind));
 }
 
-export function riskForOperationKind(kind: ExcelOperation["kind"] | "table.append_rows" | "table.sort"): AgentOperationRisk {
+export function riskForOperationKind(
+  kind: ExcelOperation["kind"]
+    | "table.append_rows"
+    | "table.update_rows"
+    | "table.create"
+    | "table.resize"
+    | "table.reorder_columns"
+    | "table.clear_data_keep_formulas"
+    | "table.clear_filters"
+    | "table.apply_filters"
+    | "table.sort"
+    | "table.set_total_row"
+    | "table.set_style"
+    | "table.copy_structure"
+    | "template.register"
+    | "template.unregister"
+    | "template.repair_sheet"
+    | "style.copy_dimensions"
+    | "style.repair_consistency"
+    | "clean.transform"
+    | "workbook.snapshot"
+    | "workbook.create_backup"
+    | "snapshot.refresh"
+    | "snapshot.invalidate"
+    | "snapshot.delete"
+    | "backup.create_file"
+    | "backup.restore_file"
+    | "backup.prune"
+    | "backup.pin"
+    | "backup.unpin"
+    | "backup.delete"
+    | "workbook.restore_backup"
+    | "workbook.import_local_config"
+    | "workbook.embed_local_config"
+    | "workbook.import_embedded_local_config"
+    | "workbook.close"
+    | "formula.copy_patterns"
+    | "formula.fill_pattern"
+    | "formula.repair_patterns"
+    | "formula.convert_to_values"
+    | "names.create"
+    | "names.update"
+    | "names.delete"
+    | "region.register"
+    | "region.clear_values"
+    | "region.write_values"
+    | "region.fill"
+): AgentOperationRisk {
   const registered = AGENT_ACTION_REGISTRY.find((action) => action.kind === kind);
   if (registered) {
     return registered.risk;

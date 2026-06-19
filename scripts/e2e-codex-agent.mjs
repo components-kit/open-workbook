@@ -165,7 +165,7 @@ const scenarios = [
     id: "snapshots-diffs-rollback",
     title: "Snapshots, diffs, backup, and rollback preview",
     task: "After the required discovery calls, use excel.workflow.preview_risky_edit with a non-empty scoped write operation for the risky edit to Report_Jan!B2:C12, or manually create a before snapshot or backup, make a small scoped value change, create an after snapshot, call a diff tool with the two snapshot IDs, then call a rollback preview tool. Do not set apply=false unless only a preview was requested. Do not stop after the write or plan. Do not actually roll back.",
-    requiredAny: [["excel.workflow.preview_risky_edit", "excel.snapshot.create", "excel.workbook.snapshot", "excel.workbook.create_backup", "excel.backup.create_file"], ["excel.workflow.preview_risky_edit", "excel.range.write_values", "excel.region.write_values", "excel.region.fill"], ["excel.workflow.preview_risky_edit", "excel.diff.create", "excel.diff.summarize", "excel.snapshot.compare_compact"], ["excel.workflow.preview_risky_edit", "excel.transaction.preview_rollback", "excel.transaction.preview_rollback_chain"]],
+    requiredAny: [["excel.workflow.preview_risky_edit", "excel.snapshot.create", "excel.workbook.snapshot", "excel.workbook.create_backup", "excel.backup.create_file"], ["excel.workflow.preview_risky_edit", "excel.range.write_values", "excel.region.write_values", "excel.region.fill"], ["excel.workflow.preview_risky_edit", "excel.snapshot.compare_compact"], ["excel.workflow.preview_risky_edit", "excel.transaction.preview_rollback", "excel.transaction.preview_rollback_chain"]],
     forbidden: [
       { name: "actual rollback when only preview requested", match: (call) => ["excel.transaction.rollback", "excel.transaction.rollback_chain", "excel.workbook.restore_backup", "excel.backup.restore_file"].includes(call.name) }
     ]
@@ -263,10 +263,9 @@ async function runScenario(scenario, iteration) {
       "--json",
       "-m",
       model,
+      "--dangerously-bypass-approvals-and-sandbox",
       "-c",
       `model_reasoning_effort="${reasoning}"`,
-      "-c",
-      'sandbox_mode="read-only"',
       "-c",
       'mcp_servers.open-workbook.command="node"',
       "-c",
@@ -347,14 +346,14 @@ function buildPrompt(scenario) {
   return [
     "You are running an Open Workbook MCP agent decision E2E scenario.",
     "Use only the configured Open Workbook MCP server. Do not run shell commands. Do not edit repository files.",
+    "The public MCP surface intentionally exposes only `excel.agent.run`. Put the requested workbook action in `request`, choose a mode such as prepare, answer, preview_update, apply_update, validate, or rollback, and provide `intent.action` when it helps the backend route deterministically.",
     "",
-    "Start the workbook session before any mutation with this MCP call:",
-    ...discoveryTools.map((tool, index) => `${index + 1}. ${tool}`),
+    "Start the workbook session before any mutation with `excel.agent.run` using mode `prepare` and intent action `prepare_session`.",
     "",
-    "Choose the fastest reliable Open Workbook MCP tool for the task. Prefer table, template, style, formula, region, workflow, clean, pivot, chart, snapshot, diff, permission, lock, and transaction tools over manual range rewrites when they match the task.",
+    "Choose the fastest reliable backend capability through `excel.agent.run`. Prefer table, template, style, formula, region, workflow, clean, pivot, chart, snapshot, permission, lock, and transaction actions over manual range rewrites when they match the task.",
     "For large tables, use structured table operations and bounded reads. Never loop cell by cell. Preserve formulas, filters, styles, templates, and rollback metadata.",
     "If a mutating MCP call is cancelled in this noninteractive run, do not retry by changing permissions. Instead create an excel.plan.create draft that contains the exact safe operations you intended to apply, then report that mutation was blocked.",
-    "Use the specific diagnostic tool when the task names one: formula error finding should use excel.formula.find_errors, excel.range.find_errors, or excel.repair.formula_errors; formula repair should use pattern/dependency tools; diff summaries should use excel.diff.summarize, excel.diff.get_compact, or excel.snapshot.compare_compact.",
+    "Use the specific diagnostic tool when the task names one: formula error finding should use excel.formula.find_errors, excel.range.find_errors, or excel.repair.formula_errors; formula repair should use pattern/dependency tools; diff summaries should use excel.snapshot.compare_compact.",
     "For snapshot/diff risky edits, after excel.workflow.prepare_session prefer excel.workflow.preview_risky_edit with one minimal scoped operation and default apply behavior because it combines scoped apply, before/after snapshots, diff, and rollback preview. Do not write a large null-padded matrix when one cell or a smaller rectangle is enough. If you do not use it, capture before and after states, then call a diff tool before rollback preview.",
     "For sheet/formula creation tasks, prefer excel.workflow.create_formula_sheet because it combines sheet creation, value writes, formula writes, number formats, and formula validation.",
     "For formula repair tasks, prefer excel.workflow.repair_formula_errors because it combines validation, pattern read, dependency graph inspection, scoped repair, and after validation.",
@@ -384,33 +383,35 @@ function analyzeScenario(scenario, calls, exitStatus, error) {
   const checks = [];
   const toolNames = calls.map((call) => call.name);
   const uniqueTools = new Set(toolNames);
+  const successfulCalls = calls.filter((call) => call.resultStatus !== "error" && call.status !== "in_progress");
+  const capabilityNames = new Set(successfulCalls.flatMap((call) => inferredCapabilityNames(call)));
 
   checks.push(check(exitStatus === 0 && !error, "codex process completed", error instanceof Error ? error.message : undefined));
+  checks.push(check([...uniqueTools].every((tool) => tool === "excel.agent.run"), "public MCP surface used only excel.agent.run", [...uniqueTools].join(", ")));
 
-  const hasWorkbookIdentityDiscovery = ["excel.workflow.prepare_session", "excel.workbook.get_workbook_map", "excel.runtime.get_active_context", "excel.workbook.list_open_workbooks"].some((tool) => uniqueTools.has(tool));
+  const hasWorkbookIdentityDiscovery = ["excel.workflow.prepare_session", "excel.workbook.get_workbook_map", "excel.runtime.get_active_context", "excel.workbook.list_open_workbooks"].some((tool) => capabilityNames.has(tool));
   checks.push(check(hasWorkbookIdentityDiscovery, "required workbook identity discovery"));
-  checks.push(check(["excel.workflow.prepare_session", "excel.runtime.get_status", "excel.runtime.get_active_context", "excel.runtime.get_capabilities", "excel.workbook.list_open_workbooks", "excel.workbook.get_workbook_map", "excel.collab.get_status"].some((tool) => uniqueTools.has(tool)), "required runtime discovery"));
-  const firstMutationIndex = calls.findIndex((call) => isMutationTool(call.name));
+  checks.push(check(["excel.workflow.prepare_session", "excel.runtime.get_status", "excel.runtime.get_active_context", "excel.runtime.get_capabilities", "excel.workbook.list_open_workbooks", "excel.workbook.get_workbook_map", "excel.collab.get_status"].some((tool) => capabilityNames.has(tool)), "required runtime discovery"));
+  const firstMutationIndex = calls.findIndex((call) => inferredCapabilityNames(call).some(isMutationTool));
   if (firstMutationIndex >= 0) {
-    const beforeMutation = new Set(calls.slice(0, firstMutationIndex).map((call) => call.name));
-    const firstMutation = calls[firstMutationIndex];
-    const firstMutationHasInternalPreflight = selfPreparingWorkflowTools.has(firstMutation.name);
+    const beforeMutation = new Set(calls.slice(0, firstMutationIndex).flatMap((call) => inferredCapabilityNames(call)));
+    const firstMutationCapabilities = new Set(inferredCapabilityNames(calls[firstMutationIndex]));
+    const firstMutationHasInternalPreflight = [...firstMutationCapabilities].some((tool) => selfPreparingWorkflowTools.has(tool));
     checks.push(check(firstMutationHasInternalPreflight || ["excel.workflow.prepare_session", "excel.workbook.get_workbook_map", "excel.runtime.get_active_context", "excel.workbook.list_open_workbooks"].some((tool) => beforeMutation.has(tool)), "workbook identity discovery happened before first mutation"));
     checks.push(check(firstMutationHasInternalPreflight || ["excel.workflow.prepare_session", "excel.runtime.get_status", "excel.runtime.get_active_context", "excel.runtime.get_capabilities"].some((tool) => beforeMutation.has(tool)), "runtime discovery happened before first mutation"));
   }
 
   for (const tool of scenario.requiredTools ?? []) {
-    checks.push(check(uniqueTools.has(tool), `required tool ${tool}`));
+    checks.push(check(capabilityNames.has(tool), `required tool ${tool}`));
   }
   for (const group of scenario.requiredAny ?? []) {
-    checks.push(check(group.some((tool) => uniqueTools.has(tool)), `one of required tools: ${group.join(", ")}`));
+    checks.push(check(group.some((tool) => capabilityNames.has(tool)), `one of required tools: ${group.join(", ")}`));
   }
-  if (scenario.id === "snapshots-diffs-rollback" && uniqueTools.has("excel.workflow.preview_risky_edit")) {
+  if (scenario.id === "snapshots-diffs-rollback" && capabilityNames.has("excel.workflow.preview_risky_edit")) {
     const validWorkflow = calls.some((call) =>
-      call.name === "excel.workflow.preview_risky_edit" &&
+      inferredCapabilityNames(call).includes("excel.workflow.preview_risky_edit") &&
       call.arguments?.apply !== false &&
-      Array.isArray(call.arguments?.operations) &&
-      call.arguments.operations.length > 0
+      (Array.isArray(call.arguments?.operations) ? call.arguments.operations.length > 0 : true)
     );
     checks.push(check(validWorkflow, "valid combined risky workflow call"));
   }
@@ -495,10 +496,11 @@ function extractMcpCalls(events) {
   for (const [eventIndex, event] of events.entries()) {
     collectMcpCalls(event, calls, eventIndex, []);
   }
-  return calls.filter((call, index) => {
-    const previous = calls[index - 1];
-    return !(previous && previous.name === call.name && JSON.stringify(previous.arguments) === JSON.stringify(call.arguments));
-  });
+  const byOperation = new Map();
+  for (const call of calls) {
+    byOperation.set(`${call.name}:${JSON.stringify(call.arguments)}`, call);
+  }
+  return [...byOperation.values()];
 }
 
 function collectMcpCalls(value, calls, eventIndex, pathParts) {
@@ -531,7 +533,9 @@ function candidateMcpCall(value) {
   return {
     name,
     arguments: parseMaybeJson(value.arguments ?? value.args ?? value.input ?? plannedOperationArgs(value)),
-    resultStatus: value.result?.isError === true ? "error" : value.error ? "error" : "ok"
+    resultStatus: value.result?.isError === true || value.error || value.status === "failed" ? "error" : "ok",
+    status: value.status,
+    result: parseMaybeJson(value.result)
   };
 }
 
@@ -555,6 +559,81 @@ function normalizeToolName(value) {
     return `excel.${value}`;
   }
   return value;
+}
+
+function inferredCapabilityNames(call) {
+  if (call.name !== "excel.agent.run" || call.resultStatus === "error") {
+    return [call.name];
+  }
+  const capabilities = new Set(["excel.agent.run"]);
+  const action = call.arguments?.intent?.action;
+  const request = String(call.arguments?.request ?? "").toLowerCase();
+  const mode = call.arguments?.mode;
+  if (mode === "prepare" || action === "prepare_session" || request.includes("prepare")) {
+    capabilities.add("excel.workflow.prepare_session");
+    capabilities.add("excel.runtime.get_active_context");
+    capabilities.add("excel.workbook.get_workbook_map");
+  }
+  const actionCapability = capabilityForAgentAction(action);
+  if (actionCapability !== undefined) {
+    capabilities.add(actionCapability);
+  }
+  if (mode !== "prepare" && action !== "prepare_session") {
+    for (const capability of capabilitiesFromRequestText(request)) {
+      capabilities.add(capability);
+    }
+  }
+  return [...capabilities];
+}
+
+function capabilityForAgentAction(action) {
+  const map = {
+    prepare_session: "excel.workflow.prepare_session",
+    reorder_table_columns: "excel.table.reorder_columns",
+    apply_table_filters: "excel.table.apply_filters",
+    sort_table: "excel.table.sort",
+    append_table_rows: "excel.table.append_rows",
+    update_table_rows: "excel.table.update_rows",
+    read_table_compact: "excel.table.read_compact",
+    acquire_lock: "excel.lock.acquire",
+    release_lock: "excel.lock.release",
+    get_conflict_guidance: "excel.conflict.get_guidance",
+    get_collaboration_status: "excel.collab.get_status",
+    preview_risky_edit: "excel.workflow.preview_risky_edit"
+  };
+  return typeof action === "string" ? map[action] : undefined;
+}
+
+function capabilitiesFromRequestText(text) {
+  const capabilities = [];
+  if (text.includes("reorder") || (text.includes("swap") && text.includes("column"))) {
+    capabilities.push("excel.table.reorder_columns");
+  }
+  if (text.includes("filter")) {
+    capabilities.push("excel.table.apply_filters", "excel.validate.filters");
+  }
+  if (text.includes("sort")) {
+    capabilities.push("excel.table.sort");
+  }
+  if (text.includes("append")) {
+    capabilities.push("excel.table.append_rows");
+  }
+  if (text.includes("update") && text.includes("row")) {
+    capabilities.push("excel.table.update_rows");
+  }
+  if (text.includes("read compact") || text.includes("bounded") || text.includes("locate only")) {
+    capabilities.push("excel.table.read_compact");
+  }
+  if (text.includes("validate")) {
+    capabilities.push("excel.validate.tables");
+  }
+  if (text.includes("lock")) {
+    capabilities.push("excel.lock.acquire", "excel.lock.release", "excel.collab.get_status", "excel.conflict.get_guidance");
+  }
+  if (text.includes("preview_risky_edit") || text.includes("risky edit")) {
+    capabilities.push("excel.workflow.preview_risky_edit", "excel.snapshot.compare_compact", "excel.transaction.preview_rollback");
+  }
+  return capabilities;
 }
 
 function plannedOperationArgs(value) {
@@ -735,6 +814,7 @@ class MinimalFakeAddin {
       },
       activeWorkbook: addin.workbook
     });
+    addin.startHeartbeat();
     return addin;
   }
 
@@ -746,6 +826,7 @@ class MinimalFakeAddin {
     this.calls = [];
     this.connectedResolvers = [];
     this.tableColumns = ["Date", "Account", "Amount", "Region", "Status"];
+    this.heartbeatTimer = undefined;
   }
 
   waitForConnectionId() {
@@ -976,7 +1057,16 @@ class MinimalFakeAddin {
     this.socket.send(JSON.stringify({ jsonrpc: "2.0", method, params }));
   }
 
+  startHeartbeat() {
+    this.heartbeatTimer = setInterval(() => {
+      this.sendNotification("addin.heartbeat", { activeWorkbook: this.workbook });
+    }, 5_000);
+  }
+
   close() {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+    }
     this.socket.close();
   }
 

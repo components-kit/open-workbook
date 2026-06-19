@@ -1,5 +1,6 @@
 import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import {
   BackupManager,
@@ -29,6 +30,7 @@ import type {
   AddinExecuteBatchRequest,
   A1Range,
   AgentId,
+  AgentRunExecutionContext,
   AgentRunInput,
   AgentRunOutput,
   AgentRecord,
@@ -193,6 +195,7 @@ export class RuntimeService {
   readonly locks = new LockManager();
   readonly transactions = new TransactionManager();
   readonly agent = new AgentOrchestrator(this);
+  private readonly agentExecutionContext = new AsyncLocalStorage<AgentRunExecutionContext>();
   private readonly addinClients = new Map<ConnectionId, AddinRpcClient>();
   private readonly regions = new Map<string, WorkbookRegion>();
   private readonly agents = new Map<AgentId, AgentRecord>();
@@ -320,6 +323,18 @@ export class RuntimeService {
       message: `Task ${task.status}: ${task.goal}`
     });
     return { ok: true, task };
+  }
+
+  completeTask(taskId: TaskId) {
+    return this.updateTask(taskId, { status: "completed", progress: 100, currentStep: "Completed" });
+  }
+
+  failTask(taskId: TaskId, errorMessage?: string | undefined) {
+    return this.updateTask(taskId, { status: "failed", errorMessage: errorMessage ?? "Task failed." });
+  }
+
+  cancelTask(taskId: TaskId) {
+    return this.updateTask(taskId, { status: "cancelled", currentStep: "Cancelled" });
   }
 
   setTaskProgress(taskId: TaskId, progress: number, currentStep?: string | undefined) {
@@ -1373,8 +1388,31 @@ export class RuntimeService {
     }
   }
 
-  async runAgent(input: AgentRunInput): Promise<AgentRunOutput> {
-    return this.agent.run(input);
+  async runAgent(input: AgentRunInput, context?: AgentRunExecutionContext): Promise<AgentRunOutput> {
+    const normalized = normalizeAgentExecutionContext(context);
+    if (!normalized) {
+      return this.agent.run(input);
+    }
+    this.registerAgent({
+      agentId: normalized.agentId as AgentId,
+      ...(normalized.agentName !== undefined ? { agentName: normalized.agentName } : {}),
+      clientType: normalized.clientType
+    });
+    return this.agentExecutionContext.run(normalized, () => this.agent.run(input, normalized));
+  }
+
+  currentAgentExecutionContext(): AgentRunExecutionContext | undefined {
+    return this.agentExecutionContext.getStore();
+  }
+
+  runWithAgentExecutionContext<T>(context: AgentRunExecutionContext | undefined, work: () => T): T {
+    const normalized = normalizeAgentExecutionContext(context);
+    return normalized ? this.agentExecutionContext.run(normalized, work) : work();
+  }
+
+  private currentAgentId(): AgentId {
+    const agentId = this.agentExecutionContext.getStore()?.agentId;
+    return typeof agentId === "string" && agentId.length > 0 ? agentId as AgentId : this.defaultAgentId;
   }
 
   getAgentContextResource(workbookContextId: string) {
@@ -1578,7 +1616,7 @@ export class RuntimeService {
   }
 
   createPlan(request: PlanCreateRequest) {
-    const agentId = request.agentId ?? this.defaultAgentId;
+    const agentId = request.agentId ?? this.currentAgentId();
     this.registerAgent({ agentId, agentName: request.agentName, clientType: "mcp" });
     const plan = this.plans.createPlan({ ...request, agentId });
     if (request.taskId !== undefined) {
@@ -1658,7 +1696,7 @@ export class RuntimeService {
     const chunks = chunkBatchOperations(request.operations);
     const now = new Date().toISOString();
     const compiled = this.compiler.compile(request);
-    const agentId = request.agentId ?? this.defaultAgentId;
+    const agentId = request.agentId ?? this.currentAgentId();
     const job: JobRecord = {
       jobId: makeId<JobId>("job"),
       workbookId: request.workbookId,
@@ -1976,6 +2014,15 @@ export class RuntimeService {
     return client.request<RuntimeSelectionResponse>("runtime.get_selection");
   }
 
+  listOpenWorkbooks() {
+    const workbooks = this.sessions
+      .list()
+      .map((session) => session.activeWorkbook)
+      .filter((workbook): workbook is WorkbookRef => workbook !== undefined);
+    const byId = new Map(workbooks.map((workbook) => [workbook.workbookId, workbook]));
+    return { ok: true, workbooks: [...byId.values()] };
+  }
+
   async getWorkbookInfo() {
     const client = this.getActiveAddinClient();
     if (!client) {
@@ -2043,6 +2090,29 @@ export class RuntimeService {
       ok: true,
       snapshots: this.snapshots.listSnapshots(workbookId)
     };
+  }
+
+  async refreshSnapshot(input: { snapshotId: SnapshotId; reason?: string }) {
+    const base = this.snapshots.getSnapshot(input.snapshotId);
+    if (!base) {
+      return {
+        ok: false,
+        error: runtimeError("BACKUP_UNAVAILABLE", `Snapshot not found: ${input.snapshotId}`, { retryable: false })
+      };
+    }
+    return this.createWorkbookSnapshot({
+      workbookId: base.workbookId,
+      reason: input.reason ?? `Refresh snapshot ${input.snapshotId}`,
+      ranges: base.affectedRanges
+    });
+  }
+
+  refreshWorkbookSnapshot(input: { snapshotId: SnapshotId; reason?: string }) {
+    return this.refreshSnapshot(input);
+  }
+
+  getWorkbookSnapshot(snapshotId: SnapshotId) {
+    return this.getSnapshot(snapshotId);
   }
 
   invalidateSnapshot(snapshotId: SnapshotId) {
@@ -4268,6 +4338,10 @@ export class RuntimeService {
     return this.applyBatch(request);
   }
 
+  restoreWorkbookBackup(backupId: BackupId, confirmationToken?: string): Promise<OperationResult> {
+    return this.restoreBackup(backupId, confirmationToken);
+  }
+
   private async mutateTable(method: string, request: { workbookId: WorkbookId }, reason: string, ranges: A1Range[]) {
     const client = this.getActiveAddinClient();
     if (!client) {
@@ -4808,6 +4882,24 @@ export class RuntimeService {
     };
   }
 
+  getTheme(workbookId: WorkbookId) {
+    return unsupportedThemeReport(
+      workbookId,
+      "get_theme",
+      "THEME_READ_UNAVAILABLE",
+      "Office.js does not expose a deterministic workbook theme read path in this runtime."
+    );
+  }
+
+  applyTheme(input: { workbookId: WorkbookId; theme?: unknown }) {
+    return unsupportedThemeReport(
+      input.workbookId,
+      "apply_theme",
+      "THEME_APPLY_UNAVAILABLE",
+      "Office.js does not expose a deterministic workbook theme apply path in this runtime."
+    );
+  }
+
   async copyStyleDimensions(input: StyleCopyRequest) {
     const client = this.getActiveAddinClient();
     if (!client) {
@@ -5309,7 +5401,7 @@ export class RuntimeService {
 
   private scheduleBatch(request: BatchRequest): { transaction: TransactionRecord; promise: Promise<OperationResult> } {
     const compiled = this.compiler.compile(request);
-    const agentId = request.agentId ?? this.defaultAgentId;
+    const agentId = request.agentId ?? this.currentAgentId();
     const scopes = scopesFromBatch(request.workbookId, request.operations);
     const transaction = this.transactions.create({
       workbookId: request.workbookId,
@@ -5613,7 +5705,7 @@ export class RuntimeService {
     },
     work: () => Promise<T>
   ): Promise<T | { ok: false; transactionId: TransactionId; rollbackAvailable: false; backups: []; warnings: OperationWarning[]; telemetry: { warningCount: number }; error: ReturnType<typeof runtimeError> }> {
-    const agentId = input.agentId ?? this.defaultAgentId;
+    const agentId = input.agentId ?? this.currentAgentId();
     const transaction = this.transactions.create({
       workbookId: input.workbookId,
       agentId,
@@ -6929,6 +7021,21 @@ function unsupportedRepairReport(workbookId: WorkbookId, repair: string, code: s
   };
 }
 
+function unsupportedThemeReport(workbookId: WorkbookId, operation: "get_theme" | "apply_theme", code: string, message: string) {
+  return {
+    ok: false,
+    workbookId,
+    operation,
+    capabilityStatus: {
+      capability: `excel.style.${operation}`,
+      status: "unsupported",
+      reasonCode: code
+    },
+    warnings: [{ code, message }],
+    error: runtimeError("CAPABILITY_UNAVAILABLE", message, { retryable: false, details: { reasonCode: code } })
+  };
+}
+
 function disconnectedError() {
   return {
     ok: false,
@@ -8147,6 +8254,17 @@ function cancelledOperationResult(transactionId: TransactionId): OperationResult
     warnings: [],
     telemetry: { warningCount: 0 },
     error: runtimeError("TRANSACTION_CANCELLED", "Queued workbook mutation was cancelled before it reached Excel.", { retryable: false })
+  };
+}
+
+function normalizeAgentExecutionContext(context: AgentRunExecutionContext | undefined): AgentRunExecutionContext | undefined {
+  if (!context || typeof context.agentId !== "string" || context.agentId.length === 0) {
+    return undefined;
+  }
+  return {
+    agentId: context.agentId,
+    ...(typeof context.agentName === "string" && context.agentName.length > 0 ? { agentName: context.agentName } : {}),
+    clientType: context.clientType ?? "mcp"
   };
 }
 

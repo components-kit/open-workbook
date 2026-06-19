@@ -6,6 +6,8 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-06-19
+
 ### Added
 
 - Added explicit `excel.agent.run` route telemetry, operation-risk telemetry, target fingerprint status, and ambiguity candidate hints so backend orchestration decisions are easier to audit without exposing primitive tools.
@@ -14,6 +16,17 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 - Added fine-grained internal Excel capability grouping and catalog-level agent status classification for future orchestration and test planning.
 - Added an internal capability coverage matrix and report command for tracking covered, unit-contract, future orchestration, host-limited, and deferred capability work.
 - Added skill guidance and tests for multilingual agent requests normalized through structured `excel.agent.run` intent fields.
+- Added `excel.agent.run` orchestration for workbook info, open-workbook listing, snapshot refresh/read/change detection, workbook backup restore, local config export/import/embed, embedded config read/import, and workbook close actions.
+- Added `excel.agent.run` orchestration for template registry reads, template detection, region inference, sheet/template validation, and preview/apply template registry or repair mutations.
+- Added `excel.agent.run` orchestration for template data-region clearing and filling, with filling constrained to explicit region value matrices.
+- Added `excel.agent.run` orchestration for style fingerprint reads, style comparisons, template style copy, and style consistency repair while keeping style primitives backend-owned.
+- Added structured `excel.agent.run` theme capability reports for workbook theme read/apply requests when the connected Excel runtime cannot safely provide theme APIs.
+- Added `excel.agent.run` orchestration for all cleaning capabilities, with read-only inspections in answer mode and mutating transforms behind preview/apply.
+- Added `excel.agent.run` orchestration for repair capabilities, including preview/apply style, formula, and table-structure repair plus structured capability reports for host-limited repair categories.
+- Added `excel.agent.run` orchestration for the full Range capability group, including compact/metadata reads and preview/apply structural range mutations.
+- Added `excel.agent.run` workflow plan reports for combined workbook workflows so agents can route formula-sheet, template-report, pivot/chart, risky-edit, inspect/analyze, and rollback/validate requests without exposing primitive workflow tools.
+- Removed unsupported Office.js placeholder capabilities for circular-reference enumeration and deep style/layout copy dimensions, and reclassified implemented file-bridge, PivotTable, and chart capabilities as internal contract-tested coverage instead of host-limited placeholders.
+- Added backend contract coverage for runtime, batch, plan, job, task, collaboration, lock, conflict, transaction, event, and permission capabilities, leaving only compact-resource and diff wrappers as unit-contract follow-up work.
 
 ### Changed
 
@@ -23,6 +36,7 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 - Used caller-provided `intent.targetHints` as a bounded deterministic target-ranking signal and added target-hint telemetry to `excel.agent.run`.
 - Refactored catalog reporting so MCP exposes only `excel.agent.run` while the full Excel catalog is reported as internal backend capabilities.
 - Removed inactive primitive MCP tool registration groups from the MCP server path and grouped internal Excel capabilities for backend orchestration.
+- Removed unimplemented lookup/table placeholder capabilities (`excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, and `excel.table.preserve_filters`) from the internal catalog so advertised capabilities map to implemented backend logic.
 - Slimmed the default E2E gate to the supported one-tool public agent surface and removed the obsolete primitive-tool fake-host sweep.
 - Split monolithic backend orchestration and runtime tests into behavior-focused suites with shared test-support fixtures.
 - Updated bundled and packaged agent instructions to emphasize the one-tool public surface instead of primitive MCP tool selection.
@@ -113,10 +127,10 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 ### Added
 
 - Added compact token-saving discovery and read tools: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, `excel.range.get_summary`, `excel.range.read_compact`, and `excel.table.read_compact`.
-- Added lookup-first token-saving tools: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, `excel.lookup.resolve_range`, and `excel.lookup.inspect_match`.
+- Added lookup-first token-saving tools: `excel.lookup.search_workbook`, `excel.lookup.resolve_range`, and `excel.lookup.inspect_match`.
 - Added compact read telemetry with `payloadBytes`, rough `estimatedTokens`, truncation status, and continuation metadata so agents can avoid sending broad workbook payloads to models by default.
-- Added local compact detail resources, compact cache lifecycle tools, `excel.validate.compact`, and additive mutation `compactProof` metadata so large details can be expanded only when needed.
-- Added compact snapshot and diff access through `excel.snapshot.get_compact`, `excel.snapshot.compare_compact`, and `excel.diff.get_compact`.
+- Added local compact detail resources, compact cache lifecycle internals, `excel.validate.compact`, and additive mutation `compactProof` metadata so large details can be expanded only when needed.
+- Added compact snapshot and diff access through `excel.snapshot.get_compact` and `excel.snapshot.compare_compact`.
 
 ## [0.1.7] - 2026-06-15
 

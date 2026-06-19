@@ -445,7 +445,7 @@ function candidateSources(metadata: WorkbookMetadata): CandidateSource[] {
       label: name.name,
       sheetName: name.sheetName,
       range: name.range,
-      searchValues: [name.name, name.sheetName ?? "", name.range],
+      searchValues: [name.name, splitIdentifierWords(name.name), name.sheetName ?? "", name.range],
       baseScore: 0.04
     })),
     ...metadata.sections.map((section) => ({
@@ -854,6 +854,12 @@ function normalizeNatural(value: string): string {
     .replace(/\bq([1-4])\b/g, "quarter $1")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function splitIdentifierWords(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ");
 }
 
 function isAmbiguous(best: AgentCandidate, second?: AgentCandidate): boolean {

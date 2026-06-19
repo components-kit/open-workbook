@@ -9,7 +9,7 @@ Open Workbook treats speed as a correctness requirement because slow workbook au
 - Do not call `context.sync()` inside per-cell loops.
 - Use 2D array assignments for values and formulas.
 - Load only requested Office.js properties.
-- Start unknown target discovery with lookup tools: `excel.lookup.search_workbook`, `excel.lookup.find_headers`, `excel.lookup.find_tables_by_columns`, `excel.lookup.find_entity`, or `excel.lookup.resolve_range`.
+- Start unknown target discovery with lookup tools: `excel.lookup.search_workbook` or `excel.lookup.resolve_range`.
 - On the default agent surface, let `excel.agent.run` choose lightweight structure metadata, targeted reads, and compact proof.
 - Internally, start known-scope large workbook reads with compact context: `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.sheet.get_summary`, `excel.table.get_schema`, or `excel.range.get_summary`.
 - Internally, prefer `excel.table.read_compact` and `excel.range.read_compact` for exploratory reads, broad used ranges, and large tables; page or project only the rows/columns needed for the task.
@@ -17,10 +17,10 @@ Open Workbook treats speed as a correctness requirement because slow workbook au
 - Reserve full reads for explicit user requests, audits, exports, or exact-data tasks that genuinely need every cell or facet.
 - Group operations by workbook, sheet, and contiguous range.
 - Chunk large payloads before Office.js limits.
-- Use `excel.batch.preflight` before applying large generated batches. It tells the agent whether to apply directly, submit to the queue, or use `excel.batch.submit_chunked`.
+- On the public agent surface, describe large generated batches through `excel.agent.run`; the backend preflights them and decides whether to apply directly, submit to the queue, or chunk safely.
 - Use `excel.range.write_styles_many` for grouped report styling instead of many parallel single-range style writes; large style entry lists are split into queued parent jobs.
 - Surface queued or long-running mutations through transaction progress instead of hiding them behind parallel write calls.
-- For chunked work, surface `excel.job.get`/`excel.job.wait` progress so the user sees one update with chunk progress.
+- For chunked work, surface returned job progress so the user sees one update with chunk progress.
 - Suspend calculation and screen updating only around large operations.
 
 ## Large Range Execution
@@ -53,7 +53,7 @@ Compact tools accept `responseMode` values of `brief`, `standard`, or `verbose`;
 
 For MCP clients that resend all tool schemas with each generation, workbook payload savings can be hidden by tool-schema overhead. `owb mcp` exposes the public `excel.agent.run` surface so normal agents avoid primitive compact-tool chains. Raw range facet reads such as `excel.range.read_values` are not part of the public agent surface; backend routing should use compact reads so sparse ranges can be bounded, trimmed, and paged. `excel.runtime.get_capabilities` reports the public tool list rather than a full/raw tool catalog.
 
-Snapshot creation and mutation results can contain full before/after workbook payloads for rollback. Public MCP responses return metadata, IDs, counts, rollback proof, `nextActionRecommendation`, `reasoningHints`, confidence metadata, and a `contextId`/`resourceUri` for the full detail instead of embedding snapshot, backup, or diff bodies inline. Snapshot and diff compact tools accept nested `budget` controls for tighter response caps. Stored detail can be inspected with metadata, preview, or paged resource reads before requesting full payloads. Use `excel.compact.context_stats` to inspect stored bytes, estimated tokens, cache hits, and estimated token savings during long agent sessions.
+Snapshot creation and mutation results can contain full before/after workbook payloads for rollback. Public MCP responses return metadata, IDs, counts, rollback proof, `nextActionRecommendation`, `reasoningHints`, confidence metadata, and a `contextId`/`resourceUri` for the full detail instead of embedding snapshot, backup, or diff bodies inline. Snapshot compact tools accept nested `budget` controls for tighter response caps. Stored detail is exposed as MCP resource links returned by `excel.agent.run` rather than separate compact-resource tools.
 
 For retry-prone mutation paths, pass a stable `idempotencyKey`. Replays with the same key and payload return `idempotentReplay: true` without applying the edit again; the same key with a different payload is rejected. Successful compact mutations also invalidate stale workbook-local compact resources and report `invalidatedContextIds`, preventing old read or validation context from being reused after an edit.
 
@@ -68,8 +68,8 @@ Compact workflows should usually cut large workbook context by 80-99%:
 - Use `excel.table.get_schema` plus a 50-row `excel.table.read_compact` page instead of sending a 10,000-row table.
 - Use `excel.range.get_summary` plus projected `excel.range.read_compact` facets instead of `excel.range.read_full` over a used range.
 - Let `excel.range.read_compact` use `cellOutput: "auto"` for sparse worksheets; mostly empty ranges return `sparseRows` and `emptySummary` instead of a large rectangular matrix.
-- Use `excel.lookup.find_headers` or `excel.lookup.resolve_range` instead of reading every sheet's first 100 rows to find a target column.
-- Use `excel.validate.compact`, `excel.snapshot.compare_compact`, or `excel.diff.get_compact` when issue/diff counts and examples are enough; fetch the `resourceUri` only for full detail review.
+- Use `excel.lookup.resolve_range` instead of reading every sheet's first 100 rows to find a target column.
+- Use `excel.validate.compact` or `excel.snapshot.compare_compact` internally when issue/diff counts and examples are enough; fetch the returned `resourceUri` only for full detail review.
 
 ## Model Routing
 

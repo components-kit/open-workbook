@@ -27,7 +27,7 @@ single serialized Office.js writer
 - Serialized writer queue around `excel.batch.apply` and `excel.plan.apply`.
 - Conservative plan refresh/rebase checks for stale plans.
 - Collaboration events for agent, task, transaction, lock, and conflict activity.
-- MCP tools for task, collaboration, and transaction inspection.
+- Agent status and prepare summaries expose compact task, lock, transaction, conflict, and recent-event state through `excel.agent.run`.
 - Shared `owb daemon` startup plus MCP adapter mode.
 - Durable local state for agents, tasks, locks, transactions, conflicts, conflict telemetry, collaboration events, templates, regions, permissions, plans, and backup indexes.
 - Confirmed rollback-chain preview/apply for related transactions.
@@ -38,9 +38,9 @@ single serialized Office.js writer
 
 The current implementation runs coordination primitives inside the daemon-owned `RuntimeService`. This makes all batch and plan applies transaction-recorded and serialized through one coordinator when MCP adapters attach to the daemon.
 
-Queued transaction progress is observable. Agents can call `excel.batch.preflight` before large generated writes, `excel.batch.submit` to enqueue mutating work without waiting for Excel execution, `excel.transaction.get` or `excel.transaction.list` for queue position and progress messages, `excel.transaction.wait` for a bounded wait until a terminal status, and `excel.transaction.cancel` to stop a queued transaction before it starts applying in Excel. When the writer is already busy, `excel.batch.apply` returns queued progress instead of waiting behind earlier mutations. Applying transactions are not interrupted mid-Office.js call.
+Queued transaction progress is observable through the backend and summarized on the public agent surface. Internally, large generated writes can be preflighted, submitted, waited, cancelled, or grouped into jobs; normal MCP clients should ask through `excel.agent.run` and report the returned transaction/job metadata. When the writer is already busy, the backend queues mutating work instead of waiting behind earlier mutations. Applying transactions are not interrupted mid-Office.js calls.
 
-Chunked work has a parent job record. `excel.job.get`, `excel.job.wait`, and `excel.job.cancel` aggregate progress for updates split into multiple child transactions, such as large style updates or row-chunked value/formula/number-format writes. Job cancellation cancels queued child transactions; chunks already applying in Excel are allowed to finish.
+Chunked work has a parent job record. Internal job capabilities aggregate progress for updates split into multiple child transactions, such as large style updates or row-chunked value/formula/number-format writes. Job cancellation cancels queued child transactions; chunks already applying in Excel are allowed to finish.
 
 Runtime commands:
 
@@ -81,55 +81,19 @@ Conflict classification is dependency-aware:
 
 Direct table, formula, chart, pivot, and named-range mutations now create transaction records and acquire typed locks, not just backups. This keeps object-level changes visible in `excel.transaction.*` and `excel.collab.*`.
 
-## Public Tools
+## Public Surface
 
-Tasks:
+MCP exposes one normal agent tool:
 
-- `excel.task.create`
-- `excel.task.claim`
-- `excel.task.update`
-- `excel.task.set_progress`
-- `excel.task.add_blocker`
-- `excel.task.resolve_blocker`
-- `excel.task.evaluate_schedule`
-- `excel.task.resume_ready`
-- `excel.task.complete`
-- `excel.task.fail`
-- `excel.task.cancel`
-- `excel.task.list`
-- `excel.task.get`
+```text
+excel.agent.run
+```
 
-Collaboration:
+Task, collaboration, lock, transaction, job, conflict, and plan-safety operations remain backend-owned capabilities. They are still implemented, persisted, and covered by contract tests, but normal agents do not call them as separate MCP tools.
 
-- `excel.collab.get_status`
-- `excel.collab.list_agents`
-- `excel.collab.list_tasks`
-- `excel.collab.list_locks`
-- `excel.collab.list_transactions`
-- `excel.collab.get_conflicts`
-- `excel.collab.get_recent_events`
+Use `excel.agent.run` `mode: "status"` or `mode: "prepare"` to see a compact `collaboration` summary with agent counts, open task counts, active locks, queued/applying/blocked transactions, open conflicts, and bounded samples of recent records. Use `preview_update` and `apply_update` for mutations; the backend attaches the MCP adapter's trusted agent identity to pending previews and applies them under the original authoring agent identity even if another session confirms the preview later.
 
-Locks:
-
-- `excel.lock.get_policy`
-- `excel.lock.set_policy`
-- `excel.lock.acquire`
-- `excel.lock.renew`
-- `excel.lock.release`
-
-Transactions:
-
-- `excel.transaction.list`
-- `excel.transaction.get`
-- `excel.transaction.preview_rollback`
-- `excel.transaction.rollback`
-- `excel.transaction.preview_rollback_chain`
-- `excel.transaction.rollback_chain`
-
-Plan safety:
-
-- `excel.plan.refresh_preview`
-- `excel.plan.rebase`
+Agent identity is assigned by the daemon/MCP adapter, not by user prompt text. Multiple MCP adapters connected to the shared daemon get separate agent records and heartbeats. Standalone MCP mode remains useful for one-agent local testing, but multi-agent workbook coordination depends on the shared daemon.
 
 ## Safe Plan Refresh
 
