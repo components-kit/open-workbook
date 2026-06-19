@@ -6,6 +6,24 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+## [0.1.16] - 2026-06-19
+
+### Added
+
+- Added stricter office-agent E2E coverage reporting that verifies all 294 internal capabilities, 67 add-in host methods, and 37 operation kinds are represented by production scenarios or unit-contract coverage.
+- Added expanded production office-agent fixtures for workbook, worksheet, range, table, formula, template, style, cleaning, repair, backup, snapshot, collaboration, and workflow behaviors.
+- Added colocated backend capability registry tests and add-in host registry tests so internal capability groups stay aligned with the one-tool public MCP surface.
+- Added package, app, script, docs, and skill READMEs that document the current repository layout and backend-owned operation model.
+
+### Changed
+
+- Refactored backend capability metadata into domain modules while preserving `excel.agent.run` as the only public MCP tool.
+- Refactored the Excel add-in host executor into grouped host method modules with a central registry and focused unit tests.
+- Refactored MCP server internals into catalog, runtime facade, prompt, resource, result, and agent-run tool modules to make the public surface easier to audit.
+- Refactored package internals, app runtime boundaries, and script organization for clearer ownership and less duplication.
+- Simplified root documentation and removed stale examples, roadmap content, and personalized agent notes from the committed repo.
+- Modernized bundled skill guidance for routing through `excel.agent.run`, multilingual structured intent, capability maps, and common workbook workflows.
+
 ## [0.1.15] - 2026-06-19
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "@components-kit/open-workbook-mcp-server",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "MCP stdio server exposing the Open Workbook excel.agent.run workflow surface.",
   "license": "MIT",
   "type": "module",
