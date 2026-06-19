@@ -2,7 +2,7 @@
 
 Office.js engine interface and defaults for Open Workbook.
 
-The live Office.js execution currently lives in the Excel add-in runtime. This package defines engine contracts and default options that future host bindings can share.
+The live Office.js execution currently lives in the Excel add-in runtime. This package defines engine contracts, defaults, and a placeholder implementation that future host bindings can share.
 
 ## Usage
 

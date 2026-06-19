@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { getExposedToolCatalog, getInternalCapabilityCatalog } from "../packages/protocol/dist/tools.js";
+import { getInternalCapabilityCatalog, getPublicAgentToolCatalog } from "../packages/protocol/dist/tools.js";
 
-const exposedTools = new Set(getExposedToolCatalog({ includePreview: true }).map((tool) => tool.name));
+const exposedTools = new Set(getPublicAgentToolCatalog({ includePreview: true }).map((tool) => tool.name));
 const internalCapabilities = new Set(getInternalCapabilityCatalog({ includePreview: true }).map((tool) => tool.name));
 
 const required = [

@@ -60,7 +60,8 @@ const checks = [
     assert: (result) =>
       result.status === 0 &&
       result.stdout.includes("# Open Workbook Excel Instructions") &&
-      result.stdout.includes("excel.runtime.get_status") &&
+      result.stdout.includes("excel.agent.run") &&
+      result.stdout.includes("backend primitive capabilities") &&
       result.stdout.includes("## Tool Selection")
   },
   {

@@ -1,0 +1,26 @@
+export type {
+  ApplyAutoFilterOperation,
+  AutofitColumnsOperation,
+  AutofitRowsOperation,
+  ClearFormatsOperation,
+  ClearRangeOperation,
+  ClearValuesKeepFormatOperation,
+  ClearValuesOperation,
+  CopyRangeOperation,
+  DeleteColumnsOperation,
+  DeleteRowsOperation,
+  InsertColumnsOperation,
+  InsertRowsOperation,
+  MergeRangeOperation,
+  MoveRangeOperation,
+  ReadFullOperation,
+  RestoreRangeSnapshotOperation,
+  UnmergeRangeOperation,
+  WriteCommentsOperation,
+  WriteFormulasOperation,
+  WriteHyperlinksOperation,
+  WriteNumberFormatsOperation,
+  WriteStylesOperation,
+  WriteValuesOperation
+} from "../operations.js";
+

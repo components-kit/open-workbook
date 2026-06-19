@@ -1050,7 +1050,7 @@ async function workflowPrepareSession(workbookId?: WorkbookId, includePreview = 
     resourceScope: compactReadScope({ workbookId: preflight.workbookId, workflow: "excel.workflow.prepare_session" }),
     sourceHash,
     nextActionRecommendation: "answer_now",
-    reasoningHints: ["Workflow discovery completed", "Capability catalog detail is stored behind contextId", "Use excel.runtime.get_capabilities when full tool catalog detail is required"],
+    reasoningHints: ["Workflow discovery completed", "Capability catalog detail is stored behind contextId", "Use excel.runtime.get_capabilities when full internal capability detail is required"],
     confidence: "high",
     confidenceReasons: ["Runtime status, active context, workbook map, and collaboration status were collected"],
     maxPayloadBytes: COMPACT_LIMITS.maxToolResultChars,

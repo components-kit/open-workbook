@@ -1,4 +1,4 @@
-import { getExposedToolCatalog } from "@components-kit/open-workbook-protocol";
+import { getPublicAgentToolCatalog } from "@components-kit/open-workbook-protocol";
 import { describe, expect, it } from "vitest";
 import { AGENT_ACTION_HANDLERS } from "./agent-action-handlers.js";
 import {
@@ -25,7 +25,7 @@ describe("excel capabilities", () => {
 
   it("keeps internal capabilities separate from the public MCP tool surface", () => {
     const summary = getExcelCapabilitySummary();
-    const exposed = getExposedToolCatalog();
+    const exposed = getPublicAgentToolCatalog();
 
     expect(exposed.map((tool) => tool.name)).toEqual(["excel.agent.run"]);
     expect(summary.total).toBe(294);

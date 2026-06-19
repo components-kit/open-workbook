@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 
 const rootPackage = readJson("package.json");
 const rootVersion = requiredString(rootPackage.version, "package.json version");
@@ -84,6 +84,8 @@ for (const packageDir of privatePackages) {
   expect(existsSync(join(packageDir, "README.md")), `${packageDir}/README.md must exist`);
 }
 
+compareDirectoryFiles("skills/open-workbook-excel", "packages/cli/assets/instructions/open-workbook-excel");
+
 if (errors.length > 0) {
   console.error("Package metadata validation failed.");
   console.error(errors.map((error) => `- ${error}`).join("\n"));
@@ -109,4 +111,43 @@ function expect(condition, message) {
   if (!condition) {
     errors.push(message);
   }
+}
+
+function compareDirectoryFiles(sourceDir, generatedDir) {
+  expect(existsSync(sourceDir), `${sourceDir} must exist`);
+  if (!existsSync(sourceDir) || !existsSync(generatedDir)) {
+    return;
+  }
+
+  const sourceFiles = listFiles(sourceDir);
+  const generatedFiles = listFiles(generatedDir);
+  const sourceSet = new Set(sourceFiles);
+  const generatedSet = new Set(generatedFiles);
+
+  for (const file of sourceFiles) {
+    expect(generatedSet.has(file), `${generatedDir} is missing generated file ${file}`);
+    if (generatedSet.has(file)) {
+      const source = readFileSync(join(sourceDir, file), "utf8");
+      const generated = readFileSync(join(generatedDir, file), "utf8");
+      expect(generated === source, `${generatedDir}/${file} is stale; run pnpm run build or node scripts/package-cli-assets.mjs`);
+    }
+  }
+  for (const file of generatedFiles) {
+    expect(sourceSet.has(file), `${generatedDir} contains stale generated file ${file}`);
+  }
+}
+
+function listFiles(dir, prefix = "") {
+  const files = [];
+  for (const entry of readdirSync(join(dir, prefix)).sort()) {
+    const entryPath = join(dir, prefix, entry);
+    const relativePath = relative(dir, entryPath);
+    const stats = statSync(entryPath);
+    if (stats.isDirectory()) {
+      files.push(...listFiles(dir, relativePath));
+    } else if (stats.isFile()) {
+      files.push(relativePath);
+    }
+  }
+  return files;
 }

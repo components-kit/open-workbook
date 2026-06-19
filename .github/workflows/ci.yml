@@ -42,5 +42,11 @@ jobs:
       - name: Verify
         run: corepack pnpm verify
 
+      - name: Check Generated Files
+        run: git diff --exit-code
+
+      - name: Agent Surface E2E
+        run: corepack pnpm test:e2e:agent-surface
+
       - name: Package Dry Run
         run: corepack pnpm pack:dry-run

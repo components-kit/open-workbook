@@ -66,7 +66,7 @@ Agent instruction source:
 
 ## Packages
 
-- [@components-kit/open-workbook-protocol](https://github.com/components-kit/open-workbook/tree/main/packages/protocol): Tool catalog, JSON-RPC contracts, resources, prompts, errors, and workbook types
+- [@components-kit/open-workbook-protocol](https://github.com/components-kit/open-workbook/tree/main/packages/protocol): Public agent tool contract, internal capability catalog, JSON-RPC contracts, resources, prompts, errors, and workbook types
 - [@components-kit/open-workbook-excel-core](https://github.com/components-kit/open-workbook/tree/main/packages/excel-core): Planning, backups, snapshots, templates, fingerprints, permissions, locks, and transactions
 - [@components-kit/open-workbook-office-js-engine](https://github.com/components-kit/open-workbook/tree/main/packages/office-js-engine): Office.js engine adapter contracts
 - [@components-kit/open-workbook](https://github.com/components-kit/open-workbook/tree/main/packages/cli): `owb` CLI for generic setup, MCP, add-in serving, sideloading, diagnostics, and fallback instructions

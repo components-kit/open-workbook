@@ -2361,7 +2361,7 @@ Every read/write result records:
 Compact summary and read tools also return `payloadBytes`, rough `estimatedTokens`, `truncated`, and optional `nextPage` metadata so agents can stop before sending oversized workbook context to the model.
 Compact tools accept `responseMode` values of `brief`, `standard`, or `verbose`; compact-profile defaults to `brief`, storing full details locally and returning `contextId`/`resourceUri` handles plus proof metadata. Compact-profile responses are guarded by shared output limits for summaries, warnings, examples, issue lists, schema/sample fields, and final result size. Budget-limited compact responses return `resourceUri` handles for full details plus `truncated`, `omittedCounts`, `fullResult`, and telemetry. Mutation results include `compactProof` metadata so agents can report changed cells/ranges, warnings, backup IDs, and rollback availability without reading changed sheets back.
 
-For MCP clients that resend all tool schemas with each generation, workbook payload savings can be hidden by tool-schema overhead. `owb mcp` exposes the public `excel.agent.run` surface so normal agents avoid primitive compact-tool chains. Raw range facet reads such as `excel.range.read_values` are not part of the public agent surface; backend routing should use compact reads so sparse ranges can be bounded, trimmed, and paged. `excel.runtime.get_capabilities` reports the public tool list rather than a full/raw tool catalog.
+For MCP clients that resend all tool schemas with each generation, workbook payload savings can be hidden by tool-schema overhead. `owb mcp` exposes the public `excel.agent.run` surface so normal agents avoid primitive compact-capability chains. Raw range facet reads such as `excel.range.read_values` are not part of the public agent surface; backend routing should use compact reads so sparse ranges can be bounded, trimmed, and paged. `excel.runtime.get_capabilities` reports the public tool list separately from the internal backend capability catalog.
 
 Snapshot creation and mutation results can contain full before/after workbook payloads for rollback. Public MCP responses return metadata, IDs, counts, rollback proof, `nextActionRecommendation`, `reasoningHints`, confidence metadata, and a `contextId`/`resourceUri` for the full detail instead of embedding snapshot, backup, or diff bodies inline. Snapshot compact tools accept nested `budget` controls for tighter response caps. Stored detail is exposed as MCP resource links returned by `excel.agent.run` rather than separate compact-resource tools.
 
@@ -2645,13 +2645,13 @@ Capability-unavailable responses are preferred over simulated success when Offic
 - `corepack pnpm test:e2e:agent:quality` is reviewed before complex workflow quality claims. It is report-only by default and covers sheet/formula creation, formula repair, snapshot/diff/rollback preview, template/style repair, and pivot/chart decisions.
 - `corepack pnpm test:e2e:agent:quality:compare` is reviewed before comparing cheap-model baseline quality with a frontier model. Set `OPEN_WORKBOOK_E2E_CHEAP_MODEL` and `OPEN_WORKBOOK_E2E_FRONTIER_MODEL` to control the profiles.
 - `corepack pnpm test:e2e:agent:quality:gate` runs the cheap/frontier quality matrix in strict mode when a release claims workflow quality is passing rather than diagnostic.
-- MCP callable tool names stay in sync with the shared protocol catalog. `corepack pnpm verify` runs `scripts/validate-mcp-catalog.mjs` after build and fails if a stable or preview callable tool is missing from the MCP server or if the server registers a tool that is not in the callable catalog.
-- Tool surface docs stay in sync with the protocol catalog and public one-tool MCP surface. `corepack pnpm verify` runs `scripts/validate-docs-surface.mjs` and fails if `docs/tool-surface.md` omits a stable or preview catalog capability.
+- MCP callable tool names stay in sync with the public agent tool contract. `corepack pnpm verify` runs `scripts/validate-mcp-catalog.mjs` after build and fails if the MCP server exposes anything other than `excel.agent.run`.
+- Tool surface docs stay in sync with the internal capability catalog and public one-tool MCP surface. `corepack pnpm verify` runs `scripts/validate-docs-surface.mjs` and fails if `docs/tool-surface.md` omits a stable or preview backend capability.
 - Package metadata stays publishable. `corepack pnpm verify` runs `scripts/validate-package-metadata.mjs` and fails if package versions, repository metadata, public/private publish intent, README presence, or `dist` entrypoints drift.
 - CLI install smoke stays healthy. `corepack pnpm verify` runs `scripts/smoke-cli.mjs` and checks `doctor`, `paths`, setup dry-run output, skills.sh guidance, fallback instruction generation, service wrapper generation, sideload manifest generation, and concise disconnected-runtime errors without requiring Excel or a bound local daemon.
 - `git diff --check` passes.
 - GitHub Actions CI passes the same non-E2E verification plus `corepack pnpm pack:dry-run` for every publishable package.
-- Tool catalog, README, installation docs, MCP client docs, and instruction docs match the public `excel.agent.run` MCP surface.
+- Capability catalog, README, installation docs, MCP client docs, and instruction docs match the public `excel.agent.run` MCP surface.
 - Fresh local install can run `npx -y @components-kit/open-workbook setup`, install `open-workbook-excel` with `npx skills add components-kit/open-workbook --skill open-workbook-excel`, generate/install a manifest, launch `npx -y @components-kit/open-workbook@latest mcp`, and report runtime status. If the runtime cannot bind or cannot be reached, CLI commands must fail with concise user-facing errors.
 - Excel add-in can be sideloaded on macOS and Windows using the generated manifest.
 - Native file bridge host smoke passes on macOS and Windows with `owb file-bridge smoke --workbook <open-workbook-name> --target <copy.xlsx>`.
@@ -2827,7 +2827,7 @@ Publishable packages:
 - `@components-kit/open-workbook`: user-facing CLI and bundled runtime assets
 - `@components-kit/open-workbook-mcp-server`: MCP stdio server
 - `@components-kit/open-workbook-backend`: local backend broker and runtime service
-- `@components-kit/open-workbook-protocol`: shared contracts, tool catalog, resources, and prompts
+- `@components-kit/open-workbook-protocol`: shared contracts, public agent tool contract, internal capability catalog, resources, and prompts
 - `@components-kit/open-workbook-excel-core`: planning, backups, snapshots, templates, permissions, and range utilities
 - `@components-kit/open-workbook-office-js-engine`: Office.js engine interface and defaults
 
@@ -3175,7 +3175,8 @@ It contains:
 
 - workbook, range, operation, snapshot, template, table, chart, pivot, and permission types
 - JSON-RPC envelope types
-- public MCP tool catalog and internal Excel capability metadata
+- public MCP agent tool contract exposing only `excel.agent.run`
+- internal backend capability catalog for orchestration and tests
 - MCP resource catalog
 - prompt catalog
 - runtime error helpers
@@ -3183,8 +3184,10 @@ It contains:
 ## Usage
 
 ```ts
-import { ToolCatalog, getToolCatalogSummary, runtimeError } from "@components-kit/open-workbook-protocol";
+import { PublicAgentToolCatalog, InternalCapabilityCatalog, runtimeError } from "@components-kit/open-workbook-protocol";
 ```
+
+Normal MCP clients should only see `excel.agent.run`. The internal capability catalog is backend-owned metadata, not an agent tool surface.
 
 Most users should install `@components-kit/open-workbook`; this package is published for integrators building clients, tests, or alternate engines.
 
@@ -3201,11 +3204,10 @@ It contains:
 - A1 range parsing and cell counting
 - stable fingerprints
 - batch compilation
-- backup records
-- snapshot comparison
+- safety utilities for backups, snapshots, permissions, plans, and transactions
+- coordination utilities for locks, tasks, and conflicts
 - template registry
-- plan manager
-- default permission policy
+- formula dependency parsing and tracing
 
 ## Usage
 
@@ -3215,6 +3217,8 @@ import { BatchCompiler, BackupManager, SnapshotManager, TemplateRegistry } from 
 
 This package is runtime-agnostic. It does not depend on Office.js and can be reused by future Excel engines.
 
+Source is grouped by domain under `src/range`, `src/safety`, `src/coordination`, `src/formula`, and `src/templates`; root exports stay compatible for consumers.
+
 ---
 
 Source: packages/office-js-engine/README.md
@@ -3223,7 +3227,7 @@ Source: packages/office-js-engine/README.md
 
 Office.js engine interface and defaults for Open Workbook.
 
-The live Office.js execution currently lives in the Excel add-in runtime. This package defines engine contracts and default options that future host bindings can share.
+The live Office.js execution currently lives in the Excel add-in runtime. This package defines engine contracts, defaults, and a placeholder implementation that future host bindings can share.
 
 ## Usage
 
@@ -3263,6 +3267,7 @@ npx -y @components-kit/open-workbook@latest mcp
 ```
 
 `owb setup` also writes fallback instructions for clients that do not support skills.sh.
+Those packaged instruction assets are generated from `skills/open-workbook-excel` during packaging and must stay in sync with the source skill.
 
 ## Commands
 

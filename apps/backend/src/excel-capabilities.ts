@@ -1,12 +1,12 @@
 import {
   getInternalCapabilityCatalog,
   getInternalCapabilityCatalogSummary,
-  type ToolCatalogOptions,
-  type ToolContract
+  type CapabilityCatalogOptions,
+  type CapabilityContract
 } from "@components-kit/open-workbook-protocol";
 import { AGENT_ACTION_HANDLERS } from "./agent-action-handlers.js";
 
-export type ExcelCapabilityDefinition = ToolContract;
+export type ExcelCapabilityDefinition = CapabilityContract;
 export type ExcelCapabilityGroup =
   | "agent"
   | "runtime"
@@ -402,15 +402,15 @@ const CONTRACT_TESTED_CAPABILITY_NAMES = new Set([
   "excel.permissions.unlock_regions"
 ]);
 
-export function listExcelCapabilities(options: ToolCatalogOptions = {}): ExcelCapabilityDefinition[] {
+export function listExcelCapabilities(options: CapabilityCatalogOptions = {}): ExcelCapabilityDefinition[] {
   return getInternalCapabilityCatalog(options);
 }
 
-export function getExcelCapability(name: string, options: ToolCatalogOptions = {}): ExcelCapabilityDefinition | undefined {
+export function getExcelCapability(name: string, options: CapabilityCatalogOptions = {}): ExcelCapabilityDefinition | undefined {
   return listExcelCapabilities(options).find((capability) => capability.name === name);
 }
 
-export function getExcelCapabilitySummary(options: ToolCatalogOptions = {}) {
+export function getExcelCapabilitySummary(options: CapabilityCatalogOptions = {}) {
   return getInternalCapabilityCatalogSummary(options);
 }
 
@@ -448,11 +448,11 @@ export function getExcelCapabilityPlanningStatus(capability: ExcelCapabilityDefi
   return "future_orchestration_candidate";
 }
 
-export function listExcelCapabilitiesByGroup(group: ExcelCapabilityGroup, options: ToolCatalogOptions = {}): ExcelCapabilityDefinition[] {
+export function listExcelCapabilitiesByGroup(group: ExcelCapabilityGroup, options: CapabilityCatalogOptions = {}): ExcelCapabilityDefinition[] {
   return listExcelCapabilities(options).filter((capability) => getExcelCapabilityGroup(capability.name) === group);
 }
 
-export function listExcelCapabilityCoverage(options: ToolCatalogOptions = {}): ExcelCapabilityCoverageEntry[] {
+export function listExcelCapabilityCoverage(options: CapabilityCatalogOptions = {}): ExcelCapabilityCoverageEntry[] {
   return listExcelCapabilities(options).map((capability) => {
     const group = getExcelCapabilityGroup(capability.name);
     if (!group) {
@@ -467,7 +467,7 @@ export function listExcelCapabilityCoverage(options: ToolCatalogOptions = {}): E
   });
 }
 
-export function summarizeExcelCapabilityCoverage(options: ToolCatalogOptions = {}): ExcelCapabilityCoverageSummary {
+export function summarizeExcelCapabilityCoverage(options: CapabilityCatalogOptions = {}): ExcelCapabilityCoverageSummary {
   const entries = listExcelCapabilityCoverage(options);
   return {
     total: entries.length,
@@ -485,7 +485,7 @@ export function summarizeExcelCapabilityCoverage(options: ToolCatalogOptions = {
   };
 }
 
-export function listExcelCapabilityGroups(options: ToolCatalogOptions = {}): ExcelCapabilityGroupSummary[] {
+export function listExcelCapabilityGroups(options: CapabilityCatalogOptions = {}): ExcelCapabilityGroupSummary[] {
   return EXCEL_CAPABILITY_GROUPS.map((definition) => {
     const capabilities = listExcelCapabilitiesByGroup(definition.group, options);
     return {

@@ -24,6 +24,7 @@ npx -y @components-kit/open-workbook@latest mcp
 ```
 
 `owb setup` also writes fallback instructions for clients that do not support skills.sh.
+Those packaged instruction assets are generated from `skills/open-workbook-excel` during packaging and must stay in sync with the source skill.
 
 ## Commands
 

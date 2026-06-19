@@ -1,40 +1,43 @@
 import { describe, expect, it } from "vitest";
-import { getExposedToolCatalog, getInternalCapabilityCatalog, getInternalCapabilityCatalogSummary, ToolCatalog } from "./tools.js";
+import { getInternalCapabilityCatalog, getInternalCapabilityCatalogSummary, getPublicAgentToolCatalog, InternalCapabilityCatalog, PublicAgentToolCatalog } from "./tools.js";
 import { PromptCatalog } from "./prompts.js";
 import { ResourceCatalog } from "./resources.js";
 
-describe("tool catalog", () => {
-  it("contains the full requested tool skeleton", () => {
-    expect(ToolCatalog.length).toBeGreaterThan(200);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.agent.run")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.runtime.get_capabilities")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.workbook.get_workbook_map")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.workbook.get_summary")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.range.read_compact")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.table.read_compact")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.lookup.search_workbook")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.lookup.inspect_match")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.validate.compact")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.snapshot.get_compact")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.prepare_session")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.create_formula_sheet")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.create_template_report")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.create_pivot_chart_summary")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.repair_formula_errors")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.preview_risky_edit")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.inspect_analyze")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.name === "excel.workflow.rollback_validate")).toBe(true);
+describe("public tool and internal capability catalogs", () => {
+  it("contains the full internal backend capability inventory", () => {
+    expect(InternalCapabilityCatalog.length).toBeGreaterThan(200);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.agent.run")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.runtime.get_capabilities")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.workbook.get_workbook_map")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.workbook.get_summary")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.range.read_compact")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.table.read_compact")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.lookup.search_workbook")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.lookup.inspect_match")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.validate.compact")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.snapshot.get_compact")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.workflow.prepare_session")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.workflow.create_formula_sheet")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.workflow.create_template_report")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.workflow.create_pivot_chart_summary")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.workflow.repair_formula_errors")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.workflow.preview_risky_edit")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.workflow.inspect_analyze")).toBe(true);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.workflow.rollback_validate")).toBe(true);
   });
 
   it("exposes only the public agent tool through the MCP catalog", () => {
-    const exposed = getExposedToolCatalog();
+    const exposed = getPublicAgentToolCatalog();
     expect(exposed.map((tool) => tool.name)).toEqual(["excel.agent.run"]);
     expect(exposed.every((tool) => tool.status === "stable")).toBe(true);
+    expect(PublicAgentToolCatalog.map((tool) => tool.name)).toEqual(["excel.agent.run"]);
   });
 
   it("keeps compact and workflow capabilities in the internal backend catalog", () => {
     const exposed = getInternalCapabilityCatalog();
     const exposedNames = new Set(exposed.map((tool) => tool.name));
+    expect(InternalCapabilityCatalog.length).toBeGreaterThan(PublicAgentToolCatalog.length);
+    expect(InternalCapabilityCatalog.some((capability) => capability.name === "excel.range.write_values")).toBe(true);
     expect(exposed.every((tool) => tool.status === "stable")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.runtime.get_status")).toBe(true);
     expect(exposed.some((tool) => tool.name === "excel.table.reorder_columns")).toBe(true);
@@ -78,7 +81,7 @@ describe("tool catalog", () => {
     expect(exposed.some((tool) => tool.name === "excel.workflow.rollback_validate")).toBe(true);
     expect(exposed.find((tool) => tool.name === "excel.workflow.rollback_validate")?.requiresConfirmation).toBe(true);
     expect(exposed.find((tool) => tool.name === "excel.runtime.get_selection")?.status).toBe("stable");
-    const catalogNames = new Set(ToolCatalog.map((tool) => tool.name));
+    const catalogNames = new Set(InternalCapabilityCatalog.map((tool) => tool.name));
     for (const omitted of [
       "excel.range.read_values",
       "excel.range.read_formulas",
@@ -107,14 +110,14 @@ describe("tool catalog", () => {
   });
 
   it("summarizes public tools separately from internal backend capabilities", () => {
-    const exposed = getExposedToolCatalog({ includePreview: true });
+    const exposed = getPublicAgentToolCatalog({ includePreview: true });
     const internalSummary = getInternalCapabilityCatalogSummary({ includePreview: true });
     expect(exposed.map((tool) => tool.name)).toEqual(["excel.agent.run"]);
-    expect(internalSummary.total).toBe(ToolCatalog.length);
+    expect(internalSummary.total).toBe(InternalCapabilityCatalog.length);
     expect(internalSummary.exposed).toBe(0);
-    expect(internalSummary.capabilities.length).toBe(ToolCatalog.length);
+    expect(internalSummary.capabilities.length).toBe(InternalCapabilityCatalog.length);
     expect(internalSummary.capabilities.some((tool) => tool.name === "excel.runtime.get_capabilities")).toBe(true);
-    expect(ToolCatalog.some((tool) => tool.status === "planned")).toBe(false);
+    expect(InternalCapabilityCatalog.some((tool) => tool.status === "planned")).toBe(false);
   });
 
   it("tracks resources and prompts as catalog entries", () => {

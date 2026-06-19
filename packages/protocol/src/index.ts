@@ -5,6 +5,7 @@ export * from "./errors.js";
 export * from "./ids.js";
 export * from "./json-rpc.js";
 export * from "./operations.js";
+export * from "./operations/index.js";
 export * from "./prompts.js";
 export * from "./resources.js";
 export * from "./tools.js";

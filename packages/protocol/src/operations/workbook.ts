@@ -1,0 +1,20 @@
+export type {
+  WorkbookBackupRetentionRequest,
+  WorkbookCalculateOperation,
+  WorkbookCreateFileBackupRequest,
+  WorkbookEmbeddedLocalConfigResponse,
+  WorkbookFileBackupManifest,
+  WorkbookFileBackupMode,
+  WorkbookFileBridgeOperation,
+  WorkbookFileBridgeRequest,
+  WorkbookFileBridgeResponse,
+  WorkbookFileBridgeStatus,
+  WorkbookFileContent,
+  WorkbookFileRestoreMode,
+  WorkbookLocalConfig,
+  WorkbookLocalConfigImportRequest,
+  WorkbookLocalConfigImportResponse,
+  WorkbookRestoreFileBackupRequest,
+  WorkbookSaveOperation,
+  WorkbookSnapshotResponse
+} from "../operations.js";

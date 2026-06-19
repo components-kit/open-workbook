@@ -1,7 +1,7 @@
-import { getExposedToolCatalog, ResourceCatalog } from "@components-kit/open-workbook-protocol";
+import { getPublicAgentToolCatalog, ResourceCatalog } from "@components-kit/open-workbook-protocol";
 
-export function getToolCatalog() {
-  return getExposedToolCatalog();
+export function getPublicMcpToolCatalog() {
+  return getPublicAgentToolCatalog();
 }
 
 export function getResourceCatalog() {

@@ -158,7 +158,7 @@ import type {
   WorkbookRef,
   WorkbookSnapshotResponse
 } from "@components-kit/open-workbook-protocol";
-import { getInternalCapabilityCatalogSummary, getToolCatalogSummary, PromptCatalog, ResourceCatalog, makeId, runtimeError } from "@components-kit/open-workbook-protocol";
+import { getInternalCapabilityCatalogSummary, getPublicAgentToolCatalogSummary, PromptCatalog, ResourceCatalog, makeId, runtimeError } from "@components-kit/open-workbook-protocol";
 import { SessionRegistry } from "./session-registry.js";
 import type { AddinRpcClient } from "./addin-rpc-client.js";
 import { NativeFileBridge } from "./native-file-bridge.js";
@@ -1449,7 +1449,7 @@ export class RuntimeService {
           activeWorkbook: session.activeWorkbook,
           capabilities: session.capabilities
         })),
-      catalog: getToolCatalogSummary(catalogOptions),
+      catalog: getPublicAgentToolCatalogSummary(catalogOptions),
       internalCapabilities: getInternalCapabilityCatalogSummary(catalogOptions),
       fileBridge: this.fileBridge.getStatus(),
       resources: ResourceCatalog,

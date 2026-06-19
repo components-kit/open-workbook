@@ -9,7 +9,7 @@ Publishable packages:
 - `@components-kit/open-workbook`: user-facing CLI and bundled runtime assets
 - `@components-kit/open-workbook-mcp-server`: MCP stdio server
 - `@components-kit/open-workbook-backend`: local backend broker and runtime service
-- `@components-kit/open-workbook-protocol`: shared contracts, tool catalog, resources, and prompts
+- `@components-kit/open-workbook-protocol`: shared contracts, public agent tool contract, internal capability catalog, resources, and prompts
 - `@components-kit/open-workbook-excel-core`: planning, backups, snapshots, templates, permissions, and range utilities
 - `@components-kit/open-workbook-office-js-engine`: Office.js engine interface and defaults
 
