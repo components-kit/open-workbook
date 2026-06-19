@@ -1,4 +1,5 @@
 import type { AgentCandidate, AgentRunInput, AgentRunOutput } from "@components-kit/open-workbook-protocol";
+import { numberToColumnName as numberToColumn } from "@components-kit/open-workbook-excel-core";
 import { normalizeHeaderName, type WorkbookMetadata } from "./workbook-metadata-cache.js";
 
 const FILLER_TERMS = new Set([
@@ -811,16 +812,6 @@ function columnIndex(column: string): number {
   return column.toUpperCase().split("").reduce((total, char) => total * 26 + char.charCodeAt(0) - 64, 0) - 1;
 }
 
-function numberToColumn(column: number): string {
-  let value = Math.max(1, column);
-  let letters = "";
-  while (value > 0) {
-    const remainder = (value - 1) % 26;
-    letters = String.fromCharCode(65 + remainder) + letters;
-    value = Math.floor((value - 1) / 26);
-  }
-  return letters;
-}
 
 function queryText(input: AgentRunInput): string {
   return [

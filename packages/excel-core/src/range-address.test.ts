@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cellCount, columnNameToNumber, formatA1Address, formatA1Cell, numberToColumnName, parseA1Address } from "./range-address.js";
+import { cellCount, cellCountFromAddress, columnNameToNumber, formatA1Address, formatA1Cell, numberToColumnName, parseA1Address, rangesOverlap, stripSheetName, tryParseA1Address } from "./range-address.js";
 
 describe("range address utilities", () => {
   it("converts column names and numbers", () => {
@@ -29,6 +29,15 @@ describe("range address utilities", () => {
     const parsed = parseA1Address("'Accounting Jan'!A1:D20");
     expect(formatA1Address(parsed)).toBe("'Accounting Jan'!A1:D20");
     expect(cellCount("A1:D20")).toBe(80);
+  });
+
+  it("supports forgiving range helper calls", () => {
+    expect(stripSheetName("'Accounting Jan'!A1:D20")).toBe("A1:D20");
+    expect(tryParseA1Address("not a range")).toBeUndefined();
+    expect(cellCountFromAddress("'Accounting Jan'!A1:D20")).toBe(80);
+    expect(cellCountFromAddress("not a range")).toBeUndefined();
+    expect(rangesOverlap("A1:C3", "C3:D4")).toBe(true);
+    expect(rangesOverlap("A1:C3", "D4:E5")).toBe(false);
   });
 
   it("formats one-based cell positions as A1 addresses", () => {

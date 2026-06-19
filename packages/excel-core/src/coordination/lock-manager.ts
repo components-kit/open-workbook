@@ -10,7 +10,7 @@ import {
   type WorkbookId,
   type WorkbookScope
 } from "@components-kit/open-workbook-protocol";
-import { parseA1Address } from "../range/range-address.js";
+import { tryParseA1Address } from "../range/range-address.js";
 import { makeLockConflict } from "./conflicts.js";
 
 export interface AcquireLocksInput {
@@ -208,16 +208,16 @@ export function scopesConflict(left: WorkbookScope, right: WorkbookScope): boole
     return scopeSheetName(left) === undefined || scopeSheetName(right) === undefined || scopeSheetName(left) === scopeSheetName(right);
   }
   if (left.type === "range" && right.type === "range") {
-    return left.sheetName === right.sheetName && rangesOverlap(left.address, right.address);
+    return left.sheetName === right.sheetName && rangesOverlapConservatively(left.address, right.address);
   }
   if (left.type === "formula" && right.type === "formula") {
     return left.sheetName === right.sheetName && optionalFormulaRangesOverlap(left.address, right.address);
   }
   if (left.type === "formula" && right.type === "range") {
-    return left.sheetName === right.sheetName && (left.address === undefined || rangesOverlap(left.address, right.address));
+    return left.sheetName === right.sheetName && (left.address === undefined || rangesOverlapConservatively(left.address, right.address));
   }
   if (left.type === "range" && right.type === "formula") {
-    return left.sheetName === right.sheetName && (right.address === undefined || rangesOverlap(left.address, right.address));
+    return left.sheetName === right.sheetName && (right.address === undefined || rangesOverlapConservatively(left.address, right.address));
   }
   const leftSheet = scopeSheetName(left);
   const rightSheet = scopeSheetName(right);
@@ -227,14 +227,13 @@ export function scopesConflict(left: WorkbookScope, right: WorkbookScope): boole
   return left.type === right.type || left.type === "range" || right.type === "range";
 }
 
-function rangesOverlap(leftAddress: string, rightAddress: string): boolean {
-  try {
-    const left = parseA1Address(leftAddress);
-    const right = parseA1Address(rightAddress);
-    return left.startRow <= right.endRow && left.endRow >= right.startRow && left.startColumn <= right.endColumn && left.endColumn >= right.startColumn;
-  } catch {
+function rangesOverlapConservatively(leftAddress: string, rightAddress: string): boolean {
+  const left = tryParseA1Address(leftAddress);
+  const right = tryParseA1Address(rightAddress);
+  if (!left || !right) {
     return true;
   }
+  return left.startRow <= right.endRow && left.endRow >= right.startRow && left.startColumn <= right.endColumn && left.endColumn >= right.startColumn;
 }
 
 function scopeSheetName(scope: WorkbookScope): string | undefined {
@@ -280,5 +279,5 @@ function optionalFormulaRangesOverlap(leftAddress: string | undefined, rightAddr
   if (leftAddress === undefined || rightAddress === undefined) {
     return true;
   }
-  return rangesOverlap(leftAddress, rightAddress);
+  return rangesOverlapConservatively(leftAddress, rightAddress);
 }

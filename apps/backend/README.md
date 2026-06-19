@@ -18,6 +18,10 @@ import { startBackendServer } from "@components-kit/open-workbook-backend/server
 - `OPEN_WORKBOOK_ADDIN_PATH`
 - `OPEN_WORKBOOK_BACKUP_DIR`
 
+## Source Layout
+
+`RuntimeService` remains the stable facade for daemon RPC and embedding. Supporting runtime configuration lives under `src/runtime/`, while add-in session/RPC code, agent orchestration, state, metadata, and file bridge modules stay separated behind that facade.
+
 ## Notes
 
 Most users should install `@components-kit/open-workbook`. This package is published for embedding, testing, and advanced integrations.

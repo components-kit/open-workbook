@@ -50,6 +50,15 @@ import {
   type SnapshotId,
   type WorkbookId
 } from "@components-kit/open-workbook-protocol";
+import {
+  cellCountFromAddress,
+  columnNameToNumber as columnToNumber,
+  matrixCellCount,
+  numberToColumnName as numberToColumn,
+  rangesOverlap as rangesOverlapAddresses,
+  stripSheetName,
+  tryParseA1Address
+} from "@components-kit/open-workbook-excel-core";
 import { columnLetter, type HeaderMetadata, type TableMetadata, type WorkbookMetadata, WorkbookMetadataCache } from "./workbook-metadata-cache.js";
 import { AgentOperationStore, type AgentCleanMutationAction, type AgentCleanRequest } from "./agent-operation-store.js";
 import { WorkbookMetadataBuilder } from "./workbook-metadata-builder.js";
@@ -3925,7 +3934,7 @@ function targetFingerprintHash(metadata: WorkbookMetadata, changes: NonNullable<
     .filter((name) => !name.sheetName || targetSheets.has(name.sheetName) || targets.some((target) => target.range && name.range === target.range))
     .map((name) => ({ name: name.name, sheetName: name.sheetName, range: name.range }));
   const targetFormulaRegions = metadata.formulaRegions
-    .filter((region) => targetSheets.has(region.sheetName) || targets.some((target) => target.range && rangesMayOverlap(target.range, region.range)))
+    .filter((region) => targetSheets.has(region.sheetName) || targets.some((target) => target.range && rangesOverlapAddresses(target.range, region.range)))
     .map((region) => ({ id: region.id, sheetName: region.sheetName, range: region.range }));
   const targetSheetMetadata = metadata.sheets
     .filter((sheet) => targetSheets.has(sheet.name))
@@ -4226,14 +4235,14 @@ function monthlySummaryColumnRange(metadata: WorkbookMetadata, sheet: WorkbookMe
   if (!/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{4}\b/i.test(sheet.name) || !sheet.usedRange) {
     return undefined;
   }
-  const used = parseA1Range(sheet.usedRange);
+  const used = tryParseA1Address(sheet.usedRange);
   if (!used || used.endColumn < columnToNumber("AJ")) {
     return undefined;
   }
   const summaryColumnSections = metadata.sections
     .filter((section) => section.sheetName === sheet.name)
     .filter((section) => {
-      const parsed = parseA1Range(section.range);
+      const parsed = tryParseA1Address(section.range);
       return parsed && parsed.startColumn >= columnToNumber("AG") && parsed.endColumn <= columnToNumber("AJ");
     });
   const merged = mergedSectionColumnRange(summaryColumnSections, summaryColumnSections[0]?.range ?? "");
@@ -4262,13 +4271,13 @@ function comparisonSectionScore(section: WorkbookMetadata["sections"][number]): 
 }
 
 function mergedSectionColumnRange(sections: WorkbookMetadata["sections"], bestRange: string): string | undefined {
-  const best = parseA1Range(bestRange);
+  const best = tryParseA1Address(bestRange);
   if (!best) {
     return undefined;
   }
   const sameColumnSections = sections
-    .map((section) => ({ section, parsed: parseA1Range(section.range) }))
-    .filter((entry): entry is { section: WorkbookMetadata["sections"][number]; parsed: NonNullable<ReturnType<typeof parseA1Range>> } =>
+    .map((section) => ({ section, parsed: tryParseA1Address(section.range) }))
+    .filter((entry): entry is { section: WorkbookMetadata["sections"][number]; parsed: NonNullable<ReturnType<typeof tryParseA1Address>> } =>
       Boolean(entry.parsed && entry.parsed.startColumn === best.startColumn && entry.parsed.endColumn === best.endColumn)
     );
   if (sameColumnSections.length <= 1) {
@@ -4519,7 +4528,7 @@ function emptyMatrixSummary(values: CellMatrix) {
 }
 
 function sparseValueRows(values: CellMatrix, address?: string) {
-  const origin = address ? parseA1Range(address) : undefined;
+  const origin = address ? tryParseA1Address(address) : undefined;
   const startRow = origin?.startRow ?? 1;
   const startColumn = origin?.startColumn ?? 1;
   return values.flatMap((row, rowIndex) => {
@@ -5040,11 +5049,6 @@ function backupRangesFromInput(workbookId: WorkbookId, input: AgentRunInput): A1
   return sheetName && address ? [{ workbookId, sheetName, address }] : [];
 }
 
-function stripSheetName(address: string): string {
-  const bang = address.lastIndexOf("!");
-  return bang >= 0 ? address.slice(bang + 1).replace(/^'|'$/g, "") : address;
-}
-
 function findMentionedSheet(metadata: WorkbookMetadata, input: AgentRunInput): WorkbookMetadata["sheets"][number] | undefined {
   if (input.target?.sheetName) {
     const normalized = normalizeComparableText(input.target.sheetName);
@@ -5252,10 +5256,6 @@ function stripUndefinedOptionals(output: Omit<AgentRunOutput, "telemetry">): Omi
   if (next.operationId === undefined) delete next.operationId;
   if (next.workbookContextId === undefined) delete next.workbookContextId;
   return next;
-}
-
-function matrixCellCount(values: CellMatrix): number {
-  return values.reduce((total, row) => total + row.length, 0);
 }
 
 function resolveUpdateTarget(metadata: WorkbookMetadata, input: AgentRunInput):
@@ -6107,7 +6107,7 @@ function rangeCopyTypeFromInput(input: AgentRunInput): NonNullable<Extract<Excel
 }
 
 function dimensionsFromAddress(address: string): { rows: number; columns: number } | undefined {
-  const range = parseA1Range(address);
+  const range = tryParseA1Address(address);
   if (!range) {
     return undefined;
   }
@@ -6140,7 +6140,7 @@ function valuePatchesFromInput(input: AgentRunInput): AgentValuePatch[] {
 }
 
 function matrixShapeIssue(address: string, values: CellMatrix): string | undefined {
-  const range = parseA1Range(address);
+  const range = tryParseA1Address(address);
   if (!range) {
     return undefined;
   }
@@ -6179,17 +6179,9 @@ function uniqueProofFromChanges(changes: NonNullable<AgentRunOutput["changes"]>)
 }
 
 function overlapsFormulaRegion(metadata: WorkbookMetadata, sheetName: string, address: string): boolean {
-  const target = parseA1Range(address);
-  if (!target) {
-    return metadata.formulaRegions.some((region) => region.sheetName === sheetName && region.range === address);
-  }
-  return metadata.formulaRegions.some((region) => {
-    if (region.sheetName !== sheetName) {
-      return false;
-    }
-    const formulaRange = parseA1Range(region.range);
-    return formulaRange ? rangesOverlap(target, formulaRange) : region.range === address;
-  });
+  return metadata.formulaRegions.some((region) =>
+    region.sheetName === sheetName && (rangesOverlapAddresses(address, region.range) || region.range === address)
+  );
 }
 
 function cellAddressFor(range: string, rowIndex: number, columnIndex: number): string {
@@ -6197,57 +6189,6 @@ function cellAddressFor(range: string, rowIndex: number, columnIndex: number): s
   const startColumn = match?.[1] ? columnToNumber(match[1]) : 1;
   const startRow = match?.[2] ? Number(match[2]) : 1;
   return `${columnLetter(startColumn + columnIndex - 1)}${startRow + rowIndex}`;
-}
-
-function cellCountFromAddress(address: string): number | undefined {
-  const range = parseA1Range(address);
-  return range ? Math.max(1, range.endColumn - range.startColumn + 1) * Math.max(1, range.endRow - range.startRow + 1) : undefined;
-}
-
-function columnToNumber(column: string): number {
-  return column.toUpperCase().split("").reduce((value, char) => value * 26 + char.charCodeAt(0) - 64, 0);
-}
-
-function numberToColumn(column: number): string {
-  let value = column;
-  let letters = "";
-  while (value > 0) {
-    const remainder = (value - 1) % 26;
-    letters = String.fromCharCode(65 + remainder) + letters;
-    value = Math.floor((value - 1) / 26);
-  }
-  return letters;
-}
-
-function parseA1Range(address: string): { startColumn: number; startRow: number; endColumn: number; endRow: number } | undefined {
-  const normalized = address.includes("!") ? address.split("!").pop() ?? address : address;
-  const match = /^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/i.exec(normalized.replace(/\$/g, ""));
-  if (!match?.[1] || !match[2]) {
-    return undefined;
-  }
-  const startColumn = columnToNumber(match[1]);
-  const startRow = Number(match[2]);
-  const endColumn = match[3] ? columnToNumber(match[3]) : startColumn;
-  const endRow = match[4] ? Number(match[4]) : startRow;
-  return {
-    startColumn: Math.min(startColumn, endColumn),
-    startRow: Math.min(startRow, endRow),
-    endColumn: Math.max(startColumn, endColumn),
-    endRow: Math.max(startRow, endRow)
-  };
-}
-
-function rangesOverlap(left: { startColumn: number; startRow: number; endColumn: number; endRow: number }, right: { startColumn: number; startRow: number; endColumn: number; endRow: number }): boolean {
-  return left.startColumn <= right.endColumn
-    && left.endColumn >= right.startColumn
-    && left.startRow <= right.endRow
-    && left.endRow >= right.startRow;
-}
-
-function rangesMayOverlap(leftAddress: string, rightAddress: string): boolean {
-  const left = parseA1Range(leftAddress);
-  const right = parseA1Range(rightAddress);
-  return Boolean(left && right && rangesOverlap(left, right));
 }
 
 function contextResource(workbookContextId: string) {

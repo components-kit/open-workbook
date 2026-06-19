@@ -2,14 +2,16 @@
 import { readFileSync } from "node:fs";
 import { getInternalCapabilityCatalog, getPublicAgentToolCatalog } from "../packages/protocol/dist/tools.js";
 
-const source = readFileSync(new URL("../apps/mcp-server/src/index.ts", import.meta.url), "utf8");
+const entrySource = readFileSync(new URL("../apps/mcp-server/src/index.ts", import.meta.url), "utf8");
+const agentToolSource = readFileSync(new URL("../apps/mcp-server/src/tools/agent-run.ts", import.meta.url), "utf8");
+const combinedSource = `${entrySource}\n${agentToolSource}`;
 
 const publicTools = getPublicAgentToolCatalog({ includePreview: true }).map((tool) => tool.name).sort();
-const registeredTools = source.includes("registerAgentTools(server)") ? ["excel.agent.run"] : [];
+const registeredTools = entrySource.includes("registerAgentTools(server") && agentToolSource.includes('"excel.agent.run"') ? ["excel.agent.run"] : [];
 const missing = publicTools.filter((name) => !registeredTools.includes(name));
 const forbiddenActiveRegistrations = ["Runtime", "Workbook", "Range", "Batch", "Workflow", "Table", "Chart", "Pivot"]
   .map((name) => `register${name}Tools(server)`)
-  .filter((snippet) => source.includes(snippet));
+  .filter((snippet) => combinedSource.includes(snippet));
 const internalCapabilities = getInternalCapabilityCatalog({ includePreview: true });
 
 const expectedInternalCapabilityCount = 294;

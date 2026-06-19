@@ -43,6 +43,14 @@ export function parseA1Address(address: string): ParsedA1Address {
   return parsed;
 }
 
+export function tryParseA1Address(address: string): ParsedA1Address | undefined {
+  try {
+    return parseA1Address(address);
+  } catch {
+    return undefined;
+  }
+}
+
 export function normalizeA1Range(workbookId: WorkbookId, sheetName: string, address: string): A1Range {
   const parsed = parseA1Address(address);
   return {
@@ -55,6 +63,11 @@ export function normalizeA1Range(workbookId: WorkbookId, sheetName: string, addr
 export function cellCount(address: string): number {
   const parsed = parseA1Address(address);
   return (parsed.endRow - parsed.startRow + 1) * (parsed.endColumn - parsed.startColumn + 1);
+}
+
+export function cellCountFromAddress(address: string): number | undefined {
+  const parsed = tryParseA1Address(stripSheetName(address));
+  return parsed ? (parsed.endRow - parsed.startRow + 1) * (parsed.endColumn - parsed.startColumn + 1) : undefined;
 }
 
 export function columnNameToNumber(columnName: string): number {
@@ -98,7 +111,24 @@ export function formatA1Address(parsed: ParsedA1Address): string {
   return parsed.sheetName ? `${quoteSheetName(parsed.sheetName)}!${range}` : range;
 }
 
-function unquoteSheetName(sheetName: string | undefined): string | undefined {
+export function stripSheetName(address: string): string {
+  const bang = address.lastIndexOf("!");
+  return bang >= 0 ? address.slice(bang + 1) : address;
+}
+
+export function rangesOverlap(leftAddress: string, rightAddress: string): boolean {
+  const left = tryParseA1Address(stripSheetName(leftAddress));
+  const right = tryParseA1Address(stripSheetName(rightAddress));
+  if (!left || !right) {
+    return false;
+  }
+  return left.startRow <= right.endRow
+    && left.endRow >= right.startRow
+    && left.startColumn <= right.endColumn
+    && left.endColumn >= right.startColumn;
+}
+
+export function unquoteSheetName(sheetName: string | undefined): string | undefined {
   if (!sheetName) {
     return undefined;
   }
@@ -108,6 +138,6 @@ function unquoteSheetName(sheetName: string | undefined): string | undefined {
   return sheetName;
 }
 
-function quoteSheetName(sheetName: string): string {
+export function quoteSheetName(sheetName: string): string {
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(sheetName) ? sheetName : `'${sheetName.replace(/'/g, "''")}'`;
 }

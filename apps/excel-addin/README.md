@@ -4,6 +4,8 @@ Office.js Excel add-in runtime for Open Workbook.
 
 This workspace package contains the taskpane HTML, manifest template, static asset server, and Office.js executor. It is private because the built add-in assets are bundled into `@components-kit/open-workbook`.
 
+The taskpane WebSocket lifecycle is handled by `src/connection.ts`. Backend JSON-RPC method dispatch lives in `src/rpc-methods.ts`, which delegates to the Office.js executor functions in `src/excel-executor.ts`.
+
 ## Development
 
 ```bash

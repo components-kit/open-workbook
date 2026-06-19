@@ -6,6 +6,7 @@ import {
   BackupManager,
   BatchCompiler,
   cellCount,
+  cloneMatrix,
   DefaultPermissionPolicy,
   buildFormulaDependencyGraph,
   attachConflictGuidance,
@@ -13,9 +14,13 @@ import {
   hashStable,
   LockManager,
   formatA1Address,
+  padMatrixRows,
   parseA1Address,
   PlanManager,
+  rangesOverlap as rangesOverlapAddresses,
+  rectangularize,
   SnapshotManager,
+  stripSheetName,
   TaskRegistry,
   TemplateRegistry,
   TransactionManager,
@@ -164,19 +169,9 @@ import type { AddinRpcClient } from "./addin-rpc-client.js";
 import { NativeFileBridge } from "./native-file-bridge.js";
 import { RuntimeStateStore } from "./state-store.js";
 import { AgentOrchestrator } from "./agent-orchestrator.js";
+import { addinHealthTimeoutMs, addinStaleTtlMs, defaultLockLeasePolicy, runtimeVersion } from "./runtime/config.js";
 
-const runtimeVersion = process.env.OPEN_WORKBOOK_VERSION ?? "0.1.14";
 type AddinConnectionState = "disconnected" | "connected_no_workbook" | "ready" | "stale";
-
-function addinStaleTtlMs(): number {
-  const value = Number(process.env.OPEN_WORKBOOK_ADDIN_STALE_TTL_MS ?? 15_000);
-  return Number.isFinite(value) && value > 0 ? Math.round(value) : 15_000;
-}
-
-function addinHealthTimeoutMs(): number {
-  const value = Number(process.env.OPEN_WORKBOOK_ADDIN_HEALTH_TIMEOUT_MS ?? 2_500);
-  return Number.isFinite(value) && value > 0 ? Math.round(value) : 2_500;
-}
 
 export interface RuntimeServiceOptions {
   stateDir?: string;
@@ -1318,7 +1313,7 @@ export class RuntimeService {
       runtime: {
         service: "open-workbook-backend",
         packageName: "@components-kit/open-workbook-backend",
-        version: runtimeVersion,
+        version: runtimeVersion(),
         pid: process.pid
       },
       connectionState,
@@ -3723,7 +3718,7 @@ export class RuntimeService {
       unique.push(row);
     }
     const compact = [...header, ...unique];
-    const values = padMatrixRows(compact, read.values.length, read.values[0]?.length ?? 0);
+    const values = padMatrixRows(compact, read.values.length, read.values[0]?.length ?? 0, "");
     const result = await this.writeCleanValues(target, values, "Remove duplicate rows");
     return cleaningReport(input.workbookId, "remove_duplicates", target, read.values.length - compact.length, {
       removedRows: read.values.length - compact.length,
@@ -3780,7 +3775,7 @@ export class RuntimeService {
     }
     const delimiter = input.delimiter ?? ",";
     const values = read.values.map((row) => String(row[input.columnIndex] ?? "").split(delimiter).map((part) => part.trim()));
-    const result = await this.writeCleanValues(target, rectangularize(values), "Split column");
+    const result = await this.writeCleanValues(target, rectangularize(values, ""), "Split column");
     return cleaningReport(input.workbookId, "split_column", target, values.length * (values[0]?.length ?? 0), { source, delimiter }, result);
   }
 
@@ -7004,11 +6999,6 @@ function regionOperation(kind: "range.clear_values_keep_format" | "range.write_v
   return operation;
 }
 
-function stripSheetName(address: string): string {
-  const bangIndex = address.lastIndexOf("!");
-  return bangIndex >= 0 ? address.slice(bangIndex + 1) : address;
-}
-
 function unsupportedRepairReport(workbookId: WorkbookId, repair: string, code: string, message: string): RepairReport {
   return {
     ok: false,
@@ -7629,10 +7619,6 @@ function cleaningError(workbookId: WorkbookId, action: string, target: A1Range, 
   };
 }
 
-function cloneMatrix(values: CellMatrix): CellMatrix {
-  return values.map((row) => [...row]);
-}
-
 function changedCellCount(before: CellMatrix, after: CellMatrix): number {
   const rowCount = Math.max(before.length, after.length);
   let changed = 0;
@@ -7686,19 +7672,6 @@ function dedupeHeaders(headers: string[]): string[] {
 
 function normalizeComparable(value: unknown): unknown {
   return typeof value === "string" ? value.trim().toLowerCase() : value;
-}
-
-function padMatrixRows(values: CellMatrix, rowCount: number, columnCount: number): CellMatrix {
-  const padded = values.map((row) => [...row, ...Array(Math.max(0, columnCount - row.length)).fill("")]);
-  while (padded.length < rowCount) {
-    padded.push(Array(columnCount).fill(""));
-  }
-  return padded;
-}
-
-function rectangularize(values: CellMatrix): CellMatrix {
-  const width = Math.max(0, ...values.map((row) => row.length));
-  return values.map((row) => [...row, ...Array(width - row.length).fill("")]);
 }
 
 function parseDateValue(value: unknown): unknown {
@@ -7800,13 +7773,7 @@ function rangesOverlap(range: A1Range, region: { sheetName: string; address: str
   if (range.sheetName !== region.sheetName) {
     return false;
   }
-  try {
-    const left = parseA1Address(stripSheetName(range.address));
-    const right = parseA1Address(stripSheetName(region.address));
-    return left.startRow <= right.endRow && left.endRow >= right.startRow && left.startColumn <= right.endColumn && left.endColumn >= right.startColumn;
-  } catch {
-    return false;
-  }
+  return rangesOverlapAddresses(range.address, region.address);
 }
 
 function safeRowCount(address: string): number | undefined {
@@ -7943,15 +7910,6 @@ function taskScheduleMessage(goal: string, state: string, dependencyCount: numbe
   }
 }
 
-function defaultLockLeasePolicy(): LockLeasePolicy {
-  return normalizeLockLeasePolicy({
-    defaultTtlMs: Number(process.env.OPEN_WORKBOOK_LOCK_DEFAULT_TTL_MS ?? 120_000),
-    transactionTtlMs: Number(process.env.OPEN_WORKBOOK_LOCK_TRANSACTION_TTL_MS ?? 120_000),
-    maxTtlMs: Number(process.env.OPEN_WORKBOOK_LOCK_MAX_TTL_MS ?? 600_000),
-    allowManualLocks: process.env.OPEN_WORKBOOK_ALLOW_MANUAL_LOCKS !== "0"
-  });
-}
-
 function normalizeLockLeasePolicy(input: Partial<LockLeasePolicy>): LockLeasePolicy {
   const maxTtlMs = positiveInteger(input.maxTtlMs, 600_000);
   return {
@@ -7970,7 +7928,7 @@ function disconnectedRuntimeCapabilities(): RuntimeCapabilities {
   return {
     engine: {
       name: "open-workbook-daemon",
-      version: runtimeVersion,
+      version: runtimeVersion(),
       platform: "unknown"
     },
     apiSets: [],

@@ -1,4 +1,4 @@
-import { chunkMatrixRows, createRangeFingerprint, createWorkbookFingerprint, formatA1Cell, hashStable, parseA1Address } from "@components-kit/open-workbook-excel-core";
+import { chunkMatrixRows, createRangeFingerprint, createWorkbookFingerprint, formatA1Cell, hashStable, matrixCellCount, parseA1Address, stripSheetName } from "@components-kit/open-workbook-excel-core";
 import type {
   AddinExecuteBatchRequest,
   AddinTemplateRepairRequest,
@@ -2879,10 +2879,6 @@ function assertMatrixShape(target: A1Range, matrix: unknown[][]): void {
   }
 }
 
-function matrixCellCount(matrix: unknown[][]): number {
-  return matrix.reduce((count, row) => count + row.length, 0);
-}
-
 function writeMatrixInChunks(
   context: Excel.RequestContext,
   target: A1Range,
@@ -3001,11 +2997,6 @@ function assignIfDefined<T extends object, K extends keyof T>(target: T, key: K,
   if (value !== undefined) {
     target[key] = value;
   }
-}
-
-function stripSheetName(address: string): string {
-  const bangIndex = address.lastIndexOf("!");
-  return bangIndex >= 0 ? address.slice(bangIndex + 1) : address;
 }
 
 function cellPositionFromZeroBased(workbookId: WorkbookRef["workbookId"], sheetName: string, rowIndex: number, columnIndex: number): CellPosition {

@@ -88,7 +88,6 @@ The backend also tracks whether a capability is the public agent entrypoint, cur
 - `excel://workbooks/{workbook_id}/templates`
 - `excel://workbooks/{workbook_id}/snapshots/{snapshot_id}`
 - `excel://workbooks/{workbook_id}/plans/{plan_id}/diff`
-- `excel://compact/{resource_id}`
 - `excel://agent/contexts/{workbook_context_id}`
 - `excel://agent/operations/{operation_id}`
 
@@ -111,9 +110,7 @@ No mutating tool should bypass the backend safety lifecycle. It must validate pe
 
 ## Implementation Notes
 
-`excel.batch.apply`, `excel.workflow.preview_risky_edit`, `excel.plan.apply`, and all stable mutating sheet/range tools route through backend snapshots, backup records, target-region conflict checks, and add-in Office.js execution.
-
-Mutating MCP tools accept `idempotencyKey` for retry safety. A repeated call with the same key and same payload returns the previous compact proof with `idempotentReplay: true` and does not execute the workbook mutation again. Reusing the same key with a different payload returns an idempotency conflict and `nextActionRecommendation: "needs_user_confirmation"`.
+Internal mutation routes such as batch, workflow preview, plan apply, and stable sheet/range operations route through backend snapshots, backup records, target-region conflict checks, and add-in Office.js execution. They are invoked by backend orchestration behind `excel.agent.run`, not exposed as separate MCP tools.
 
 On the public agent surface, `excel.agent.run` with `mode: "prepare"` is the preferred first call. Prepare builds lightweight structure metadata for fast workbook identity, sheet, table, and named-range context; later targeted answers upgrade that context with sheet samples only when actual rows, values, formulas, comparisons, or raw header sections are needed. Internally, workflow preflight combines runtime status, active context, capabilities, workbook map, and collaboration state before mutations.
 
@@ -127,7 +124,7 @@ Lookup and compact context tools reduce token use by exposing target candidates 
 
 `excel.range.read_compact` and `excel.table.read_compact` are the internal token-saving read paths. They default to `responseMode: "brief"`, storing full page/sample details locally while returning schema/window proof, `contextId`, `resourceUri`, `truncated`, `nextPage`, `payloadBytes`, and `estimatedTokens`. Range compact reads also accept `cellOutput: "auto" | "matrix" | "sparse"`; auto mode keeps dense small matrices readable and returns coordinate-aware `sparseRows` plus `emptySummary` for mostly empty ranges. `agent.run` uses these patterns to return bounded proof and resource links without asking agents to fetch full cell bodies unless the user requests detail.
 
-Large or budget-limited compact results can return an `excel://compact/{resource_id}` handle instead of embedding full detail. Compact-profile results are capped by shared limits and include `truncated`, `budgetExceeded`, `omittedCounts`, `fullResult`, and token telemetry when detail is stored locally. Stored resources include `contextId`, scope, source hash, size, creation time, last access time, and access count. Agents reach those details through MCP resource links returned by `excel.agent.run`; compact resource management is backend-owned rather than advertised as separate callable Excel capabilities. `excel.snapshot.get_compact` and `excel.snapshot.compare_compact` use this pattern for snapshot and diff details. Summary/schema cache entries are local to the MCP process and are cleared automatically after workbook-mutating tools.
+Large or budget-limited agent results are summarized inline and point to backend-owned context resources when full detail is needed. Compact-profile outputs include `truncated`, `budgetExceeded`, `omittedCounts`, proof references, and token telemetry when data is bounded. Agents reach reusable workbook context and pending operation detail through MCP resource links returned by `excel.agent.run`; compact resource management remains backend-owned rather than advertised as separate callable Excel capabilities. Snapshot and diff detail follows this pattern through internal capability routes such as `excel.snapshot.get_compact` and `excel.snapshot.compare_compact`.
 
 `excel.validate.compact` returns validation issue counts, severity counts, categories, and a few examples while storing the full validation report behind a compact resource URI. Use it before reporting validation proof unless the user needs the full issue list inline.
 

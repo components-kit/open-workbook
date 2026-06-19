@@ -1,4 +1,5 @@
 import { makeId, type BatchRequest, type CellMatrix, type ExcelOperation, type NameInfo, type OperationId, type RuntimeSelectionResponse, type SelectionInfo, type WorkbookId, type WorkbookRef } from "@components-kit/open-workbook-protocol";
+import { stripSheetName } from "@components-kit/open-workbook-excel-core";
 import {
   checkMetadataFreshness,
   columnLetter,
@@ -509,10 +510,6 @@ function sampleAddress(address: string, rowCount?: number, columnCount?: number)
   const endColumn = startColumn + cols - 1;
   const endRow = startRow + rows - 1;
   return `${columnLetter(startColumn)}${startRow}:${columnLetter(endColumn)}${endRow}`;
-}
-
-function stripSheetName(address: string): string {
-  return address.includes("!") ? address.split("!").pop() ?? address : address;
 }
 
 function columnIndex(column: string): number {
