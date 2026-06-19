@@ -1115,6 +1115,7 @@ function valuesFor(sheetName: string, address: string) {
     if (address === "B3") return [[""]];
     if (address === "C2") return [[100]];
     if (address === "C1:C4") return [["Amount"], [100], [200], [300]];
+    if (address === "D1:D4") return [["Status"], ["Open"], ["Closed"], ["Open"]];
     return [
       ["Date", "Account", "Amount", "Status"],
       ["2026-01-01", "A-100", 100, "Open"],

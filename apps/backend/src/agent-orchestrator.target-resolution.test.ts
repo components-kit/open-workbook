@@ -89,6 +89,62 @@ describe("AgentOrchestrator Target Resolution", () => {
       expect(result.warnings[0]).toContain("No non-empty cells");
     });
 
+  it("corrects a conflicting single-column range when the request names a different header", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Count unique values in the Status column.",
+        mode: "answer",
+        target: { sheetName: "Data", range: "C1:C4" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "D1:D4", label: "Status" });
+      expect(result.warnings[0]).toContain("Adjusted target range from C1:C4 to D1:D4");
+      expect((result.answer as any).kind).toBe("range_value_counts");
+      expect((result.answer as any).uniqueCount).toBe(2);
+      expect((result.answer as any).topValues).toEqual([
+        { value: "Open", count: 2 },
+        { value: "Closed", count: 1 }
+      ]);
+      expect((result.answer as any).resultUri).toMatch(/^excel:\/\/agent\/results\/agentres_/);
+    });
+
+  it("does not rewrite a literal column-letter read without a semantic header name", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Count unique values in column C.",
+        mode: "answer",
+        target: { sheetName: "Data", range: "C1:C4" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "C1:C4" });
+      expect(result.warnings).toEqual([]);
+      expect((result.answer as any).kind).toBe("range_value_counts");
+      expect((result.answer as any).uniqueCount).toBe(4);
+    });
+
+  it("uses target.column to narrow a sheet read to the matching header column", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "How many unique status values are there?",
+        mode: "answer",
+        target: { sheetName: "Data", column: "Status" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "D1:D4", label: "Status" });
+      expect(result.warnings[0]).toContain("Adjusted target range from A1:D4 to D1:D4");
+      expect((result.answer as any).kind).toBe("range_value_counts");
+      expect((result.answer as any).uniqueCount).toBe(2);
+    });
+
   it("resolves exact raw sheet targets to the used range when no table exists", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);

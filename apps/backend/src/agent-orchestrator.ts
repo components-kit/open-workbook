@@ -60,7 +60,7 @@ import {
   stripSheetName,
   tryParseA1Address
 } from "@components-kit/open-workbook-excel-core";
-import { columnLetter, type HeaderMetadata, type TableMetadata, type WorkbookMetadata, WorkbookMetadataCache } from "./workbook-metadata-cache.js";
+import { columnLetter, normalizeHeaderName, type ColumnMetadata, type HeaderMetadata, type TableMetadata, type WorkbookMetadata, WorkbookMetadataCache } from "./workbook-metadata-cache.js";
 import { AgentOperationStore, type AgentCleanMutationAction, type AgentCleanRequest } from "./agent-operation-store.js";
 import { WorkbookMetadataBuilder } from "./workbook-metadata-builder.js";
 import { findAgentCandidates, resolveAgentReadTarget, resolveAgentUpdateTarget, type AgentTargetResolution } from "./agent-target-resolver.js";
@@ -595,7 +595,8 @@ export class AgentOrchestrator {
     if (answerIntent(input) === "schema") {
       return this.schemaAnswerOutput(metadata, input, requestedMode, resolved, candidates);
     }
-    const normalizedRange = normalizeOperationRange(metadata, resolved.sheetName, resolved.range);
+    const adjustedTarget = adjustReadRangeForSemanticColumn(metadata, input, resolved.sheetName, resolved.range);
+    const normalizedRange = normalizeOperationRange(metadata, resolved.sheetName, adjustedTarget.range);
     if (isFormulaReadIntentAction(intentAction(input))) {
       return this.formulaAnswerOutput(metadata, input, requestedMode, normalizedRange, resolved, runMetrics);
     }
@@ -612,6 +613,22 @@ export class AgentOrchestrator {
       return this.tableCompactAnswerOutput(metadata, input, requestedMode, resolved, table, runMetrics);
     }
     const profile = await this.readAndProfileRange(metadata.workbook.workbookId as WorkbookId, resolved.sheetName, normalizedRange, runMetrics);
+    const aggregate = aggregateProfileForRequest(input, profile, adjustedTarget.column);
+    if (aggregate) {
+      return {
+        status: "SUCCESS",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: `Answered ${aggregate.uniqueCount} unique value(s) from ${adjustedTarget.column?.name ?? resolved.candidate.label} on ${resolved.sheetName}.`,
+        answer: aggregate,
+        metrics: { ...profile.metrics, uniqueCount: aggregate.uniqueCount },
+        candidates: candidates.slice(0, 5),
+        proof: [{ sheetName: resolved.sheetName, range: normalizedRange, label: adjustedTarget.column?.name ?? resolved.candidate.label }],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "answer_now",
+        warnings: [...adjustedTarget.warnings, ...(profile.warning ? [profile.warning] : [])]
+      };
+    }
     return {
       status: "SUCCESS",
       mode: requestedMode,
@@ -620,10 +637,10 @@ export class AgentOrchestrator {
       answer: profile,
       metrics: profile.metrics,
       candidates: candidates.slice(0, 5),
-      proof: [{ sheetName: resolved.sheetName, range: normalizedRange, label: resolved.candidate.label }],
+      proof: [{ sheetName: resolved.sheetName, range: normalizedRange, label: adjustedTarget.column?.name ?? resolved.candidate.label }],
       resourceLinks: [contextResource(metadata.workbookContextId)],
       nextAction: "answer_now",
-      warnings: profile.warning ? [profile.warning] : []
+      warnings: [...adjustedTarget.warnings, ...(profile.warning ? [profile.warning] : [])]
     };
   }
 
@@ -4534,6 +4551,213 @@ function comparisonAnswerOutput(
   };
 }
 
+function adjustReadRangeForSemanticColumn(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput,
+  sheetName: string,
+  range: string
+): { range: string; column?: ColumnMetadata; warnings: string[] } {
+  const match = resolveRequestedColumn(metadata, input, sheetName);
+  if (!match) {
+    return { range, warnings: [] };
+  }
+  const current = columnRangeBounds(range, metadata, sheetName);
+  if (!current) {
+    return { range, column: match.column, warnings: [] };
+  }
+  const targetColumnNumber = match.column.index + 1;
+  const targetRange = `${match.column.letter}${current.startRow}:${match.column.letter}${current.endRow}`;
+  const sameSingleColumn = current.startColumn === targetColumnNumber && current.endColumn === targetColumnNumber;
+  if (sameSingleColumn) {
+    return { range, column: match.column, warnings: [] };
+  }
+  if ((current.startColumn === current.endColumn || input.target?.column) && match.confidence >= 0.86) {
+    return {
+      range: targetRange,
+      column: match.column,
+      warnings: [`Adjusted target range from ${range} to ${targetRange} because "${match.column.name}" matched column ${match.column.letter}.`]
+    };
+  }
+  return { range, column: match.column, warnings: [] };
+}
+
+function resolveRequestedColumn(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput,
+  sheetName: string
+): { column: ColumnMetadata; confidence: number } | undefined {
+  const requestedNames = requestedColumnNames(input);
+  if (requestedNames.length === 0) {
+    return undefined;
+  }
+  const columns = metadataColumnsForSheet(metadata, sheetName);
+  if (columns.length === 0) {
+    return undefined;
+  }
+  const scored = columns
+    .map((column) => ({ column, confidence: requestedNames.reduce((best, name) => Math.max(best, columnNameMatchScore(name, column)), 0) }))
+    .filter((entry) => entry.confidence >= 0.86)
+    .sort((left, right) => right.confidence - left.confidence || left.column.index - right.column.index);
+  const best = scored[0];
+  const second = scored[1];
+  if (!best || (second && best.confidence === second.confidence && best.column.normalizedName === second.column.normalizedName)) {
+    return undefined;
+  }
+  return best;
+}
+
+function requestedColumnNames(input: AgentRunInput): string[] {
+  const values = [
+    input.target?.column,
+    ...(((input.intent as { targetHints?: string[] } | undefined)?.targetHints ?? [])),
+    ...quotedColumnNames(input.request),
+    ...namedColumnPhrases(input.request)
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  return [...new Set(values.map((value) => value.trim()))];
+}
+
+function quotedColumnNames(request: string): string[] {
+  return [...request.matchAll(/["“']([^"“”']{2,80})["”']/g)].map((match) => match[1]!).filter((value) => /\s|\/|_/.test(value));
+}
+
+function namedColumnPhrases(request: string): string[] {
+  const phrases: string[] = [];
+  const patterns = [
+    /\b(?:column|field|header)\s+(?:named|called)\s+([^.,;:\n]{2,80})/gi,
+    /\b([^.,;:\n]{2,80})\s+(?:column|field|header)\b/gi
+  ];
+  for (const pattern of patterns) {
+    for (const match of request.matchAll(pattern)) {
+      const value = match[1]?.trim();
+      if (value && !/^[A-Z]{1,3}$/i.test(value)) {
+        const cleaned = value.replace(/\b(?:the|a|an|specifically|from|to|for|all|unique|non-empty|nonempty|values?|count|counts?|how|many)\b/gi, " ").replace(/\s+/g, " ").trim();
+        phrases.push(cleaned);
+        const tail = /\b(?:in|on|by|from)\s+(.+)$/i.exec(cleaned)?.[1]?.trim();
+        if (tail) {
+          phrases.push(tail);
+        }
+      }
+    }
+  }
+  return phrases.filter((value) => value.length >= 2);
+}
+
+function metadataColumnsForSheet(metadata: WorkbookMetadata, sheetName: string): ColumnMetadata[] {
+  const byKey = new Map<string, ColumnMetadata>();
+  const add = (column: ColumnMetadata) => {
+    const key = `${column.index}:${normalizeHeaderName(column.name)}`;
+    if (!byKey.has(key)) {
+      byKey.set(key, column);
+    }
+  };
+  metadata.tables.filter((table) => table.sheetName === sheetName).forEach((table) => table.columns.forEach(add));
+  const sheet = metadata.sheets.find((candidate) => candidate.name === sheetName);
+  sheet?.headers.forEach((header) => header.columns.forEach(add));
+  metadata.sections.filter((section) => section.sheetName === sheetName).forEach((section) => section.columns.forEach(add));
+  return [...byKey.values()];
+}
+
+function columnNameMatchScore(requestedName: string, column: ColumnMetadata): number {
+  const requested = normalizeHeaderName(requestedName);
+  const columnName = normalizeHeaderName(column.name);
+  if (!requested || !columnName || /^[a-z]{1,3}$/i.test(requestedName.trim())) {
+    return 0;
+  }
+  if (requested === columnName || requested === column.normalizedName || requested.replace(/_/g, "") === columnName.replace(/_/g, "")) {
+    return 1;
+  }
+  const requestedTokens = new Set(headerTokens(requestedName));
+  const columnTokens = headerTokens(column.name);
+  if (requestedTokens.size === 0 || columnTokens.length === 0) {
+    return 0;
+  }
+  const overlap = columnTokens.filter((token) => requestedTokens.has(token)).length;
+  if (overlap === 0) {
+    return 0;
+  }
+  const precision = overlap / columnTokens.length;
+  const recall = overlap / requestedTokens.size;
+  return 0.2 + precision * 0.45 + recall * 0.35;
+}
+
+function headerTokens(value: string): string[] {
+  return normalizeHeaderName(value.replace(/[\/_-]+/g, " ")).split("_").filter(Boolean);
+}
+
+function columnRangeBounds(range: string, metadata: WorkbookMetadata, sheetName: string): { startColumn: number; endColumn: number; startRow: number; endRow: number } | undefined {
+  const normalized = stripSheetName(range).replace(/\$/g, "").toUpperCase();
+  const sheet = metadata.sheets.find((candidate) => candidate.name === sheetName);
+  const defaultEndRow = Math.max(1, sheet?.rowCount ?? 1);
+  const cellRange = /^([A-Z]{1,3})(\d+)(?::([A-Z]{1,3})(\d+))?$/.exec(normalized);
+  if (cellRange?.[1] && cellRange[2]) {
+    const endColumn = cellRange[3] ?? cellRange[1];
+    const endRow = cellRange[4] ?? cellRange[2];
+    return {
+      startColumn: columnToNumber(cellRange[1]),
+      endColumn: columnToNumber(endColumn),
+      startRow: Number(cellRange[2]),
+      endRow: Number(endRow)
+    };
+  }
+  const columnOnly = /^([A-Z]{1,3})(?::([A-Z]{1,3}))?$/.exec(normalized);
+  if (columnOnly?.[1]) {
+    return {
+      startColumn: columnToNumber(columnOnly[1]),
+      endColumn: columnToNumber(columnOnly[2] ?? columnOnly[1]),
+      startRow: 1,
+      endRow: defaultEndRow
+    };
+  }
+  return undefined;
+}
+
+function aggregateProfileForRequest(
+  input: AgentRunInput,
+  profile: ReturnType<typeof profileValues>,
+  column?: ColumnMetadata
+): Record<string, unknown> | undefined {
+  if (!isAggregateValueRequest(input.request)) {
+    return undefined;
+  }
+  const values = profileValuesForAggregation(profile, column);
+  if (values.length === 0) {
+    return undefined;
+  }
+  const counts = new Map<string, { value: unknown; count: number }>();
+  for (const value of values) {
+    const key = String(value);
+    const current = counts.get(key);
+    counts.set(key, { value, count: (current?.count ?? 0) + 1 });
+  }
+  const valueCounts = [...counts.values()]
+    .sort((left, right) => right.count - left.count || String(left.value).localeCompare(String(right.value)));
+  return stripUndefinedRecord({
+    kind: "range_value_counts",
+    source: "live_read",
+    column: column ? { name: column.name, letter: column.letter, index: column.index } : undefined,
+    uniqueCount: counts.size,
+    valueCount: values.length,
+    valueCounts
+  });
+}
+
+function isAggregateValueRequest(request: string): boolean {
+  return /\b(unique|distinct|dedupe|deduplicate|count|counts?|how many|frequency|frequencies|group by)\b/i.test(request);
+}
+
+function profileValuesForAggregation(profile: ReturnType<typeof profileValues>, column?: ColumnMetadata): unknown[] {
+  const rows = Array.isArray(profile.rows)
+    ? profile.rows as unknown[][]
+    : Array.isArray(profile.sparseRows)
+      ? (profile.sparseRows as Array<{ cells?: Array<{ value?: unknown }> }>).flatMap((row) => row.cells?.map((cell) => cell.value) ?? [])
+      : [];
+  const values = rows.flat().filter((value) => value !== null && value !== undefined && value !== "");
+  if (column && values.length > 0 && normalizeHeaderName(String(values[0])) === normalizeHeaderName(column.name)) {
+    return values.slice(1);
+  }
+  return values;
+}
+
 function connectionReadinessSummary(connectionState: string): string {
   if (connectionState === "stale") {
     return "Open Workbook has a stale Excel add-in session, so agents cannot reach the active workbook.";
@@ -5647,8 +5871,8 @@ function answerNeedsResultResource(answer: unknown): boolean {
   const text = JSON.stringify(answer);
   const typed = answer as Record<string, unknown>;
   return text.length > 2_000
-    || ["headers", "values", "formulas", "text", "numberFormat", "sample", "sparseRows", "rows"].some((key) => typed[key] !== undefined)
-    || Object.values(typed).some((value) => value && typeof value === "object" && ["headers", "values", "sample", "sparseRows", "rows"].some((key) => (value as Record<string, unknown>)[key] !== undefined));
+    || ["headers", "values", "formulas", "text", "numberFormat", "sample", "sparseRows", "rows", "valueCounts"].some((key) => typed[key] !== undefined)
+    || Object.values(typed).some((value) => value && typeof value === "object" && ["headers", "values", "sample", "sparseRows", "rows", "valueCounts"].some((key) => (value as Record<string, unknown>)[key] !== undefined));
 }
 
 function compactAnswerForResponseMode(answer: unknown, responseMode: AgentResponseMode, resultUri?: string, fullResultUri?: string): unknown {
@@ -5668,6 +5892,9 @@ function compactAnswerForResponseMode(answer: unknown, responseMode: AgentRespon
   }
   if (kind === "range_profile") {
     return compactRangeProfileAnswer(typed, resultUri, fullResultUri);
+  }
+  if (kind === "range_value_counts") {
+    return compactRangeValueCountsAnswer(typed, resultUri, fullResultUri);
   }
   if (kind === "table_compact_read") {
     return compactTableReadAnswer(typed, responseMode, resultUri, fullResultUri);
@@ -5718,6 +5945,19 @@ function compactRangeProfileAnswer(answer: Record<string, unknown>, resultUri?: 
     range: answer.range,
     shape: answer.shape,
     metrics: compactProfileMetrics(answer.metrics),
+    resultUri,
+    fullResultUri
+  });
+}
+
+function compactRangeValueCountsAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    source: answer.source,
+    column: answer.column,
+    uniqueCount: answer.uniqueCount,
+    valueCount: answer.valueCount,
+    topValues: Array.isArray(answer.valueCounts) ? answer.valueCounts.slice(0, 10) : undefined,
     resultUri,
     fullResultUri
   });
