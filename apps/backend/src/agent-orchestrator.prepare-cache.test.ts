@@ -83,6 +83,25 @@ describe("AgentOrchestrator Prepare Cache", () => {
       expect((answered.answer as any).sheetCount).toBe(sheets.length);
     });
 
+  it("answers copied workbook context handles without rebuilding workbook metadata", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const prepared = await agent.run({ request: "Prepare workbook", mode: "prepare" });
+      const callsAfterPrepare = { ...runtime.runtimeMethodCalls };
+      const handled = await agent.run({
+        request: `continue using excel://agent/contexts/${prepared.workbookContextId}`,
+        mode: "answer"
+      });
+
+      expect(handled.status).toBe("SUCCESS");
+      expect(handled.workbookContextId).toBe(prepared.workbookContextId);
+      expect((handled.answer as any).ok).toBe(true);
+      expect((handled.answer as any).workbook.sheetCount).toBe(sheets.length);
+      expect(runtime.runtimeMethodCalls["workbook.get_workbook_map"]).toBe(callsAfterPrepare["workbook.get_workbook_map"]);
+      expect(runtime.readBatchCount).toBe(0);
+    });
+
   it("prepares workbook discovery metadata through internal workbook, sheet, table, name, and region capabilities", async () => {
       const runtime = new FakeAgentRuntime();
       runtime.collaborationStatus = {
@@ -124,6 +143,41 @@ describe("AgentOrchestrator Prepare Cache", () => {
       expect(runtime.readBatchCount).toBe(0);
     });
 
+  it("returns a semantic workbook index from cached metadata without reading cell values", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Create workbook index",
+        mode: "answer",
+        detailLevel: "semantic_index",
+        budget: { maxExamples: 20 }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("semantic_workbook_index");
+      expect((result.answer as any).entries.map((entry: any) => entry.role)).toContain("transaction_sheet");
+      expect(result.candidates?.some((candidate) => candidate.semanticRole === "data_table")).toBe(true);
+      expect(result.resourceLinks.map((link) => link.uri)).toContain(`excel://agent/contexts/${result.workbookContextId}/semantic-index`);
+      expect(result.telemetry.workflowRoute).toBe("semantic_index.find");
+      expect(result.telemetry.metadataPolicy).toBe("sampled_allowed");
+      expect(result.telemetry.readPolicy).toBe("metadata_only");
+      expect(result.telemetry.fullReadUsed).toBe(false);
+      expect(runtime.readBatchCount).toBe(0);
+    });
+
+  it("exposes semantic index through the workbook context resource", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const prepared = await agent.run({ request: "Prepare workbook", mode: "prepare" });
+      const resource = agent.getSemanticIndexResource(String(prepared.workbookContextId)) as any;
+
+      expect(resource.ok).toBe(true);
+      expect(resource.semanticIndex.kind).toBe("semantic_workbook_index");
+      expect(resource.semanticIndex.entries.some((entry: any) => entry.role === "data_table")).toBe(true);
+    });
+
   it("answers vague workbook file reviews from complete structure metadata without sheet sampling", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -132,7 +186,11 @@ describe("AgentOrchestrator Prepare Cache", () => {
   
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).kind).toBe("workbook_overview");
+      expect((result.answer as any).semanticIndex.kind).toBe("semantic_workbook_index");
       expect((result.answer as any).sheets.map((sheet: any) => sheet.name)).toEqual(sheets.map((sheet) => sheet.name));
+      expect(result.telemetry.workflowRoute).toBe("workbook.summary");
+      expect(result.telemetry.metadataPolicy).toBe("structure_only");
+      expect(result.telemetry.readPolicy).toBe("metadata_only");
       expect(result.telemetry.internalReadCount).toBe(0);
       expect(runtime.readBatchCount).toBe(0);
     });
@@ -162,6 +220,7 @@ describe("AgentOrchestrator Prepare Cache", () => {
       expect(result.candidates?.map((candidate) => candidate.id)).toContain("name:RevenueTotal");
       expect(result.candidates?.find((candidate) => candidate.id === "name:InputRegion")?.range).toBe("B1:B3");
       expect(result.candidates?.find((candidate) => candidate.id === "name:RevenueTotal")?.sheetName).toBe("Report");
+      expect(result.candidates?.some((candidate) => candidate.semanticRole === "named_region")).toBe(true);
       expect(result.telemetry.internalReadCount).toBe(0);
       expect(runtime.readBatchCount).toBe(sheets.length);
     });

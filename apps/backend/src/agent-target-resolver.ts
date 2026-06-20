@@ -1,6 +1,7 @@
-import type { AgentCandidate, AgentRunInput, AgentRunOutput } from "@components-kit/open-workbook-protocol";
+import type { AgentCandidate, AgentRunInput, AgentRunOutput, AgentSemanticRole } from "@components-kit/open-workbook-protocol";
 import { numberToColumnName as numberToColumn } from "@components-kit/open-workbook-excel-core";
 import { normalizeHeaderName, type WorkbookMetadata } from "./workbook-metadata-cache.js";
+import { semanticIndexEntries } from "./semantic-workbook-index.js";
 
 const FILLER_TERMS = new Set([
   "a",
@@ -53,6 +54,8 @@ interface CandidateSource {
   sheetName?: string | undefined;
   tableName?: string | undefined;
   range?: string | undefined;
+  semanticRole?: AgentSemanticRole | undefined;
+  aliases?: string[] | undefined;
   searchValues: string[];
   baseScore?: number | undefined;
 }
@@ -81,13 +84,48 @@ export type AgentTargetResolution = {
 export function findAgentCandidates(metadata: WorkbookMetadata, input: AgentRunInput): AgentCandidate[] {
   const query = queryText(input);
   const targetHints = targetHintTexts(input);
-  return candidateSources(metadata)
+  const scored = candidateSources(metadata)
     .map((source) => toCandidate(source, scoreSource(query, targetHints, source)))
     .filter((candidate) => candidate.confidence > 0)
     .sort((left, right) => right.confidence - left.confidence || rankKind(left.kind) - rankKind(right.kind));
+  const seen = new Set<string>();
+  return scored.filter((candidate) => {
+    if (seen.has(candidate.id)) {
+      return false;
+    }
+    seen.add(candidate.id);
+    return true;
+  });
 }
 
 export function resolveAgentReadTarget(metadata: WorkbookMetadata, input: AgentRunInput): AgentTargetResolution {
+  if (input.target?.sheetName && input.target.range) {
+    const exact = metadata.sheets.find((sheet) => normalizeNatural(sheet.name) === normalizeNatural(input.target!.sheetName!));
+    if (exact) {
+      return {
+        ok: true,
+        candidate: toCandidate({
+          kind: "sheet",
+          id: exact.id,
+          label: exact.name,
+          sheetName: exact.name,
+          range: input.target.range,
+          searchValues: [exact.name]
+        }, 1),
+        sheetName: exact.name,
+        range: input.target.range
+      };
+    }
+    const canonical = bestExplicitSheetCandidate(metadata, input.target.sheetName);
+    if (canonical?.sheetName) {
+      return {
+        ok: true,
+        candidate: { ...canonical, range: input.target.range },
+        sheetName: canonical.sheetName,
+        range: input.target.range
+      };
+    }
+  }
   return resolveAgentTarget(metadata, input, {
     requireRange: true,
     ambiguousSummary: "Multiple workbook targets match the request. Choose one candidate before OpenWorkbook reads data.",
@@ -400,13 +438,28 @@ function exactSourceResolution(
 }
 
 function candidateSources(metadata: WorkbookMetadata): CandidateSource[] {
-  return [
+  return dedupeSources([
+    ...semanticIndexEntries(metadata)
+      .filter((entry) => entry.sourceKind !== "selection")
+      .map((entry) => ({
+        kind: entry.sourceKind as AgentCandidate["kind"],
+        id: entry.id,
+        label: entry.label,
+        sheetName: entry.sheetName,
+        tableName: entry.tableName,
+        range: entry.range,
+        semanticRole: entry.role,
+        aliases: entry.aliases,
+        searchValues: [entry.label, entry.role.replace(/_/g, " "), ...entry.aliases, ...entry.evidence],
+        baseScore: semanticRoleBaseScore(entry.role)
+      })),
     ...metadata.sheets.map((sheet) => ({
       kind: "sheet" as const,
       id: sheet.id,
       label: sheet.name,
       sheetName: sheet.name,
       range: sheet.usedRange,
+      semanticRole: semanticRoleForSheetKind(sheet.kind),
       searchValues: [sheet.name, sheet.kind, ...sheet.headers.flatMap((header) => header.columns.map((column) => column.name))]
     })),
     ...metadata.tables.map((table) => ({
@@ -447,7 +500,7 @@ function candidateSources(metadata: WorkbookMetadata): CandidateSource[] {
       sheetName: name.sheetName,
       range: name.range,
       searchValues: [name.name, splitIdentifierWords(name.name), name.sheetName ?? "", name.range],
-      baseScore: 0.04
+      baseScore: 0.2
     })),
     ...metadata.sections.map((section) => ({
       kind: "region" as const,
@@ -481,7 +534,18 @@ function candidateSources(metadata: WorkbookMetadata): CandidateSource[] {
       searchValues: [region.sheetName, "formula", "calculation"],
       baseScore: 0.01
     }))
-  ];
+  ]);
+}
+
+function dedupeSources(sources: CandidateSource[]): CandidateSource[] {
+  const seen = new Set<string>();
+  return sources.filter((source) => {
+    if (seen.has(source.id)) {
+      return false;
+    }
+    seen.add(source.id);
+    return true;
+  });
 }
 
 function resolveMentionedNamedRegion(
@@ -573,6 +637,8 @@ function toCandidate(source: CandidateSource, confidence: number | CandidateScor
     ...(source.sheetName !== undefined ? { sheetName: source.sheetName } : {}),
     ...(source.tableName !== undefined ? { tableName: source.tableName } : {}),
     ...(source.range !== undefined ? { range: source.range } : {}),
+    ...(source.semanticRole !== undefined ? { semanticRole: source.semanticRole } : {}),
+    ...(source.aliases !== undefined && source.aliases.length > 0 ? { aliases: source.aliases.slice(0, 8) } : {}),
     reason: candidateReason(source, boundedConfidence, score.matchedTargetHint),
     nextRequestHint: candidateNextRequestHint(source)
   };
@@ -582,7 +648,8 @@ function candidateReason(source: CandidateSource, confidence: number, matchedTar
   const location = source.sheetName ? ` on sheet "${source.sheetName}"` : "";
   const scope = source.range ? ` at ${source.range}` : "";
   const hint = matchedTargetHint ? " using a caller target hint" : "";
-  return `${source.kind} match "${source.label}"${location}${scope}${hint} scored ${confidence}.`;
+  const role = source.semanticRole ? ` (${source.semanticRole})` : "";
+  return `${source.kind} match "${source.label}"${role}${location}${scope}${hint} scored ${confidence}.`;
 }
 
 function candidateNextRequestHint(source: CandidateSource): string {
@@ -627,6 +694,36 @@ function scoreTextAgainstSource(query: string, source: CandidateSource): number 
     }
   }
   return Math.min(1, score + (source.baseScore ?? 0));
+}
+
+function semanticRoleBaseScore(role: AgentSemanticRole): number {
+  switch (role) {
+    case "data_table":
+      return 0.09;
+    case "transaction_sheet":
+    case "summary_sheet":
+    case "template_sheet":
+      return 0.08;
+    case "form_region":
+    case "named_region":
+      return role === "named_region" ? 0.2 : 0.07;
+    case "formula_region":
+    case "style_reference":
+      return 0.05;
+    case "lookup_sheet":
+    case "selection":
+      return 0.04;
+    default:
+      return 0.02;
+  }
+}
+
+function semanticRoleForSheetKind(kind: WorkbookMetadata["sheets"][number]["kind"]): AgentSemanticRole | undefined {
+  if (kind === "transaction") return "transaction_sheet";
+  if (kind === "summary" || kind === "dashboard") return "summary_sheet";
+  if (kind === "template") return "template_sheet";
+  if (kind === "lookup") return "lookup_sheet";
+  return undefined;
 }
 
 function parseSheetRangeReference(request: string): { sheetName: string; range: string } | undefined {

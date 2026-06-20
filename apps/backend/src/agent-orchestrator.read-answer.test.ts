@@ -97,6 +97,76 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(runtime.readBatchCount).toBe(0);
     });
 
+  it("downgrades vague full table detail requests to sheet summaries", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Look into Data sheet, how is it?",
+        mode: "answer",
+        detailLevel: "full_table",
+        target: { sheetName: "Data" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("sheet_summary");
+      expect(result.warnings.join(" ")).toContain("full_table");
+      expect(result.telemetry.fullReadCellCount).toBe(0);
+      expect(runtime.readBatchCount).toBe(0);
+    });
+
+  it("keeps explicit target range reads exact", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Read exact values from A2:B2",
+        mode: "answer",
+        target: { sheetName: "Data", range: "A2:B2" },
+        responseMode: "verbose"
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "A2:B2" });
+      expect((result.answer as any).shape).toEqual({ rows: 1, columns: 2 });
+    });
+
+  it("diagnoses date-like text formatting issues on the exact range", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Diagnose formatting error in A2:B2",
+        mode: "answer",
+        intent: { action: "format_diagnostics" },
+        target: { sheetName: "Data", range: "A2:B2" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("format_diagnostics");
+      expect((result.answer as any).range).toBe("A2:B2");
+      expect((result.answer as any).issues.map((issue: any) => issue.code)).toContain("DATE_TEXT_TWO_DIGIT_YEAR");
+      expect(result.telemetry.fullReadUsed).toBe(true);
+    });
+
+  it("returns current style summaries without falling back to value profiles", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "What is the current styling of A1:D1?",
+        mode: "answer",
+        intent: { action: "read_style_summary" },
+        target: { sheetName: "Data", range: "A1:D1" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("style_summary");
+      expect((result.answer as any).fills).toEqual({ hash: "fills" });
+      expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "A1:D1" });
+      expect(runtime.runtimeMethodCalls["style.get_fingerprint"]).toBe(1);
+    });
+
   it("uses compact table reads for table-target value answers", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -135,6 +205,24 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       const summary = agent.getResultResource(resultId, { view: "summary" }) as any;
       expect(summary.answer.values).toBeUndefined();
       expect(summary.answer.resultUri).toBe((result.answer as any).resultUri);
+      const callsAfterRead = runtime.runtimeMethodCalls["table.read"];
+      const continued = await agent.run({
+        request: "Continue using the stored result",
+        mode: "answer",
+        continuation: result.continuation
+      });
+      expect(continued.status).toBe("SUCCESS");
+      expect((continued.answer as any).kind).toBe("agent_result_resource");
+      expect((continued.answer as any).view).toBe("summary");
+      expect((continued.answer as any).result.answer.values).toBeUndefined();
+      expect(runtime.runtimeMethodCalls["table.read"]).toBe(callsAfterRead);
+      const pastedFull = await agent.run({
+        request: `Show full details from ${(result.answer as any).fullResultUri}`,
+        mode: "answer"
+      });
+      expect((pastedFull.answer as any).view).toBe("full");
+      expect((pastedFull.answer as any).result.answer.values).toEqual([[123, "Open"], [456, "Closed"]]);
+      expect(runtime.runtimeMethodCalls["table.read"]).toBe(callsAfterRead);
       expect(result.telemetry.internalReadCount).toBe(1);
       expect(runtime.runtimeMethodCalls["table.read"]).toBe(1);
       expect(runtime.readBatchCount).toBe(0);

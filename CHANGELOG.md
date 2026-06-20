@@ -6,6 +6,21 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+## [0.1.18] - 2026-06-20
+
+### Added
+
+- Added a semantic workbook index and deterministic intent routing so agents can find workbook, sheet, table, region, formula, and template targets from cached metadata before reading cells.
+- Added first-class resource-handle reuse for workbook contexts, semantic indexes, operation status, stored agent results, and compact result aliases.
+- Added mutation invalidation evidence with `invalidatedContextIds` and `invalidatedResourceUris` so agents do not reuse stale workbook context or result handles after edits.
+- Added targeted handle, resource, and invalidation tests covering continuation reuse, copied resource URIs, result summary/full views, and apply-time cache invalidation.
+
+### Changed
+
+- Improved style and format orchestration with style summaries, format diagnostics, precise style-dimension clearing, and grouped style operations that avoid repeated tool calls.
+- Updated Open Workbook Skills guidance, packaged CLI instructions, and docs to prefer handle-first follow-ups and fetch full result resources only for explicit audit, raw-value, or all-row requests.
+- Aligned the MCP resource catalog, resource registration, and documentation for semantic-index, agent-result, and compact compatibility resources.
+
 ## [0.1.17] - 2026-06-19
 
 ### Added

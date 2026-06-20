@@ -1304,6 +1304,18 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
             counters.cellsWritten += payload.compiled.estimatedCellsTouched;
             break;
           }
+          case "range.clear_style_dimensions": {
+            clearRangeStyleDimensions(getRange(context, operation.target), operation.target, operation.dimensions);
+            counters.cellsWritten += payload.compiled.estimatedCellsTouched;
+            break;
+          }
+          case "range.clear_style_dimensions_many": {
+            for (const entry of operation.entries) {
+              clearRangeStyleDimensions(getRange(context, entry.target), entry.target, entry.dimensions);
+            }
+            counters.cellsWritten += payload.compiled.estimatedCellsTouched;
+            break;
+          }
           case "range.write_hyperlinks":
           case "range.write_comments": {
             warnings.push({
@@ -2896,6 +2908,124 @@ function applyRangeStyle(range: Excel.Range, style: NonNullable<RangeSnapshot["s
   if (style.columnWidth !== undefined) {
     range.format.columnWidth = style.columnWidth;
   }
+  if (style.borders !== undefined) {
+    applyRangeBorders(range, style.borders);
+  }
+}
+
+function clearRangeStyleDimensions(range: Excel.Range, target: A1Range, dimensions: string[]): void {
+  const dimensionSet = new Set(dimensions);
+  if (dimensionSet.has("borders")) {
+    applyRangeBorders(range, { style: "none" });
+  }
+  if (dimensionSet.has("fills")) {
+    range.format.fill.clear();
+  }
+  if (dimensionSet.has("fonts")) {
+    range.format.font.name = "Calibri";
+    range.format.font.size = 11;
+    range.format.font.color = "#000000";
+    range.format.font.bold = false;
+    range.format.font.italic = false;
+    range.format.font.underline = Excel.RangeUnderlineStyle.none;
+  }
+  if (dimensionSet.has("alignment")) {
+    range.format.horizontalAlignment = Excel.HorizontalAlignment.general;
+    range.format.verticalAlignment = Excel.VerticalAlignment.bottom;
+  }
+  if (dimensionSet.has("numberFormats")) {
+    const parsed = parseA1Address(stripSheetName(target.address));
+    range.numberFormat = matrixOf(parsed.endRow - parsed.startRow + 1, parsed.endColumn - parsed.startColumn + 1, "General");
+  }
+  if (dimensionSet.has("rowHeights")) {
+    range.format.autofitRows();
+  }
+  if (dimensionSet.has("columnWidths")) {
+    range.format.autofitColumns();
+  }
+}
+
+function applyRangeBorders(range: Excel.Range, borders: NonNullable<NonNullable<RangeSnapshot["style"]>["borders"]>): void {
+  const edgeNames = ["edgeTop", "edgeBottom", "edgeLeft", "edgeRight", "insideHorizontal", "insideVertical"] as const;
+  const maybeUniform = isBorderStyleEntry(borders) ? borders : undefined;
+  for (const edgeName of edgeNames) {
+    const edgeStyle = maybeUniform ?? (borders as Partial<Record<typeof edgeNames[number], unknown>>)[edgeName];
+    if (isBorderStyleEntry(edgeStyle)) {
+      const border = range.format.borders.getItem(toOfficeBorderIndex(edgeName));
+      if (edgeStyle.style !== undefined) {
+        border.style = toBorderLineStyle(edgeStyle.style);
+      }
+      if (edgeStyle.weight !== undefined && edgeStyle.style !== "none") {
+        border.weight = toBorderWeight(edgeStyle.weight);
+      }
+      if (edgeStyle.color !== undefined && edgeStyle.style !== "none") {
+        border.color = edgeStyle.color;
+      }
+    }
+  }
+}
+
+function toOfficeBorderIndex(edgeName: "edgeTop" | "edgeBottom" | "edgeLeft" | "edgeRight" | "insideHorizontal" | "insideVertical"): "EdgeTop" | "EdgeBottom" | "EdgeLeft" | "EdgeRight" | "InsideHorizontal" | "InsideVertical" {
+  switch (edgeName) {
+    case "edgeTop":
+      return "EdgeTop";
+    case "edgeBottom":
+      return "EdgeBottom";
+    case "edgeLeft":
+      return "EdgeLeft";
+    case "edgeRight":
+      return "EdgeRight";
+    case "insideHorizontal":
+      return "InsideHorizontal";
+    case "insideVertical":
+      return "InsideVertical";
+  }
+}
+
+function isBorderStyleEntry(value: unknown): value is { style?: string; weight?: string; color?: string } {
+  return typeof value === "object"
+    && value !== null
+    && ("style" in value || "weight" in value || "color" in value);
+}
+
+function toBorderLineStyle(style: string): Excel.BorderLineStyle {
+  switch (style) {
+    case "none":
+      return Excel.BorderLineStyle.none;
+    case "dash":
+      return Excel.BorderLineStyle.dash;
+    case "dashDot":
+      return Excel.BorderLineStyle.dashDot;
+    case "dashDotDot":
+      return Excel.BorderLineStyle.dashDotDot;
+    case "dot":
+      return Excel.BorderLineStyle.dot;
+    case "double":
+      return Excel.BorderLineStyle.double;
+    case "slantDashDot":
+      return Excel.BorderLineStyle.slantDashDot;
+    case "continuous":
+    default:
+      return Excel.BorderLineStyle.continuous;
+  }
+}
+
+function toBorderWeight(weight: string): Excel.BorderWeight {
+  switch (weight) {
+    case "hairline":
+      return Excel.BorderWeight.hairline;
+    case "medium":
+      return Excel.BorderWeight.medium;
+    case "thick":
+      return Excel.BorderWeight.thick;
+    case "thin":
+    default:
+      return Excel.BorderWeight.thin;
+  }
+}
+
+function matrixOf<T>(rows: number, columns: number, value: T): T[][] {
+  return Array.from({ length: rows }, () => Array.from({ length: columns }, () => value));
 }
 
 function normalizeFormulaMatrix(matrix: unknown[][]): Array<Array<string | null>> {

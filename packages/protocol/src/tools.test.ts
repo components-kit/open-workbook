@@ -123,6 +123,8 @@ describe("public tool and internal capability catalogs", () => {
   it("tracks resources and prompts as catalog entries", () => {
     expect(ResourceCatalog.some((resource) => resource.uriTemplate === "excel://runtime/status")).toBe(true);
     expect(ResourceCatalog.some((resource) => resource.uriTemplate === "excel://compact/{resource_id}")).toBe(true);
+    expect(ResourceCatalog.some((resource) => resource.uriTemplate === "excel://agent/contexts/{workbook_context_id}/semantic-index")).toBe(true);
+    expect(ResourceCatalog.some((resource) => resource.uriTemplate === "excel://agent/results/{result_id}")).toBe(true);
     expect(ResourceCatalog.every((resource) => resource.status === "stable")).toBe(true);
     expect(PromptCatalog.some((prompt) => prompt.name === "excel.prompts.create_next_month_sheet" && prompt.status === "stable")).toBe(true);
     expect(PromptCatalog.some((prompt) => prompt.name === "excel.prompts.field_value_image_to_styled_table" && prompt.status === "stable")).toBe(true);

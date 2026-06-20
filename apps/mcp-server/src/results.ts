@@ -56,6 +56,12 @@ function compactAgentResultText(value: AgentRunOutput): string {
   if (value.resourceLinks.length > 0) {
     lines.push(`resources: ${value.resourceLinks.map((resource) => resource.uri).join(", ")}`);
   }
+  if (value.invalidatedContextIds?.length) {
+    lines.push(`invalidatedContextIds: ${value.invalidatedContextIds.join(", ")}`);
+  }
+  if (value.invalidatedResourceUris?.length) {
+    lines.push(`invalidatedResourceUris: ${value.invalidatedResourceUris.join(", ")}`);
+  }
   if (value.warnings.length > 0) {
     lines.push(`warnings: ${value.warnings.slice(0, 3).join(" | ")}`);
   }

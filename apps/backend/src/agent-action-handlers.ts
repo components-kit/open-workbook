@@ -42,6 +42,7 @@ export type AgentActionHandlerId =
   | "first_open_reviewed"
   | "write_formulas"
   | "write_number_formats"
+  | "clear_style_dimensions"
   | "copy_style_from_template"
   | "repair_style_consistency"
   | "repair_style_from_template"
@@ -550,6 +551,14 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     matches: (_input, request) => /\b(number\s+format|number\s+formats|currency|percent|percentage|decimal|date format)\b/.test(request)
   },
   {
+    id: "clear_style_dimensions",
+    capabilityName: "excel.range.clear_style_dimensions",
+    intentAction: "clear_style_dimensions",
+    requiresResolvedTarget: true,
+    riskKind: "safe_format",
+    matches: (_input, request) => /\b(clear|remove|delete|wipe)\b/.test(request) && /\b(borders?|fills?|fonts?|alignment|number\s*formats?|row heights?|column widths?)\b/.test(request) && !/\b(all formats?|all formatting|everything)\b/.test(request)
+  },
+  {
     id: "apply_table_view",
     capabilityName: "excel.table.apply_view",
     intentAction: "apply_table_view",
@@ -571,7 +580,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "append_table_rows",
     requiresResolvedTarget: true,
     riskKind: "broad_range_write",
-    matches: (_input, request) => /\b(append|add|insert)\b/.test(request) && /\b(rows?|records?|table)\b/.test(request)
+    matches: (_input, request) => /\b(append|add|insert)\b/.test(request) && /\b(rows?|records?|table)\b/.test(request) && !/\bborders?\b/.test(request)
   },
   {
     id: "update_table_rows",
@@ -859,7 +868,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "format_range",
     requiresResolvedTarget: true,
     riskKind: "safe_format",
-    matches: (_input, request) => /\b(style|format|formatting|header\s+row)\b/.test(request)
+    matches: (_input, request) => /\b(style|format|formatting|header\s+row|borders?)\b/.test(request)
   }
 ];
 

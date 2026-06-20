@@ -1436,12 +1436,20 @@ export class RuntimeService {
     return this.agent.getContextResource(workbookContextId);
   }
 
+  getAgentSemanticIndexResource(workbookContextId: string) {
+    return this.agent.getSemanticIndexResource(workbookContextId);
+  }
+
   getAgentOperationResource(operationId: string) {
     return this.agent.getOperationResource(operationId);
   }
 
   getAgentResultResource(resultId: string, options?: { view?: "summary" | "full"; maxBytes?: number }) {
     return this.agent.getResultResource(resultId, options);
+  }
+
+  getCompactResource(resourceId: string, options?: { view?: "summary" | "full"; maxBytes?: number }) {
+    return this.agent.getCompactResource(resourceId, options);
   }
 
   async getStatusWithFileBridgeProbe() {
@@ -7631,6 +7639,7 @@ function scopesFromOperation(workbookId: WorkbookId, operation: ExcelOperation):
     case "range.write_values":
     case "range.write_number_formats":
     case "range.write_styles":
+    case "range.clear_style_dimensions":
     case "range.write_hyperlinks":
     case "range.write_comments":
     case "range.clear":
@@ -7653,6 +7662,8 @@ function scopesFromOperation(workbookId: WorkbookId, operation: ExcelOperation):
     case "range.write_number_formats_many":
       return operation.entries.map((entry) => rangeScope(entry.target));
     case "range.write_styles_many":
+      return operation.entries.map((entry) => rangeScope(entry.target));
+    case "range.clear_style_dimensions_many":
       return operation.entries.map((entry) => rangeScope(entry.target));
     case "range.clear_many":
       return operation.entries.map((entry) => rangeScope(entry.target));

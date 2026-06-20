@@ -275,7 +275,9 @@ export class FakeAgentRuntime {
           snapshot: {
             values: valuesFor(sheetName, address),
             formulas: formulasFor(sheetName, address),
-            text: valuesFor(sheetName, address).map((row) => row.map((value) => value === null || value === undefined ? "" : String(value)))
+            text: valuesFor(sheetName, address).map((row) => row.map((value) => value === null || value === undefined ? "" : String(value))),
+            numberFormat: numberFormatsFor(sheetName, address),
+            style: { fillColor: "#FFFFFF", fontName: "Calibri", fontSize: 11 }
           }
         };
       });
@@ -1156,6 +1158,7 @@ function valuesFor(sheetName: string, address: string) {
       ];
     }
     if (address === "B2") return [["A-100"]];
+    if (address === "A2:B2") return [["20/6/26", "20/6/26"]];
     if (address === "B3") return [[""]];
     if (address === "C2") return [[100]];
     if (address === "C1:C4") return [["Amount"], [100], [200], [300]];
@@ -1267,6 +1270,14 @@ function padToSummary(left: unknown[], summary: unknown[]) {
 function formulasFor(sheetName: string, address: string) {
   const values = valuesFor(sheetName, address);
   return values.map((row) => row.map((value) => typeof value === "string" && value.startsWith("=") ? value : null));
+}
+
+function numberFormatsFor(sheetName: string, address: string) {
+  const values = valuesFor(sheetName, address);
+  if (sheetName === "Data" && address === "A2:B2") {
+    return [["@", "@"]];
+  }
+  return values.map((row) => row.map(() => "General"));
 }
 
 function validationReport(scope: string, request: any) {

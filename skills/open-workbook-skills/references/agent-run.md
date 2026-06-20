@@ -6,7 +6,7 @@
 
 - `status`: connection readiness, active workbook availability, file bridge status, and compact collaboration state.
 - `prepare`: workbook identity plus lightweight structure metadata for follow-up calls.
-- `find`: target discovery across sheets, tables, headers, named items, regions, summary blocks, formulas, and workbook labels.
+- `find`: target discovery across sheets, tables, headers, named items, regions, summary blocks, formulas, semantic roles, and workbook labels.
 - `answer`: live reads, schema questions, deterministic summaries, comparisons, metadata inspection, and validation-style facts that do not mutate.
 - `preview_update`: target resolution, permission checks, lock checks, safety capture, and preview for writes or workbook actions.
 - `apply_update`: apply a previously previewed operation with its exact `operationId` and `confirmationToken`.
@@ -26,6 +26,8 @@ Use structured fields when the task is clear:
 - `workbookContextId`: reuse the value from `prepare`, `find`, or a prior result when returned.
 
 Structured intent is a hint, not a bypass. The backend still resolves ambiguity, checks permissions, blocks unsafe edits, records snapshots/backups, runs Office.js, validates, and returns rollback metadata.
+
+Use `detailLevel: "semantic_index"` when you need a compact role-aware workbook map before choosing a sheet, table, template, form region, formula region, or style target. Use `workbook_summary` and `sheet_summary` for overview questions. Do not request table samples or full tables for broad context questions.
 
 ## Multilingual Requests
 
@@ -49,7 +51,7 @@ Small explicit value edits may use `auto` when the backend can prove the target 
 
 ## Result Handling
 
-Treat `resourceLinks`, `proof`, `compactProof`, `invalidatedContextIds`, `nextAction`, warnings, telemetry, backup IDs, transaction IDs, and rollback options as the evidence contract.
+Treat `resourceLinks`, `proof`, `compactProof`, `continuation`, `invalidatedContextIds`, `invalidatedResourceUris`, `nextAction`, warnings, telemetry, backup IDs, transaction IDs, and rollback options as the evidence contract. Reuse `workbookContextId` or `continuation` on follow-up calls; fetch `resultUri` or `fullResultUri` only when the user explicitly asks for full details, all rows, raw values, or an audit.
 
 If `nextAction` is `answer_now`, answer from the returned proof. Fetch full detail only when the user asks for an audit or the proof says detail is required.
 

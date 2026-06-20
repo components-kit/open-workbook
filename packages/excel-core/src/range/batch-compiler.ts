@@ -89,6 +89,7 @@ function getOperationTargets(operation: ExcelOperation) {
     case "range.write_formulas":
     case "range.write_number_formats":
     case "range.write_styles":
+    case "range.clear_style_dimensions":
     case "range.write_hyperlinks":
     case "range.write_comments":
     case "range.clear":
@@ -107,6 +108,8 @@ function getOperationTargets(operation: ExcelOperation) {
     case "range.write_number_formats_many":
       return operation.entries.map((entry) => entry.target);
     case "range.write_styles_many":
+      return operation.entries.map((entry) => entry.target);
+    case "range.clear_style_dimensions_many":
       return operation.entries.map((entry) => entry.target);
     case "range.clear_many":
       return operation.entries.map((entry) => entry.target);

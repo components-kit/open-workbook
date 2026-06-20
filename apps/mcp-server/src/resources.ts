@@ -74,7 +74,16 @@ export function registerResources(mcp: McpServer, runtime: RuntimeFacade): void 
     return runtime.getPlanDiffResource(workbookId, planId);
   });
 
+  registerJsonTemplateResource(mcp, "compact resource", "excel://compact/{resource_id}", "Compatibility alias for stored compact agent resources.", async (uri, variables) => {
+    const view = uri.searchParams.get("view") === "full" ? "full" : "summary";
+    const maxBytesParam = uri.searchParams.get("maxBytes");
+    const maxBytes = maxBytesParam && /^\d+$/.test(maxBytesParam) ? Number(maxBytesParam) : view === "full" ? 24_000 : 8_000;
+    return runtime.getCompactResource(resourceVariable(variables, "resource_id"), { view, maxBytes });
+  });
+
   registerJsonTemplateResource(mcp, "agent workbook context", "excel://agent/contexts/{workbook_context_id}", "Cached workbook metadata used by the Open Workbook agent workflow.", async (_uri, variables) => runtime.getAgentContextResource(resourceVariable(variables, "workbook_context_id")));
+
+  registerJsonTemplateResource(mcp, "agent semantic workbook index", "excel://agent/contexts/{workbook_context_id}/semantic-index", "Role-aware workbook index used by the Open Workbook agent workflow.", async (_uri, variables) => runtime.getAgentSemanticIndexResource(resourceVariable(variables, "workbook_context_id")));
 
   registerJsonTemplateResource(mcp, "agent pending operation", "excel://agent/operations/{operation_id}", "Pending previewed workbook operation awaiting apply confirmation.", async (_uri, variables) => runtime.getAgentOperationResource(resourceVariable(variables, "operation_id")));
 

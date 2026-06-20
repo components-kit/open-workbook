@@ -174,6 +174,15 @@ export class WorkbookMetadataCache {
     }
   }
 
+  deleteByContextId(workbookContextId: string): boolean {
+    const key = this.keyByContextId.get(workbookContextId);
+    if (!key) {
+      return false;
+    }
+    this.delete(key);
+    return true;
+  }
+
   clearExpired(now = Date.now()): void {
     for (const [key, metadata] of this.byKey.entries()) {
       if (now > metadata.expiresAt) {

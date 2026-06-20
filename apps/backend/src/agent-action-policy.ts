@@ -26,6 +26,8 @@ export const AGENT_ACTION_REGISTRY: AgentActionDefinition[] = [
   { kind: "range.write_number_formats_many", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "range.write_styles", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "range.write_styles_many", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "range.clear_style_dimensions", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "range.clear_style_dimensions_many", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "range.clear", risk: "destructive", previewRequired: true, confirmationRequired: true },
   { kind: "range.clear_many", risk: "destructive", previewRequired: true, confirmationRequired: true },
   { kind: "range.clear_values", risk: "destructive", previewRequired: true, confirmationRequired: true },

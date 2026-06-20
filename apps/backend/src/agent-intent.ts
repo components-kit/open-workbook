@@ -63,6 +63,8 @@ export function modeForIntentAction(action: AgentIntentAction): AgentRunMode {
   if (action === "explain_formula") return "answer";
   if (action === "read_named_item") return "answer";
   if (action === "read_region") return "answer";
+  if (action === "read_style_summary") return "answer";
+  if (action === "format_diagnostics") return "answer";
   if (action === "read_style_fingerprint") return "answer";
   if (action === "compare_style_fingerprint") return "answer";
   if (isRangeReadIntentAction(action)) return "answer";

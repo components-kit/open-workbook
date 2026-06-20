@@ -22,6 +22,7 @@ import {
   type NameUpdateRequest,
   type OperationId,
   type RangeMetadataRequest,
+  type RangeSnapshot,
   type RangeSearchRequest,
   type RegionRegisterRequest,
   type RegionSelector,
@@ -71,6 +72,7 @@ import { classifyAgentActionRisk, type AgentOperationRisk } from "./agent-action
 import { routeAgentRequest, type IntentRoute } from "./agent-routing.js";
 import { isAgentIntentAction, normalizeAgentIntent, type AgentIntentAction, type NormalizedAgentIntent } from "./agent-intent.js";
 import { findAgentActionHandler, type AgentActionHandlerDefinition, type AgentActionHandlerId } from "./agent-action-handlers.js";
+import { buildSemanticWorkbookIndex } from "./semantic-workbook-index.js";
 
 const AGENT_RESULT_TTL_MS = 60 * 60 * 1000;
 const AGENT_LARGE_RANGE_CELL_LIMIT = 10_000;
@@ -137,6 +139,17 @@ class AgentResultStore {
     return result;
   }
 
+  invalidateByWorkbookContextId(workbookContextId: string): string[] {
+    const invalidated: string[] = [];
+    for (const [resultId, result] of this.results.entries()) {
+      if (result.workbookContextId === workbookContextId) {
+        invalidated.push(result.resourceUri, result.fullResourceUri, compactResultResource(resultId).uri);
+        this.results.delete(resultId);
+      }
+    }
+    return invalidated;
+  }
+
   private clearExpired(now = Date.now()): void {
     for (const [resultId, result] of this.results.entries()) {
       if (now > result.expiresAt) {
@@ -191,6 +204,7 @@ export class AgentOrchestrator {
       const metadataFreshnessReason = typeof outputMetrics?.metadataFreshnessReason === "string" ? outputMetrics.metadataFreshnessReason : runMetrics.metadataFreshnessReason;
       const metadataDetailLevel = outputMetrics?.metadataDetailLevel === "sampled" || outputMetrics?.metadataDetailLevel === "structure" ? outputMetrics.metadataDetailLevel : runMetrics.metadataDetailLevel;
       const targetFingerprintStatus = isTargetFingerprintStatus(outputMetrics?.targetFingerprintStatus) ? outputMetrics.targetFingerprintStatus : runMetrics.targetFingerprintStatus;
+      const safetyFingerprintOnly = typeof outputMetrics?.safetyFingerprintOnly === "boolean" ? outputMetrics.safetyFingerprintOnly : runMetrics.safetyFingerprintOnly;
       const preBudgetPayloadBytes = Buffer.byteLength(JSON.stringify(output));
       const budgeted = applyOutputBudget(output, input, this.results);
       const targetHintCount = runMetrics.intent.targetHints?.length ?? 0;
@@ -211,6 +225,8 @@ export class AgentOrchestrator {
           metadataCacheStatus: mode === "status" || mode === "apply_update" || mode === "rollback" ? "not_applicable" : cacheHit ? "hit" : "miss",
           internalReadCount: runMetrics.internalReadCount,
           fullReadCellCount: runMetrics.fullReadCellCount,
+          fullReadUsed: runMetrics.fullReadUsed === true,
+          ...(safetyFingerprintOnly !== undefined ? { safetyFingerprintOnly } : {}),
           candidateCount: budgeted.candidates?.length ?? 0,
           resourceLinkCount: budgeted.resourceLinks.length,
           estimatedTokensSaved: Math.max(0, Math.ceil((preBudgetPayloadBytes - payloadBytes) / 4)),
@@ -218,6 +234,14 @@ export class AgentOrchestrator {
           routeMatchedRule: runMetrics.route.matchedRule,
           routeConfidence: runMetrics.route.confidence,
           routeReasons: runMetrics.route.reasons,
+          workflowRoute: runMetrics.route.workflowRoute,
+          workflowConfidence: runMetrics.route.workflowConfidence,
+          workflowReasons: runMetrics.route.workflowReasons,
+          semanticIndexStatus: runMetrics.semanticEntryCount !== undefined ? "built" : "not_applicable",
+          ...(runMetrics.semanticEntryCount !== undefined ? { semanticEntryCount: runMetrics.semanticEntryCount } : {}),
+          semanticCandidateUsed: outputUsedSemanticCandidate(output),
+          metadataPolicy: runMetrics.route.metadataPolicy,
+          readPolicy: runMetrics.route.readPolicy,
           ...(operationRisk !== undefined ? { operationRisk } : {}),
           ...(actionHandlerId !== undefined ? { actionHandlerId } : {}),
           ...(autoApplyBlockedReason !== undefined ? { autoApplyBlockedReason } : {}),
@@ -287,9 +311,14 @@ export class AgentOrchestrator {
         return finish(await this.rollback(input));
       }
 
+      const handleOutput = this.resourceHandleOutput(input, mode);
+      if (handleOutput) {
+        return finish(handleOutput, true);
+      }
+
       const requestedOverviewIntent = workbookOverviewIntent(input);
       const effectiveMode = route.mode;
-      const includeSamples = shouldBuildSampledMetadata(input, effectiveMode, requestedOverviewIntent);
+      const includeSamples = shouldBuildSampledMetadata(input, effectiveMode, requestedOverviewIntent, route);
       internalCallCount += 1;
       const readiness = await this.runtime.getConnectionReadiness();
       if (!readiness.ok) {
@@ -312,6 +341,7 @@ export class AgentOrchestrator {
       });
       runMetrics.metadataFreshnessReason = freshnessReason;
       runMetrics.metadataDetailLevel = metadata.detailLevel;
+      runMetrics.semanticEntryCount = buildSemanticWorkbookIndex(metadata).entryCount;
       internalCallCount += cacheHit ? 1 : 4;
 
       const detailLevelOutput = (mode === "answer" || mode === "find" || mode === "prepare" || mode === "auto") ? detailLevelAnswerOutput(metadata, input, mode) : undefined;
@@ -465,6 +495,7 @@ export class AgentOrchestrator {
       ok: true,
       workbookContextId,
       workbook: metadata.workbook,
+      semanticIndex: buildSemanticWorkbookIndex(metadata, { maxEntries: 25 }),
       ...(metadata.selection ? { selection: metadata.selection } : {}),
       sheets: metadata.sheets.map((sheet) => ({
         name: sheet.name,
@@ -505,6 +536,18 @@ export class AgentOrchestrator {
     };
   }
 
+  getSemanticIndexResource(workbookContextId: string) {
+    const metadata = this.metadataCache.getByContextId(workbookContextId);
+    if (!metadata) {
+      return { ok: false, error: runtimeError("NOT_FOUND", "Workbook context metadata was not found or expired.", { retryable: true }) };
+    }
+    return {
+      ok: true,
+      workbookContextId,
+      semanticIndex: buildSemanticWorkbookIndex(metadata)
+    };
+  }
+
   getOperationResource(operationId: string) {
     const pending = this.operations.get(operationId);
     if (!pending) {
@@ -534,8 +577,88 @@ export class AgentOrchestrator {
     return { ok: true, ...result };
   }
 
+  getCompactResource(resourceId: string, options?: { view?: "summary" | "full"; maxBytes?: number }) {
+    return this.getResultResource(resourceId, options);
+  }
+
   invalidateWorkbook(workbookId: WorkbookId | string): void {
     this.metadataCache.deleteByWorkbookId(workbookId);
+  }
+
+  private invalidateWorkbookContext(workbookContextId: string): { invalidatedContextIds: string[]; invalidatedResourceUris: string[] } {
+    const invalidatedContextIds = this.metadataCache.deleteByContextId(workbookContextId) ? [workbookContextId] : [];
+    const invalidatedResourceUris = this.results.invalidateByWorkbookContextId(workbookContextId);
+    return { invalidatedContextIds, invalidatedResourceUris };
+  }
+
+  private resourceHandleOutput(input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> | undefined {
+    const handle = detectAgentResourceHandle(input);
+    if (!handle) {
+      return undefined;
+    }
+    if (handle.kind === "operation") {
+      return this.operationStatus({ ...input, operationId: handle.id });
+    }
+    if (handle.kind === "result" || handle.kind === "compact") {
+      const view = shouldReturnFullResource(input, handle.view) ? "full" : "summary";
+      const result = this.results.get(handle.id, { view, maxBytes: view === "full" ? 24_000 : 8_000 });
+      if (!result) {
+        return {
+          status: "NOT_FOUND",
+          mode: requestedMode,
+          summary: "Stored agent result was not found or expired.",
+          answer: { kind: "agent_result_not_found", resultId: handle.id, retryable: true },
+          proof: [],
+          resourceLinks: [],
+          nextAction: "retry_after_refresh",
+          warnings: ["Retry the original workbook request to create a fresh result handle."]
+        };
+      }
+      const resource = handle.kind === "compact" ? compactResultResource(handle.id) : resultResource(handle.id);
+      const workbookContextId = typeof (result as { workbookContextId?: unknown }).workbookContextId === "string" ? (result as { workbookContextId: string }).workbookContextId : undefined;
+      return {
+        status: "SUCCESS",
+        mode: requestedMode,
+        ...(workbookContextId !== undefined ? { workbookContextId } : {}),
+        summary: view === "full" ? "Returned stored agent result detail from a resource handle." : "Returned stored agent result summary from a resource handle.",
+        answer: { kind: "agent_result_resource", view, result },
+        proof: [],
+        resourceLinks: [resource],
+        nextAction: "answer_now",
+        warnings: view === "summary" ? ["Full result detail remains behind fullResultUri; fetch it only when the user explicitly needs full detail."] : []
+      };
+    }
+    if (handle.kind === "semantic_index") {
+      const resource = this.getSemanticIndexResource(handle.id);
+      const ok = (resource as { ok?: unknown }).ok === true;
+      return {
+        status: ok ? "SUCCESS" : "NOT_FOUND",
+        mode: requestedMode,
+        workbookContextId: handle.id,
+        summary: ok ? "Returned semantic workbook index from a context handle." : "Workbook context metadata was not found or expired.",
+        answer: resource,
+        proof: [],
+        resourceLinks: [semanticIndexResource(handle.id)],
+        nextAction: ok ? "answer_now" : "retry_after_refresh",
+        warnings: ok ? [] : ["Retry prepare to create a fresh workbook context handle."]
+      };
+    }
+    if (handle.kind === "context") {
+      const resource = this.getContextResource(handle.id);
+      const ok = (resource as { ok?: unknown }).ok === true;
+      return {
+        status: ok ? "SUCCESS" : "NOT_FOUND",
+        mode: requestedMode,
+        workbookContextId: handle.id,
+        summary: ok ? "Returned cached workbook context from a handle." : "Workbook context metadata was not found or expired.",
+        answer: resource,
+        proof: [],
+        resourceLinks: [contextResource(handle.id)],
+        nextAction: ok ? "answer_now" : "retry_after_refresh",
+        warnings: ok ? [] : ["Retry prepare to create a fresh workbook context handle."]
+      };
+    }
+    return undefined;
   }
 
   private prepareOutput(metadata: WorkbookMetadata, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> {
@@ -551,6 +674,7 @@ export class AgentOrchestrator {
         tableCount: metadata.tables.length,
         namedRangeCount: metadata.namedRanges.length,
         sectionCount: metadata.sections.length,
+        semanticIndex: buildSemanticWorkbookIndex(metadata, { maxEntries: 12 }),
         collaboration: compactAgentCollaborationSummary(this.runtime.getCollaborationStatus(metadata.workbook.workbookId as WorkbookId)),
         sheets: metadata.sheets.map((sheet) => ({ name: sheet.name, kind: sheet.kind, usedRange: sheet.usedRange, sectionCount: sheet.sectionIds.length }))
       },
@@ -1229,6 +1353,74 @@ export class AgentOrchestrator {
   ): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
     const action = intentAction(input);
     const workbookId = metadata.workbook.workbookId as WorkbookId;
+    if (action === "read_style_summary") {
+      const resolved = resolveAgentReadTarget(metadata, input);
+      if (!resolved.ok) {
+        return {
+          status: resolved.status,
+          mode: requestedMode,
+          workbookContextId: metadata.workbookContextId,
+          summary: resolved.summary,
+          ...(resolved.candidates !== undefined ? { candidates: resolved.candidates } : {}),
+          proof: [],
+          resourceLinks: [contextResource(metadata.workbookContextId)],
+          nextAction: resolved.nextAction,
+          warnings: resolved.warnings
+        };
+      }
+      runMetrics.internalReadCount += 1;
+      const result = await this.runtime.getStyleFingerprint({
+        workbookId,
+        sheetName: resolved.sheetName,
+        address: resolved.range,
+        maxCellSamples: 200
+      });
+      if ((result as { ok?: boolean }).ok === false) {
+        return formulaRuntimeErrorOutput(metadata, requestedMode, `Style summary is unavailable for ${resolved.sheetName}!${resolved.range}.`, result);
+      }
+      return {
+        status: "SUCCESS",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: `Read style summary for ${resolved.sheetName}!${resolved.range}.`,
+        answer: { kind: "style_summary", ...styleSummaryFromFingerprint((result as { fingerprint?: unknown }).fingerprint ?? result) },
+        metrics: { source: "runtime_style_summary" },
+        proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "style summary" }],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "answer_now",
+        warnings: styleWarnings(result)
+      };
+    }
+    if (action === "format_diagnostics") {
+      const resolved = resolveAgentReadTarget(metadata, input);
+      if (!resolved.ok) {
+        return {
+          status: resolved.status,
+          mode: requestedMode,
+          workbookContextId: metadata.workbookContextId,
+          summary: resolved.summary,
+          ...(resolved.candidates !== undefined ? { candidates: resolved.candidates } : {}),
+          proof: [],
+          resourceLinks: [contextResource(metadata.workbookContextId)],
+          nextAction: resolved.nextAction,
+          warnings: resolved.warnings
+        };
+      }
+      const snapshot = await this.readRangeSnapshot(workbookId, resolved.sheetName, resolved.range, ["values", "text", "formulas", "numberFormat", "style"], runMetrics);
+      const diagnostics = formatDiagnosticsFromSnapshot(snapshot, resolved.sheetName, resolved.range);
+      return {
+        status: "SUCCESS",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: `Diagnosed formatting for ${resolved.sheetName}!${resolved.range}.`,
+        answer: diagnostics,
+        metrics: { source: "runtime_format_diagnostics", issueCount: diagnostics.issues.length },
+        proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "format diagnostics" }],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "answer_now",
+        warnings: diagnostics.issues.slice(0, 5).map((issue) => issue.message)
+      };
+    }
     if (action === "read_style_fingerprint") {
       const request = styleFingerprintRequestFromInput(metadata, input);
       if (!request) {
@@ -1803,7 +1995,7 @@ export class AgentOrchestrator {
       operationId: pending.operationId,
       confirmationToken: pending.confirmationToken,
       summary: pending.summary,
-      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched", safetyFingerprintOnly: true },
       changes,
       proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "preview target" }],
       resourceLinks: [operationResource(String(pending.operationId))],
@@ -1943,7 +2135,7 @@ export class AgentOrchestrator {
         operationCount: 1,
         grouped: true
       },
-      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched", safetyFingerprintOnly: true },
       changes,
       proof,
       resourceLinks: [operationResource(String(pending.operationId))],
@@ -2171,6 +2363,8 @@ export class AgentOrchestrator {
         return resolved ? this.previewFormulaConvertToValues(metadata, input, requestedMode, resolved) : undefined;
       case "write_number_formats":
         return resolved ? this.previewNumberFormatUpdate(metadata, input, requestedMode, resolved) : undefined;
+      case "clear_style_dimensions":
+        return resolved ? this.previewClearStyleDimensions(metadata, input, requestedMode, resolved) : undefined;
       case "format_range":
         return resolved ? this.previewStyleUpdate(metadata, input, requestedMode, resolved) : undefined;
     }
@@ -2686,6 +2880,40 @@ export class AgentOrchestrator {
     return this.previewBatchOperation(metadata, requestedMode, [operation], [{ sheetName: resolved.sheetName, range: resolved.range, before: "formats", after: "cleared formats" }], `Prepared clear-formats preview on ${resolved.sheetName}!${resolved.range}.`, { kind: "clear_formats_preview", sheetName: resolved.sheetName, range: resolved.range });
   }
 
+  private previewClearStyleDimensions(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode, resolved: Extract<AgentTargetResolution, { ok: true }>): Omit<AgentRunOutput, "telemetry"> {
+    const dimensions = styleDimensionsFromAgentInput(input);
+    if (dimensions.length === 0) {
+      return {
+        status: "NEEDS_INPUT",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: "Style-dimension clearing needs values.dimensions or a request that names borders, fills, fonts, alignment, number formats, row heights, or column widths.",
+        proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "style-dimension target" }],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "ask_user",
+        warnings: []
+      };
+    }
+    const operation: ExcelOperation = {
+      kind: "range.clear_style_dimensions",
+      operationId: makeId<OperationId>("op"),
+      workbookId: metadata.workbook.workbookId as WorkbookId,
+      destructiveLevel: "format",
+      reason: input.request,
+      target: { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: resolved.sheetName, address: resolved.range },
+      dimensions
+    };
+    const label = dimensions.join(", ");
+    return this.previewBatchOperation(
+      metadata,
+      requestedMode,
+      [operation],
+      [{ sheetName: resolved.sheetName, range: resolved.range, before: label, after: `cleared ${label}` }],
+      `Prepared style-dimension clear preview on ${resolved.sheetName}!${resolved.range}.`,
+      { kind: "clear_style_dimensions_preview", sheetName: resolved.sheetName, range: resolved.range, dimensions }
+    );
+  }
+
   private previewAutofit(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode, resolved: Extract<AgentTargetResolution, { ok: true }>, dimension: "columns" | "rows"): Omit<AgentRunOutput, "telemetry"> {
     const redirect = this.fragmentationRedirect(metadata, requestedMode, {
       family: `autofit_${dimension}`,
@@ -2725,11 +2953,11 @@ export class AgentOrchestrator {
         status: "NEEDS_INPUT",
         mode: requestedMode,
         workbookContextId: metadata.workbookContextId,
-        summary: "Number-format updates need values.numberFormats, values.numberFormat, or values.formats.",
+        summary: "Number-format updates need values.numberFormats, values.numberFormat, or values.formats. Example: values: { numberFormat: \"dd/mm/yyyy\" }.",
         proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "number-format target" }],
         resourceLinks: [contextResource(metadata.workbookContextId)],
         nextAction: "ask_user",
-        warnings: []
+        warnings: [`Retry with values.numberFormat or a ${resolved.range} shaped values.numberFormats matrix.`]
       };
     }
     const shapeIssue = matrixShapeIssue(resolved.range, numberFormat);
@@ -2885,7 +3113,7 @@ export class AgentOrchestrator {
       confirmationToken: pending.confirmationToken,
       summary,
       answer,
-      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched", safetyFingerprintOnly: true },
       changes,
       proof: changes.flatMap((change) => change.range ? [{ sheetName: change.sheetName, range: change.range, label: "preview target" }] : []).slice(0, 1),
       resourceLinks: [operationResource(String(pending.operationId))],
@@ -3324,6 +3552,9 @@ export class AgentOrchestrator {
     requestedMode: AgentRunMode,
     resolved: Extract<AgentTargetResolution, { ok: true }>
   ): Omit<AgentRunOutput, "telemetry"> {
+    if (/\b(clear|remove|delete|wipe)\b/i.test(input.request) && styleDimensionsFromAgentInput(input).length > 0) {
+      return this.previewClearStyleDimensions(metadata, input, requestedMode, resolved);
+    }
     const style = styleFromRequest(input.request);
     const redirect = this.fragmentationRedirect(metadata, requestedMode, {
       family: "format_range",
@@ -4024,6 +4255,7 @@ export class AgentOrchestrator {
     const validationFailed = validation?.ok === false;
     const resultRecord = result as { transactionId?: string; backups?: string[]; rollbackAvailable?: boolean; telemetry?: unknown; warnings?: unknown[]; results?: unknown[] };
     const resultWarnings = Array.isArray(resultRecord.warnings) ? resultRecord.warnings.map(String) : [];
+    const invalidated = applyFailed ? { invalidatedContextIds: [] as string[], invalidatedResourceUris: [] as string[] } : this.invalidateWorkbookContext(pending.workbookContextId);
     const output: Omit<AgentRunOutput, "telemetry"> = {
       status: applyFailed || validationFailed ? "VALIDATION_FAILED" : "SUCCESS",
       mode: "apply_update",
@@ -4052,6 +4284,8 @@ export class AgentOrchestrator {
       changes: pending.changes,
       proof: pending.changes.flatMap((change) => change.range ? [{ sheetName: change.sheetName, range: change.range, label: "applied target" }] : []).slice(0, 1),
       resourceLinks: resultRecord.transactionId ? [{ uri: `excel://transactions/${resultRecord.transactionId}`, name: "transaction", description: "Applied workbook transaction.", mimeType: "application/json" }] : [],
+      invalidatedContextIds: invalidated.invalidatedContextIds,
+      invalidatedResourceUris: invalidated.invalidatedResourceUris,
       nextAction: applyFailed || validationFailed ? "manual_review" : "answer_now",
       warnings: [...resultWarnings, ...(validation?.issues?.slice(0, 5).map((issue) => issue.message) ?? [])]
     };
@@ -4259,6 +4493,32 @@ export class AgentOrchestrator {
     return profileValues(values, address);
   }
 
+  private async readRangeSnapshot(
+    workbookId: WorkbookId,
+    sheetName: string,
+    address: string,
+    facets: NonNullable<Extract<ExcelOperation, { kind: "range.read_full" }>["facets"]>,
+    runMetrics?: AgentRunMetrics
+  ): Promise<RangeSnapshot | undefined> {
+    const operation: ExcelOperation = {
+      kind: "range.read_full",
+      operationId: makeId<OperationId>("op"),
+      workbookId,
+      destructiveLevel: "none",
+      reason: "Agent exact range diagnostics read",
+      target: { workbookId, sheetName, address },
+      facets
+    };
+    const result = await this.runtime.applyBatch({ workbookId, mode: "apply", operations: [operation] });
+    const snapshot = operationReadSnapshots(result)[0]?.snapshot;
+    if (runMetrics) {
+      runMetrics.internalReadCount += 1;
+      runMetrics.fullReadCellCount += matrixCellCount(snapshot?.values ?? snapshot?.text ?? []);
+      runMetrics.fullReadUsed = true;
+    }
+    return snapshot as RangeSnapshot | undefined;
+  }
+
   private async readAndProfileRanges(workbookId: WorkbookId, targets: Array<{ sheetName: string; range: string }>, runMetrics: AgentRunMetrics) {
     const operations: ExcelOperation[] = targets.map((target) => ({
       kind: "range.read_full",
@@ -4404,6 +4664,9 @@ function templateMetadataOutput(
 interface AgentRunMetrics {
   internalReadCount: number;
   fullReadCellCount: number;
+  fullReadUsed?: boolean;
+  safetyFingerprintOnly?: boolean;
+  semanticEntryCount?: number;
   route: IntentRoute;
   intent: NormalizedAgentIntent;
   autoApplied?: boolean;
@@ -4659,18 +4922,27 @@ function isEveryCellDumpRequest(requestText: string): boolean {
     || /\ball\s+cells?\b.*\b(all|every)\s+sheets?\b/.test(request);
 }
 
-function shouldBuildSampledMetadata(input: AgentRunInput, effectiveMode: AgentRunMode, overviewIntent: ReturnType<typeof detectWorkbookOverviewIntent>): boolean {
-  if (input.detailLevel === "workbook_summary" || input.detailLevel === "sheet_summary") {
+function shouldBuildSampledMetadata(input: AgentRunInput, effectiveMode: AgentRunMode, overviewIntent: ReturnType<typeof detectWorkbookOverviewIntent>, route: IntentRoute): boolean {
+  if (input.detailLevel === "workbook_summary" || input.detailLevel === "semantic_index" || input.detailLevel === "sheet_summary") {
+    return false;
+  }
+  if (input.detailLevel === "full_table" && !isExplicitFullDataRequest(input.request)) {
     return false;
   }
   if (input.detailLevel === "table_sample" || input.detailLevel === "full_table") {
     return true;
   }
-  if (isWorkbookDumpRequest(input.request) || isLargeTargetRangeRequest(input)) {
-    return false;
-  }
   if (/\b(sections?|blocks?|areas?)\b/i.test(input.request)) {
     return true;
+  }
+  if (route.metadataPolicy === "structure_only") {
+    return false;
+  }
+  if (route.metadataPolicy === "sampled_required") {
+    return true;
+  }
+  if (isWorkbookDumpRequest(input.request) || isLargeTargetRangeRequest(input)) {
+    return false;
   }
   if (effectiveMode === "prepare") {
     return false;
@@ -4705,6 +4977,7 @@ function workbookOverviewAnswer(metadata: WorkbookMetadata, input: AgentRunInput
     tableCount: metadata.tables.length,
     namedRangeCount: metadata.namedRanges.length,
     sectionCount: metadata.sections.length,
+    semanticIndex: buildSemanticWorkbookIndex(metadata, { maxEntries: 12 }),
     sheets: metadata.sheets.map((sheet) => ({
       name: sheet.name,
       kind: sheet.kind,
@@ -4724,9 +4997,9 @@ function workbookOverviewAnswer(metadata: WorkbookMetadata, input: AgentRunInput
     workbookContextId: metadata.workbookContextId,
     summary: workbookOverviewSummary(metadata, intent, blankSheets.length),
     answer,
-    metrics: { source: "cached_metadata", sheetCount: metadata.sheets.length, tableCount: metadata.tables.length, namedRangeCount: metadata.namedRanges.length, sectionCount: metadata.sections.length },
+    metrics: { source: "cached_metadata", sheetCount: metadata.sheets.length, tableCount: metadata.tables.length, namedRangeCount: metadata.namedRanges.length, sectionCount: metadata.sections.length, semanticEntryCount: answer.semanticIndex.entryCount },
     proof: metadata.sheets.slice(0, 5).flatMap((sheet) => sheet.usedRange ? [{ sheetName: sheet.name, range: sheet.usedRange, label: "used range" }] : []),
-    resourceLinks: [contextResource(metadata.workbookContextId)],
+    resourceLinks: [contextResource(metadata.workbookContextId), semanticIndexResource(metadata.workbookContextId)],
     nextAction: "answer_now",
     warnings: []
   };
@@ -4736,10 +5009,58 @@ function detailLevelAnswerOutput(metadata: WorkbookMetadata, input: AgentRunInpu
   if (input.detailLevel === "workbook_summary") {
     return workbookSummaryDetailOutput(metadata, requestedMode);
   }
+  if (input.detailLevel === "semantic_index") {
+    return semanticIndexDetailOutput(metadata, input, requestedMode);
+  }
   if (input.detailLevel === "sheet_summary") {
     return sheetSummaryDetailOutput(metadata, input, requestedMode);
   }
+  if (input.detailLevel === "full_table" && !isExplicitFullDataRequest(input.request)) {
+    const output = sheetSummaryDetailOutput(metadata, input, requestedMode);
+    return {
+      ...output,
+      summary: `${output.summary} Full-table detail was not fetched because the request was an overview-style inspection.`,
+      warnings: [...output.warnings, "Use full_table only when the user explicitly asks for all rows, every value, or full table contents."]
+    };
+  }
   return undefined;
+}
+
+function semanticIndexDetailOutput(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> {
+  const semanticIndex = buildSemanticWorkbookIndex(metadata, { maxEntries: input.budget?.maxExamples ?? 25 });
+  const candidates = semanticIndex.entries.map((entry) => ({
+    id: entry.id,
+    kind: entry.sourceKind === "selection" ? "range" as const : entry.sourceKind,
+    label: entry.label,
+    ...(entry.sheetName !== undefined ? { sheetName: entry.sheetName } : {}),
+    ...(entry.tableName !== undefined ? { tableName: entry.tableName } : {}),
+    ...(entry.range !== undefined ? { range: entry.range } : {}),
+    semanticRole: entry.role,
+    aliases: entry.aliases.slice(0, 8),
+    confidence: entry.confidence,
+    reason: `${entry.role} semantic index entry from ${entry.sourceKind}.`,
+    nextRequestHint: `Retry with target.candidateId "${entry.id}".`
+  }));
+  return {
+    status: "SUCCESS",
+    mode: requestedMode,
+    workbookContextId: metadata.workbookContextId,
+    summary: `Returned semantic workbook index for ${metadata.workbook.name} from cached metadata.`,
+    answer: semanticIndex,
+    metrics: { source: "cached_metadata", detailLevel: "semantic_index", fullReadCellCount: 0, semanticEntryCount: semanticIndex.entryCount },
+    candidates,
+    proof: semanticIndex.entries.flatMap((entry) => entry.sheetName && entry.range ? [{ sheetName: entry.sheetName, range: entry.range, label: entry.label }] : []).slice(0, 5),
+    resourceLinks: [contextResource(metadata.workbookContextId), semanticIndexResource(metadata.workbookContextId)],
+    nextAction: "answer_now",
+    warnings: metadata.detailLevel === "sampled" ? [] : ["Semantic roles are structure-only; confidence improves when sampled metadata is available."]
+  };
+}
+
+function isExplicitFullDataRequest(requestText: string): boolean {
+  const request = requestText.toLowerCase();
+  return /\b(full|entire|complete|all|every)\b.*\b(table|rows?|values?|cells?|data|contents?)\b/.test(request)
+    || /\b(read|show|list|return|dump)\b.*\b(all|every)\b/.test(request)
+    || /\ba1:[a-z]+\d+\b/i.test(requestText);
 }
 
 function workbookSummaryDetailOutput(metadata: WorkbookMetadata, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> {
@@ -4756,11 +5077,12 @@ function workbookSummaryDetailOutput(metadata: WorkbookMetadata, requestedMode: 
       sheetCount: metadata.sheets.length,
       tableCount: metadata.tables.length,
       namedRangeCount: metadata.namedRanges.length,
+      semanticIndex: buildSemanticWorkbookIndex(metadata, { maxEntries: 12 }),
       sheets: summary.sheets
     },
     metrics: { source: "cached_metadata", detailLevel: "workbook_summary", fullReadCellCount: 0 },
     proof: metadata.sheets.slice(0, 5).flatMap((sheet) => sheet.usedRange ? [{ sheetName: sheet.name, range: sheet.usedRange, label: "used range" }] : []),
-    resourceLinks: [contextResource(metadata.workbookContextId)],
+    resourceLinks: [contextResource(metadata.workbookContextId), semanticIndexResource(metadata.workbookContextId)],
     nextAction: "answer_now",
     warnings: []
   };
@@ -5769,13 +6091,200 @@ function compareNumericMetrics(profiles: Array<{ sheetName: string; profile: Ret
   return { rows, highestSumSheet: highest?.sheetName };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function styleSummaryFromFingerprint(fingerprint: unknown) {
+  const record = isRecord(fingerprint) ? fingerprint : {};
+  const dimensions = isRecord(record.dimensions) ? record.dimensions : {};
+  return {
+    sheetName: record.sheetName,
+    range: record.address,
+    rowCount: record.rowCount,
+    columnCount: record.columnCount,
+    truncated: record.truncated === true,
+    fills: dimensions.fills,
+    fonts: dimensions.fonts,
+    alignment: dimensions.alignment,
+    numberFormats: dimensions.numberFormats,
+    borders: dimensions.borders,
+    rowHeights: dimensions.rowHeights,
+    columnWidths: dimensions.columnWidths,
+    conditionalFormatting: dimensions.conditionalFormatting,
+    dataValidation: dimensions.dataValidation
+  };
+}
+
+function styleWarnings(result: unknown): string[] {
+  const fingerprint = isRecord(result) && isRecord(result.fingerprint) ? result.fingerprint : result;
+  const warnings = isRecord(fingerprint) && Array.isArray(fingerprint.warnings) ? fingerprint.warnings : [];
+  return warnings.map((warning) => isRecord(warning) && typeof warning.message === "string" ? warning.message : String(warning)).slice(0, 5);
+}
+
+function formatDiagnosticsFromSnapshot(snapshot: RangeSnapshot | undefined, sheetName: string, range: string) {
+  const values = snapshot?.values ?? [];
+  const text = snapshot?.text ?? [];
+  const formulas = snapshot?.formulas ?? [];
+  const numberFormat = snapshot?.numberFormat ?? [];
+  const cells: Array<Record<string, unknown>> = [];
+  const issues: Array<{ code: string; severity: "info" | "warning" | "error"; message: string; cell?: string; suggestedAction?: string; suggestedValues?: Record<string, unknown> }> = [];
+  const parsed = tryParseA1Address(stripSheetName(range));
+  const rowCount = Math.max(values.length, text.length, formulas.length, numberFormat.length);
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+    const columnCount = Math.max(values[rowIndex]?.length ?? 0, text[rowIndex]?.length ?? 0, formulas[rowIndex]?.length ?? 0, numberFormat[rowIndex]?.length ?? 0);
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+      const cell = parsed ? `${numberToColumn(parsed.startColumn + columnIndex)}${parsed.startRow + rowIndex}` : undefined;
+      const rawValue = values[rowIndex]?.[columnIndex];
+      const displayedText = text[rowIndex]?.[columnIndex];
+      const formula = formulas[rowIndex]?.[columnIndex];
+      const format = numberFormat[rowIndex]?.[columnIndex];
+      const detectedType = detectCellType(rawValue, displayedText, formula);
+      cells.push({
+        ...(cell ? { cell } : {}),
+        rawValue,
+        displayedText,
+        formula,
+        numberFormat: format,
+        detectedType
+      });
+      if (typeof rawValue === "string" && isDateLikeText(rawValue)) {
+        issues.push({
+          code: /\b\d{1,2}[/-]\d{1,2}[/-]\d{2}\b/.test(rawValue) ? "DATE_TEXT_TWO_DIGIT_YEAR" : "DATE_TEXT",
+          severity: "warning",
+          message: `${cell ?? "Cell"} contains date-like text${/\b\d{1,2}[/-]\d{1,2}[/-]\d{2}\b/.test(rawValue) ? " with a two-digit year" : ""}.`,
+          ...(cell ? { cell } : {}),
+          suggestedAction: "parse_dates",
+          suggestedValues: { numberFormat: "dd/mm/yyyy" }
+        });
+      }
+      if (typeof rawValue === "number" && (format === undefined || format === "General") && isDateLikeText(displayedText)) {
+        issues.push({
+          code: "DATE_SERIAL_GENERAL_FORMAT",
+          severity: "warning",
+          message: `${cell ?? "Cell"} is numeric but appears to display as a date without an explicit date number format.`,
+          ...(cell ? { cell } : {}),
+          suggestedAction: "write_number_formats",
+          suggestedValues: { numberFormat: "dd/mm/yyyy" }
+        });
+      }
+      if (typeof rawValue === "string" && /^=/.test(rawValue)) {
+        issues.push({
+          code: "FORMULA_STORED_AS_TEXT",
+          severity: "warning",
+          message: `${cell ?? "Cell"} starts with '=' but is stored as text.`,
+          ...(cell ? { cell } : {}),
+          suggestedAction: "write_formulas"
+        });
+      }
+    }
+  }
+  const uniqueFormats = [...new Set(numberFormat.flat().filter((value): value is string => typeof value === "string"))];
+  if (uniqueFormats.length > 1) {
+    issues.push({
+      code: "INCONSISTENT_NUMBER_FORMATS",
+      severity: "info",
+      message: `Range ${sheetName}!${range} contains ${uniqueFormats.length} number formats.`,
+      suggestedAction: "write_number_formats",
+      suggestedValues: { numberFormats: uniqueFormats }
+    });
+  }
+  return {
+    kind: "format_diagnostics",
+    sheetName,
+    range,
+    cells,
+    style: snapshot?.style,
+    issues,
+    suggestedNextAction: issues[0]?.suggestedAction ?? "answer_now"
+  };
+}
+
+function detectCellType(rawValue: unknown, displayedText: unknown, formula: unknown): string {
+  if (typeof formula === "string" && formula.startsWith("=")) return "formula";
+  if (typeof rawValue === "number") return "number";
+  if (typeof rawValue === "boolean") return "boolean";
+  if (typeof rawValue === "string" && isDateLikeText(rawValue)) return "date_text";
+  if (typeof displayedText === "string" && isDateLikeText(displayedText)) return "date_display";
+  if (typeof rawValue === "string") return "text";
+  if (rawValue === null || rawValue === undefined || rawValue === "") return "blank";
+  return typeof rawValue;
+}
+
+function isDateLikeText(value: unknown): value is string {
+  return typeof value === "string" && /^\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s*$/.test(value);
+}
+
 function styleFromRequest(request: string) {
   const lower = request.toLowerCase();
   return {
     ...(lower.includes("header") ? { fontBold: true, fillColor: "#D9EAF7", fontColor: "#1F2937", horizontalAlignment: "center" } : {}),
     ...(/\bbold\b/.test(lower) ? { fontBold: true } : {}),
-    ...(/\bitalic\b/.test(lower) ? { fontItalic: true } : {})
+    ...(/\bitalic\b/.test(lower) ? { fontItalic: true } : {}),
+    ...(/\bborders?\b/.test(lower) && /\b(add|apply|draw|thin|outline|all sides?)\b/.test(lower)
+      ? { borders: { style: "continuous" as const, weight: "thin" as const } }
+      : {})
   };
+}
+
+function styleDimensionsFromAgentInput(input: AgentRunInput): StyleDimension[] {
+  const values = input.values as Record<string, unknown> | undefined;
+  const rawDimensions = values?.dimensions;
+  const dimensions = new Set<StyleDimension>();
+  if (Array.isArray(rawDimensions)) {
+    for (const rawDimension of rawDimensions) {
+      const dimension = normalizeStyleDimension(rawDimension);
+      if (dimension) dimensions.add(dimension);
+    }
+  }
+  const request = input.request.toLowerCase();
+  const requestDimensions: Array<[RegExp, StyleDimension]> = [
+    [/\bborders?\b/, "borders"],
+    [/\bfills?\b|\bbackgrounds?\b/, "fills"],
+    [/\bfonts?\b|\bbold\b|\bitalic\b/, "fonts"],
+    [/\balignment\b|\balign\b/, "alignment"],
+    [/\bnumber\s*formats?\b|\bdate formats?\b|\bcurrency formats?\b/, "numberFormats"],
+    [/\brow heights?\b/, "rowHeights"],
+    [/\bcolumn widths?\b/, "columnWidths"]
+  ];
+  for (const [pattern, dimension] of requestDimensions) {
+    if (pattern.test(request)) dimensions.add(dimension);
+  }
+  return [...dimensions];
+}
+
+function normalizeStyleDimension(value: unknown): StyleDimension | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.toLowerCase().replace(/[\s_-]+/g, "");
+  switch (normalized) {
+    case "border":
+    case "borders":
+      return "borders";
+    case "fill":
+    case "fills":
+    case "background":
+    case "backgrounds":
+      return "fills";
+    case "font":
+    case "fonts":
+      return "fonts";
+    case "alignment":
+    case "align":
+      return "alignment";
+    case "numberformat":
+    case "numberformats":
+    case "dateformat":
+    case "dateformats":
+      return "numberFormats";
+    case "rowheight":
+    case "rowheights":
+      return "rowHeights";
+    case "columnwidth":
+    case "columnwidths":
+      return "columnWidths";
+    default:
+      return undefined;
+  }
 }
 
 function styleEntriesFromInput(
@@ -6527,6 +7036,85 @@ function responseModeFromInput(input: AgentRunInput): AgentResponseMode {
   return input.responseMode ?? "brief";
 }
 
+type AgentDetectedResourceHandle =
+  | { kind: "context"; id: string }
+  | { kind: "semantic_index"; id: string }
+  | { kind: "operation"; id: string }
+  | { kind: "result"; id: string; view?: "summary" | "full" }
+  | { kind: "compact"; id: string; view?: "summary" | "full" };
+
+function detectAgentResourceHandle(input: AgentRunInput): AgentDetectedResourceHandle | undefined {
+  if (input.operationId) {
+    return { kind: "operation", id: String(input.operationId) };
+  }
+  const continuationResult = input.continuation?.resultUri ?? input.continuation?.fullResultUri;
+  const continuationHandle = continuationResult ? parseAgentResourceUri(continuationResult) : undefined;
+  if ((continuationHandle?.kind === "result" || continuationHandle?.kind === "compact") && isResultHandleContinuationRequest(input)) {
+    return input.continuation?.resultUri ? continuationHandle : { kind: continuationHandle.kind, id: continuationHandle.id };
+  }
+  const requestHandle = parseAgentResourceUri(input.request);
+  if (requestHandle) {
+    return requestHandle;
+  }
+  if (isContextOnlyContinuationRequest(input) && input.workbookContextId) {
+    return { kind: "context", id: String(input.workbookContextId) };
+  }
+  return undefined;
+}
+
+function parseAgentResourceUri(text: string): AgentDetectedResourceHandle | undefined {
+  const compact = /excel:\/\/compact\/([A-Za-z0-9_-]+)(?:\?([^\s"'<>]+))?/i.exec(text);
+  if (compact?.[1]) {
+    return { kind: "compact", id: compact[1], ...resourceViewFromQuery(compact[2]) };
+  }
+  const result = /excel:\/\/agent\/results\/([A-Za-z0-9_-]+)(?:\?([^\s"'<>]+))?/i.exec(text);
+  if (result?.[1]) {
+    return { kind: "result", id: result[1], ...resourceViewFromQuery(result[2]) };
+  }
+  const operation = /excel:\/\/agent\/operations\/([A-Za-z0-9_-]+)/i.exec(text);
+  if (operation?.[1]) {
+    return { kind: "operation", id: operation[1] };
+  }
+  const semanticIndex = /excel:\/\/agent\/contexts\/([A-Za-z0-9_-]+)\/semantic-index/i.exec(text);
+  if (semanticIndex?.[1]) {
+    return { kind: "semantic_index", id: semanticIndex[1] };
+  }
+  const context = /excel:\/\/agent\/contexts\/([A-Za-z0-9_-]+)/i.exec(text);
+  if (context?.[1]) {
+    return { kind: "context", id: context[1] };
+  }
+  const contextText = /\b(?:continue|reuse|using|use)\s+(?:context\s+)?(wbctx_[A-Za-z0-9_-]+|ctx_[A-Za-z0-9_-]+)/i.exec(text);
+  if (contextText?.[1]) {
+    return { kind: "context", id: contextText[1] };
+  }
+  return undefined;
+}
+
+function resourceViewFromQuery(query: string | undefined): { view?: "summary" | "full" } {
+  return query && /(?:^|&)view=full(?:&|$)/i.test(query) ? { view: "full" } : {};
+}
+
+function isContextOnlyContinuationRequest(input: AgentRunInput): boolean {
+  const request = input.request.trim().toLowerCase();
+  return Boolean(input.workbookContextId)
+    && !input.target
+    && !input.values
+    && /^(continue|reuse|use|look at|show|inspect|summarize|summary)\b/.test(request)
+    && /\b(context|workbook context|same workbook|previous context)\b/.test(request);
+}
+
+function isResultHandleContinuationRequest(input: AgentRunInput): boolean {
+  return /\b(continue|reuse|use|show|inspect|read|fetch|open)\b/i.test(input.request)
+    && /\b(stored result|previous result|result handle|result resource|resource handle|full result|stored detail|stored details)\b/i.test(input.request);
+}
+
+function shouldReturnFullResource(input: AgentRunInput, requestedView?: "summary" | "full"): boolean {
+  if (requestedView === "full" || input.responseMode === "verbose") {
+    return true;
+  }
+  return /\b(full|all rows|all values|raw values|complete|entire|everything|detail|details|audit)\b/i.test(input.request);
+}
+
 function applyContinuationInput(input: AgentRunInput): AgentRunInput {
   const continuation = input.continuation;
   if (!continuation) {
@@ -6601,6 +7189,12 @@ function compactAnswerForResponseMode(answer: unknown, responseMode: AgentRespon
   }
   if (kind === "comparison_profile") {
     return compactComparisonAnswer(typed, resultUri, fullResultUri);
+  }
+  if (kind === "semantic_workbook_index") {
+    return compactSemanticIndexAnswer(typed, resultUri, fullResultUri);
+  }
+  if (kind === "workbook_overview") {
+    return compactWorkbookOverviewAnswer(typed, resultUri, fullResultUri);
   }
   return compactGenericAnswer(typed, resultUri, fullResultUri);
 }
@@ -6710,10 +7304,64 @@ function compactComparisonAnswer(answer: Record<string, unknown>, resultUri?: st
   });
 }
 
+function compactSemanticIndexAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  const entries = Array.isArray(answer.entries)
+    ? answer.entries.slice(0, 8).map((entry) => {
+        const typed = entry as Record<string, unknown>;
+        return stripUndefinedRecord({
+          id: typed.id,
+          label: typed.label,
+          role: typed.role,
+          sourceKind: typed.sourceKind,
+          sheetName: typed.sheetName,
+          tableName: typed.tableName,
+          range: typed.range,
+          confidence: typed.confidence
+        });
+      })
+    : undefined;
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    source: answer.source,
+    workbook: answer.workbook,
+    detailLevel: answer.detailLevel,
+    entryCount: answer.entryCount,
+    entries,
+    resultUri,
+    fullResultUri
+  });
+}
+
+function compactWorkbookOverviewAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  const semanticIndex = answer.semanticIndex && typeof answer.semanticIndex === "object"
+    ? compactSemanticIndexAnswer(answer.semanticIndex as Record<string, unknown>)
+    : undefined;
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    source: answer.source,
+    workbook: answer.workbook,
+    selection: answer.selection,
+    sheetCount: answer.sheetCount,
+    tableCount: answer.tableCount,
+    namedRangeCount: answer.namedRangeCount,
+    sectionCount: answer.sectionCount,
+    semanticIndex,
+    sheets: answer.sheets,
+    tables: answer.tables,
+    namedRanges: answer.namedRanges,
+    blankSheets: answer.blankSheets,
+    resultUri,
+    fullResultUri
+  });
+}
+
 function compactGenericAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
   const next = { ...answer };
   for (const key of ["headers", "values", "formulas", "text", "numberFormat", "sample", "sparseRows", "rows", "emptySummary", "schema", "profile"]) {
     delete next[key];
+  }
+  if (next.semanticIndex && typeof next.semanticIndex === "object") {
+    next.semanticIndex = compactSemanticIndexAnswer(next.semanticIndex as Record<string, unknown>);
   }
   if (resultUri) {
     next.resultUri = resultUri;
@@ -6815,6 +7463,7 @@ function compactCandidate(candidate: AgentCandidate): AgentCandidate {
   const next = { ...candidate };
   delete next.reason;
   delete next.nextRequestHint;
+  delete next.aliases;
   return next;
 }
 
@@ -6827,6 +7476,20 @@ function outputUsedCallerTargetHint(output: Omit<AgentRunOutput, "telemetry">): 
     return output.status === "SUCCESS" && output.nextAction === "answer_now" && hinted[0]?.id === output.candidates?.[0]?.id;
   }
   return hinted.some((candidate) => output.proof.some((proof) =>
+    proof.sheetName === candidate.sheetName &&
+    (!proof.range || !candidate.range || proof.range === candidate.range)
+  ));
+}
+
+function outputUsedSemanticCandidate(output: Omit<AgentRunOutput, "telemetry">): boolean {
+  const semantic = output.candidates?.filter((candidate) => candidate.semanticRole) ?? [];
+  if (semantic.length === 0) {
+    return false;
+  }
+  if (output.proof.length === 0) {
+    return output.status === "SUCCESS" && output.nextAction === "answer_now" && semantic[0]?.id === output.candidates?.[0]?.id;
+  }
+  return semantic.some((candidate) => output.proof.some((proof) =>
     proof.sheetName === candidate.sheetName &&
     (!proof.range || !candidate.range || proof.range === candidate.range)
   ));
@@ -8092,6 +8755,10 @@ function contextResource(workbookContextId: string) {
   return { uri: `excel://agent/contexts/${workbookContextId}`, name: "workbook context", description: "Cached workbook metadata summary.", mimeType: "application/json" as const };
 }
 
+function semanticIndexResource(workbookContextId: string) {
+  return { uri: `excel://agent/contexts/${workbookContextId}/semantic-index`, name: "semantic workbook index", description: "Role-aware workbook target index.", mimeType: "application/json" as const };
+}
+
 function operationResource(operationId: string) {
   return { uri: `excel://agent/operations/${operationId}`, name: "pending operation", description: "Pending previewed workbook update.", mimeType: "application/json" as const };
 }
@@ -8099,6 +8766,10 @@ function operationResource(operationId: string) {
 function resultResource(resultId: string, view?: "summary" | "full") {
   const suffix = view ? `?view=${view}` : "";
   return { uri: `excel://agent/results/${resultId}${suffix}`, name: "agent result", description: "Stored agent answer detail.", mimeType: "application/json" as const };
+}
+
+function compactResultResource(resultId: string) {
+  return { uri: `excel://compact/${resultId}`, name: "compact agent result", description: "Compatibility alias for a stored agent result.", mimeType: "application/json" as const };
 }
 
 function compactStoredResult(result: StoredAgentResult): Record<string, unknown> {

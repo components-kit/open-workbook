@@ -17,6 +17,8 @@ export interface OperationTelemetry {
   warningCount?: number;
   requestedFacets?: string[];
   loadedFacets?: string[];
+  fullReadUsed?: boolean;
+  safetyFingerprintOnly?: boolean;
 }
 
 export interface OperationWarning {
@@ -154,6 +156,20 @@ export interface ClearFormatsOperation extends OperationBase {
 export interface ClearFormatsManyOperation extends OperationBase {
   kind: "range.clear_formats_many";
   targets: A1Range[];
+}
+
+export interface ClearStyleDimensionsOperation extends OperationBase {
+  kind: "range.clear_style_dimensions";
+  target: A1Range;
+  dimensions: StyleDimension[];
+}
+
+export interface ClearStyleDimensionsManyOperation extends OperationBase {
+  kind: "range.clear_style_dimensions_many";
+  entries: Array<{
+    target: A1Range;
+    dimensions: StyleDimension[];
+  }>;
 }
 
 export interface CopyRangeOperation extends OperationBase {
@@ -345,6 +361,8 @@ export type ExcelOperation =
   | ClearValuesOperation
   | ClearFormatsOperation
   | ClearFormatsManyOperation
+  | ClearStyleDimensionsOperation
+  | ClearStyleDimensionsManyOperation
   | CopyRangeOperation
   | MoveRangeOperation
   | InsertRowsOperation
@@ -505,8 +523,21 @@ export interface RangeSnapshot {
     verticalAlignment?: string;
     rowHeight?: number;
     columnWidth?: number;
+    borders?: RangeBorderStyle;
   };
 }
+
+export type RangeBorderEdge = "edgeTop" | "edgeBottom" | "edgeLeft" | "edgeRight" | "insideHorizontal" | "insideVertical";
+
+export interface RangeBorderStyleEntry {
+  style?: "none" | "continuous" | "dash" | "dashDot" | "dashDotDot" | "dot" | "double" | "slantDashDot";
+  weight?: "hairline" | "thin" | "medium" | "thick";
+  color?: string;
+}
+
+export type RangeBorderStyle =
+  | RangeBorderStyleEntry
+  | Partial<Record<RangeBorderEdge, RangeBorderStyleEntry>>;
 
 export type StyleDimension =
   | "columnWidths"

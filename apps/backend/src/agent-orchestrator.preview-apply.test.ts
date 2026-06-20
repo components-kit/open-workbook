@@ -87,6 +87,43 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
       expect(cancelApplied.status).toBe("VALIDATION_FAILED");
     });
 
+  it("invalidates workbook context and stored result handles after successful apply", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_apply_invalidate");
+      agent.metadataCache.set(metadata);
+
+      const read = await agent.run({
+        request: "Read first transaction rows",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "read_values" },
+        target: { tableName: "Transactions" },
+        values: { rowLimit: 2 }
+      });
+      const resultUri = (read.answer as any).resultUri as string;
+      const resultId = resultUri.split("/").pop()!;
+      const preview = await agent.run({
+        request: "Update Data B2",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        target: { sheetName: "Data", range: "B2" },
+        values: { values: [[999]] }
+      });
+      const applied = await agent.run({
+        request: "Apply update",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(applied.status).toBe("SUCCESS");
+      expect(applied.invalidatedContextIds).toContain(metadata.workbookContextId);
+      expect(applied.invalidatedResourceUris).toContain(resultUri);
+      expect(agent.getResultResource(resultId) as any).toMatchObject({ ok: false });
+      expect(agent.getContextResource(metadata.workbookContextId) as any).toMatchObject({ ok: false });
+    });
+
   it("reports and cancels previewed operations without workbook readiness", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -402,7 +439,56 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
     expect(clearFormats.telemetry.operationRisk).toBe("safe_format");
     expect(autofitRows.status).toBe("PREVIEW_READY");
     expect((autofitRows.answer as any).dimension).toBe("rows");
-    expect(autofitRows.telemetry.actionHandlerId).toBe("autofit_rows");
+      expect(autofitRows.telemetry.actionHandlerId).toBe("autofit_rows");
+    });
+
+  it("routes border-only removal to style-dimension clearing", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Remove all borders from selected cells",
+      mode: "preview_update",
+      target: { sheetName: "Data", range: "A3:B10" }
+    });
+    const applied = await agent.run({
+      request: "Apply border cleanup",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect((preview.answer as any).kind).toBe("clear_style_dimensions_preview");
+    expect((preview.answer as any).dimensions).toEqual(["borders"]);
+    expect(preview.telemetry.safetyFingerprintOnly).toBe(true);
+    expect(applied.status).toBe("SUCCESS");
+    expect(runtime.lastWriteOperations[0]?.kind).toBe("range.clear_style_dimensions");
+    expect((runtime.lastWriteOperations[0] as any).dimensions).toEqual(["borders"]);
+  });
+
+  it("routes add-border requests to style writes with border payloads", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Add thin border to every cell in row 2",
+      mode: "preview_update",
+      target: { sheetName: "Data", range: "A2:D2" }
+    });
+    const applied = await agent.run({
+      request: "Apply border style",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect((preview.answer as any).kind).toBe("style_preview");
+    expect((preview.answer as any).style.borders).toEqual({ style: "continuous", weight: "thin" });
+    expect(applied.status).toBe("SUCCESS");
+    expect(runtime.lastWriteOperations[0]?.kind).toBe("range.write_styles");
+    expect((runtime.lastWriteOperations[0] as any).style.borders).toEqual({ style: "continuous", weight: "thin" });
   });
 
   it("previews and applies explicit range copy operations", async () => {

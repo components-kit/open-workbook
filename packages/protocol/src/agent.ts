@@ -47,6 +47,7 @@ export type AgentNextAction =
 
 export const AGENT_DETAIL_LEVELS = [
   "workbook_summary",
+  "semantic_index",
   "sheet_summary",
   "table_sample",
   "full_table"
@@ -116,6 +117,7 @@ export const AGENT_INTENT_ACTIONS = [
   "write_formulas",
   "write_number_formats",
   "format_range",
+  "clear_style_dimensions",
   "read_range_compact",
   "get_range_summary",
   "read_hyperlinks",
@@ -129,6 +131,8 @@ export const AGENT_INTENT_ACTIONS = [
   "find_range_errors",
   "write_styles_many",
   "replace_range_with_styled_table",
+  "read_style_summary",
+  "format_diagnostics",
   "read_style_fingerprint",
   "compare_style_fingerprint",
   "get_theme",
@@ -286,9 +290,53 @@ export interface AgentCandidate {
   sheetName?: string;
   tableName?: string;
   range?: string;
+  semanticRole?: AgentSemanticRole;
+  aliases?: string[];
   confidence: number;
   reason?: string;
   nextRequestHint?: string;
+}
+
+export type AgentSemanticRole =
+  | "workbook"
+  | "data_table"
+  | "transaction_sheet"
+  | "summary_sheet"
+  | "template_sheet"
+  | "lookup_sheet"
+  | "form_region"
+  | "formula_region"
+  | "style_reference"
+  | "named_region"
+  | "selection"
+  | "unknown";
+
+export interface AgentSemanticIndexEntry {
+  id: string;
+  label: string;
+  role: AgentSemanticRole;
+  sourceKind: AgentCandidate["kind"] | "selection";
+  sheetName?: string;
+  tableName?: string;
+  range?: string;
+  aliases: string[];
+  confidence: number;
+  evidence: string[];
+  supportedActions: AgentIntentAction[];
+}
+
+export interface AgentSemanticWorkbookIndex {
+  kind: "semantic_workbook_index";
+  source: "cached_metadata";
+  workbook: {
+    workbookId?: WorkbookId | string;
+    name: string;
+    activeSheet?: string;
+    sheetCount: number;
+  };
+  detailLevel: "structure" | "sampled";
+  entryCount: number;
+  entries: AgentSemanticIndexEntry[];
 }
 
 export interface AgentProofReference {
@@ -338,6 +386,8 @@ export interface AgentRunOutput {
   candidates?: AgentCandidate[];
   proof: AgentProofReference[];
   resourceLinks: AgentResourceLink[];
+  invalidatedContextIds?: Array<WorkbookContextId | string>;
+  invalidatedResourceUris?: string[];
   continuation?: AgentContinuation;
   nextAction: AgentNextAction;
   warnings: string[];
@@ -356,6 +406,16 @@ export interface AgentRunOutput {
     metadataDetailLevel?: "structure" | "sampled";
     internalReadCount?: number;
     fullReadCellCount?: number;
+    fullReadUsed?: boolean;
+    safetyFingerprintOnly?: boolean;
+    workflowRoute?: string;
+    workflowConfidence?: number;
+    workflowReasons?: string[];
+    semanticIndexStatus?: "built" | "not_applicable";
+    semanticEntryCount?: number;
+    semanticCandidateUsed?: boolean;
+    metadataPolicy?: "structure_only" | "sampled_allowed" | "sampled_required";
+    readPolicy?: "metadata_only" | "targeted_read" | "preview_only" | "apply_only" | "not_applicable";
     candidateCount?: number;
     resourceLinkCount?: number;
     estimatedTokensSaved?: number;

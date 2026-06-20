@@ -20,6 +20,7 @@ export const ResourceCatalog: ResourceContract[] = [
   resource("excel://workbooks/{workbook_id}/plans/{plan_id}/diff", "stable"),
   resource("excel://compact/{resource_id}", "stable"),
   resource("excel://agent/contexts/{workbook_context_id}", "stable"),
+  resource("excel://agent/contexts/{workbook_context_id}/semantic-index", "stable"),
   resource("excel://agent/operations/{operation_id}", "stable"),
   resource("excel://agent/results/{result_id}", "stable")
 ];

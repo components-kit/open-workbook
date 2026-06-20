@@ -5,6 +5,8 @@ import type { McpServerConfig } from "./config.js";
 
 export type RuntimeFacade = RuntimeService & {
   compileBatch(request: BatchRequest): unknown;
+  getAgentSemanticIndexResource(workbookContextId: string): unknown;
+  getCompactResource(resourceId: string, options?: { view?: "summary" | "full"; maxBytes?: number }): unknown;
 };
 
 export interface RuntimeFacadeHandle {
