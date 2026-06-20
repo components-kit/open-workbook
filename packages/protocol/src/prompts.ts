@@ -11,6 +11,8 @@ const STABLE_PROMPTS = new Set([
   "excel.prompts.clean_current_sheet",
   "excel.prompts.fix_formula_errors",
   "excel.prompts.format_like_template",
+  "excel.prompts.field_value_image_to_styled_table",
+  "excel.prompts.booking_image_to_styled_table",
   "excel.prompts.validate_report_before_saving",
   "excel.prompts.create_summary_report"
 ]);
@@ -20,6 +22,8 @@ const PROMPT_NAMES = [
   "excel.prompts.clean_current_sheet",
   "excel.prompts.fix_formula_errors",
   "excel.prompts.format_like_template",
+  "excel.prompts.field_value_image_to_styled_table",
+  "excel.prompts.booking_image_to_styled_table",
   "excel.prompts.validate_report_before_saving",
   "excel.prompts.create_summary_report"
 ] as const;

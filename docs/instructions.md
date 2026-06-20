@@ -1,24 +1,24 @@
 # Agent Instructions
 
-Open Workbook ships an agent skill in the repository under `skills/open-workbook-excel/`.
+Open Workbook ships an agent skill in the repository under `skills/open-workbook-skills/`.
 
 Install it with skills.sh:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel
+npx skills add components-kit/open-workbook --skill open-workbook-skills
 ```
 
 For a global OpenCode install:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel -a opencode -g -y
+npx skills add components-kit/open-workbook --skill open-workbook-skills -a opencode -g -y
 ```
 
 The skills.sh-compatible layout is:
 
 ```text
 skills/
-  open-workbook-excel/
+  open-workbook-skills/
     SKILL.md
     references/
       tool-selection.md
@@ -36,5 +36,5 @@ For clients that do not support skills.sh, print or write a portable instruction
 
 ```bash
 npx -y @components-kit/open-workbook instructions
-npx -y @components-kit/open-workbook instructions --out open-workbook-excel.md
+npx -y @components-kit/open-workbook instructions --out open-workbook-skills.md
 ```

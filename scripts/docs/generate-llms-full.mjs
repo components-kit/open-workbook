@@ -17,7 +17,7 @@ This file is generated for LLM and agent context. It combines the project README
 npx -y @components-kit/open-workbook setup
 \`\`\`
 
-Then install the skill with \`npx skills add components-kit/open-workbook --skill open-workbook-excel\` and paste the printed MCP launch command into an agent UI's local stdio MCP configuration.
+Then install the skill with \`npx skills add components-kit/open-workbook --skill open-workbook-skills\` and paste the printed MCP launch command into an agent UI's local stdio MCP configuration.
 
 ## Production Rules
 
@@ -32,14 +32,14 @@ Then install the skill with \`npx skills add components-kit/open-workbook --skil
 const SOURCE_FILES = [
   "README.md",
   "CHANGELOG.md",
-  "skills/open-workbook-excel/SKILL.md",
-  "skills/open-workbook-excel/references/agent-run.md",
-  "skills/open-workbook-excel/references/capability-map.md",
-  "skills/open-workbook-excel/references/tool-selection.md",
-  "skills/open-workbook-excel/references/workflows.md",
-  "skills/open-workbook-excel/references/reliability.md",
-  "skills/open-workbook-excel/references/performance.md",
-  "skills/open-workbook-excel/references/multi-agent.md",
+  "skills/open-workbook-skills/SKILL.md",
+  "skills/open-workbook-skills/references/agent-run.md",
+  "skills/open-workbook-skills/references/capability-map.md",
+  "skills/open-workbook-skills/references/tool-selection.md",
+  "skills/open-workbook-skills/references/workflows.md",
+  "skills/open-workbook-skills/references/reliability.md",
+  "skills/open-workbook-skills/references/performance.md",
+  "skills/open-workbook-skills/references/multi-agent.md",
   "docs/installation.md",
   "docs/mcp-clients.md",
   "docs/instructions.md",

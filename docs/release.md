@@ -57,7 +57,7 @@ node packages/cli/dist/index.js sideload manifest --out /tmp/open-workbook.xml
 
 ```text
 npx -y @components-kit/open-workbook@latest mcp
-npx skills add components-kit/open-workbook --skill open-workbook-excel
+npx skills add components-kit/open-workbook --skill open-workbook-skills
 ```
 
 8. For host-readiness claims, open desktop Excel with the sideloaded add-in connected and run the opt-in live smoke:

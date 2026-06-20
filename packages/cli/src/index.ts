@@ -13,7 +13,7 @@ const repoRoot = resolve(__dirname, "../../..");
 const packageRoot = resolve(__dirname, "..");
 const publicPackageName = "@components-kit/open-workbook";
 const currentVersion = readPackageVersion([join(packageRoot, "package.json"), join(repoRoot, "package.json")]) ?? OPEN_WORKBOOK_VERSION;
-const instructionFileName = "open-workbook-excel.md";
+const instructionFileName = "open-workbook-skills.md";
 const developmentManifestId = "6f2d2ac1-69b0-4eb6-a256-0a1fcb00d3e1";
 const sourcePaths = {
   mcpServer: resolve(repoRoot, "apps/mcp-server/dist/index.js"),
@@ -21,7 +21,7 @@ const sourcePaths = {
   fileBridge: resolve(repoRoot, "apps/backend/dist/file-bridge.js"),
   addinServer: resolve(repoRoot, "apps/excel-addin/scripts/dev-server.mjs"),
   manifest: resolve(repoRoot, "apps/excel-addin/manifest.xml"),
-  instructions: resolve(repoRoot, "skills/open-workbook-excel")
+  instructions: resolve(repoRoot, "skills/open-workbook-skills")
 };
 const bundledPaths = {
   mcpServer: resolve(packageRoot, "assets/mcp-server/dist/index.js"),
@@ -29,7 +29,7 @@ const bundledPaths = {
   fileBridge: resolve(packageRoot, "assets/backend/dist/file-bridge.js"),
   addinServer: resolve(packageRoot, "assets/excel-addin/scripts/dev-server.mjs"),
   manifest: resolve(packageRoot, "assets/excel-addin/manifest.xml"),
-  instructions: resolve(packageRoot, "assets/instructions/open-workbook-excel")
+  instructions: resolve(packageRoot, "assets/instructions/open-workbook-skills")
 };
 const dependencyPaths = {
   mcpServer: resolve(packageRoot, "node_modules/@components-kit/open-workbook-mcp-server/dist/index.js"),
@@ -94,7 +94,7 @@ program
 
 program
   .command("instructions")
-  .description("Print or write the generic Open Workbook Excel agent instructions")
+  .description("Print or write the generic Open Workbook Skills agent instructions")
   .option("--out <path>", "Write instructions to a file instead of stdout")
   .action((options: { out?: string }) => {
     const instructions = generateGenericInstructions();
@@ -598,7 +598,7 @@ function generateGenericInstructions(): string {
     fail(`Missing instruction source: ${skillPath}`);
   }
   const sections = [
-    "# Open Workbook Excel Instructions",
+    "# Open Workbook Skills Instructions",
     stripFrontmatter(readFileSync(skillPath, "utf8")).trim()
   ];
   const references = [
@@ -663,8 +663,8 @@ async function runSetup(options: SetupOptions, mode: "setup" | "upgrade"): Promi
   console.log(`npx -y ${publicPackageName}@latest mcp`);
   console.log("Use it as a local stdio MCP server command. Config wrappers vary by client.");
   console.log("");
-  console.log("Install or update the Open Workbook Excel skill with skills.sh:");
-  console.log("npx skills add components-kit/open-workbook --skill open-workbook-excel");
+  console.log("Install or update the Open Workbook Skills skill with skills.sh:");
+  console.log("npx skills add components-kit/open-workbook --skill open-workbook-skills");
   console.log("");
   console.log("The fallback instruction file above is for clients that do not support skills.sh.");
   console.log("Start the agent UI before opening the Excel add-in so `npx ... mcp` can serve the taskpane and backend.");

@@ -117,6 +117,7 @@ import type {
   TaskRecord,
   TableAppendRowsRequest,
   TableApplyFiltersRequest,
+  TableApplyViewRequest,
   TableCopyStructureRequest,
   TableCreateRequest,
   TableInfo,
@@ -141,6 +142,7 @@ import type {
   TemplateValidationIssue,
   TemplateValidationResponse,
   StyleCompareResponse,
+  StyleCopyManyResponse,
   StyleCopyRequest,
   StyleCopyResponse,
   StyleDimension,
@@ -189,12 +191,14 @@ export class RuntimeService {
   readonly tasks = new TaskRegistry();
   readonly locks = new LockManager();
   readonly transactions = new TransactionManager();
-  readonly agent = new AgentOrchestrator(this);
+  readonly agent: AgentOrchestrator;
   private readonly agentExecutionContext = new AsyncLocalStorage<AgentRunExecutionContext>();
   private readonly addinClients = new Map<ConnectionId, AddinRpcClient>();
   private readonly regions = new Map<string, WorkbookRegion>();
   private readonly agents = new Map<AgentId, AgentRecord>();
   private readonly jobs = new Map<JobId, JobRecord>();
+  private readonly directMutationResults = new Map<string, unknown>();
+  private readonly workbookContentVersions = new Map<string, number>();
   private readonly collabEvents: CollaborationEvent[] = [];
   private readonly conflicts: ConflictRecord[] = [];
   private readonly conflictTelemetry: ConflictTelemetryRecord[] = [];
@@ -226,6 +230,7 @@ export class RuntimeService {
   constructor(options: RuntimeServiceOptions = {}) {
     this.stateStore = options.persistState === false ? undefined : new RuntimeStateStore(options.stateDir);
     this.fileBridge = options.fileBridge ?? new NativeFileBridge();
+    this.agent = new AgentOrchestrator(this, { onOperationsChanged: () => this.persistState() });
     this.restoreState();
     this.recoverRuntimeState();
     void this.applyDefaultBackupRetention("startup");
@@ -1149,6 +1154,7 @@ export class RuntimeService {
     }
     this.plans.load(snapshot.plans ?? []);
     this.backups.load(snapshot.backups ?? []);
+    this.agent.loadOperations(snapshot.agentOperations ?? []);
   }
 
   private recoverRuntimeState(): void {
@@ -1211,7 +1217,8 @@ export class RuntimeService {
       regions: [...this.regions.values()].map((region) => ({ ...region })),
       permissions: this.permissionState,
       plans: this.plans.dump(),
-      backups: this.backups.dump()
+      backups: this.backups.dump(),
+      agentOperations: this.agent.dumpOperations()
     });
   }
 
@@ -1237,6 +1244,21 @@ export class RuntimeService {
     if (this.events.length > 250) {
       this.events.splice(0, this.events.length - 250);
     }
+    const workbookId = eventWorkbookId(params) ?? this.sessions.getActive()?.activeWorkbook?.workbookId;
+    if (workbookId && /change|changed|mutation|write|clear|format|style|table|sheet|range/i.test(method)) {
+      this.bumpWorkbookContentVersion(workbookId);
+    }
+  }
+
+  getWorkbookContentVersion(workbookId: WorkbookId | string): number {
+    return this.workbookContentVersions.get(String(workbookId)) ?? 0;
+  }
+
+  private bumpWorkbookContentVersion(workbookId: WorkbookId | string): number {
+    const key = String(workbookId);
+    const next = (this.workbookContentVersions.get(key) ?? 0) + 1;
+    this.workbookContentVersions.set(key, next);
+    return next;
   }
 
   private recordCollabEvent(input: Omit<CollaborationEvent, "eventId" | "createdAt">): void {
@@ -3494,7 +3516,25 @@ export class RuntimeService {
     if (permissionWarnings.length > 0) {
       return permissionDenied("Chart deletion is blocked by the current Open Workbook permission policy.", permissionWarnings);
     }
-    return client.request("chart.delete", request);
+    return this.applyDirectTransaction(
+      {
+        workbookId: request.workbookId,
+        goal: `Before deleting chart ${request.chartName}`,
+        scopes: [{ type: "chart", workbookId: request.workbookId, sheetName: request.sheetName, chartName: request.chartName }],
+        destructiveLevel: "structure"
+      },
+      async () => {
+        const backupResult = await this.createWorkbookBackup({
+          workbookId: request.workbookId,
+          reason: `Before deleting chart ${request.chartName}`
+        });
+        if (!("backup" in backupResult)) {
+          return backupResult;
+        }
+        const result = await client.request("chart.delete", request);
+        return { ok: (result as { ok?: boolean }).ok !== false, backup: backupResult.backup, result };
+      }
+    );
   }
 
   async validateChartAgainstTemplate(request: ChartSelector & { templateChartName?: string; templateSheetName?: string }) {
@@ -3692,7 +3732,7 @@ export class RuntimeService {
     const headerRowIndex = input.headerRowIndex ?? detectHeaderCandidates(read.values, 10)[0]?.rowIndex ?? 0;
     const before = read.values[headerRowIndex] ?? [];
     const normalized = dedupeHeaders(before.map((value) => normalizeHeader(String(value ?? ""))));
-    const result = await this.writeCleanValues(headerRowTarget(target, headerRowIndex), [normalized], "Normalize headers");
+    const result = await this.writeChangedCleanValues(headerRowTarget(target, headerRowIndex), [before], [normalized], "Normalize headers");
     return cleaningReport(input.workbookId, "normalize_headers", target, changedCellCount([before], [normalized]), { headerRowIndex, headers: normalized }, result);
   }
 
@@ -3766,7 +3806,7 @@ export class RuntimeService {
         ) as CellValue;
       }
     }
-    const result = await this.writeCleanValues(target, values, "Fill missing values");
+    const result = await this.writeChangedCleanValues(target, read.values, values, "Fill missing values");
     return cleaningReport(input.workbookId, "fill_missing_values", target, changedCellCount(read.values, values), { strategy }, result);
   }
 
@@ -4239,6 +4279,10 @@ export class RuntimeService {
 
   async sortTable(request: TableSortRequest) {
     return this.mutateTable("table.sort", request, `Before sorting table ${request.tableName}`, await this.getTableBackupRanges(request));
+  }
+
+  async applyTableView(request: TableApplyViewRequest) {
+    return this.mutateTable("table.apply_view", request, `Before applying table view to ${request.tableName}`, await this.getTableBackupRanges(request));
   }
 
   async clearTableSort(request: TableSelector) {
@@ -4908,7 +4952,7 @@ export class RuntimeService {
     );
   }
 
-  async copyStyleDimensions(input: StyleCopyRequest) {
+  async copyStyleDimensions(input: StyleCopyRequest, options: { idempotencyKey?: string } = {}) {
     const client = this.getActiveAddinClient();
     if (!client) {
       return {
@@ -4939,21 +4983,107 @@ export class RuntimeService {
       };
     }
 
-    const backup = await this.createWorkbookBackup({
-      workbookId: input.workbookId,
-      reason: `Before copying style dimensions to ${input.targetSheetName}`,
-      ranges: targetRanges
-    });
-    const result = await client.request<StyleCopyResponse>("style.copy_dimensions", input);
-    const validation = await this.compareStyleFingerprints({
-      workbookId: input.workbookId,
-      sourceSheetName: input.sourceSheetName,
-      targetSheetName: input.targetSheetName,
-      ...(input.sourceAddress !== undefined ? { sourceAddress: input.sourceAddress } : {}),
-      ...(input.targetAddress !== undefined ? { targetAddress: input.targetAddress } : {}),
-      dimensions: input.dimensions
-    });
-    return { ok: result.ok, backup, result, validation };
+    return this.applyDirectTransaction(
+      {
+        workbookId: input.workbookId,
+        goal: `Before copying style dimensions to ${input.targetSheetName}`,
+        scopes: targetRanges.map(rangeScope),
+        destructiveLevel: "format",
+        idempotencyKey: options.idempotencyKey
+      },
+      async () => {
+        const backup = await this.createWorkbookBackup({
+          workbookId: input.workbookId,
+          reason: `Before copying style dimensions to ${input.targetSheetName}`,
+          ranges: targetRanges
+        });
+        if (!("backup" in backup)) {
+          return backup;
+        }
+        const result = await client.request<StyleCopyResponse>("style.copy_dimensions", input);
+        const validation = await this.compareStyleFingerprints({
+          workbookId: input.workbookId,
+          sourceSheetName: input.sourceSheetName,
+          targetSheetName: input.targetSheetName,
+          ...(input.sourceAddress !== undefined ? { sourceAddress: input.sourceAddress } : {}),
+          ...(input.targetAddress !== undefined ? { targetAddress: input.targetAddress } : {}),
+          dimensions: input.dimensions
+        });
+        const backupIds = backup.backup?.backupId ? [backup.backup.backupId] : [];
+        return {
+          ok: result.ok,
+          backup: backup.backup,
+          backups: backupIds,
+          rollbackAvailable: backupIds.length > 0,
+          warnings: result.warnings ?? [],
+          telemetry: { styleCopyCount: 1, validationIssueCount: "issueCount" in validation ? validation.issueCount : 0 },
+          result,
+          validation
+        };
+      }
+    );
+  }
+
+  async copyStyleDimensionsMany(input: { workbookId: WorkbookId; requests: StyleCopyRequest[] }, options: { idempotencyKey?: string } = {}) {
+    const client = this.getActiveAddinClient();
+    if (!client) {
+      return {
+        ok: false,
+        error: runtimeError("ADDIN_DISCONNECTED", "No Excel add-in session is connected.", { retryable: true })
+      };
+    }
+    if (input.requests.length === 0) {
+      return { ok: true, copied: [], copyCount: 0, results: [], warnings: [], telemetry: { styleCopyCount: 0 } };
+    }
+
+    const targetRanges = (await Promise.all(input.requests.map((request) =>
+      request.targetAddress !== undefined
+        ? Promise.resolve([{ workbookId: request.workbookId, sheetName: request.targetSheetName, address: request.targetAddress }])
+        : this.getSheetUsedRange(request.workbookId, request.targetSheetName)
+    ))).flat();
+    const permissionWarnings = this.validateDirectMutation(input.workbookId, targetRanges, "format");
+    if (permissionWarnings.length > 0) {
+      return {
+        ok: false,
+        error: runtimeError("PERMISSION_DENIED", "Grouped style copy is blocked by the current Open Workbook permission policy.", {
+          retryable: false,
+          details: { permissionWarnings }
+        }),
+        warnings: permissionWarnings
+      };
+    }
+
+    return this.applyDirectTransaction(
+      {
+        workbookId: input.workbookId,
+        goal: `Before copying ${input.requests.length} grouped style range(s)`,
+        scopes: targetRanges.map(rangeScope),
+        destructiveLevel: "format",
+        idempotencyKey: options.idempotencyKey
+      },
+      async () => {
+        const backup = await this.createWorkbookBackup({
+          workbookId: input.workbookId,
+          reason: `Before copying ${input.requests.length} grouped style range(s)`,
+          ranges: targetRanges
+        });
+        if (!("backup" in backup)) {
+          return backup;
+        }
+        const result = await client.request<StyleCopyManyResponse>("style.copy_dimensions_many", input);
+        const backupIds = backup.backup?.backupId ? [backup.backup.backupId] : [];
+        return {
+          ok: result.ok,
+          backup: backup.backup,
+          backups: backupIds,
+          rollbackAvailable: backupIds.length > 0,
+          warnings: result.warnings ?? [],
+          telemetry: { styleCopyCount: result.copyCount },
+          result,
+          results: result.results
+        };
+      }
+    );
   }
 
   async readFormulaPatterns(
@@ -5109,11 +5239,10 @@ export class RuntimeService {
     }
 
     const ranges = await this.getSheetUsedRange(input.workbookId, input.targetSheetName);
-    const backup = await this.createWorkbookBackup({
-      workbookId: input.workbookId,
-      reason: `Before repairing ${input.targetSheetName} from template ${input.templateId}`,
-      ranges
-    });
+    const permissionWarnings = this.validateDirectMutation(input.workbookId, ranges, "structure");
+    if (permissionWarnings.length > 0) {
+      return permissionDenied("Template repair is blocked by the current Open Workbook permission policy.", permissionWarnings);
+    }
     const repairRequest: AddinTemplateRepairRequest = {
       workbookId: input.workbookId,
       templateId: input.templateId,
@@ -5122,13 +5251,37 @@ export class RuntimeService {
       dataRegions: template.dataRegions,
       repair: input.repair ?? ["styles", "formulas", "dataRegions"]
     };
-    const result = await client.request("template.repair", repairRequest);
-    const validation = await this.validateSheetAgainstTemplate({
-      workbookId: input.workbookId,
-      templateId: input.templateId,
-      targetSheetName: input.targetSheetName
-    });
-    return { ok: true, backup, result, validation };
+    return this.applyDirectTransaction(
+      {
+        workbookId: input.workbookId,
+        goal: `Before repairing ${input.targetSheetName} from template ${input.templateId}`,
+        scopes: ranges.map(rangeScope),
+        destructiveLevel: "structure"
+      },
+      async () => {
+        const backup = await this.createWorkbookBackup({
+          workbookId: input.workbookId,
+          reason: `Before repairing ${input.targetSheetName} from template ${input.templateId}`,
+          ranges
+        });
+        if (!("backup" in backup)) {
+          return backup;
+        }
+        const result = await client.request("template.repair", repairRequest);
+        const validation = await this.validateSheetAgainstTemplate({
+          workbookId: input.workbookId,
+          templateId: input.templateId,
+          targetSheetName: input.targetSheetName
+        });
+        return {
+          ok: (result as { ok?: boolean }).ok !== false,
+          backup: backup.backup,
+          warnings: (result as { warnings?: OperationWarning[] }).warnings ?? [],
+          result,
+          validation
+        };
+      }
+    );
   }
 
   async applyPlan(planId: PlanId, confirmationToken?: string): Promise<OperationResult> {
@@ -5376,8 +5529,11 @@ export class RuntimeService {
     const returnQueuedProgress = this.isRuntimeMutationBusy();
     const scheduled = this.scheduleBatch(request);
     void scheduled.promise.then((result) => {
-      if (result.ok && batchInvalidatesWorkbookMetadata(request)) {
-        this.agent.invalidateWorkbook(request.workbookId);
+      if (result.ok) {
+        this.bumpWorkbookContentVersion(request.workbookId);
+        if (batchInvalidatesWorkbookMetadata(request)) {
+          this.agent.invalidateWorkbook(request.workbookId);
+        }
       }
     }, () => undefined);
     if (returnQueuedProgress) {
@@ -5710,9 +5866,13 @@ export class RuntimeService {
       destructiveLevel: DestructiveLevel;
       taskId?: TaskId | undefined;
       agentId?: AgentId | undefined;
+      idempotencyKey?: string | undefined;
     },
     work: () => Promise<T>
   ): Promise<T | { ok: false; transactionId: TransactionId; rollbackAvailable: false; backups: []; warnings: OperationWarning[]; telemetry: { warningCount: number }; error: ReturnType<typeof runtimeError> }> {
+    if (input.idempotencyKey !== undefined && this.directMutationResults.has(input.idempotencyKey)) {
+      return this.directMutationResults.get(input.idempotencyKey) as T;
+    }
     const agentId = input.agentId ?? this.currentAgentId();
     const transaction = this.transactions.create({
       workbookId: input.workbookId,
@@ -5770,11 +5930,11 @@ export class RuntimeService {
         } else {
           this.persistState();
         }
-        return {
-          ok: false,
+        const blockedResult = {
+          ok: false as const,
           transactionId: transaction.transactionId,
-          rollbackAvailable: false,
-          backups: [],
+          rollbackAvailable: false as const,
+          backups: [] as [],
           warnings: lockResult.conflicts.map((conflict) => ({
             code: conflict.code,
             message: conflict.message,
@@ -5785,6 +5945,7 @@ export class RuntimeService {
             retryable: true
           })
         };
+        return this.cacheDirectMutationResult(input.idempotencyKey, blockedResult);
       }
 
       this.transactions.markApplying(transaction.transactionId, lockResult.locks.map((lock) => lock.lockId));
@@ -5832,13 +5993,22 @@ export class RuntimeService {
             message: `Transaction applied: ${transaction.goal}`
           });
         }
-        if (resultRecord.ok !== false && transactionInvalidatesWorkbookMetadata(input)) {
-          this.agent.invalidateWorkbook(input.workbookId);
+        if (resultRecord.ok !== false) {
+          this.bumpWorkbookContentVersion(input.workbookId);
+          if (transactionInvalidatesWorkbookMetadata(input)) {
+            this.agent.invalidateWorkbook(input.workbookId);
+          }
         }
         if (typeof result === "object" && result !== null && !Array.isArray(result)) {
-          return { ...result, transactionId: transaction.transactionId } as T;
+          return this.cacheDirectMutationResult(input.idempotencyKey, {
+            ...result,
+            transactionId: transaction.transactionId,
+            backups: Array.isArray((result as { backups?: unknown }).backups) ? ((result as unknown) as { backups: unknown[] }).backups : backups,
+            rollbackAvailable: Boolean((result as { rollbackAvailable?: unknown }).rollbackAvailable) || backups.length > 0,
+            warnings
+          } as T);
         }
-        return result;
+        return this.cacheDirectMutationResult(input.idempotencyKey, result);
       } finally {
         const releasedLocks = this.locks.release(lockResult.locks.map((lock) => lock.lockId));
         this.markConflictTelemetryClearedByLock(releasedLocks.map((lock) => lock.lockId));
@@ -5856,6 +6026,13 @@ export class RuntimeService {
         }
       }
     });
+  }
+
+  private cacheDirectMutationResult<T>(idempotencyKey: string | undefined, result: T): T {
+    if (idempotencyKey !== undefined) {
+      this.directMutationResults.set(idempotencyKey, result);
+    }
+    return result;
   }
 
   private async applyBatchDirect(request: BatchRequest): Promise<OperationResult> {
@@ -5961,7 +6138,7 @@ export class RuntimeService {
     }
     const values = read.values.map((row) => row.map((value) => transform(value) as CellValue));
     const changedCells = changedCellCount(read.values, values);
-    const result = changedCells > 0 ? await this.writeCleanValues(target, values, action.replace(/_/g, " ")) : undefined;
+    const result = changedCells > 0 ? await this.writeChangedCleanValues(target, read.values, values, action.replace(/_/g, " ")) : undefined;
     return cleaningReport(input.workbookId, action, target, changedCells, undefined, result);
   }
 
@@ -5999,6 +6176,18 @@ export class RuntimeService {
           preserveFormats: true
         }
       ]
+    });
+  }
+
+  private async writeChangedCleanValues(target: A1Range, before: CellMatrix, after: CellMatrix, reason: string): Promise<OperationResult | undefined> {
+    const operations = changedValueRunOperations(target, before, after, reason);
+    if (operations.length === 0) {
+      return undefined;
+    }
+    return this.applyBatch({
+      workbookId: target.workbookId,
+      mode: "apply",
+      operations
     });
   }
 
@@ -7459,6 +7648,18 @@ function scopesFromOperation(workbookId: WorkbookId, operation: ExcelOperation):
     case "range.unmerge":
     case "range.restore_snapshot":
       return [rangeScope(operation.target)];
+    case "range.write_values_many":
+      return operation.entries.map((entry) => rangeScope(entry.target));
+    case "range.write_number_formats_many":
+      return operation.entries.map((entry) => rangeScope(entry.target));
+    case "range.write_styles_many":
+      return operation.entries.map((entry) => rangeScope(entry.target));
+    case "range.clear_many":
+      return operation.entries.map((entry) => rangeScope(entry.target));
+    case "range.clear_formats_many":
+      return operation.targets.map(rangeScope);
+    case "range.autofit_many":
+      return operation.entries.map((entry) => rangeScope(entry.target));
     case "range.write_formulas":
       return [
         rangeScope(operation.target),
@@ -7474,6 +7675,11 @@ function scopesFromOperation(workbookId: WorkbookId, operation: ExcelOperation):
     case "workbook.save":
       return [{ type: "workbook", workbookId }];
     case "sheet.copy":
+      return [
+        { type: "sheet", workbookId, sheetName: operation.sourceSheetName },
+        { type: "workbook", workbookId }
+      ];
+    case "sheet.copy_clean_data_regions":
       return [
         { type: "sheet", workbookId, sheetName: operation.sourceSheetName },
         { type: "workbook", workbookId }
@@ -7644,6 +7850,48 @@ function changedCellCount(before: CellMatrix, after: CellMatrix): number {
     }
   }
   return changed;
+}
+
+function changedValueRunOperations(target: A1Range, before: CellMatrix, after: CellMatrix, reason: string): Array<Extract<ExcelOperation, { kind: "range.write_values" }>> {
+  const parsed = parseA1Address(stripSheetName(target.address));
+  const operations: Array<Extract<ExcelOperation, { kind: "range.write_values" }>> = [];
+  const rowCount = Math.max(before.length, after.length);
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+    const columnCount = Math.max(before[rowIndex]?.length ?? 0, after[rowIndex]?.length ?? 0);
+    let runStart: number | undefined;
+    const flushRun = (exclusiveColumnIndex: number) => {
+      if (runStart === undefined) {
+        return;
+      }
+      const startColumn = parsed.startColumn + runStart;
+      const endColumn = parsed.startColumn + exclusiveColumnIndex - 1;
+      const row = parsed.startRow + rowIndex;
+      operations.push({
+        kind: "range.write_values",
+        operationId: makeId<OperationId>("op"),
+        workbookId: target.workbookId,
+        destructiveLevel: "values",
+        reason,
+        target: {
+          workbookId: target.workbookId,
+          sheetName: target.sheetName,
+          address: formatA1Address({ startRow: row, endRow: row, startColumn, endColumn })
+        },
+        values: [(after[rowIndex] ?? []).slice(runStart, exclusiveColumnIndex)],
+        preserveFormats: true
+      });
+      runStart = undefined;
+    };
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+      if (before[rowIndex]?.[columnIndex] !== after[rowIndex]?.[columnIndex]) {
+        runStart ??= columnIndex;
+        continue;
+      }
+      flushRun(columnIndex);
+    }
+    flushRun(columnCount);
+  }
+  return operations;
 }
 
 function detectHeaderCandidates(values: CellMatrix, maxRows: number): Array<{ rowIndex: number; score: number; nonEmptyCount: number; uniqueCount: number }> {
@@ -8270,6 +8518,25 @@ function chunkOperationsForRetry(operations: ExcelOperation[]): ExcelOperation[]
 
 function batchInvalidatesWorkbookMetadata(request: BatchRequest): boolean {
   return operationsInvalidateWorkbookMetadata(request.operations);
+}
+
+function eventWorkbookId(params: unknown): WorkbookId | string | undefined {
+  if (!params || typeof params !== "object") {
+    return undefined;
+  }
+  const record = params as Record<string, unknown>;
+  const direct = record.workbookId ?? record.workbookID;
+  if (typeof direct === "string") {
+    return direct;
+  }
+  const workbook = record.workbook;
+  if (workbook && typeof workbook === "object") {
+    const nested = (workbook as Record<string, unknown>).workbookId ?? (workbook as Record<string, unknown>).id;
+    if (typeof nested === "string") {
+      return nested;
+    }
+  }
+  return undefined;
 }
 
 function operationsInvalidateWorkbookMetadata(operations: ExcelOperation[]): boolean {

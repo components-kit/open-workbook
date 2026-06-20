@@ -97,7 +97,7 @@ const report = {
       coverage: [
         "Signed-in Codex CLI can initialize Open Workbook MCP",
         "Codex uses gpt-5.4-mini with low reasoning unless overridden",
-        "Bundled open-workbook-excel skill guidance is loaded into every scenario prompt",
+        "Bundled open-workbook-skills skill guidance is loaded into every scenario prompt",
         "Every scenario expects workbook identity plus runtime discovery before mutation",
         "Large table reorder/filter/sort/append/update choice quality",
         "Multi-agent lock and conflict decisions",

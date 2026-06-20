@@ -39,12 +39,15 @@ import type {
   SheetTemplateFingerprintRequest,
   SheetTemplateFingerprintResponse,
   StyleCopyRequest,
+  StyleCopyManyRequest,
+  StyleCopyManyResponse,
   StyleCopyResponse,
   StyleDimension,
   StyleFingerprintRequest,
   StyleFingerprintResponse,
   TableAppendRowsRequest,
   TableApplyFiltersRequest,
+  TableApplyViewRequest,
   TableCopyStructureRequest,
   TableCreateRequest,
   TableInfo,
@@ -1042,6 +1045,23 @@ export async function sortTable(request: TableSortRequest): Promise<{ ok: boolea
   });
 }
 
+export async function applyTableView(request: TableApplyViewRequest): Promise<{ ok: boolean; info: TableInfo }> {
+  return mutateTableAndReturnInfo(request, (table) => {
+    if (request.clearFilters) {
+      table.clearFilters();
+    }
+    for (const filter of request.filters ?? []) {
+      table.columns.getItem(filter.column as any).filter.apply(filter.criteria as Excel.FilterCriteria);
+    }
+    if (request.clearSort) {
+      table.sort.clear();
+    }
+    if (request.sort?.fields?.length) {
+      table.sort.apply(request.sort.fields as Excel.SortField[], request.sort.matchCase, request.sort.method as any);
+    }
+  });
+}
+
 export async function clearTableSort(request: TableSelector): Promise<{ ok: boolean; info: TableInfo }> {
   return mutateTableAndReturnInfo(request, (table) => table.sort.clear());
 }
@@ -1243,6 +1263,14 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
             counters.cellsWritten += matrixCellCount(operation.values);
             break;
           }
+          case "range.write_values_many": {
+            for (const entry of operation.entries) {
+              assertMatrixShape(entry.target, entry.values);
+              counters.chunkCount += writeMatrixInChunks(context, entry.target, entry.values, "values");
+              counters.cellsWritten += matrixCellCount(entry.values);
+            }
+            break;
+          }
           case "range.write_formulas": {
             assertMatrixShape(operation.target, operation.formulas);
             counters.chunkCount += writeMatrixInChunks(context, operation.target, operation.formulas, "formulas");
@@ -1256,8 +1284,23 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
             counters.cellsWritten += matrixCellCount(operation.numberFormat);
             break;
           }
+          case "range.write_number_formats_many": {
+            for (const entry of operation.entries) {
+              assertMatrixShape(entry.target, entry.numberFormat);
+              counters.chunkCount += writeMatrixInChunks(context, entry.target, entry.numberFormat, "numberFormat");
+              counters.cellsWritten += matrixCellCount(entry.numberFormat);
+            }
+            break;
+          }
           case "range.write_styles": {
             applyRangeStyle(getRange(context, operation.target), operation.style);
+            counters.cellsWritten += payload.compiled.estimatedCellsTouched;
+            break;
+          }
+          case "range.write_styles_many": {
+            for (const entry of operation.entries) {
+              applyRangeStyle(getRange(context, entry.target), entry.style);
+            }
             counters.cellsWritten += payload.compiled.estimatedCellsTouched;
             break;
           }
@@ -1285,6 +1328,20 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
                   ? Excel.ClearApplyTo.formats
                   : toClearApplyTo(operation.applyTo ?? "all");
             getRange(context, operation.target).clear(applyTo);
+            counters.cellsWritten += payload.compiled.estimatedCellsTouched;
+            break;
+          }
+          case "range.clear_many": {
+            for (const entry of operation.entries) {
+              getRange(context, entry.target).clear(toClearApplyTo(entry.applyTo ?? "all"));
+            }
+            counters.cellsWritten += payload.compiled.estimatedCellsTouched;
+            break;
+          }
+          case "range.clear_formats_many": {
+            for (const target of operation.targets) {
+              getRange(context, target).clear(Excel.ClearApplyTo.formats);
+            }
             counters.cellsWritten += payload.compiled.estimatedCellsTouched;
             break;
           }
@@ -1326,6 +1383,18 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
           }
           case "range.autofit_rows": {
             getRange(context, operation.target).format.autofitRows();
+            break;
+          }
+          case "range.autofit_many": {
+            for (const entry of operation.entries) {
+              const format = getRange(context, entry.target).format;
+              if (entry.dimension === "columns" || entry.dimension === "both") {
+                format.autofitColumns();
+              }
+              if (entry.dimension === "rows" || entry.dimension === "both") {
+                format.autofitRows();
+              }
+            }
             break;
           }
           case "range.apply_autofilter": {
@@ -1371,6 +1440,22 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
               : sourceSheet;
             const copiedSheet = sourceSheet.copy(toWorksheetPositionType(operation.position ?? "after"), relativeSheet);
             copiedSheet.name = operation.newSheetName;
+            if (operation.activate ?? true) {
+              copiedSheet.activate();
+            }
+            sheetsChanged += 1;
+            break;
+          }
+          case "sheet.copy_clean_data_regions": {
+            const sourceSheet = context.workbook.worksheets.getItem(operation.sourceSheetName);
+            const relativeSheet = operation.relativeToSheetName
+              ? context.workbook.worksheets.getItem(operation.relativeToSheetName)
+              : sourceSheet;
+            const copiedSheet = sourceSheet.copy(toWorksheetPositionType(operation.position ?? "after"), relativeSheet);
+            copiedSheet.name = operation.newSheetName;
+            for (const dataRegion of operation.dataRegions) {
+              copiedSheet.getRange(stripSheetName(dataRegion)).clear(Excel.ClearApplyTo.contents);
+            }
             if (operation.activate ?? true) {
               copiedSheet.activate();
             }
@@ -1460,7 +1545,7 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
     });
 
     const operationResult: OperationResult & { readData: unknown } = {
-      ok: warnings.every((warning) => warning.code !== "TEMPLATE_SOURCE_MISSING"),
+      ok: !warnings.some((warning) => warning.code === "TEMPLATE_SOURCE_MISSING" || warning.code === "OPERATION_NOT_SUPPORTED"),
       diffSummary: result.diffSummary,
       data: result.readData,
       readData: result.readData,
@@ -1736,7 +1821,31 @@ export async function captureStyleFingerprint(request: StyleFingerprintRequest):
 }
 
 export async function copyStyleDimensions(request: StyleCopyRequest): Promise<StyleCopyResponse> {
+  return Excel.run(async (context) => copyStyleDimensionsInContext(context, request));
+}
+
+export async function copyStyleDimensionsMany(request: StyleCopyManyRequest): Promise<StyleCopyManyResponse> {
   return Excel.run(async (context) => {
+    const results: StyleCopyResponse[] = [];
+    const warnings: OperationWarning[] = [];
+    const copied = new Set<StyleDimension>();
+    for (const entry of request.requests) {
+      const result = await copyStyleDimensionsInContext(context, entry);
+      results.push(result);
+      result.copied.forEach((dimension) => copied.add(dimension));
+      warnings.push(...result.warnings);
+    }
+    return {
+      ok: results.every((result) => result.ok),
+      copied: [...copied],
+      copyCount: results.length,
+      results,
+      warnings
+    };
+  });
+}
+
+async function copyStyleDimensionsInContext(context: Excel.RequestContext, request: StyleCopyRequest): Promise<StyleCopyResponse> {
     const sourceSheet = context.workbook.worksheets.getItem(request.sourceSheetName);
     const targetSheet = context.workbook.worksheets.getItem(request.targetSheetName);
     const sourceRange = request.sourceAddress ? sourceSheet.getRange(stripSheetName(request.sourceAddress)) : sourceSheet.getUsedRangeOrNullObject();
@@ -1824,7 +1933,6 @@ export async function copyStyleDimensions(request: StyleCopyRequest): Promise<St
 
     await context.sync();
     return { ok: warnings.length === 0 || copied.length > 0, copied: [...new Set(copied)], warnings };
-  });
 }
 
 export async function readFormulaPatterns(request: FormulaPatternRequest): Promise<FormulaPatternResponse> {

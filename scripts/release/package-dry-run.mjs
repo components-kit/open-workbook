@@ -42,7 +42,7 @@ for (const packagePath of packages) {
     console.error(`Package dry run for ${packagePath} includes compiled test artifacts.`);
     failed = true;
   }
-  if (packagePath === "./packages/cli" && !packedFiles.includes("assets/instructions/open-workbook-excel/SKILL.md")) {
+  if (packagePath === "./packages/cli" && !packedFiles.includes("assets/instructions/open-workbook-skills/SKILL.md")) {
     console.error("CLI package dry run is missing generic instruction assets.");
     failed = true;
   }

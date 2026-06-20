@@ -17,10 +17,22 @@ describe("excel capabilities", () => {
   it("keeps Excel operations available as internal backend capabilities", () => {
     const capabilities = listExcelCapabilities();
 
-    expect(capabilities.length).toBe(294);
+    expect(capabilities.length).toBe(301);
     expect(getExcelCapability("excel.agent.run")).toBeTruthy();
     expect(getExcelCapability("excel.range.write_values")?.mutatesWorkbook).toBe(true);
     expect(getExcelCapability("excel.workflow.inspect_analyze")?.mutatesWorkbook).toBe(false);
+  });
+
+  it("does not advertise executor-limited operations as stable or covered", () => {
+    for (const capabilityName of ["excel.range.write_hyperlinks", "excel.range.write_comments", "excel.sheet.move"]) {
+      const capability = getExcelCapability(capabilityName);
+      if (!capability) {
+        expect(listExcelCapabilityCoverage().some((entry) => entry.capability.name === capabilityName), capabilityName).toBe(false);
+        continue;
+      }
+      expect(capability.status, capabilityName).toBe("planned");
+      expect(listExcelCapabilityCoverage().find((entry) => entry.capability.name === capabilityName)?.planningStatus, capabilityName).toBe("defer");
+    }
   });
 
   it("keeps internal capabilities separate from the public MCP tool surface", () => {
@@ -28,7 +40,7 @@ describe("excel capabilities", () => {
     const exposed = getPublicAgentToolCatalog();
 
     expect(exposed.map((tool) => tool.name)).toEqual(["excel.agent.run"]);
-    expect(summary.total).toBe(294);
+    expect(summary.total).toBe(301);
     expect(summary.exposed).toBe(0);
     expect(summary.capabilities.some((capability) => capability.name === "excel.range.read_compact")).toBe(true);
   });

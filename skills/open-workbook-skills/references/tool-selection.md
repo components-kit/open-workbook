@@ -22,6 +22,8 @@ Do not call backend primitive capabilities directly in normal MCP clients. Looku
 
 If `excel.agent.run` returns `AMBIGUOUS_TARGET`, select one candidate and retry with `target.candidateId` plus the same `workbookContextId`. Do not switch to shell, Python, openpyxl, pandas, or offline `.xlsx` parsing for a connected live workbook.
 
+If `excel.agent.run` returns `NEEDS_WORKFLOW_REDIRECT`, stop the fragmented operation sequence and call the suggested grouped `preview_update` workflow. Do not continue chunking adjacent style, clear, autofit, table, or formula operations.
+
 ## Structured Intent
 
 When the user's LLM/client can infer intent, pass structured fields instead of relying only on English keyword matching:
@@ -75,6 +77,8 @@ Avoid prompts that require workbook-wide scans unless the user asked for audit, 
 - For formulas, use `intent.action: "write_formulas"` and formula matrices beginning with `=`.
 - For formula pattern repair from a registered template, use `repair_formula_patterns` with `values.templateId` and `target.sheetName`, then apply the returned preview once.
 - For direct styles, use `intent.action: "format_range"` with a narrow `target`. For style audit/comparison, use `read_style_fingerprint` or `compare_style_fingerprint` with explicit source and target sheets/ranges. For workbook theme requests, use `get_theme` or `apply_theme` in answer mode and report the returned capability status; do not synthesize theme changes when the host says unavailable. For template style copy or repair, use `copy_style_from_template` or `repair_style_consistency` with explicit source/destination or `values.templateId`, then apply once.
+- For style-only requests such as “make Booking look like Employees,” use `copy_style_from_template`; never duplicate the source/template sheet or change source values.
+- For OCR, screenshots, forms, invoices, shipment documents, booking images, or other field/value data that must become a horizontal styled table, use `replace_range_with_styled_table` with `values.headers`, `values.row` or `values.rows`, optional `values.clearRange`, and optional `values.headerStyleSource` / `values.bodyStyleSource`. This workflow clears stale layout, writes the table, styles header/body, and autofits in one preview/apply path.
 - For explicit repair intents, use `repair_style_from_template`, `repair_formulas_from_template`, or `repair_table_structure` with `mode: "preview_update"` and then apply once. Use `repair_filters_from_template`, `repair_print_layout`, `repair_named_ranges`, `repair_formula_errors`, or `repair_merged_cells` with `mode: "answer"` to get a structured repair report when the host cannot safely execute the category.
 - For number formats, use `intent.action: "write_number_formats"` with `values.numberFormat` or `values.numberFormats`.
 - For cleaning inspections, use `detect_header_row`, `detect_outliers`, or `fuzzy_match` with `mode: "answer"`. For cleaning transforms, use `normalize_headers`, `trim_whitespace`, `remove_duplicates`, `parse_dates`, `parse_numbers`, `standardize_currency`, `fill_missing_values`, `split_column`, or `merge_columns` with a concrete range, then apply once.
@@ -84,9 +88,10 @@ Avoid prompts that require workbook-wide scans unless the user asked for audit, 
 - For table row changes, use `append_table_rows` or `update_table_rows` with explicit `target.tableName` and `values.rows`.
 - For table structure changes, use `create_table`, `resize_table`, `reorder_table_columns`, or `copy_table_structure` with explicit table/sheet/address fields, then apply the returned preview once.
 - For table presentation, use `clear_table_filters`, `set_table_total_row`, or `set_table_style` with explicit `target.tableName`.
-- For sheet structure and presentation, use `create_sheet`, `copy_sheet`, `rename_sheet`, `hide_sheet`, `unhide_sheet`, or `set_sheet_tab_color`; pass `target.sheetName` for existing sheets, `values.newSheetName` for copy/rename, `values.sheetName` for create, and `values.color` for tab color.
+- For sheet structure and presentation, use `create_sheet`, `copy_sheet`, `rename_sheet`, `hide_sheet`, `unhide_sheet`, or `set_sheet_tab_color`; pass `target.sheetName` for existing sheets, `values.newSheetName` for copy/rename, `values.sheetName` for create, and `values.color` for tab color. Use raw `copy_sheet` only for an exact duplicate including old values.
 - For template registry reads, use `list_templates`, `read_template`, `detect_templates`, or `infer_template_regions` with `mode: "answer"` and `values.templateId` when needed.
 - For template lifecycle and repair, use `register_template`, `unregister_template`, `clear_template_data_regions`, `fill_template_regions`, or `repair_sheet_from_template` with `mode: "preview_update"` and then apply once. Pass `values.templateId`, `target.sheetName` or `values.sourceSheetName`, `values.targetSheetName`, and optional `values.dataRegions` or repair dimensions when known. For `fill_template_regions`, pass explicit `values.regions` entries or a `values.regionValues` map keyed by declared data-region address.
+- For “create from template,” prefer a clean template copy: preserve headers, formulas, styles, validation, and layout, then clear old data regions so fresh rows follow the same pattern. Do not leave previous business data in the new sheet unless the user explicitly asks for a raw duplicate.
 - For local safety captures, use `create_snapshot` or `create_backup` with `mode: "preview_update"`; pass `target.sheetName` and `target.range` for scoped captures when possible, then apply once with the returned confirmation token.
 - For safety artifact inspection, use `list_snapshots`, `read_snapshot`, `list_backups`, or `read_backup` with `mode: "answer"`; pass `values.snapshotId` or `values.backupId` for reads. Snapshot reads return compact metadata and payload counts, not the full stored payload.
 - For safety artifact lifecycle work, use `compare_snapshots` and `verify_backup` with `mode: "answer"`; use `create_file_backup`, `restore_file_backup`, `prune_backups`, `refresh_snapshot`, `invalidate_snapshot`, `delete_snapshot`, `pin_backup`, `unpin_backup`, or `delete_backup` with `mode: "preview_update"` and then apply with the returned confirmation token.
@@ -100,7 +105,7 @@ Never pad broad ranges with blanks or nulls when only a smaller rectangle should
 Describe the user's goal through `excel.agent.run` and let the backend choose internal table, template, formula, pivot, chart, validation, snapshot, diff, backup, and transaction capabilities.
 
 - For table appends, pass `target.candidateId` or `target.tableName` with `values.rows`, preview first, then apply.
-- For table sort/filter, pass `intent.action: "sort_table"` or `filter_range` plus a table/range target.
+- For table sort/filter, pass `intent.action: "sort_table"` or `filter_range` plus a table/range target. If one user request combines table filters and sorting, use `intent.action: "apply_table_view"` with `values.filters` and `values.sort.fields` so the backend previews and applies one table mutation.
 - For template, formula repair, pivot/chart, and risky-edit tasks, use `prepare`, `find`, `answer`, `preview_update`, and `validate` as appropriate; template metadata reads can stay in `answer`, while template mutations and repairs must preview/apply; report host capability warnings honestly.
 - For save/recalculate, use `intent.action: "save"` or `calculate`; the backend maps these to workbook-level operations.
 

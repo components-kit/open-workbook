@@ -25,6 +25,7 @@ import type { RuntimeService } from "./runtime-service.js";
 export interface MetadataBuildResult {
   metadata: WorkbookMetadata;
   cacheHit: boolean;
+  freshnessReason: string;
 }
 
 export class WorkbookMetadataBuilder {
@@ -43,6 +44,9 @@ export class WorkbookMetadataBuilder {
       throw new Error("No active Excel workbook is available. Open Excel and connect the Open Workbook add-in.");
     }
     const selection = await this.readSelection(activeWorkbook.workbookId);
+    const contentVersion = typeof (this.runtime as unknown as { getWorkbookContentVersion?: (workbookId: WorkbookId | string) => number }).getWorkbookContentVersion === "function"
+      ? (this.runtime as unknown as { getWorkbookContentVersion: (workbookId: WorkbookId | string) => number }).getWorkbookContentVersion(activeWorkbook.workbookId)
+      : 0;
     const mapResult = await this.runtime.getWorkbookMap();
     if ((mapResult as { ok?: boolean }).ok === false) {
       throw new Error("Workbook map is unavailable because the Excel add-in is disconnected.");
@@ -55,9 +59,9 @@ export class WorkbookMetadataBuilder {
       sheets
     });
     if (existingByContext) {
-      const freshness = checkMetadataFreshness(existingByContext, fingerprint, { requireSampled: includeSamples });
+      const freshness = checkMetadataFreshness(existingByContext, fingerprint, { requireSampled: includeSamples, contentVersion });
       if (freshness.status === "FRESH") {
-        return { metadata: this.cache.set(withFreshSelection(existingByContext, selection)), cacheHit: true };
+        return { metadata: this.cache.set(withFreshSelection(existingByContext, selection)), cacheHit: true, freshnessReason: "cached metadata is fresh" };
       }
       this.cache.delete(existingByContext.workbookKey);
     }
@@ -68,8 +72,11 @@ export class WorkbookMetadataBuilder {
       ...(activeWorkbook.path !== undefined ? { workbookPath: activeWorkbook.path } : {})
     });
     const existing = this.cache.get(key);
-    if (existing && checkMetadataFreshness(existing, fingerprint, { requireSampled: includeSamples }).status === "FRESH") {
-      return { metadata: this.cache.set(withFreshSelection(existing, selection)), cacheHit: true };
+    if (existing) {
+      const freshness = checkMetadataFreshness(existing, fingerprint, { requireSampled: includeSamples, contentVersion });
+      if (freshness.status === "FRESH") {
+        return { metadata: this.cache.set(withFreshSelection(existing, selection)), cacheHit: true, freshnessReason: "cached metadata is fresh" };
+      }
     }
 
     const tables = await this.buildTableMetadata(activeWorkbook.workbookId, sheets);
@@ -101,6 +108,7 @@ export class WorkbookMetadataBuilder {
       workbookContextId: reusableContextId ?? makeId("wbctx"),
       workbookKey: key,
       detailLevel: includeSamples ? "sampled" : "structure",
+      contentVersion,
       workbook: {
         workbookId: activeWorkbook.workbookId,
         name: activeWorkbook.name,
@@ -130,7 +138,7 @@ export class WorkbookMetadataBuilder {
       updatedAt: now,
       expiresAt: now + DEFAULT_METADATA_CACHE_TTL_MS
     };
-    return { metadata: this.cache.set(metadata), cacheHit: false };
+    return { metadata: this.cache.set(metadata), cacheHit: false, freshnessReason: includeSamples ? "built sampled metadata" : "built structure metadata" };
   }
 
   invalidateWorkbook(workbookId: WorkbookId | string): void {

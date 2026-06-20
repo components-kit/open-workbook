@@ -1,6 +1,6 @@
 # Packaging And Publishing
 
-Open Workbook is designed for local-first, non-AppSource distribution. The public entry point is `@components-kit/open-workbook`, which can be run through `npx` and carries the built MCP server, Excel add-in assets, and fallback agent instructions. The primary skill install path is skills.sh against `skills/open-workbook-excel`.
+Open Workbook is designed for local-first, non-AppSource distribution. The public entry point is `@components-kit/open-workbook`, which can be run through `npx` and carries the built MCP server, Excel add-in assets, and fallback agent instructions. The primary skill install path is skills.sh against `skills/open-workbook-skills`.
 
 ## Packages
 
@@ -81,8 +81,8 @@ The tarball should include:
 - `packages/cli/assets/excel-addin/public`
 - `packages/cli/assets/excel-addin/scripts`
 - `packages/cli/assets/excel-addin/manifest.xml`
-- `packages/cli/assets/instructions/open-workbook-excel/SKILL.md`
-- `packages/cli/assets/instructions/open-workbook-excel/references`
+- `packages/cli/assets/instructions/open-workbook-skills/SKILL.md`
+- `packages/cli/assets/instructions/open-workbook-skills/references`
 - `packages/cli/README.md`
 
 ## Publish Checklist
@@ -93,7 +93,7 @@ Before publishing:
 2. Run `corepack pnpm verify`.
 3. Run `node packages/cli/dist/index.js doctor`.
 4. Run `corepack pnpm pack:dry-run`.
-5. Confirm `node packages/cli/dist/index.js setup --dry-run` prints the `npx -y @components-kit/open-workbook@latest mcp` local stdio launch command and `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
+5. Confirm `node packages/cli/dist/index.js setup --dry-run` prints the `npx -y @components-kit/open-workbook@latest mcp` local stdio launch command and `npx skills add components-kit/open-workbook --skill open-workbook-skills`.
 6. Confirm `node packages/cli/dist/index.js upgrade --dry-run` prints the same launch command with upgrade wording.
 7. Confirm generated manifests include the expected taskpane URL and `backendUrl`.
 8. Confirm `@components-kit/open-workbook-excel-addin` remains private.
@@ -124,13 +124,13 @@ npx -y @components-kit/open-workbook@latest mcp
 They install the skill with:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel
+npx skills add components-kit/open-workbook --skill open-workbook-skills
 ```
 
 For OpenCode:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel -a opencode -g -y
+npx skills add components-kit/open-workbook --skill open-workbook-skills -a opencode -g -y
 ```
 
 ## Native Installer Shape

@@ -18,7 +18,8 @@ Open Workbook treats speed as a correctness requirement because slow workbook au
 - Group operations by workbook, sheet, and contiguous range.
 - Chunk large payloads before Office.js limits.
 - On the public agent surface, describe large generated batches through `excel.agent.run`; the backend preflights them and decides whether to apply directly, submit to the queue, or chunk safely.
-- Describe grouped report styling through one `excel.agent.run` preview instead of many parallel single-range style writes; internally, large style entry lists can route to `excel.range.write_styles_many` and queued parent jobs.
+- Describe grouped range work through one `excel.agent.run` preview instead of many parallel single-range writes; internally, related values, number formats, styles, clears, and autofit route to `excel.range.*_many` operations and queued parent jobs when needed.
+- For extracted booking/client-image tables, use one `replace_range_with_styled_table` preview/apply so values, clearing, autofit, and style copies are compiled together.
 - Surface queued or long-running mutations through transaction progress instead of hiding them behind parallel write calls.
 - For chunked work, surface returned job progress so the user sees one update with chunk progress.
 - Suspend calculation and screen updating only around large operations.
@@ -60,6 +61,8 @@ For retry-prone mutation paths, pass a stable `idempotencyKey`. Replays with the
 Lookup capabilities are cheaper than workbook scans when the backend does not know where data lives. They return ranked sheet/table/column/header/entity/range candidates and encoded `matchId` values; normal agents should ask through `excel.agent.run` `mode: "find"` or retry with a returned candidate instead of calling lookup primitives directly.
 
 Initial releases collect telemetry first, then set hard SLOs from real workbook tests.
+
+Use `corepack pnpm diagnose:session -- <log-file>` on OpenCode or MCP logs when tool-call count looks wrong. The report highlights repeated `excel.agent.run` calls, missed batching opportunities, preview/apply imbalance, and when `operation_status` should replace repeated apply attempts.
 
 ## Token Budget Examples
 

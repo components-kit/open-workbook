@@ -3,36 +3,56 @@ import type { AgentId, TransactionId, WorkbookId } from "./ids.js";
 export type WorkbookContextId = string & { readonly __brand: "WorkbookContextId" };
 export type AgentOperationId = string & { readonly __brand: "AgentOperationId" };
 
-export type AgentRunMode =
-  | "auto"
-  | "status"
-  | "prepare"
-  | "find"
-  | "answer"
-  | "preview_update"
-  | "apply_update"
-  | "validate"
-  | "rollback";
+export const AGENT_RUN_MODES = [
+  "auto",
+  "status",
+  "prepare",
+  "find",
+  "answer",
+  "preview_update",
+  "apply_update",
+  "operation_status",
+  "cancel_operation",
+  "validate",
+  "rollback"
+] as const;
 
-export type AgentRunStatus =
-  | "SUCCESS"
-  | "PREVIEW_READY"
-  | "NEEDS_INPUT"
-  | "AMBIGUOUS_TARGET"
-  | "NOT_FOUND"
-  | "STALE_CONTEXT"
-  | "VALIDATION_FAILED"
-  | "CONFLICT"
-  | "ERROR";
+export type AgentRunMode = typeof AGENT_RUN_MODES[number];
+
+export const AGENT_RUN_STATUSES = [
+  "SUCCESS",
+  "IN_PROGRESS",
+  "PREVIEW_READY",
+  "NEEDS_INPUT",
+  "AMBIGUOUS_TARGET",
+  "NEEDS_WORKFLOW_REDIRECT",
+  "NOT_FOUND",
+  "STALE_CONTEXT",
+  "VALIDATION_FAILED",
+  "CONFLICT",
+  "ERROR"
+] as const;
+
+export type AgentRunStatus = typeof AGENT_RUN_STATUSES[number];
 
 export type AgentNextAction =
   | "answer_now"
   | "call_apply_update"
   | "ask_user"
+  | "call_preview_update"
   | "call_with_target"
   | "fetch_resource"
   | "retry_after_refresh"
   | "manual_review";
+
+export const AGENT_DETAIL_LEVELS = [
+  "workbook_summary",
+  "sheet_summary",
+  "table_sample",
+  "full_table"
+] as const;
+
+export type AgentDetailLevel = typeof AGENT_DETAIL_LEVELS[number];
 
 export interface AgentRunTarget {
   workbookId?: WorkbookId | string;
@@ -108,6 +128,7 @@ export const AGENT_INTENT_ACTIONS = [
   "find_blank_cells",
   "find_range_errors",
   "write_styles_many",
+  "replace_range_with_styled_table",
   "read_style_fingerprint",
   "compare_style_fingerprint",
   "get_theme",
@@ -155,6 +176,7 @@ export const AGENT_INTENT_ACTIONS = [
   "clear_table_filters",
   "sort_table",
   "filter_range",
+  "apply_table_view",
   "set_table_total_row",
   "set_table_style",
   "copy_table_structure",
@@ -242,6 +264,7 @@ export interface AgentRunInput {
       reason?: string;
     }>;
   };
+  detailLevel?: AgentDetailLevel;
   responseMode?: "brief" | "standard" | "verbose";
   budget?: {
     maxPayloadBytes?: number;
@@ -329,6 +352,8 @@ export interface AgentRunOutput {
     previewOperationId?: AgentOperationId | string;
     validationStatus?: "passed" | "failed" | "not_run";
     metadataCacheStatus?: "hit" | "miss" | "not_applicable";
+    metadataFreshnessReason?: string;
+    metadataDetailLevel?: "structure" | "sampled";
     internalReadCount?: number;
     fullReadCellCount?: number;
     candidateCount?: number;
@@ -341,6 +366,13 @@ export interface AgentRunOutput {
     operationRisk?: string;
     actionHandlerId?: string;
     autoApplyBlockedReason?: string;
+    workflowKind?: string;
+    groupedOperationCount?: number;
+    styleCopyCount?: number;
+    clearFormatCount?: number;
+    fragmentationRedirectCount?: number;
+    detectedFamily?: string;
+    suggestedWorkflowKind?: string;
     targetFingerprintStatus?: "matched" | "changed" | "not_applicable";
     targetHintCount?: number;
     targetHintUsed?: boolean;

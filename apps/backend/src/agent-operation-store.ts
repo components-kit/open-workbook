@@ -18,6 +18,7 @@ import {
   type WorkbookLocalConfigImportRequest,
   type WorkbookRestoreFileBackupRequest,
   type TableApplyFiltersRequest,
+  type TableApplyViewRequest,
   type TableAppendRowsRequest,
   type TableCopyStructureRequest,
   type TableCreateRequest,
@@ -40,6 +41,8 @@ import type { AgentOperationRisk } from "./agent-action-policy.js";
 
 export type PendingAgentAction =
   | { kind: "batch"; operations: ExcelOperation[] }
+  | { kind: "style.copy_dimensions_many"; requests: StyleCopyRequest[] }
+  | { kind: "workflow.replace_styled_table"; operations: ExcelOperation[]; styleCopies: StyleCopyRequest[] }
   | { kind: "table.append_rows"; request: TableAppendRowsRequest }
   | { kind: "table.update_rows"; request: TableUpdateRowsRequest }
   | { kind: "table.create"; request: TableCreateRequest }
@@ -49,6 +52,7 @@ export type PendingAgentAction =
   | { kind: "table.clear_filters"; request: TableSelector }
   | { kind: "table.apply_filters"; request: TableApplyFiltersRequest }
   | { kind: "table.sort"; request: TableSortRequest }
+  | { kind: "table.apply_view"; request: TableApplyViewRequest }
   | { kind: "table.set_total_row"; request: TableSetTotalRowRequest }
   | { kind: "table.set_style"; request: TableSetStyleRequest }
   | { kind: "table.copy_structure"; request: TableCopyStructureRequest }
@@ -127,27 +131,149 @@ export interface PendingAgentOperation {
   agentName?: string;
   sourceFingerprintHash?: string;
   sourceTargetFingerprintHash?: string;
+  applyStatus?: "previewed" | "applying" | "applied" | "failed";
+  applyStartedAt?: number;
+  completedAt?: number;
+  expiresAt: number;
+  terminalOutput?: Omit<AgentRunOutput, "telemetry">;
 }
+
+export interface AgentOperationStoreOptions {
+  now?: () => number;
+  previewTtlMs?: number;
+  terminalTtlMs?: number;
+  onChange?: () => void;
+}
+
+const DEFAULT_PREVIEW_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_TERMINAL_TTL_MS = 60 * 60 * 1000;
 
 export class AgentOperationStore {
   private readonly pending = new Map<string, PendingAgentOperation>();
 
-  create(input: Omit<PendingAgentOperation, "operationId" | "confirmationToken" | "createdAt">): PendingAgentOperation {
+  constructor(private readonly options: AgentOperationStoreOptions = {}) {}
+
+  create(input: Omit<PendingAgentOperation, "operationId" | "confirmationToken" | "createdAt" | "expiresAt">): PendingAgentOperation {
+    this.clearExpired();
+    const now = this.now();
     const operation: PendingAgentOperation = {
       ...input,
       operationId: makeId<AgentOperationId>("agentop"),
       confirmationToken: makeId("confirm"),
-      createdAt: Date.now()
+      createdAt: now,
+      expiresAt: now + this.previewTtlMs(),
+      applyStatus: "previewed"
     };
     this.pending.set(operation.operationId, operation);
+    this.emitChange();
     return operation;
   }
 
   get(operationId: string): PendingAgentOperation | undefined {
-    return this.pending.get(operationId);
+    const operation = this.pending.get(operationId);
+    if (!operation) {
+      return undefined;
+    }
+    if (this.now() > operation.expiresAt) {
+      this.pending.delete(operationId);
+      this.emitChange();
+      return undefined;
+    }
+    return operation;
   }
 
   delete(operationId: string): void {
-    this.pending.delete(operationId);
+    if (this.pending.delete(operationId)) {
+      this.emitChange();
+    }
   }
+
+  cancel(operationId: string): PendingAgentOperation | undefined {
+    const operation = this.get(operationId);
+    if (!operation || operation.applyStatus !== "previewed") {
+      return undefined;
+    }
+    this.pending.delete(operationId);
+    this.emitChange();
+    return operation;
+  }
+
+  markApplying(operationId: string): PendingAgentOperation | undefined {
+    const operation = this.get(operationId);
+    if (!operation) {
+      return undefined;
+    }
+    operation.applyStatus = "applying";
+    operation.applyStartedAt = this.now();
+    this.emitChange();
+    return operation;
+  }
+
+  markCompleted(operationId: string, output: Omit<AgentRunOutput, "telemetry">): PendingAgentOperation | undefined {
+    const operation = this.get(operationId);
+    if (!operation) {
+      return undefined;
+    }
+    operation.applyStatus = output.status === "SUCCESS" ? "applied" : "failed";
+    operation.completedAt = this.now();
+    operation.expiresAt = operation.completedAt + this.terminalTtlMs();
+    operation.terminalOutput = output;
+    this.emitChange();
+    return operation;
+  }
+
+  clearExpired(now = this.now()): number {
+    let removed = 0;
+    for (const [operationId, operation] of this.pending.entries()) {
+      if (now > operation.expiresAt) {
+        this.pending.delete(operationId);
+        removed += 1;
+      }
+    }
+    if (removed > 0) {
+      this.emitChange();
+    }
+    return removed;
+  }
+
+  dump(): PendingAgentOperation[] {
+    this.clearExpired();
+    return [...this.pending.values()].map((operation) => cloneOperation(operation));
+  }
+
+  load(operations: PendingAgentOperation[]): void {
+    this.pending.clear();
+    const now = this.now();
+    for (const operation of operations) {
+      if (now <= operation.expiresAt) {
+        this.pending.set(String(operation.operationId), cloneOperation(operation));
+      }
+    }
+  }
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
+  }
+
+  private previewTtlMs(): number {
+    return this.options.previewTtlMs ?? DEFAULT_PREVIEW_TTL_MS;
+  }
+
+  private terminalTtlMs(): number {
+    return this.options.terminalTtlMs ?? DEFAULT_TERMINAL_TTL_MS;
+  }
+
+  private emitChange(): void {
+    this.options.onChange?.();
+  }
+}
+
+function cloneOperation(operation: PendingAgentOperation): PendingAgentOperation {
+  return {
+    ...operation,
+    action: structuredClone(operation.action),
+    changes: structuredClone(operation.changes),
+    ...(operation.risk !== undefined ? { risk: structuredClone(operation.risk) } : {}),
+    ...(operation.terminalOutput !== undefined ? { terminalOutput: structuredClone(operation.terminalOutput) } : {})
+  };
 }

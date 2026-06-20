@@ -6,7 +6,7 @@ Open Workbook is distributed as one npm package for technical users:
 npx -y @components-kit/open-workbook setup
 ```
 
-The setup command prepares the local machine, but it does not edit every agent UI automatically. After setup, install the Open Workbook Excel skill with skills.sh and copy the printed MCP launch command into whichever MCP-capable agent you use.
+The setup command prepares the local machine, but it does not edit every agent UI automatically. After setup, install the Open Workbook Skills skill with skills.sh and copy the printed MCP launch command into whichever MCP-capable agent you use.
 
 ## Requirements
 
@@ -23,10 +23,10 @@ Run setup:
 npx -y @components-kit/open-workbook setup
 ```
 
-Install the Open Workbook Excel skill:
+Install the Open Workbook Skills skill:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel
+npx skills add components-kit/open-workbook --skill open-workbook-skills
 ```
 
 It also prepares an Excel add-in manifest. On macOS, setup copies the manifest into Excel's local WEF sideload folder. On Windows, setup writes a manifest and prints the Trusted Add-in Catalog steps that Excel requires.

@@ -90,7 +90,7 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 - Reframed compact read/resource tools as backend-owned internals while keeping normal agent guidance centered on the backend-composed `excel.agent.run` workflow.
 - Removed the public advanced MCP surface path; primitive operation exposure is now reserved for internal test/development harnesses while packaged MCP clients see one public tool.
 - Reduced normal office-agent behavior call count and payload size by auto-applying small explicit value edits, compacting apply results, and updating the behavior harness to avoid unnecessary prepare/read chains.
-- Updated Open Workbook Excel skill guidance so default-surface clients start with `excel.agent.run` `mode: "prepare"` instead of unavailable advanced workflow tools.
+- Updated Open Workbook Skills skill guidance so default-surface clients start with `excel.agent.run` `mode: "prepare"` instead of unavailable advanced workflow tools.
 - Clarified OpenCode guidance so default-surface clients call `excel.agent.run` instead of runtime/workbook primitives.
 
 ## [0.1.13] - 2026-06-16
@@ -201,7 +201,7 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ### Changed
 
-- Split Codex agent E2E into a blocking core safety lane and report-only workflow quality lane, with bundled `open-workbook-excel` skill guidance loaded into agent prompts.
+- Split Codex agent E2E into a blocking core safety lane and report-only workflow quality lane, with bundled `open-workbook-skills` skill guidance loaded into agent prompts.
 - Added report-only cheap/frontier Codex agent quality comparison and failure-category reporting for workflow diagnostics.
 - Replaced the live Excel E2E placeholder with an opt-in backend/add-in connectivity smoke contract that writes JSON and Markdown artifacts.
 - Strengthened skill and MCP tool guidance for formula writes, large table operations, formula repair, snapshots, diffs, and multi-agent locking.
@@ -263,7 +263,7 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 - Publishable protocol, core workbook utilities, Office.js engine contracts, backend runtime, MCP server, and CLI packages.
 - Excel tool surface covering workbook, worksheet, range, formula, table, filter, sort, chart, PivotTable, template, snapshot, backup, validation, repair, cleanup, permissions, and file lifecycle workflows.
 - Reversible workbook mutation flow with planning, permission checks, snapshots, backups, fingerprints, validation, diff summaries, and rollback support.
-- Packaged agent instruction skill under `skills/open-workbook-excel` and bundled CLI fallback instructions.
+- Packaged agent instruction skill under `skills/open-workbook-skills` and bundled CLI fallback instructions.
 - Documentation for installation, MCP clients, architecture, runtime, sideloading, packaging, safety contracts, workbook lifecycle, performance, and production readiness.
 - Release validation scripts for builds, package metadata, MCP catalog consistency, documentation surface, skill assets, CLI smoke checks, package dry runs, tests, and synthetic benchmarks.
 

@@ -62,6 +62,15 @@ export interface WriteValuesOperation extends OperationBase {
   preserveFormats: true;
 }
 
+export interface WriteValuesManyOperation extends OperationBase {
+  kind: "range.write_values_many";
+  entries: Array<{
+    target: A1Range;
+    values: CellMatrix;
+    preserveFormats?: true;
+  }>;
+}
+
 export interface WriteFormulasOperation extends OperationBase {
   kind: "range.write_formulas";
   target: A1Range;
@@ -81,11 +90,29 @@ export interface WriteNumberFormatsOperation extends OperationBase {
   preserveValues: true;
 }
 
+export interface WriteNumberFormatsManyOperation extends OperationBase {
+  kind: "range.write_number_formats_many";
+  entries: Array<{
+    target: A1Range;
+    numberFormat: string[][];
+    preserveValues?: true;
+  }>;
+}
+
 export interface WriteStylesOperation extends OperationBase {
   kind: "range.write_styles";
   target: A1Range;
   style: NonNullable<RangeSnapshot["style"]>;
   preserveValues: true;
+}
+
+export interface WriteStylesManyOperation extends OperationBase {
+  kind: "range.write_styles_many";
+  entries: Array<{
+    target: A1Range;
+    style: NonNullable<RangeSnapshot["style"]>;
+    preserveValues?: true;
+  }>;
 }
 
 export interface WriteHyperlinksOperation extends OperationBase {
@@ -106,6 +133,14 @@ export interface ClearRangeOperation extends OperationBase {
   applyTo?: "all" | "contents" | "formats" | "hyperlinks";
 }
 
+export interface ClearManyOperation extends OperationBase {
+  kind: "range.clear_many";
+  entries: Array<{
+    target: A1Range;
+    applyTo?: "all" | "contents" | "formats" | "hyperlinks";
+  }>;
+}
+
 export interface ClearValuesOperation extends OperationBase {
   kind: "range.clear_values";
   target: A1Range;
@@ -114,6 +149,11 @@ export interface ClearValuesOperation extends OperationBase {
 export interface ClearFormatsOperation extends OperationBase {
   kind: "range.clear_formats";
   target: A1Range;
+}
+
+export interface ClearFormatsManyOperation extends OperationBase {
+  kind: "range.clear_formats_many";
+  targets: A1Range[];
 }
 
 export interface CopyRangeOperation extends OperationBase {
@@ -163,6 +203,14 @@ export interface AutofitRowsOperation extends OperationBase {
   target: A1Range;
 }
 
+export interface AutofitManyOperation extends OperationBase {
+  kind: "range.autofit_many";
+  entries: Array<{
+    target: A1Range;
+    dimension: "columns" | "rows" | "both";
+  }>;
+}
+
 export interface ApplyAutoFilterOperation extends OperationBase {
   kind: "range.apply_autofilter";
   target: A1Range;
@@ -197,6 +245,16 @@ export interface CopySheetOperation extends OperationBase {
   kind: "sheet.copy";
   sourceSheetName: string;
   newSheetName: string;
+  position?: "beginning" | "end" | "before" | "after";
+  relativeToSheetName?: string;
+  activate?: boolean;
+}
+
+export interface CopySheetCleanDataRegionsOperation extends OperationBase {
+  kind: "sheet.copy_clean_data_regions";
+  sourceSheetName: string;
+  newSheetName: string;
+  dataRegions: string[];
   position?: "beginning" | "end" | "before" | "after";
   relativeToSheetName?: string;
   activate?: boolean;
@@ -273,15 +331,20 @@ export interface CreateSheetFromTemplateOperation extends OperationBase {
 export type ExcelOperation =
   | ReadFullOperation
   | WriteValuesOperation
+  | WriteValuesManyOperation
   | WriteFormulasOperation
   | ClearValuesKeepFormatOperation
   | WriteNumberFormatsOperation
+  | WriteNumberFormatsManyOperation
   | WriteStylesOperation
+  | WriteStylesManyOperation
   | WriteHyperlinksOperation
   | WriteCommentsOperation
   | ClearRangeOperation
+  | ClearManyOperation
   | ClearValuesOperation
   | ClearFormatsOperation
+  | ClearFormatsManyOperation
   | CopyRangeOperation
   | MoveRangeOperation
   | InsertRowsOperation
@@ -290,12 +353,14 @@ export type ExcelOperation =
   | DeleteColumnsOperation
   | AutofitColumnsOperation
   | AutofitRowsOperation
+  | AutofitManyOperation
   | ApplyAutoFilterOperation
   | MergeRangeOperation
   | UnmergeRangeOperation
   | RestoreRangeSnapshotOperation
   | CreateSheetOperation
   | CopySheetOperation
+  | CopySheetCleanDataRegionsOperation
   | RenameSheetOperation
   | DeleteSheetOperation
   | MoveSheetOperation
@@ -486,9 +551,22 @@ export interface StyleCopyRequest {
   dimensions: StyleDimension[];
 }
 
+export interface StyleCopyManyRequest {
+  workbookId: WorkbookId;
+  requests: StyleCopyRequest[];
+}
+
 export interface StyleCopyResponse {
   ok: boolean;
   copied: StyleDimension[];
+  warnings: OperationWarning[];
+}
+
+export interface StyleCopyManyResponse {
+  ok: boolean;
+  copied: StyleDimension[];
+  copyCount: number;
+  results: StyleCopyResponse[];
   warnings: OperationWarning[];
 }
 
@@ -911,6 +989,17 @@ export interface TableSortRequest extends TableSelector {
   fields: TableSortField[];
   matchCase?: boolean;
   method?: "PinYin" | "StrokeCount";
+}
+
+export interface TableApplyViewRequest extends TableSelector {
+  filters?: TableFilterSpec[];
+  sort?: {
+    fields: TableSortField[];
+    matchCase?: boolean;
+    method?: "PinYin" | "StrokeCount";
+  };
+  clearFilters?: boolean;
+  clearSort?: boolean;
 }
 
 export interface TableSetTotalRowRequest extends TableSelector {

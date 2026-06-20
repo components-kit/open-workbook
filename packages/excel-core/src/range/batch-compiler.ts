@@ -3,10 +3,14 @@ import type {
   CompiledBatch,
   DestructiveLevel,
   ExcelOperation,
-  RangeFingerprint
+  RangeFingerprint,
+  A1Range
 } from "@components-kit/open-workbook-protocol";
 import { createRangeFingerprint } from "./fingerprint.js";
-import { cellCount } from "./range-address.js";
+import { cellCount, formatA1Address, parseA1Address, stripSheetName } from "./range-address.js";
+
+const EXCEL_MAX_ROW = 1_048_576;
+const EXCEL_MAX_COLUMN = 16_384;
 
 const DESTRUCTIVE_RANK: Record<DestructiveLevel, number> = {
   none: 0,
@@ -38,6 +42,10 @@ export class BatchCompiler {
       if (operation.kind === "sheet.delete") {
         requiredBackups.add("workbook-copy");
       }
+      if (operation.kind === "sheet.copy_clean_data_regions") {
+        requiredBackups.add("sheet");
+        requiredBackups.add("workbook-copy");
+      }
       if (operation.kind === "sheet.clear") {
         requiredBackups.add("sheet");
       }
@@ -49,8 +57,7 @@ export class BatchCompiler {
         requiredBackups.add("workbook-copy");
       }
 
-      const target = getOperationTarget(operation);
-      if (target) {
+      for (const target of getOperationTargets(operation)) {
         estimatedCellsTouched += cellCount(target.address);
         targetFingerprints.push(createRangeFingerprint(target, { pending: operation.kind }, this.now()));
       }
@@ -75,7 +82,7 @@ function maxDestructiveLevel(left: DestructiveLevel, right: DestructiveLevel): D
   return DESTRUCTIVE_RANK[right] > DESTRUCTIVE_RANK[left] ? right : left;
 }
 
-function getOperationTarget(operation: ExcelOperation) {
+function getOperationTargets(operation: ExcelOperation) {
   switch (operation.kind) {
     case "range.read_full":
     case "range.write_values":
@@ -88,21 +95,36 @@ function getOperationTarget(operation: ExcelOperation) {
     case "range.clear_values":
     case "range.clear_formats":
     case "range.clear_values_keep_format":
-    case "range.insert_rows":
-    case "range.delete_rows":
-    case "range.insert_columns":
-    case "range.delete_columns":
     case "range.autofit_columns":
     case "range.autofit_rows":
     case "range.apply_autofilter":
     case "range.merge":
     case "range.unmerge":
     case "range.restore_snapshot":
-      return operation.target;
+      return [operation.target];
+    case "range.write_values_many":
+      return operation.entries.map((entry) => entry.target);
+    case "range.write_number_formats_many":
+      return operation.entries.map((entry) => entry.target);
+    case "range.write_styles_many":
+      return operation.entries.map((entry) => entry.target);
+    case "range.clear_many":
+      return operation.entries.map((entry) => entry.target);
+    case "range.clear_formats_many":
+      return operation.targets;
+    case "range.autofit_many":
+      return operation.entries.map((entry) => entry.target);
+    case "range.insert_rows":
+    case "range.delete_rows":
+      return [shiftedRowRange(operation.target)];
+    case "range.insert_columns":
+    case "range.delete_columns":
+      return [shiftedColumnRange(operation.target)];
     case "range.copy":
     case "range.move":
-      return operation.source;
+      return [operation.source, operation.target];
     case "template.create_sheet_from_template":
+    case "sheet.copy_clean_data_regions":
     case "workbook.calculate":
     case "workbook.save":
     case "sheet.create":
@@ -116,6 +138,32 @@ function getOperationTarget(operation: ExcelOperation) {
     case "sheet.unprotect":
     case "sheet.clear":
     case "sheet.set_tab_color":
-      return undefined;
+      return [];
   }
+}
+
+function shiftedRowRange(target: A1Range): A1Range {
+  const parsed = parseA1Address(stripSheetName(target.address));
+  return {
+    ...target,
+    address: formatA1Address({
+      startRow: parsed.startRow,
+      endRow: EXCEL_MAX_ROW,
+      startColumn: parsed.startColumn,
+      endColumn: parsed.endColumn
+    })
+  };
+}
+
+function shiftedColumnRange(target: A1Range): A1Range {
+  const parsed = parseA1Address(stripSheetName(target.address));
+  return {
+    ...target,
+    address: formatA1Address({
+      startRow: parsed.startRow,
+      endRow: parsed.endRow,
+      startColumn: parsed.startColumn,
+      endColumn: EXCEL_MAX_COLUMN
+    })
+  };
 }

@@ -10,6 +10,15 @@ Repository scripts are grouped by maintenance workflow. Public entrypoints stay 
 - `dev/`: local runtime helpers. Sideload commands are handled by the CLI.
 - `docs/`: generated documentation helpers such as `llms-full.txt`.
 - `reports/`: diagnostic reports that are useful during planning but are not release gates.
+- `diagnostics/`: ad hoc analysis tools for real MCP/OpenCode sessions and tool-call behavior.
 - `lib/`: small shared helpers for repo-maintenance scripts.
+
+Useful operation-maintenance commands:
+
+```bash
+corepack pnpm operations:manifest
+corepack pnpm operations:check
+corepack pnpm diagnose:session -- path/to/session.log
+```
 
 Test runners, smoke tests, E2E flows, fixtures, and benchmarks live under `tests/`.

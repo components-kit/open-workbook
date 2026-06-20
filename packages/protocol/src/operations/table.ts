@@ -1,6 +1,7 @@
 export type {
   TableAppendRowsRequest,
   TableApplyFiltersRequest,
+  TableApplyViewRequest,
   TableCompactReadRequest,
   TableCopyStructureRequest,
   TableCreateRequest,
@@ -13,4 +14,3 @@ export type {
   TableSortRequest,
   TableUpdateRowsRequest
 } from "../operations.js";
-

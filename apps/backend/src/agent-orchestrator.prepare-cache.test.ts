@@ -44,6 +44,26 @@ describe("AgentOrchestrator Prepare Cache", () => {
       expect(runtime.readBatchCount).toBe(readCallsAfterFirstPrepare);
     });
 
+  it("invalidates sampled metadata when workbook content version changes", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const first = await agent.run({ request: "Find sections and blocks", mode: "find" });
+      const readsAfterFirst = runtime.readBatchCount;
+      runtime.workbookContentVersion += 1;
+      const second = await agent.run({
+        request: "Find sections and blocks again",
+        mode: "find",
+        workbookContextId: first.workbookContextId
+      });
+
+      expect(first.telemetry.metadataDetailLevel).toBe("sampled");
+      expect(second.telemetry.cacheHit).toBe(false);
+      expect(second.telemetry.metadataCacheStatus).toBe("miss");
+      expect(second.telemetry.metadataFreshnessReason).toBe("built sampled metadata");
+      expect(runtime.readBatchCount).toBeGreaterThan(readsAfterFirst);
+    });
+
   it("reuses workbook context from continuation metadata", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);

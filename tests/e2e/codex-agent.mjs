@@ -362,7 +362,7 @@ function buildPrompt(scenario) {
     "For quality workflow tasks, complete the post-action tool sequence even if an earlier tool returns ok: formula repair must include a repair tool, template work must fill/repair/validate, pivot/chart work must refresh and validate, and snapshot work must diff before rollback preview.",
     "After risky mutations, validate the affected area and mention backup, transaction, warning, diff, or rollback metadata that the MCP returns.",
     "",
-    "Bundled Open Workbook Excel skill guidance:",
+    "Bundled Open Workbook Skills skill guidance:",
     skillGuidance,
     "",
     "Workbook fixture summary:",
@@ -1202,11 +1202,11 @@ function hasArg(name) {
 
 function loadSkillGuidance() {
   const files = [
-    ["SKILL.md", "skills/open-workbook-excel/SKILL.md"],
-    ["Tool Selection", "skills/open-workbook-excel/references/tool-selection.md"],
-    ["Performance", "skills/open-workbook-excel/references/performance.md"],
-    ["Multi-Agent", "skills/open-workbook-excel/references/multi-agent.md"],
-    ["Reliability", "skills/open-workbook-excel/references/reliability.md"]
+    ["SKILL.md", "skills/open-workbook-skills/SKILL.md"],
+    ["Tool Selection", "skills/open-workbook-skills/references/tool-selection.md"],
+    ["Performance", "skills/open-workbook-skills/references/performance.md"],
+    ["Multi-Agent", "skills/open-workbook-skills/references/multi-agent.md"],
+    ["Reliability", "skills/open-workbook-skills/references/reliability.md"]
   ];
   return files
     .map(([label, relativePath]) => {

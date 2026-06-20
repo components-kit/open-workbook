@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -8,6 +8,14 @@ import { createServer } from "node:http";
 const cli = "packages/cli/dist/index.js";
 const tempDir = mkdtempSync(join(tmpdir(), "open-workbook-cli-smoke-"));
 const manifestPath = join(tempDir, "open-workbook.xml");
+const diagnosticsLogPath = join(tempDir, "split-table-view.log");
+writeFileSync(
+  diagnosticsLogPath,
+  [
+    JSON.stringify({ tool: "excel.agent.run", params: { mode: "preview_update", intent: { action: "filter_range" }, request: "Filter Transactions to Open" } }),
+    JSON.stringify({ tool: "excel.agent.run", params: { mode: "preview_update", intent: { action: "sort_table" }, request: "Sort Transactions by Amount" } })
+  ].join("\n")
+);
 const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
 const expectedOfficeManifestVersion = officeManifestVersion(packageVersion);
 
@@ -37,7 +45,7 @@ const checks = [
       result.stdout.includes("MCP launch command for your agent UI:") &&
       result.stdout.includes("npx -y @components-kit/open-workbook@latest mcp") &&
       result.stdout.includes("local stdio MCP server command") &&
-      result.stdout.includes("npx skills add components-kit/open-workbook --skill open-workbook-excel") &&
+      result.stdout.includes("npx skills add components-kit/open-workbook --skill open-workbook-skills") &&
       result.stdout.includes("instructions.md") &&
       result.stdout.includes("setup-manifest.xml") &&
       result.stdout.includes("restart the agent UI or MCP host")
@@ -61,7 +69,7 @@ const checks = [
     args: ["instructions"],
     assert: (result) =>
       result.status === 0 &&
-      result.stdout.includes("# Open Workbook Excel Instructions") &&
+      result.stdout.includes("# Open Workbook Skills Instructions") &&
       result.stdout.includes("excel.agent.run") &&
       result.stdout.includes("backend primitive capabilities") &&
       result.stdout.includes("## Tool Selection")
@@ -164,6 +172,7 @@ for (const check of checks) {
 await smokePackagedAddinServer();
 await smokeStaleAddinServerGuard();
 await smokeLatestVersionNotice();
+smokeSessionDiagnostics();
 
 if (failures.length > 0) {
   console.error("CLI smoke failed.");
@@ -179,7 +188,21 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log(`CLI smoke passed: ${checks.length + 3} command(s).`);
+console.log(`CLI smoke passed: ${checks.length + 4} command(s).`);
+
+function smokeSessionDiagnostics() {
+  const result = spawnSync(process.execPath, ["scripts/diagnostics/session-diagnostics.mjs", diagnosticsLogPath], {
+    encoding: "utf8"
+  });
+  if (result.status !== 0 || !result.stdout.includes("intent.action=apply_table_view")) {
+    failures.push({
+      name: "session diagnostics table view batching",
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr
+    });
+  }
+}
 
 async function smokePackagedAddinServer() {
   const port = 37977;

@@ -72,6 +72,31 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(runtime.readBatchCount).toBe(0);
     });
 
+  it("returns workbook and sheet detail summaries from metadata without live cell reads", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const workbookSummary = await agent.run({
+        request: "Summarize workbook",
+        mode: "answer",
+        detailLevel: "workbook_summary"
+      });
+      const sheetSummary = await agent.run({
+        request: "Summarize Data sheet",
+        mode: "answer",
+        detailLevel: "sheet_summary",
+        workbookContextId: workbookSummary.workbookContextId,
+        target: { sheetName: "Data" }
+      });
+
+      expect((workbookSummary.answer as any).kind).toBe("workbook_summary");
+      expect((sheetSummary.answer as any).kind).toBe("sheet_summary");
+      expect((sheetSummary.answer as any).sheet.name).toBe("Data");
+      expect(workbookSummary.telemetry.metadataDetailLevel).toBe("structure");
+      expect(sheetSummary.telemetry.cacheHit).toBe(true);
+      expect(runtime.readBatchCount).toBe(0);
+    });
+
   it("uses compact table reads for table-target value answers", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -113,6 +138,35 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(result.telemetry.internalReadCount).toBe(1);
       expect(runtime.runtimeMethodCalls["table.read"]).toBe(1);
       expect(runtime.readBatchCount).toBe(0);
+    });
+
+  it("uses deterministic table sample and full table detail levels", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_table_detail_levels");
+      agent.metadataCache.set(metadata);
+
+      const sample = await agent.run({
+        request: "Read Transactions table sample",
+        mode: "answer",
+        detailLevel: "table_sample",
+        workbookContextId: metadata.workbookContextId,
+        target: { tableName: "Transactions" }
+      });
+      const full = await agent.run({
+        request: "Read full Transactions table",
+        mode: "answer",
+        detailLevel: "full_table",
+        workbookContextId: metadata.workbookContextId,
+        target: { tableName: "Transactions" }
+      });
+
+      expect((sample.answer as any).kind).toBe("table_compact_read");
+      expect((sample.answer as any).rowLimit).toBe(20);
+      expect((full.answer as any).kind).toBe("table_compact_read");
+      expect((full.answer as any).rowLimit).toBe(10000);
+      expect((full.answer as any).fullResultUri).toMatch(/\?view=full$/);
+      expect(runtime.runtimeMethodCalls["table.read"]).toBe(2);
     });
 
   it("preserves compact table row details in verbose mode", async () => {

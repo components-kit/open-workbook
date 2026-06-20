@@ -69,7 +69,7 @@ npx -y @components-kit/open-workbook@latest upgrade
 Install the agent skill with skills.sh:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel
+npx skills add components-kit/open-workbook --skill open-workbook-skills
 ```
 
 Use the printed MCP launch command in your agent UI. It will look like:
@@ -197,10 +197,10 @@ node packages/cli/dist/index.js sideload manifest --development --out open-workb
 
 Open Workbook includes generic agent instruction source for fast, reliable live Excel automation through the MCP surface:
 
-- `skills/open-workbook-excel/SKILL.md`
-- `skills/open-workbook-excel/references/`
+- `skills/open-workbook-skills/SKILL.md`
+- `skills/open-workbook-skills/references/`
 
-Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`. The skill teaches agents to use the public `excel.agent.run` workflow, pass structured intent and target hints when available, normalize multilingual requests into canonical routing fields while preserving the user's language, avoid sparse null-padded overwrites, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews. `owb instructions` remains available as a fallback for clients that do not support skills.sh.
+Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-skills`. The skill teaches agents to use the public `excel.agent.run` workflow, pass structured intent and target hints when available, normalize multilingual requests into canonical routing fields while preserving the user's language, avoid sparse null-padded overwrites, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews. `owb instructions` remains available as a fallback for clients that do not support skills.sh.
 
 ## Safety Contract
 
@@ -237,6 +237,8 @@ Mutating operations should follow the same lifecycle:
 - [Permissions and Cleaning](docs/permissions-cleaning.md)
 - [Workbook File Lifecycle](docs/workbook-file-lifecycle.md)
 - [Performance Contract](docs/performance.md)
+- [Operation Authoring](docs/operation-authoring.md)
+- [Session Diagnostics](docs/session-diagnostics.md)
 - [Multi-Agent Runtime](docs/multi-agent-runtime.md)
 - [Production Readiness](docs/production-readiness.md)
 - [Service Wrapper](docs/service-wrapper.md)

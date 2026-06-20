@@ -11,14 +11,14 @@ This map groups backend-owned action concepts for `excel.agent.run`. It is for r
 
 ## Mutations
 
-- Values/formulas/formats: `write_values`, `write_formulas`, `write_number_formats`, `format_range`, `write_styles_many`, `clear_values`, `clear_values_raw`, `clear_formats`, `copy_range`, `move_range`.
+- Values/formulas/formats: `write_values`, grouped `values.patches`, `write_formulas`, `write_number_formats`, `format_range`, `write_styles_many`, grouped internal `write_values_many`/`write_number_formats_many`/`clear_many`/`clear_formats_many`/`autofit_many`, `clear_values`, `clear_values_raw`, `clear_formats`, `copy_range`, `move_range`.
 - Structure: `insert_rows`, `delete_rows`, `insert_columns`, `delete_columns`, `merge_range`, `unmerge_range`, `create_sheet`, `copy_sheet`, `rename_sheet`, `delete_sheet`, `hide_sheet`, `unhide_sheet`, `protect_sheet`, `unprotect_sheet`, `clear_sheet`, `set_sheet_tab_color`, `autofit`, `autofit_rows`.
-- Tables: `append_table_rows`, `update_table_rows`, `create_table`, `resize_table`, `reorder_table_columns`, `clear_table_data`, `clear_table_filters`, `sort_table`, `filter_range`, `set_table_total_row`, `set_table_style`, `copy_table_structure`.
+- Tables: `append_table_rows`, `update_table_rows`, `create_table`, `resize_table`, `reorder_table_columns`, `clear_table_data`, `clear_table_filters`, `sort_table`, `filter_range`, `apply_table_view`, `set_table_total_row`, `set_table_style`, `copy_table_structure`.
 - Cleaning: `normalize_headers`, `trim_whitespace`, `remove_duplicates`, `parse_dates`, `parse_numbers`, `standardize_currency`, `fill_missing_values`, `split_column`, `merge_columns`.
 
 ## Template, Formula, Style, Pivot, And Chart Workflows
 
-- Template workflows: `copy_template_sheet`, `register_template`, `unregister_template`, `clear_template_data_regions`, `fill_template_regions`, `validate_sheet_against_template`, `repair_sheet_from_template`, `create_template_report`.
+- Template workflows: `copy_template_sheet` backed by internal `sheet.copy_clean_data_regions`, `register_template`, `unregister_template`, `clear_template_data_regions`, `fill_template_regions`, `validate_sheet_against_template`, `repair_sheet_from_template`, `create_template_report`.
 - Formula workflows: `create_formula_sheet`, `read_formula_patterns`, `get_formula_dependency_graph`, `trace_formula_precedents`, `trace_formula_dependents`, `validate_formula_range`, `validate_formula_against_template`, `find_formula_errors`, `explain_formula`, `copy_formula_patterns`, `fill_formula_down`, `fill_formula_right`, `repair_formula_patterns`, `convert_formulas_to_values`, `recalculate_formulas`, `repair_formulas_from_template`.
 - Style workflows: `read_style_fingerprint`, `compare_style_fingerprint`, `get_theme`, `apply_theme`, `copy_style_from_template`, `repair_style_consistency`, `repair_style_from_template`.
 - Pivot/chart workflows: `create_pivot_chart_summary` and related host-limited capability reports.

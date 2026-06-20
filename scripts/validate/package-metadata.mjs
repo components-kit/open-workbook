@@ -85,7 +85,7 @@ for (const packageDir of privatePackages) {
   expect(existsSync(join(packageDir, "README.md")), `${packageDir}/README.md must exist`);
 }
 
-compareDirectoryFiles("skills/open-workbook-excel", "packages/cli/assets/instructions/open-workbook-excel");
+compareDirectoryFiles("skills/open-workbook-skills", "packages/cli/assets/instructions/open-workbook-skills");
 validateRuntimeVersionSource(rootVersion);
 validateExcelManifestTemplate(rootOfficeManifestVersion);
 

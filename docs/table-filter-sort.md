@@ -9,6 +9,7 @@ Structured table operations use native Office.js table APIs instead of range-onl
 - Create, resize, reorder columns, append rows, update rows, clear constants while keeping formulas, set total row, set style, and copy table structure.
 - Apply, clear, and validate table filters through Office.js filter criteria.
 - Apply and clear table sort state through Office.js sort fields.
+- Apply combined table views with filters, sort fields, and optional clear-filter/clear-sort flags in one Office.js transaction.
 
 For `excel.agent.run`, table filter previews use `values.filters`. The canonical filter shape is:
 
@@ -19,6 +20,8 @@ For `excel.agent.run`, table filter previews use `values.filters`. The canonical
 The agent surface also normalizes common shorthand shapes such as `{ "column": "Status", "value": "Open" }`, `{ "column": "Status", "criterion": "Open" }`, and `{ "column": "Status", "filterType": "text", "value": "Open" }` before calling the Office.js table filter API.
 
 Structured table sort previews accept `values.sortBy` or `values.column` plus `values.direction` or `values.ascending`; text-only amount sort inference remains a fallback.
+
+When one request combines table filters and sorting, use `intent.action: "apply_table_view"` with `values.filters` and `values.sort.fields`. The backend stores one preview, applies one direct table transaction, and returns one proof instead of splitting filter and sort into separate operations.
 
 ## Safety
 

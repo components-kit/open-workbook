@@ -25,6 +25,37 @@ import {
 import type { AgentId, OperationId, PlanId, RuntimeCapabilities, WorkbookId } from "./runtime-service.test-support.js";
 
 describe("RuntimeService transaction rollback preview", () => {
+  it("replays keyed direct transaction results without rerunning work", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_direct_idempotency" as WorkbookId;
+    let calls = 0;
+    const applyDirectTransaction = (runtime as unknown as {
+      applyDirectTransaction: RuntimeService["applyBatch"];
+    }).applyDirectTransaction.bind(runtime) as (
+      input: {
+        workbookId: WorkbookId;
+        goal: string;
+        scopes: [];
+        destructiveLevel: "format";
+        idempotencyKey: string;
+      },
+      work: () => Promise<{ ok: true; value: number }>
+    ) => Promise<{ ok: true; value: number; transactionId: string }>;
+
+    const first = await applyDirectTransaction(
+      { workbookId, goal: "Direct idempotency", scopes: [], destructiveLevel: "format", idempotencyKey: "direct:test" },
+      async () => ({ ok: true, value: ++calls })
+    );
+    const second = await applyDirectTransaction(
+      { workbookId, goal: "Direct idempotency", scopes: [], destructiveLevel: "format", idempotencyKey: "direct:test" },
+      async () => ({ ok: true, value: ++calls })
+    );
+
+    expect(calls).toBe(1);
+    expect(second.value).toBe(1);
+    expect(second.transactionId).toBe(first.transactionId);
+  });
+
   it("allows rollback preview when no later transaction overlaps", () => {
     const runtime = new RuntimeService({ persistState: false });
     const workbookId = "workbook_rollback" as WorkbookId;

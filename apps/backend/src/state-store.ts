@@ -14,6 +14,7 @@ import type {
   TransactionRecord,
   WorkbookRegion
 } from "@components-kit/open-workbook-protocol";
+import type { PendingAgentOperation } from "./agent-operation-store.js";
 
 export interface RuntimeStateSnapshot {
   version: 1;
@@ -32,6 +33,7 @@ export interface RuntimeStateSnapshot {
   permissions?: PermissionState | undefined;
   plans?: PlanRecord[] | undefined;
   backups?: BackupRecord[] | undefined;
+  agentOperations?: PendingAgentOperation[] | undefined;
 }
 
 export class RuntimeStateStore {
@@ -65,7 +67,8 @@ export class RuntimeStateStore {
       regions: parsed.regions ?? [],
       permissions: parsed.permissions,
       plans: parsed.plans ?? [],
-      backups: parsed.backups ?? []
+      backups: parsed.backups ?? [],
+      agentOperations: parsed.agentOperations ?? []
     };
   }
 

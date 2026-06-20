@@ -21,6 +21,7 @@ export function registerPrompts(mcp: McpServer): void {
       promptContext(args),
       tokenDiscipline(),
       "Use `excel.agent.run` with `mode: \"prepare\"` to collect workbook context, then preview a template or sheet-copy workflow with `mode: \"preview_update\"`.",
+      "Prefer a clean template copy: preserve headers, formulas, styling, validation, and layout, then clear old data regions for fresh rows. Use raw sheet copy only when the user explicitly asks for an exact duplicate including old values.",
       "Prefer a registered template. If no template is clear, ask the user to confirm the source sheet before previewing.",
       "Apply only with a follow-up `excel.agent.run` `mode: \"apply_update\"` using the returned operationId and confirmationToken.",
       "Validate formulas, styles, tables, filters, and template consistency before reporting success."
@@ -69,10 +70,29 @@ export function registerPrompts(mcp: McpServer): void {
       "Make the target sheet look like the template while preserving current data values.",
       promptContext(args),
       tokenDiscipline(),
+      "For style-only requests, use style copy or style repair; do not duplicate the source/template sheet and do not mutate the source sheet.",
       "Use `excel.agent.run` to compare style/template consistency and preview a scoped style repair.",
       "Ask before changing structure-level layout such as hidden rows/columns, freeze panes, print settings, or page layout.",
       "Validate styles, formulas, tables, filters, and print layout after applying."
     ]
+  );
+
+  registerWorkflowPrompt(
+    mcp,
+    "excel.prompts.field_value_image_to_styled_table",
+    "Field/value image to styled table",
+    "Turn extracted field/value data into a horizontal styled table with one safe preview/apply workflow.",
+    promptArgs,
+    fieldValueStyledTablePromptLines
+  );
+
+  registerWorkflowPrompt(
+    mcp,
+    "excel.prompts.booking_image_to_styled_table",
+    "Booking image to styled table",
+    "Compatibility alias for the generic field/value styled-table workflow.",
+    promptArgs,
+    fieldValueStyledTablePromptLines
   );
 
   registerWorkflowPrompt(
@@ -141,4 +161,18 @@ function promptContext(args: Record<string, unknown>): string {
 
 function tokenDiscipline(): string {
   return "Keep `responseMode` brief by default, reuse workbookContextId/operationId/resultUri from continuation, and read fullResultUri only when full row/detail payloads are necessary.";
+}
+
+function fieldValueStyledTablePromptLines(args: Record<string, unknown>): string[] {
+  return [
+    "Convert extracted field/value data from OCR, screenshots, forms, invoices, shipment documents, or booking images into a horizontal table without issuing many low-level range or style calls.",
+    promptContext(args),
+    tokenDiscipline(),
+    "After OCR/image extraction, build `values.headers` and `values.row` or `values.rows` from the extracted fields. Do not write sparse null-padded matrices.",
+    "Use one `excel.agent.run` call with `mode: \"preview_update\"`, `intent.action: \"replace_range_with_styled_table\"`, an explicit target range, optional `values.clearRange`, and optional `values.headerStyleSource`/`values.bodyStyleSource` plus `values.dimensions`.",
+    "The style source sheet is only a style source. Mutate only the target sheet. Do not clear leftovers by writing blanks when stale borders/fills should disappear.",
+    "Apply once with `mode: \"apply_update\"`, operationId, and confirmationToken. Do not split clear, value write, autofit, and style copy into separate agent calls unless the workflow returns a hard failure.",
+    "If the backend returns `NEEDS_WORKFLOW_REDIRECT`, stop chunking and call the suggested grouped preview workflow.",
+    "If the target range, clear range, or style source is ambiguous, ask for those addresses before previewing."
+  ];
 }

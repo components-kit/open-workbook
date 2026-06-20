@@ -25,6 +25,75 @@ import {
 import type { AgentId, OperationId, PlanId, RuntimeCapabilities, WorkbookId } from "./runtime-service.test-support.js";
 
 describe("RuntimeService persistence", () => {
+  it("restores pending agent preview operations from the state store", async () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "open-workbook-state-agent-operation-"));
+    const workbookId = "workbook_persist_agent_operation" as WorkbookId;
+    const first = new RuntimeService({ stateDir });
+    first.agent.loadOperations([{
+      operationId: "agentop_persisted",
+      confirmationToken: "confirm_persisted",
+      workbookContextId: "wbctx_persist_agent_operation",
+      workbookId,
+      action: { kind: "batch", operations: [] },
+      changes: [{ sheetName: "Data", range: "B2", before: 1, after: 123 }],
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+      summary: "Prepared persisted preview.",
+      applyStatus: "previewed"
+    }]);
+    (first as unknown as { persistState: () => void }).persistState();
+
+    const second = new RuntimeService({ stateDir });
+    const restored = second.agent.getOperationResource("agentop_persisted");
+
+    expect(restored?.operationId).toBe("agentop_persisted");
+    expect(restored?.applyStatus).toBe("previewed");
+    expect(restored?.summary).toContain("Prepared");
+  });
+
+  it("restores terminal agent operation output for apply retry after restart", async () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "open-workbook-state-agent-terminal-"));
+    const workbookId = "workbook_persist_agent_terminal" as WorkbookId;
+    const first = new RuntimeService({ stateDir });
+    first.agent.loadOperations([{
+      operationId: "agentop_terminal",
+      confirmationToken: "confirm_terminal",
+      workbookContextId: "wbctx_persist_agent_terminal",
+      workbookId,
+      action: { kind: "batch", operations: [] },
+      changes: [{ sheetName: "Data", range: "B2", before: 1, after: 123 }],
+      createdAt: Date.now(),
+      completedAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+      summary: "Applied persisted preview.",
+      applyStatus: "applied",
+      terminalOutput: {
+        status: "SUCCESS",
+        mode: "apply_update",
+        workbookContextId: "wbctx_persist_agent_terminal",
+        operationId: "agentop_terminal",
+        summary: "Applied persisted preview.",
+        answer: { kind: "apply_update_result", ok: true, backupIds: ["backup_terminal"], rollbackAvailable: true },
+        proof: [],
+        resourceLinks: [],
+        nextAction: "answer_now",
+        warnings: []
+      }
+    }]);
+    (first as unknown as { persistState: () => void }).persistState();
+
+    const second = new RuntimeService({ stateDir });
+    const retry = await second.agent.run({
+      request: "Retry apply",
+      mode: "apply_update",
+      operationId: "agentop_terminal",
+      confirmationToken: "confirm_terminal"
+    });
+
+    expect(retry.status).toBe("SUCCESS");
+    expect((retry.answer as any).backupIds).toEqual(["backup_terminal"]);
+  });
+
   it("restores agents and tasks from the state store", () => {
     const stateDir = mkdtempSync(path.join(tmpdir(), "open-workbook-state-"));
     const workbookId = "workbook_persist" as WorkbookId;

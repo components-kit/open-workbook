@@ -20,12 +20,17 @@ export interface AgentActionDefinition {
 
 export const AGENT_ACTION_REGISTRY: AgentActionDefinition[] = [
   { kind: "range.write_values", risk: "small_value_write", previewRequired: true, confirmationRequired: true },
+  { kind: "range.write_values_many", risk: "broad_range_write", previewRequired: true, confirmationRequired: true },
   { kind: "range.write_formulas", risk: "formula_write", previewRequired: true, confirmationRequired: true },
   { kind: "range.write_number_formats", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "range.write_number_formats_many", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "range.write_styles", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "range.write_styles_many", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "range.clear", risk: "destructive", previewRequired: true, confirmationRequired: true },
+  { kind: "range.clear_many", risk: "destructive", previewRequired: true, confirmationRequired: true },
   { kind: "range.clear_values", risk: "destructive", previewRequired: true, confirmationRequired: true },
   { kind: "range.clear_formats", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "range.clear_formats_many", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "range.clear_values_keep_format", risk: "destructive", previewRequired: true, confirmationRequired: true },
   { kind: "range.insert_rows", risk: "structure_change", previewRequired: true, confirmationRequired: true },
   { kind: "range.delete_rows", risk: "destructive", previewRequired: true, confirmationRequired: true },
@@ -35,10 +40,12 @@ export const AGENT_ACTION_REGISTRY: AgentActionDefinition[] = [
   { kind: "range.unmerge", risk: "structure_change", previewRequired: true, confirmationRequired: true },
   { kind: "range.autofit_columns", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "range.autofit_rows", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "range.autofit_many", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "range.copy", risk: "broad_range_write", previewRequired: true, confirmationRequired: true },
   { kind: "range.move", risk: "destructive", previewRequired: true, confirmationRequired: true },
   { kind: "range.apply_autofilter", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "sheet.copy", risk: "structure_change", previewRequired: true, confirmationRequired: true },
+  { kind: "sheet.copy_clean_data_regions", risk: "structure_change", previewRequired: true, confirmationRequired: true },
   { kind: "sheet.create", risk: "structure_change", previewRequired: true, confirmationRequired: true },
   { kind: "sheet.rename", risk: "structure_change", previewRequired: true, confirmationRequired: true },
   { kind: "sheet.delete", risk: "destructive", previewRequired: true, confirmationRequired: true },
@@ -86,6 +93,7 @@ export const AGENT_ACTION_REGISTRY: AgentActionDefinition[] = [
   { kind: "table.clear_filters", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "table.apply_filters", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "table.sort", risk: "broad_range_write", previewRequired: true, confirmationRequired: true },
+  { kind: "table.apply_view", risk: "broad_range_write", previewRequired: true, confirmationRequired: true },
   { kind: "table.set_total_row", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "table.set_style", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "table.copy_structure", risk: "structure_change", previewRequired: true, confirmationRequired: true },
@@ -93,6 +101,8 @@ export const AGENT_ACTION_REGISTRY: AgentActionDefinition[] = [
   { kind: "template.unregister", risk: "destructive", previewRequired: true, confirmationRequired: true },
   { kind: "template.repair_sheet", risk: "structure_change", previewRequired: true, confirmationRequired: true },
   { kind: "style.copy_dimensions", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "style.copy_dimensions_many", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "workflow.replace_styled_table", risk: "destructive", previewRequired: true, confirmationRequired: true },
   { kind: "style.repair_consistency", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "clean.transform", risk: "broad_range_write", previewRequired: true, confirmationRequired: true }
 ];
@@ -111,6 +121,10 @@ const RISK_RANK: Record<AgentOperationRisk, number> = {
 export function classifyAgentActionRisk(action: PendingAgentAction): AgentOperationRisk {
   const kinds = action.kind === "batch"
     ? action.operations.map((operation) => operation.kind)
+    : action.kind === "workflow.replace_styled_table"
+      ? [...action.operations.map((operation) => operation.kind), ...action.styleCopies.map(() => "style.copy_dimensions" as const)]
+      : action.kind === "style.copy_dimensions_many"
+        ? action.requests.map(() => "style.copy_dimensions" as const)
     : [action.kind];
   return highestRisk(kinds.map(riskForOperationKind));
 }
@@ -126,6 +140,7 @@ export function riskForOperationKind(
     | "table.clear_filters"
     | "table.apply_filters"
     | "table.sort"
+    | "table.apply_view"
     | "table.set_total_row"
     | "table.set_style"
     | "table.copy_structure"
@@ -133,6 +148,8 @@ export function riskForOperationKind(
     | "template.unregister"
     | "template.repair_sheet"
     | "style.copy_dimensions"
+    | "style.copy_dimensions_many"
+    | "workflow.replace_styled_table"
     | "style.repair_consistency"
     | "clean.transform"
     | "workbook.snapshot"

@@ -90,6 +90,7 @@ export interface WorkbookMetadata {
   workbookContextId: string;
   workbookKey: string;
   detailLevel: "structure" | "sampled";
+  contentVersion?: number;
   workbook: {
     workbookId?: WorkbookId | string;
     name: string;
@@ -214,13 +215,22 @@ export function createMetadataFingerprint(input: {
 export function checkMetadataFreshness(
   metadata: WorkbookMetadata,
   latest: WorkbookFingerprint,
-  options: { requireSampled?: boolean } = {}
+  options: { requireSampled?: boolean; contentVersion?: number } = {}
 ): WorkbookMetadataFreshness {
   if (metadata.fingerprint.structureHash !== latest.structureHash) {
     return { status: "STALE", reason: "Workbook structure fingerprint changed." };
   }
   if (options.requireSampled === true && metadata.detailLevel !== "sampled") {
     return { status: "STALE", reason: "Workbook metadata needs sheet samples." };
+  }
+  if (
+    options.requireSampled === true
+    && metadata.detailLevel === "sampled"
+    && options.contentVersion !== undefined
+    && metadata.contentVersion !== undefined
+    && metadata.contentVersion !== options.contentVersion
+  ) {
+    return { status: "STALE", reason: "Workbook content changed since sampled metadata was captured." };
   }
   return { status: "FRESH" };
 }

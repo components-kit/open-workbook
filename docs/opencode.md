@@ -42,10 +42,10 @@ For `npx`-based OpenCode config, keep the command equivalent to:
 }
 ```
 
-Install the Open Workbook Excel skill into OpenCode:
+Install the Open Workbook Skills skill into OpenCode:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel -a opencode -g -y
+npx skills add components-kit/open-workbook --skill open-workbook-skills -a opencode -g -y
 ```
 
 After Excel opens the add-in, useful default-surface calls are:
@@ -58,9 +58,12 @@ excel.agent.run mode=answer request="Summarize the active workbook"
 excel.agent.run mode=answer request="Compare January and February"
 excel.agent.run mode=preview_update request="Change Sales!E2 to Reviewed"
 excel.agent.run mode=apply_update request="Apply the previewed update"
+excel.agent.run mode=operation_status request="Check a pending operation" operationId="..."
 ```
 
 For related edits across multiple ranges, send one grouped preview using `values.patches` and then apply that returned operation once. Do not issue one preview/apply pair per zone, column group, or row block unless the grouped apply returns a hard failure with actionable issue details.
+
+For booking images or OCR-extracted client screenshots that need fields rotated into headers/values and styled like an existing sheet, send one `preview_update` with `intent.action: "replace_range_with_styled_table"`, structured `values`, and any style source ranges. Apply the returned operation once. Do not split the task into separate clear, write, autofit, and style calls.
 
 Omitted mode or `mode=auto` remains compatible for casual prompts, but explicit modes are more predictable for agent UIs. The backend should either answer from compact proof in one call or return a precise `nextAction`; agents should not chain primitive compact tools.
 

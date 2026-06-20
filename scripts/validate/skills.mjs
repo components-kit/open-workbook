@@ -91,7 +91,7 @@ for (const skillFile of skillFiles) {
     }
   }
 
-  if (metadata.name === "open-workbook-excel") {
+  if (metadata.name === "open-workbook-skills") {
     for (const term of REQUIRED_PRIMARY_TERMS) {
       if (!contents.includes(term)) {
         errors.push(`${relative(ROOT, skillFile)} must mention ${term}`);

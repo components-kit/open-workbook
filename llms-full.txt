@@ -10,7 +10,7 @@ This file is generated for LLM and agent context. It combines the project README
 npx -y @components-kit/open-workbook setup
 ```
 
-Then install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel` and paste the printed MCP launch command into an agent UI's local stdio MCP configuration.
+Then install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-skills` and paste the printed MCP launch command into an agent UI's local stdio MCP configuration.
 
 ## Production Rules
 
@@ -97,7 +97,7 @@ npx -y @components-kit/open-workbook@latest upgrade
 Install the agent skill with skills.sh:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel
+npx skills add components-kit/open-workbook --skill open-workbook-skills
 ```
 
 Use the printed MCP launch command in your agent UI. It will look like:
@@ -225,10 +225,10 @@ node packages/cli/dist/index.js sideload manifest --development --out open-workb
 
 Open Workbook includes generic agent instruction source for fast, reliable live Excel automation through the MCP surface:
 
-- `skills/open-workbook-excel/SKILL.md`
-- `skills/open-workbook-excel/references/`
+- `skills/open-workbook-skills/SKILL.md`
+- `skills/open-workbook-skills/references/`
 
-Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`. The skill teaches agents to use the public `excel.agent.run` workflow, pass structured intent and target hints when available, normalize multilingual requests into canonical routing fields while preserving the user's language, avoid sparse null-padded overwrites, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews. `owb instructions` remains available as a fallback for clients that do not support skills.sh.
+Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-skills`. The skill teaches agents to use the public `excel.agent.run` workflow, pass structured intent and target hints when available, normalize multilingual requests into canonical routing fields while preserving the user's language, avoid sparse null-padded overwrites, preserve templates/formulas/styles, validate changes, and recover through snapshots, backups, transactions, and rollback previews. `owb instructions` remains available as a fallback for clients that do not support skills.sh.
 
 ## Safety Contract
 
@@ -265,6 +265,8 @@ Mutating operations should follow the same lifecycle:
 - [Permissions and Cleaning](docs/permissions-cleaning.md)
 - [Workbook File Lifecycle](docs/workbook-file-lifecycle.md)
 - [Performance Contract](docs/performance.md)
+- [Operation Authoring](docs/operation-authoring.md)
+- [Session Diagnostics](docs/session-diagnostics.md)
 - [Multi-Agent Runtime](docs/multi-agent-runtime.md)
 - [Production Readiness](docs/production-readiness.md)
 - [Service Wrapper](docs/service-wrapper.md)
@@ -385,7 +387,7 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 - Reframed compact read/resource tools as backend-owned internals while keeping normal agent guidance centered on the backend-composed `excel.agent.run` workflow.
 - Removed the public advanced MCP surface path; primitive operation exposure is now reserved for internal test/development harnesses while packaged MCP clients see one public tool.
 - Reduced normal office-agent behavior call count and payload size by auto-applying small explicit value edits, compacting apply results, and updating the behavior harness to avoid unnecessary prepare/read chains.
-- Updated Open Workbook Excel skill guidance so default-surface clients start with `excel.agent.run` `mode: "prepare"` instead of unavailable advanced workflow tools.
+- Updated Open Workbook Skills skill guidance so default-surface clients start with `excel.agent.run` `mode: "prepare"` instead of unavailable advanced workflow tools.
 - Clarified OpenCode guidance so default-surface clients call `excel.agent.run` instead of runtime/workbook primitives.
 
 ## [0.1.13] - 2026-06-16
@@ -496,7 +498,7 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ### Changed
 
-- Split Codex agent E2E into a blocking core safety lane and report-only workflow quality lane, with bundled `open-workbook-excel` skill guidance loaded into agent prompts.
+- Split Codex agent E2E into a blocking core safety lane and report-only workflow quality lane, with bundled `open-workbook-skills` skill guidance loaded into agent prompts.
 - Added report-only cheap/frontier Codex agent quality comparison and failure-category reporting for workflow diagnostics.
 - Replaced the live Excel E2E placeholder with an opt-in backend/add-in connectivity smoke contract that writes JSON and Markdown artifacts.
 - Strengthened skill and MCP tool guidance for formula writes, large table operations, formula repair, snapshots, diffs, and multi-agent locking.
@@ -558,7 +560,7 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 - Publishable protocol, core workbook utilities, Office.js engine contracts, backend runtime, MCP server, and CLI packages.
 - Excel tool surface covering workbook, worksheet, range, formula, table, filter, sort, chart, PivotTable, template, snapshot, backup, validation, repair, cleanup, permissions, and file lifecycle workflows.
 - Reversible workbook mutation flow with planning, permission checks, snapshots, backups, fingerprints, validation, diff summaries, and rollback support.
-- Packaged agent instruction skill under `skills/open-workbook-excel` and bundled CLI fallback instructions.
+- Packaged agent instruction skill under `skills/open-workbook-skills` and bundled CLI fallback instructions.
 - Documentation for installation, MCP clients, architecture, runtime, sideloading, packaging, safety contracts, workbook lifecycle, performance, and production readiness.
 - Release validation scripts for builds, package metadata, MCP catalog consistency, documentation surface, skill assets, CLI smoke checks, package dry runs, tests, and synthetic benchmarks.
 
@@ -569,14 +571,14 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ---
 
-Source: skills/open-workbook-excel/SKILL.md
+Source: skills/open-workbook-skills/SKILL.md
 
 ---
-name: open-workbook-excel
+name: open-workbook-skills
 description: "Use when an agent needs to automate live Microsoft Excel workbooks through Open Workbook MCP with the public excel.agent.run workflow: inspect workbooks, read/write ranges, update tables, preserve templates, repair formulas/styles, create pivots/charts, validate reports, save/export files, coordinate multiple agents, or normalize multilingual workbook requests into structured intent."
 ---
 
-# Open Workbook Excel
+# Open Workbook Skills
 
 Use Open Workbook MCP for live desktop Excel work. It is the required first path when the workbook is open in Excel and the user expects current cell values, unsaved edits, formatting, formulas, filters, tables, pivots, charts, snapshots, backups, transaction history, and rollback safety to survive.
 
@@ -598,6 +600,8 @@ Use modes deliberately:
 - `answer`: targeted live reads, schemas, summaries, comparisons, and deterministic inspection.
 - `preview_update`: preview mutations and get an `operationId` plus `confirmationToken`.
 - `apply_update`: apply only a previewed operation with the returned token.
+- `operation_status`: check a returned operation without reissuing preview/apply.
+- `cancel_operation`: cancel a pending preview before apply starts.
 - `validate`: validate workbook, sheet, table, formula, style, filter, print-layout, or unintended-change scope.
 - `rollback`: inspect or apply recovery through returned transaction, snapshot, or backup guidance.
 - `auto`: compatibility route for casual prompts; explicit modes are preferred when the workflow step is known.
@@ -613,14 +617,25 @@ When the caller LLM can infer routing, pass structured fields alongside the natu
 - `target`: explicit `sheetName`, `range`, `tableName`, named item, region, or returned `candidateId`.
 - `values`: 2D values, formulas, styles, table rows, patches, template data, backup IDs, or confirmation data.
 
+Use `detailLevel` when the user is implicitly asking for more or less data: `workbook_summary` for metadata-only workbook context, `sheet_summary` for one sheet without live cell reads, `table_sample` for a bounded live table sample, and `full_table` when the full table should be available behind result resources.
+
 For multilingual requests, preserve the original language in `request`, normalize routing fields to canonical English when clear, keep target hints in the workbook/user language, and answer the user in their language unless asked otherwise. Do not translate the whole task into English and discard the original wording.
 
 Read `references/agent-run.md` for mode contracts, preview/apply behavior, multilingual routing, and result handling. Read `references/capability-map.md` when you need exact internal action groups.
+
+## Workflow Semantics
+
+- Raw duplicate: use `copy_sheet` only when the user explicitly asks for an exact copy including old values.
+- Create from template: use template workflows to preserve structure, formulas, styles, validation, and layout while clearing old data regions for fresh entry.
+- Apply style from template: use `copy_style_from_template`; the source/template sheet is a style source only and must not be duplicated or mutated.
+- Replace styled table: use `replace_range_with_styled_table` to clear stale layout, write headers/rows, copy header/body style samples, and autofit in one preview/apply workflow.
 
 ## Safety Rules
 
 - Never bypass permissions, scoped locks, snapshots, backups, fingerprints, Office.js execution, validation, transaction records, or rollback metadata for mutations.
 - Never write cell-by-cell loops. Batch values, formulas, number formats, and styles as narrow 2D matrices or grouped patches.
+- For OCR output, screenshots, forms, invoices, shipment documents, booking images, or other field/value data that must become a styled horizontal table, use one `preview_update` with `intent.action: "replace_range_with_styled_table"` and one `apply_update`; do not split clear/write/autofit/style copy into separate calls. If old borders/fills must disappear, do not clear leftovers by writing blanks.
+- If a response returns `status: "NEEDS_WORKFLOW_REDIRECT"`, stop the fragmented plan and call the suggested grouped `preview_update` workflow instead.
 - Never pad broad ranges with blanks or `null` when only a smaller rectangle should change.
 - Treat `CAPABILITY_UNAVAILABLE`, unsupported, partial, disconnected, and Office.js host-limit warnings as real results.
 - After risky mutations, validate affected scopes and report important proof: transaction IDs, backup IDs, warnings, diffs, rollback options, compact proof, and telemetry.
@@ -638,7 +653,7 @@ Read `references/agent-run.md` for mode contracts, preview/apply behavior, multi
 
 ---
 
-Source: skills/open-workbook-excel/references/agent-run.md
+Source: skills/open-workbook-skills/references/agent-run.md
 
 ## Agent Run
 
@@ -699,7 +714,7 @@ If the result is `AMBIGUOUS_TARGET`, retry with one returned `target.candidateId
 
 ---
 
-Source: skills/open-workbook-excel/references/capability-map.md
+Source: skills/open-workbook-skills/references/capability-map.md
 
 ## Capability Map
 
@@ -714,14 +729,14 @@ This map groups backend-owned action concepts for `excel.agent.run`. It is for r
 
 ## Mutations
 
-- Values/formulas/formats: `write_values`, `write_formulas`, `write_number_formats`, `format_range`, `write_styles_many`, `clear_values`, `clear_values_raw`, `clear_formats`, `copy_range`, `move_range`.
+- Values/formulas/formats: `write_values`, grouped `values.patches`, `write_formulas`, `write_number_formats`, `format_range`, `write_styles_many`, grouped internal `write_values_many`/`write_number_formats_many`/`clear_many`/`clear_formats_many`/`autofit_many`, `clear_values`, `clear_values_raw`, `clear_formats`, `copy_range`, `move_range`.
 - Structure: `insert_rows`, `delete_rows`, `insert_columns`, `delete_columns`, `merge_range`, `unmerge_range`, `create_sheet`, `copy_sheet`, `rename_sheet`, `delete_sheet`, `hide_sheet`, `unhide_sheet`, `protect_sheet`, `unprotect_sheet`, `clear_sheet`, `set_sheet_tab_color`, `autofit`, `autofit_rows`.
-- Tables: `append_table_rows`, `update_table_rows`, `create_table`, `resize_table`, `reorder_table_columns`, `clear_table_data`, `clear_table_filters`, `sort_table`, `filter_range`, `set_table_total_row`, `set_table_style`, `copy_table_structure`.
+- Tables: `append_table_rows`, `update_table_rows`, `create_table`, `resize_table`, `reorder_table_columns`, `clear_table_data`, `clear_table_filters`, `sort_table`, `filter_range`, `apply_table_view`, `set_table_total_row`, `set_table_style`, `copy_table_structure`.
 - Cleaning: `normalize_headers`, `trim_whitespace`, `remove_duplicates`, `parse_dates`, `parse_numbers`, `standardize_currency`, `fill_missing_values`, `split_column`, `merge_columns`.
 
 ## Template, Formula, Style, Pivot, And Chart Workflows
 
-- Template workflows: `copy_template_sheet`, `register_template`, `unregister_template`, `clear_template_data_regions`, `fill_template_regions`, `validate_sheet_against_template`, `repair_sheet_from_template`, `create_template_report`.
+- Template workflows: `copy_template_sheet` backed by internal `sheet.copy_clean_data_regions`, `register_template`, `unregister_template`, `clear_template_data_regions`, `fill_template_regions`, `validate_sheet_against_template`, `repair_sheet_from_template`, `create_template_report`.
 - Formula workflows: `create_formula_sheet`, `read_formula_patterns`, `get_formula_dependency_graph`, `trace_formula_precedents`, `trace_formula_dependents`, `validate_formula_range`, `validate_formula_against_template`, `find_formula_errors`, `explain_formula`, `copy_formula_patterns`, `fill_formula_down`, `fill_formula_right`, `repair_formula_patterns`, `convert_formulas_to_values`, `recalculate_formulas`, `repair_formulas_from_template`.
 - Style workflows: `read_style_fingerprint`, `compare_style_fingerprint`, `get_theme`, `apply_theme`, `copy_style_from_template`, `repair_style_consistency`, `repair_style_from_template`.
 - Pivot/chart workflows: `create_pivot_chart_summary` and related host-limited capability reports.
@@ -743,7 +758,7 @@ This map groups backend-owned action concepts for `excel.agent.run`. It is for r
 
 ---
 
-Source: skills/open-workbook-excel/references/tool-selection.md
+Source: skills/open-workbook-skills/references/tool-selection.md
 
 ## Tool Selection
 
@@ -768,6 +783,8 @@ Do not call backend primitive capabilities directly in normal MCP clients. Looku
 - `validate`: validate after risky changes.
 
 If `excel.agent.run` returns `AMBIGUOUS_TARGET`, select one candidate and retry with `target.candidateId` plus the same `workbookContextId`. Do not switch to shell, Python, openpyxl, pandas, or offline `.xlsx` parsing for a connected live workbook.
+
+If `excel.agent.run` returns `NEEDS_WORKFLOW_REDIRECT`, stop the fragmented operation sequence and call the suggested grouped `preview_update` workflow. Do not continue chunking adjacent style, clear, autofit, table, or formula operations.
 
 ## Structured Intent
 
@@ -822,6 +839,8 @@ Avoid prompts that require workbook-wide scans unless the user asked for audit, 
 - For formulas, use `intent.action: "write_formulas"` and formula matrices beginning with `=`.
 - For formula pattern repair from a registered template, use `repair_formula_patterns` with `values.templateId` and `target.sheetName`, then apply the returned preview once.
 - For direct styles, use `intent.action: "format_range"` with a narrow `target`. For style audit/comparison, use `read_style_fingerprint` or `compare_style_fingerprint` with explicit source and target sheets/ranges. For workbook theme requests, use `get_theme` or `apply_theme` in answer mode and report the returned capability status; do not synthesize theme changes when the host says unavailable. For template style copy or repair, use `copy_style_from_template` or `repair_style_consistency` with explicit source/destination or `values.templateId`, then apply once.
+- For style-only requests such as “make Booking look like Employees,” use `copy_style_from_template`; never duplicate the source/template sheet or change source values.
+- For OCR, screenshots, forms, invoices, shipment documents, booking images, or other field/value data that must become a horizontal styled table, use `replace_range_with_styled_table` with `values.headers`, `values.row` or `values.rows`, optional `values.clearRange`, and optional `values.headerStyleSource` / `values.bodyStyleSource`. This workflow clears stale layout, writes the table, styles header/body, and autofits in one preview/apply path.
 - For explicit repair intents, use `repair_style_from_template`, `repair_formulas_from_template`, or `repair_table_structure` with `mode: "preview_update"` and then apply once. Use `repair_filters_from_template`, `repair_print_layout`, `repair_named_ranges`, `repair_formula_errors`, or `repair_merged_cells` with `mode: "answer"` to get a structured repair report when the host cannot safely execute the category.
 - For number formats, use `intent.action: "write_number_formats"` with `values.numberFormat` or `values.numberFormats`.
 - For cleaning inspections, use `detect_header_row`, `detect_outliers`, or `fuzzy_match` with `mode: "answer"`. For cleaning transforms, use `normalize_headers`, `trim_whitespace`, `remove_duplicates`, `parse_dates`, `parse_numbers`, `standardize_currency`, `fill_missing_values`, `split_column`, or `merge_columns` with a concrete range, then apply once.
@@ -831,9 +850,10 @@ Avoid prompts that require workbook-wide scans unless the user asked for audit, 
 - For table row changes, use `append_table_rows` or `update_table_rows` with explicit `target.tableName` and `values.rows`.
 - For table structure changes, use `create_table`, `resize_table`, `reorder_table_columns`, or `copy_table_structure` with explicit table/sheet/address fields, then apply the returned preview once.
 - For table presentation, use `clear_table_filters`, `set_table_total_row`, or `set_table_style` with explicit `target.tableName`.
-- For sheet structure and presentation, use `create_sheet`, `copy_sheet`, `rename_sheet`, `hide_sheet`, `unhide_sheet`, or `set_sheet_tab_color`; pass `target.sheetName` for existing sheets, `values.newSheetName` for copy/rename, `values.sheetName` for create, and `values.color` for tab color.
+- For sheet structure and presentation, use `create_sheet`, `copy_sheet`, `rename_sheet`, `hide_sheet`, `unhide_sheet`, or `set_sheet_tab_color`; pass `target.sheetName` for existing sheets, `values.newSheetName` for copy/rename, `values.sheetName` for create, and `values.color` for tab color. Use raw `copy_sheet` only for an exact duplicate including old values.
 - For template registry reads, use `list_templates`, `read_template`, `detect_templates`, or `infer_template_regions` with `mode: "answer"` and `values.templateId` when needed.
 - For template lifecycle and repair, use `register_template`, `unregister_template`, `clear_template_data_regions`, `fill_template_regions`, or `repair_sheet_from_template` with `mode: "preview_update"` and then apply once. Pass `values.templateId`, `target.sheetName` or `values.sourceSheetName`, `values.targetSheetName`, and optional `values.dataRegions` or repair dimensions when known. For `fill_template_regions`, pass explicit `values.regions` entries or a `values.regionValues` map keyed by declared data-region address.
+- For “create from template,” prefer a clean template copy: preserve headers, formulas, styles, validation, and layout, then clear old data regions so fresh rows follow the same pattern. Do not leave previous business data in the new sheet unless the user explicitly asks for a raw duplicate.
 - For local safety captures, use `create_snapshot` or `create_backup` with `mode: "preview_update"`; pass `target.sheetName` and `target.range` for scoped captures when possible, then apply once with the returned confirmation token.
 - For safety artifact inspection, use `list_snapshots`, `read_snapshot`, `list_backups`, or `read_backup` with `mode: "answer"`; pass `values.snapshotId` or `values.backupId` for reads. Snapshot reads return compact metadata and payload counts, not the full stored payload.
 - For safety artifact lifecycle work, use `compare_snapshots` and `verify_backup` with `mode: "answer"`; use `create_file_backup`, `restore_file_backup`, `prune_backups`, `refresh_snapshot`, `invalidate_snapshot`, `delete_snapshot`, `pin_backup`, `unpin_backup`, or `delete_backup` with `mode: "preview_update"` and then apply with the returned confirmation token.
@@ -847,7 +867,7 @@ Never pad broad ranges with blanks or nulls when only a smaller rectangle should
 Describe the user's goal through `excel.agent.run` and let the backend choose internal table, template, formula, pivot, chart, validation, snapshot, diff, backup, and transaction capabilities.
 
 - For table appends, pass `target.candidateId` or `target.tableName` with `values.rows`, preview first, then apply.
-- For table sort/filter, pass `intent.action: "sort_table"` or `filter_range` plus a table/range target.
+- For table sort/filter, pass `intent.action: "sort_table"` or `filter_range` plus a table/range target. If one user request combines table filters and sorting, use `intent.action: "apply_table_view"` with `values.filters` and `values.sort.fields` so the backend previews and applies one table mutation.
 - For template, formula repair, pivot/chart, and risky-edit tasks, use `prepare`, `find`, `answer`, `preview_update`, and `validate` as appropriate; template metadata reads can stay in `answer`, while template mutations and repairs must preview/apply; report host capability warnings honestly.
 - For save/recalculate, use `intent.action: "save"` or `calculate`; the backend maps these to workbook-level operations.
 
@@ -857,7 +877,7 @@ Treat returned `resourceLinks`, `compactProof`, `proof`, `invalidatedContextIds`
 
 ---
 
-Source: skills/open-workbook-excel/references/workflows.md
+Source: skills/open-workbook-skills/references/workflows.md
 
 ## Workflows
 
@@ -978,7 +998,7 @@ Full file replacement of an open workbook is host-limited. Prefer safe open-as-n
 
 ---
 
-Source: skills/open-workbook-excel/references/reliability.md
+Source: skills/open-workbook-skills/references/reliability.md
 
 ## Reliability
 
@@ -1063,7 +1083,7 @@ Do not use stale snapshots as the source of truth for current workbook state.
 
 ---
 
-Source: skills/open-workbook-excel/references/performance.md
+Source: skills/open-workbook-skills/references/performance.md
 
 ## Performance
 
@@ -1100,6 +1120,7 @@ When a compact response includes `resourceUri`, fetch it only if the full detail
 
 - Use one batch or plan for related edits.
 - On the public agent surface, group related range value edits with `values.patches` in one `preview_update`, then call `apply_update` once for the returned operation.
+- For repeated values, number formats, styles, clears, or autofit across related ranges, use one grouped preview; the backend compiles it to internal `*_many` range operations so stale checks, backups, telemetry, and rollback stay single-operation.
 - Ask for preview before applying large generated changes.
 - Keep matrix shapes exact: rows and columns must match the target range.
 - Let Open Workbook chunk large values/formulas/number formats through safe row-based chunk plans.
@@ -1124,7 +1145,7 @@ For mutation results, prefer the returned `compactProof` summary over reading ch
 
 ---
 
-Source: skills/open-workbook-excel/references/multi-agent.md
+Source: skills/open-workbook-skills/references/multi-agent.md
 
 ## Multi-Agent Work
 
@@ -1182,7 +1203,7 @@ Open Workbook is distributed as one npm package for technical users:
 npx -y @components-kit/open-workbook setup
 ```
 
-The setup command prepares the local machine, but it does not edit every agent UI automatically. After setup, install the Open Workbook Excel skill with skills.sh and copy the printed MCP launch command into whichever MCP-capable agent you use.
+The setup command prepares the local machine, but it does not edit every agent UI automatically. After setup, install the Open Workbook Skills skill with skills.sh and copy the printed MCP launch command into whichever MCP-capable agent you use.
 
 ## Requirements
 
@@ -1199,10 +1220,10 @@ Run setup:
 npx -y @components-kit/open-workbook setup
 ```
 
-Install the Open Workbook Excel skill:
+Install the Open Workbook Skills skill:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel
+npx skills add components-kit/open-workbook --skill open-workbook-skills
 ```
 
 It also prepares an Excel add-in manifest. On macOS, setup copies the manifest into Excel's local WEF sideload folder. On Windows, setup writes a manifest and prints the Trusted Add-in Catalog steps that Excel requires.
@@ -1267,13 +1288,13 @@ Open Workbook is client-neutral. Any MCP-capable agent UI can launch the same co
 Install the Excel skill with skills.sh:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel
+npx skills add components-kit/open-workbook --skill open-workbook-skills
 ```
 
 For OpenCode global install:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel -a opencode -g -y
+npx skills add components-kit/open-workbook --skill open-workbook-skills -a opencode -g -y
 ```
 
 ## Source Checkout
@@ -1316,25 +1337,25 @@ Source: docs/instructions.md
 
 ## Agent Instructions
 
-Open Workbook ships an agent skill in the repository under `skills/open-workbook-excel/`.
+Open Workbook ships an agent skill in the repository under `skills/open-workbook-skills/`.
 
 Install it with skills.sh:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel
+npx skills add components-kit/open-workbook --skill open-workbook-skills
 ```
 
 For a global OpenCode install:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel -a opencode -g -y
+npx skills add components-kit/open-workbook --skill open-workbook-skills -a opencode -g -y
 ```
 
 The skills.sh-compatible layout is:
 
 ```text
 skills/
-  open-workbook-excel/
+  open-workbook-skills/
     SKILL.md
     references/
       tool-selection.md
@@ -1352,7 +1373,7 @@ For clients that do not support skills.sh, print or write a portable instruction
 
 ```bash
 npx -y @components-kit/open-workbook instructions
-npx -y @components-kit/open-workbook instructions --out open-workbook-excel.md
+npx -y @components-kit/open-workbook instructions --out open-workbook-skills.md
 ```
 
 ---
@@ -1533,10 +1554,14 @@ Supported modes:
 - `answer`: answer when deterministic cached metadata and targeted reads are enough; otherwise return candidates and `NEEDS_INPUT`. Schema/header/column-only requests return cached table or range metadata when possible; requests for actual rows, values, samples, raw monthly sections, or explicit A1 ranges perform live targeted reads.
 - `preview_update`: prepare a scoped workbook change and return `operationId` plus `confirmationToken`.
 - `apply_update`: apply a previously previewed operation.
+- `operation_status`: inspect a previewed, applying, applied, failed, expired, or cancelled operation by `operationId`.
+- `cancel_operation`: cancel a pending preview before apply starts.
 - `validate`: run compact validation.
 - `rollback`: reserved for conservative rollback orchestration.
 
-Mutation rule: `preview_update` never applies workbook edits. It can preview scoped range value writes, grouped multi-range value patches, raw value clears, row/column insert/delete operations, merge/unmerge operations, formula writes, style updates, template style copy/repair, sheet create/copy/rename/hide/unhide/tab-color updates, local snapshot/backup creation, workbook backup/config/close actions, template-sheet cleanup, template registry mutations, template-backed sheet repair, and explicit table-row appends through the default agent tool. `auto` may preview and apply a clearly authorized, scoped value edit when safety checks pass; structural, destructive, broad, sparse, stale, ambiguous, style, formula, template, sheet, backup, workbook, or table append edits stop before mutation and return `nextAction`. Manual applying requires a second `excel.agent.run` call with `mode: "apply_update"`, the previewed `operationId`, and the matching `confirmationToken`. Pending previews store workbook and target-specific fingerprints; apply returns `STALE_CONTEXT` when sheet, table, named-range, formula-region, selection, or target metadata has drifted after preview. If a grouped preview succeeds, agents should call `apply_update` once and should not split these related patches unless apply returns a hard failure with actionable details.
+Mutation rule: `preview_update` never applies workbook edits. It can preview scoped range value writes, grouped multi-range value patches, raw value clears, row/column insert/delete operations, merge/unmerge operations, formula writes, style updates, template style copy/repair, sheet create/copy/rename/hide/unhide/tab-color updates, local snapshot/backup creation, workbook backup/config/close actions, template-sheet cleanup, template registry mutations, template-backed sheet repair, explicit table-row appends, and composed booking/OCR table replacement through the default agent tool. `auto` may preview and apply a clearly authorized, scoped value edit when safety checks pass; structural, destructive, broad, sparse, stale, ambiguous, style, formula, template, sheet, backup, workbook, or table append edits stop before mutation and return `nextAction`. Manual applying requires a second `excel.agent.run` call with `mode: "apply_update"`, the previewed `operationId`, and the matching `confirmationToken`. Pending previews store workbook and target-specific fingerprints; apply returns `STALE_CONTEXT` when sheet, table, named-range, formula-region, selection, or target metadata has drifted after preview. If a grouped or composed preview succeeds, agents should call `apply_update` once and should not split these related patches unless apply returns a hard failure with actionable details.
+
+For booking images, OCR output, or client screenshots that need headers rotated into a value table while preserving workbook style, use `intent.action: "replace_range_with_styled_table"` with explicit target, values, optional `values.clearRange`, and optional `values.headerStyleSource`/`values.bodyStyleSource`. This compiles clear/write/autofit/style-copy steps into one previewed operation and one apply. Do not issue separate clear, write, autofit, and style calls for this workflow.
 
 Agent results include `structuredContent`, a text fallback, compact proof ranges, reusable candidate ids, resource links such as `excel://agent/contexts/{workbook_context_id}` and `excel://agent/operations/{operation_id}`, and telemetry for payload bytes, estimated tokens, elapsed time, cache reuse, route decision, caller intent source/action/acceptance, target hint count/usage, matched action handler, operation risk, target fingerprint status, metadata cache status, auto-apply decisions, internal read count, full-read cell count, candidate count, resource-link count, and estimated token savings. `budget.maxPayloadBytes`, `budget.maxEstimatedTokens`, and `budget.maxExamples` bound inline agent output; larger context is summarized or moved behind resource links.
 
@@ -1551,8 +1576,8 @@ The backend also tracks whether a capability is the public agent entrypoint, cur
 - Runtime: `excel.runtime.get_status`, `excel.runtime.connect_addin`, `excel.runtime.disconnect_addin`, `excel.runtime.ping_addin`, `excel.runtime.get_capabilities`, `excel.runtime.get_active_context`, `excel.runtime.get_selection`, `excel.runtime.set_active_workbook`, `excel.runtime.set_active_sheet`
 - Workbook: `excel.workbook.list_open_workbooks`, `excel.workbook.get_workbook_info`, `excel.workbook.get_workbook_map`, `excel.workbook.get_summary`, `excel.workbook.get_used_range_summary`, `excel.workbook.snapshot`, `excel.workbook.refresh_snapshot`, `excel.workbook.get_snapshot`, `excel.workbook.detect_external_changes`, `excel.workbook.calculate`, `excel.workbook.save`, `excel.workbook.save_as`, `excel.workbook.create_backup`, `excel.workbook.restore_backup`, `excel.workbook.export_copy`, `excel.workbook.export_local_config`, `excel.workbook.import_local_config`, `excel.workbook.embed_local_config`, `excel.workbook.read_embedded_local_config`, `excel.workbook.import_embedded_local_config`, `excel.workbook.close`
 - File backups: `excel.backup.create_file`, `excel.backup.list`, `excel.backup.get`, `excel.backup.verify`, `excel.backup.restore_file`, `excel.backup.delete`, `excel.backup.prune`, `excel.backup.pin`, `excel.backup.unpin`
-- Sheet: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.get_summary`, `excel.sheet.create`, `excel.sheet.copy`, `excel.sheet.rename`, `excel.sheet.delete`, `excel.sheet.hide`, `excel.sheet.unhide`, `excel.sheet.protect`, `excel.sheet.unprotect`, `excel.sheet.clear`, `excel.sheet.get_used_range`, `excel.sheet.set_tab_color`
-- Range: `excel.range.read_compact`, `excel.range.get_summary`, `excel.range.read_hyperlinks`, `excel.range.read_comments`, `excel.range.read_notes`, `excel.range.read_merged_cells`, `excel.range.read_data_validation`, `excel.range.read_conditional_formatting`, `excel.range.search`, `excel.range.find_blank_cells`, `excel.range.find_errors`, `excel.range.write_values`, `excel.range.write_formulas`, `excel.range.write_number_formats`, `excel.range.write_styles`, `excel.range.write_styles_many`, `excel.range.clear`, `excel.range.clear_values`, `excel.range.clear_formats`, `excel.range.clear_values_keep_format`, `excel.range.copy`, `excel.range.move`, `excel.range.insert_rows`, `excel.range.delete_rows`, `excel.range.insert_columns`, `excel.range.delete_columns`, `excel.range.autofit_columns`, `excel.range.autofit_rows`, `excel.range.merge`, `excel.range.unmerge`
+- Sheet: `excel.sheet.list`, `excel.sheet.get_info`, `excel.sheet.get_summary`, `excel.sheet.create`, `excel.sheet.copy`, `excel.sheet.copy_clean_data_regions`, `excel.sheet.rename`, `excel.sheet.delete`, `excel.sheet.hide`, `excel.sheet.unhide`, `excel.sheet.protect`, `excel.sheet.unprotect`, `excel.sheet.clear`, `excel.sheet.get_used_range`, `excel.sheet.set_tab_color`
+- Range: `excel.range.read_compact`, `excel.range.get_summary`, `excel.range.read_hyperlinks`, `excel.range.read_comments`, `excel.range.read_notes`, `excel.range.read_merged_cells`, `excel.range.read_data_validation`, `excel.range.read_conditional_formatting`, `excel.range.search`, `excel.range.find_blank_cells`, `excel.range.find_errors`, `excel.range.write_values`, `excel.range.write_values_many`, `excel.range.write_formulas`, `excel.range.write_number_formats`, `excel.range.write_number_formats_many`, `excel.range.write_styles`, `excel.range.write_styles_many`, `excel.range.clear`, `excel.range.clear_many`, `excel.range.clear_values`, `excel.range.clear_formats`, `excel.range.clear_formats_many`, `excel.range.clear_values_keep_format`, `excel.range.copy`, `excel.range.move`, `excel.range.insert_rows`, `excel.range.delete_rows`, `excel.range.insert_columns`, `excel.range.delete_columns`, `excel.range.autofit_columns`, `excel.range.autofit_rows`, `excel.range.autofit_many`, `excel.range.merge`, `excel.range.unmerge`
 - Lookup: `excel.lookup.search_workbook`, `excel.lookup.resolve_range`, `excel.lookup.inspect_match`
 - Batch: `excel.batch.apply`, `excel.batch.submit`, `excel.batch.submit_chunked`, `excel.batch.preflight`, `excel.batch.validate`, `excel.batch.dry_run`
 - Workflow: `excel.workflow.prepare_session`, `excel.workflow.create_formula_sheet`, `excel.workflow.create_template_report`, `excel.workflow.create_pivot_chart_summary`, `excel.workflow.repair_formula_errors`, `excel.workflow.preview_risky_edit`, `excel.workflow.inspect_analyze`, `excel.workflow.rollback_validate`
@@ -1568,7 +1593,7 @@ The backend also tracks whether a capability is the public agent entrypoint, cur
 - Templates: `excel.template.detect_templates`, `excel.template.register`, `excel.template.unregister`, `excel.template.get`, `excel.template.list`, `excel.template.infer_regions`, `excel.template.create_sheet_from_template`, `excel.template.clear_data_regions`, `excel.template.fill_regions`, `excel.template.validate_sheet_against_template`, `excel.template.repair_sheet_from_template`
 - Style: `excel.style.get_fingerprint`, `excel.style.compare_fingerprint`, `excel.style.copy_from_template`, `excel.style.apply_style`, `excel.style.validate_consistency`, `excel.style.repair_consistency`, `excel.style.get_theme`, `excel.style.apply_theme`, `excel.style.copy_column_widths`, `excel.style.copy_row_heights`, `excel.style.copy_borders`, `excel.style.copy_fills`, `excel.style.copy_fonts`, `excel.style.copy_alignment`, `excel.style.copy_number_formats`, `excel.style.copy_conditional_formatting`, `excel.style.copy_data_validation`
 - Formula: `excel.formula.read_patterns`, `excel.formula.copy_patterns`, `excel.formula.fill_down`, `excel.formula.fill_right`, `excel.formula.validate`, `excel.formula.validate_against_template`, `excel.formula.repair_patterns`, `excel.formula.find_errors`, `excel.formula.get_dependency_graph`, `excel.formula.trace_precedents`, `excel.formula.trace_dependents`, `excel.formula.convert_to_values`, `excel.formula.recalculate`, `excel.formula.explain`
-- Tables: `excel.table.list`, `excel.table.get_info`, `excel.table.get_schema`, `excel.table.read_compact`, `excel.table.create`, `excel.table.resize`, `excel.table.reorder_columns`, `excel.table.append_rows`, `excel.table.update_rows`, `excel.table.clear_data_keep_formulas`, `excel.table.clear_filters`, `excel.table.apply_filters`, `excel.table.sort`, `excel.table.set_total_row`, `excel.table.set_style`, `excel.table.copy_structure`, `excel.table.validate_against_template`
+- Tables: `excel.table.list`, `excel.table.get_info`, `excel.table.get_schema`, `excel.table.read_compact`, `excel.table.create`, `excel.table.resize`, `excel.table.reorder_columns`, `excel.table.append_rows`, `excel.table.update_rows`, `excel.table.clear_data_keep_formulas`, `excel.table.clear_filters`, `excel.table.apply_filters`, `excel.table.sort`, `excel.table.apply_view`, `excel.table.set_total_row`, `excel.table.set_style`, `excel.table.copy_structure`, `excel.table.validate_against_template`
 - PivotTables: `excel.pivot.list`, `excel.pivot.get_info`, `excel.pivot.create`, `excel.pivot.refresh`, `excel.pivot.refresh_all`, `excel.pivot.update_source`, `excel.pivot.copy_from_template`, `excel.pivot.delete`, `excel.pivot.validate_source`, `excel.pivot.get_capability_matrix`, `excel.pivot.get_fingerprint`, `excel.pivot.compare_fingerprint`, `excel.pivot.diff`, `excel.pivot.repair_from_template`, `excel.pivot.rebuild_with_source`
 - Charts: `excel.chart.list`, `excel.chart.get_info`, `excel.chart.create`, `excel.chart.update_data_source`, `excel.chart.copy_from_template`, `excel.chart.refresh`, `excel.chart.delete`, `excel.chart.validate_against_template`
 - Names: `excel.names.list`, `excel.names.get`, `excel.names.create`, `excel.names.update`, `excel.names.delete`
@@ -1604,6 +1629,8 @@ Generic workbook prompts are registered with the MCP server and return safe tool
 - `excel.prompts.clean_current_sheet`
 - `excel.prompts.fix_formula_errors`
 - `excel.prompts.format_like_template`
+- `excel.prompts.field_value_image_to_styled_table`
+- `excel.prompts.booking_image_to_styled_table`
 - `excel.prompts.validate_report_before_saving`
 - `excel.prompts.create_summary_report`
 
@@ -1620,6 +1647,13 @@ On the public agent surface, `excel.agent.run` with `mode: "prepare"` is the pre
 Runtime readiness is stricter than socket connection. Status payloads include `connectionState` (`disconnected`, `connected_no_workbook`, `ready`, or `stale`), `activeAddinReachable`, and `activeWorkbookAvailable`. `excel.agent.run` probes the add-in quickly before workbook work; stale or unresponsive sessions return `NEEDS_INPUT` with taskpane reload guidance instead of waiting on a long Office.js RPC timeout.
 
 `excel.agent.run` `mode: "prepare"` returns a server-side `workbookContextId`. Ambiguous public-surface calls return candidates with ids; pass the selected id back as `target.candidateId` with the same `workbookContextId` to continue without switching surfaces. Internally, workbook summaries, sheet summaries, compact range/table reads, and compact resources can reuse that ID to avoid repeated workbook discovery; missing or ambiguous sheet/table targets return structured candidates.
+
+Use `detailLevel` to control how much workbook data the backend fetches before response compaction:
+
+- `workbook_summary`: metadata-only workbook summary.
+- `sheet_summary`: metadata-only summary for one sheet.
+- `table_sample`: targeted live table sample, compact inline response.
+- `full_table`: targeted live table read with full details stored behind result resources.
 
 Lookup and compact context tools reduce token use by exposing target candidates and workbook structure before cell data. Use `excel.lookup.search_workbook` or `excel.lookup.resolve_range` when the target sheet, table, column, entity, or range is unknown. Use `excel.lookup.inspect_match` to read one bounded candidate preview instead of probing whole sheets.
 
@@ -1660,7 +1694,7 @@ Compact table reads accept optional column, row-window, and include flags so age
 
 `excel.batch.submit` queues a batch mutation and returns transaction progress immediately. Use it when a mutation may take longer than an MCP client timeout, then follow with `excel.transaction.wait` or `excel.transaction.get`. `excel.batch.submit_chunked` preflights a large batch, splits safely chunkable style/value/formula/number-format work, queues child transactions, and returns one parent job. `excel.batch.apply` still waits when the writer is idle, but if another mutation is active or queued it returns queued transaction progress instead of blocking behind the queue.
 
-`excel.range.write_styles_many` applies multiple range/style entries through the reversible batch path. Agents should use it for grouped report formatting such as title bands, header rows, body ranges, zebra rows, and repeated status/type coloring instead of launching many parallel `excel.range.write_styles` calls. Large style entry lists are split into queued parent jobs; set `OPEN_WORKBOOK_STYLE_BATCH_CHUNK_SIZE` to override the default chunk size.
+Grouped range operations (`excel.range.write_values_many`, `excel.range.write_number_formats_many`, `excel.range.write_styles_many`, `excel.range.clear_many`, `excel.range.clear_formats_many`, and `excel.range.autofit_many`) apply related range entries through one reversible batch path. Agents should use one grouped preview for related values, number formats, styles, stale layout cleanup, and autofit work instead of launching many parallel single-range calls. Large style entry lists are split into queued parent jobs; set `OPEN_WORKBOOK_STYLE_BATCH_CHUNK_SIZE` to override the default chunk size.
 
 `excel.job.list`, `excel.job.get`, `excel.job.wait`, and `excel.job.cancel` track parent jobs that split one user-visible update into multiple queued transactions. Jobs expose aggregate chunk progress and cancellation for queued child transactions. Applying chunks are not interrupted mid-Office.js call.
 
@@ -1949,6 +1983,7 @@ Structured table operations use native Office.js table APIs instead of range-onl
 - Create, resize, reorder columns, append rows, update rows, clear constants while keeping formulas, set total row, set style, and copy table structure.
 - Apply, clear, and validate table filters through Office.js filter criteria.
 - Apply and clear table sort state through Office.js sort fields.
+- Apply combined table views with filters, sort fields, and optional clear-filter/clear-sort flags in one Office.js transaction.
 
 For `excel.agent.run`, table filter previews use `values.filters`. The canonical filter shape is:
 
@@ -1959,6 +1994,8 @@ For `excel.agent.run`, table filter previews use `values.filters`. The canonical
 The agent surface also normalizes common shorthand shapes such as `{ "column": "Status", "value": "Open" }`, `{ "column": "Status", "criterion": "Open" }`, and `{ "column": "Status", "filterType": "text", "value": "Open" }` before calling the Office.js table filter API.
 
 Structured table sort previews accept `values.sortBy` or `values.column` plus `values.direction` or `values.ascending`; text-only amount sort inference remains a fallback.
+
+When one request combines table filters and sorting, use `intent.action: "apply_table_view"` with `values.filters` and `values.sort.fields`. The backend stores one preview, applies one direct table transaction, and returns one proof instead of splitting filter and sort into separate operations.
 
 ## Safety
 
@@ -2372,7 +2409,8 @@ Open Workbook treats speed as a correctness requirement because slow workbook au
 - Group operations by workbook, sheet, and contiguous range.
 - Chunk large payloads before Office.js limits.
 - On the public agent surface, describe large generated batches through `excel.agent.run`; the backend preflights them and decides whether to apply directly, submit to the queue, or chunk safely.
-- Describe grouped report styling through one `excel.agent.run` preview instead of many parallel single-range style writes; internally, large style entry lists can route to `excel.range.write_styles_many` and queued parent jobs.
+- Describe grouped range work through one `excel.agent.run` preview instead of many parallel single-range writes; internally, related values, number formats, styles, clears, and autofit route to `excel.range.*_many` operations and queued parent jobs when needed.
+- For extracted booking/client-image tables, use one `replace_range_with_styled_table` preview/apply so values, clearing, autofit, and style copies are compiled together.
 - Surface queued or long-running mutations through transaction progress instead of hiding them behind parallel write calls.
 - For chunked work, surface returned job progress so the user sees one update with chunk progress.
 - Suspend calculation and screen updating only around large operations.
@@ -2414,6 +2452,8 @@ For retry-prone mutation paths, pass a stable `idempotencyKey`. Replays with the
 Lookup capabilities are cheaper than workbook scans when the backend does not know where data lives. They return ranked sheet/table/column/header/entity/range candidates and encoded `matchId` values; normal agents should ask through `excel.agent.run` `mode: "find"` or retry with a returned candidate instead of calling lookup primitives directly.
 
 Initial releases collect telemetry first, then set hard SLOs from real workbook tests.
+
+Use `corepack pnpm diagnose:session -- <log-file>` on OpenCode or MCP logs when tool-call count looks wrong. The report highlights repeated `excel.agent.run` calls, missed batching opportunities, preview/apply imbalance, and when `operation_status` should replace repeated apply attempts.
 
 ## Token Budget Examples
 
@@ -2696,7 +2736,7 @@ Capability-unavailable responses are preferred over simulated success when Offic
 - `git diff --check` passes.
 - GitHub Actions CI passes the same non-E2E verification plus `corepack pnpm pack:dry-run` for every publishable package.
 - Capability catalog, README, installation docs, MCP client docs, and instruction docs match the public `excel.agent.run` MCP surface.
-- Fresh local install can run `npx -y @components-kit/open-workbook setup`, install `open-workbook-excel` with `npx skills add components-kit/open-workbook --skill open-workbook-excel`, generate/install a manifest, launch `npx -y @components-kit/open-workbook@latest mcp`, and report runtime status. If the runtime cannot bind or cannot be reached, CLI commands must fail with concise user-facing errors.
+- Fresh local install can run `npx -y @components-kit/open-workbook setup`, install `open-workbook-skills` with `npx skills add components-kit/open-workbook --skill open-workbook-skills`, generate/install a manifest, launch `npx -y @components-kit/open-workbook@latest mcp`, and report runtime status. If the runtime cannot bind or cannot be reached, CLI commands must fail with concise user-facing errors.
 - Excel add-in can be sideloaded on macOS and Windows using the generated manifest.
 - Native file bridge host smoke passes on macOS and Windows with `owb file-bridge smoke --workbook <open-workbook-name> --target <copy.xlsx>`.
 - Real Excel smoke starts with `OPEN_WORKBOOK_LIVE_E2E=1 corepack pnpm test:e2e:live:mac` or `OPEN_WORKBOOK_LIVE_E2E=1 corepack pnpm test:e2e:live:windows` and must confirm the backend is reachable and the Excel add-in has an active workbook. For deeper host claims, add `-- --deep` to run a scratch-sheet range write, formula validation, snapshot diff, and rollback preview.
@@ -2832,10 +2872,10 @@ For `npx`-based OpenCode config, keep the command equivalent to:
 }
 ```
 
-Install the Open Workbook Excel skill into OpenCode:
+Install the Open Workbook Skills skill into OpenCode:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel -a opencode -g -y
+npx skills add components-kit/open-workbook --skill open-workbook-skills -a opencode -g -y
 ```
 
 After Excel opens the add-in, useful default-surface calls are:
@@ -2848,9 +2888,12 @@ excel.agent.run mode=answer request="Summarize the active workbook"
 excel.agent.run mode=answer request="Compare January and February"
 excel.agent.run mode=preview_update request="Change Sales!E2 to Reviewed"
 excel.agent.run mode=apply_update request="Apply the previewed update"
+excel.agent.run mode=operation_status request="Check a pending operation" operationId="..."
 ```
 
 For related edits across multiple ranges, send one grouped preview using `values.patches` and then apply that returned operation once. Do not issue one preview/apply pair per zone, column group, or row block unless the grouped apply returns a hard failure with actionable issue details.
+
+For booking images or OCR-extracted client screenshots that need fields rotated into headers/values and styled like an existing sheet, send one `preview_update` with `intent.action: "replace_range_with_styled_table"`, structured `values`, and any style source ranges. Apply the returned operation once. Do not split the task into separate clear, write, autofit, and style calls.
 
 Omitted mode or `mode=auto` remains compatible for casual prompts, but explicit modes are more predictable for agent UIs. The backend should either answer from compact proof in one call or return a precise `nextAction`; agents should not chain primitive compact tools.
 
@@ -2862,7 +2905,7 @@ Source: docs/packaging.md
 
 ## Packaging And Publishing
 
-Open Workbook is designed for local-first, non-AppSource distribution. The public entry point is `@components-kit/open-workbook`, which can be run through `npx` and carries the built MCP server, Excel add-in assets, and fallback agent instructions. The primary skill install path is skills.sh against `skills/open-workbook-excel`.
+Open Workbook is designed for local-first, non-AppSource distribution. The public entry point is `@components-kit/open-workbook`, which can be run through `npx` and carries the built MCP server, Excel add-in assets, and fallback agent instructions. The primary skill install path is skills.sh against `skills/open-workbook-skills`.
 
 ## Packages
 
@@ -2943,8 +2986,8 @@ The tarball should include:
 - `packages/cli/assets/excel-addin/public`
 - `packages/cli/assets/excel-addin/scripts`
 - `packages/cli/assets/excel-addin/manifest.xml`
-- `packages/cli/assets/instructions/open-workbook-excel/SKILL.md`
-- `packages/cli/assets/instructions/open-workbook-excel/references`
+- `packages/cli/assets/instructions/open-workbook-skills/SKILL.md`
+- `packages/cli/assets/instructions/open-workbook-skills/references`
 - `packages/cli/README.md`
 
 ## Publish Checklist
@@ -2955,7 +2998,7 @@ Before publishing:
 2. Run `corepack pnpm verify`.
 3. Run `node packages/cli/dist/index.js doctor`.
 4. Run `corepack pnpm pack:dry-run`.
-5. Confirm `node packages/cli/dist/index.js setup --dry-run` prints the `npx -y @components-kit/open-workbook@latest mcp` local stdio launch command and `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
+5. Confirm `node packages/cli/dist/index.js setup --dry-run` prints the `npx -y @components-kit/open-workbook@latest mcp` local stdio launch command and `npx skills add components-kit/open-workbook --skill open-workbook-skills`.
 6. Confirm `node packages/cli/dist/index.js upgrade --dry-run` prints the same launch command with upgrade wording.
 7. Confirm generated manifests include the expected taskpane URL and `backendUrl`.
 8. Confirm `@components-kit/open-workbook-excel-addin` remains private.
@@ -2986,13 +3029,13 @@ npx -y @components-kit/open-workbook@latest mcp
 They install the skill with:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel
+npx skills add components-kit/open-workbook --skill open-workbook-skills
 ```
 
 For OpenCode:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel -a opencode -g -y
+npx skills add components-kit/open-workbook --skill open-workbook-skills -a opencode -g -y
 ```
 
 ## Native Installer Shape
@@ -3069,7 +3112,7 @@ node packages/cli/dist/index.js sideload manifest --out /tmp/open-workbook.xml
 
 ```text
 npx -y @components-kit/open-workbook@latest mcp
-npx skills add components-kit/open-workbook --skill open-workbook-excel
+npx skills add components-kit/open-workbook --skill open-workbook-skills
 ```
 
 8. For host-readiness claims, open desktop Excel with the sideloaded add-in connected and run the opt-in live smoke:
@@ -3202,7 +3245,7 @@ For non-store open-source distribution, the expected install flow is:
 
 1. Run `npx -y @components-kit/open-workbook setup`.
 2. Add the printed MCP launch command to the agent UI's local stdio MCP configuration.
-3. Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
+3. Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-skills`.
 4. Open the agent UI, then Excel, then the Open Workbook add-in.
 
 `owb service manifest` remains available for advanced deployments that want startup services. Excel still requires user or admin trust approval for the add-in manifest.
@@ -3298,10 +3341,10 @@ npx -y @components-kit/open-workbook setup
 Setup prepares the Excel add-in manifest and prints the MCP launch command.
 For an existing install, run `npx -y @components-kit/open-workbook@latest upgrade` to refresh local setup assets after a package update.
 
-Install the Open Workbook Excel skill with skills.sh:
+Install the Open Workbook Skills skill with skills.sh:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel
+npx skills add components-kit/open-workbook --skill open-workbook-skills
 ```
 
 Use the printed MCP launch command in your agent UI's local stdio MCP configuration:
@@ -3311,7 +3354,7 @@ npx -y @components-kit/open-workbook@latest mcp
 ```
 
 `owb setup` also writes fallback instructions for clients that do not support skills.sh.
-Those packaged instruction assets are generated from `skills/open-workbook-excel` during packaging and must stay in sync with the source skill.
+Those packaged instruction assets are generated from `skills/open-workbook-skills` during packaging and must stay in sync with the source skill.
 
 ## Commands
 

@@ -16,6 +16,7 @@ describe("table host operations", () => {
     coveredHostFunction("table.clear_filters");
     coveredHostFunction("table.apply_filters");
     coveredHostFunction("table.sort");
+    coveredHostFunction("table.apply_view");
     coveredHostFunction("table.clear_sort");
     coveredHostFunction("table.set_total_row");
     coveredHostFunction("table.set_style");

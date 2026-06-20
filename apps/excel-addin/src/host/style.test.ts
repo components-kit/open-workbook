@@ -6,5 +6,6 @@ describe("style host operations", () => {
     expectHostDomainContract("apps/excel-addin/src/host/style.test.ts");
     coveredHostFunction("style.capture_fingerprint");
     coveredHostFunction("style.copy_dimensions");
+    coveredHostFunction("style.copy_dimensions_many");
   });
 });

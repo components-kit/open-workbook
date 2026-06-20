@@ -33,6 +33,7 @@ When a compact response includes `resourceUri`, fetch it only if the full detail
 
 - Use one batch or plan for related edits.
 - On the public agent surface, group related range value edits with `values.patches` in one `preview_update`, then call `apply_update` once for the returned operation.
+- For repeated values, number formats, styles, clears, or autofit across related ranges, use one grouped preview; the backend compiles it to internal `*_many` range operations so stale checks, backups, telemetry, and rollback stay single-operation.
 - Ask for preview before applying large generated changes.
 - Keep matrix shapes exact: rows and columns must match the target range.
 - Let Open Workbook chunk large values/formulas/number formats through safe row-based chunk plans.

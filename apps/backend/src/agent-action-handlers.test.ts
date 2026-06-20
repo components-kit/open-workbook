@@ -1,16 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { AGENT_ACTION_HANDLERS, findAgentActionHandler } from "./agent-action-handlers.js";
-import type { AgentRunInput } from "@components-kit/open-workbook-protocol";
+import { AGENT_INTENT_ACTIONS, type AgentRunInput } from "@components-kit/open-workbook-protocol";
 import { getExcelCapability } from "./excel-capabilities.js";
 
 describe("agent action handlers", () => {
   it("declares stable handler metadata", () => {
     expect(AGENT_ACTION_HANDLERS.length).toBeGreaterThanOrEqual(8);
+    const protocolActions = new Set<string>(AGENT_INTENT_ACTIONS);
+    const claimedScopedActions = new Set<string>();
     for (const handler of AGENT_ACTION_HANDLERS) {
       expect(handler.id).toMatch(/^[a-z0-9_]+$/);
       expect(handler.riskKind).toBeTruthy();
       expect(getExcelCapability(handler.capabilityName), handler.capabilityName).toBeTruthy();
       expect(typeof handler.matches).toBe("function");
+      if (handler.intentAction) {
+        expect(protocolActions.has(handler.intentAction), handler.id).toBe(true);
+        const scopedAction = `${handler.requiresResolvedTarget ? "target" : "workbook"}:${handler.intentAction}`;
+        expect(claimedScopedActions.has(scopedAction), scopedAction).toBe(false);
+        claimedScopedActions.add(scopedAction);
+      }
     }
   });
 
@@ -125,6 +133,7 @@ describe("agent action handlers", () => {
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "repair_style_from_template" } }, "repair_style_from_template", false)?.id).toBe("repair_style_from_template");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "repair_formulas_from_template" } }, "repair_formulas_from_template", false)?.id).toBe("repair_formulas_from_template");
     expect(findAgentActionHandler({ request: "Copy style from the template" }, undefined, false)?.id).toBe("copy_style_from_template");
+    expect(findAgentActionHandler({ request: "Match the same style from source to target" }, undefined, false)?.id).toBe("copy_style_from_template");
     expect(findAgentActionHandler({ request: "Repair style consistency" }, undefined, false)?.id).toBe("repair_style_consistency");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "repair_table_structure" }, target: { tableName: "Transactions" } }, "repair_table_structure", true)?.id).toBe("repair_table_structure");
   });

@@ -12,7 +12,7 @@ const copies = [
   ["apps/excel-addin/public", "excel-addin/public"],
   ["apps/excel-addin/scripts", "excel-addin/scripts"],
   ["apps/excel-addin/manifest.xml", "excel-addin/manifest.xml"],
-  ["skills/open-workbook-excel", "instructions/open-workbook-excel"]
+  ["skills/open-workbook-skills", "instructions/open-workbook-skills"]
 ];
 
 rmSync(out, { recursive: true, force: true });

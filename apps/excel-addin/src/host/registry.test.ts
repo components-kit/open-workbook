@@ -47,5 +47,6 @@ describe("add-in host method registry", () => {
     expect(source).toContain("range.write_comments");
     expect(source).toContain("sheet.move");
     expect(source).toContain("OPERATION_NOT_SUPPORTED");
+    expect(source).toContain("warning.code === \"OPERATION_NOT_SUPPORTED\"");
   });
 });

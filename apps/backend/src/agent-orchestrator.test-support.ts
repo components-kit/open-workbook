@@ -29,6 +29,8 @@ export class FakeAgentRuntime {
   readiness: any;
   agentExecutionContext: any;
   collaborationStatus: any;
+  failStyleCopyOnCall: number | undefined;
+  workbookContentVersion = 0;
 
   sessions = { getActive: () => ({ activeWorkbook }) };
 
@@ -86,6 +88,10 @@ export class FakeAgentRuntime {
   async getActiveContext() {
     this.recordRuntimeCall("runtime.get_active_context");
     return { ok: true, activeWorkbook };
+  }
+
+  getWorkbookContentVersion() {
+    return this.workbookContentVersion;
   }
 
   async getSelection() {
@@ -338,6 +344,11 @@ export class FakeAgentRuntime {
     return { ok: true, backups: [], warnings: [], telemetry: {} };
   }
 
+  async applyTableView(request: any) {
+    this.tableMethodCalls.push({ method: "table.apply_view", request });
+    return { ok: true, backups: [], warnings: [], telemetry: {} };
+  }
+
   async setTableTotalRow(request: any) {
     this.tableMethodCalls.push({ method: "table.set_total_row", request });
     return { ok: true, backups: [], warnings: [], telemetry: {} };
@@ -482,7 +493,40 @@ export class FakeAgentRuntime {
 
   async copyStyleDimensions(request: any) {
     this.recordRuntimeCall("style.copy_dimensions");
-    return { ok: true, result: { copied: request.dimensions }, validation: { ok: true, issueCount: 0, issues: [] } };
+    if (this.failStyleCopyOnCall === this.runtimeMethodCalls["style.copy_dimensions"]) {
+      return { ok: false, backups: [], rollbackAvailable: false, warnings: ["Style copy failed"], error: { code: "STYLE_COPY_FAILED", message: "Style copy failed" }, telemetry: { styleCopyCount: 0 } };
+    }
+    return { ok: true, backups: [`backup_style_${this.runtimeMethodCalls["style.copy_dimensions"]}`], rollbackAvailable: true, result: { copied: request.dimensions }, validation: { ok: true, issueCount: 0, issues: [] }, telemetry: { styleCopyCount: 1 } };
+  }
+
+  async copyStyleDimensionsMany(request: any) {
+    this.recordRuntimeCall("style.copy_dimensions_many");
+    const copyCount = request.requests?.length ?? 0;
+    if (this.failStyleCopyOnCall !== undefined) {
+      const results = request.requests.map((_entry: unknown, index: number) => ({ ok: index + 1 !== this.failStyleCopyOnCall, warnings: index + 1 === this.failStyleCopyOnCall ? ["Style copy failed"] : [] }));
+      return {
+        ok: false,
+        backups: ["backup_style_many"],
+        rollbackAvailable: true,
+        warnings: ["Style copy failed"],
+        error: { code: "STYLE_COPY_FAILED", message: "Style copy failed" },
+        result: {
+          ok: false,
+          copyCount,
+          results
+        },
+        results,
+        telemetry: { styleCopyCount: Math.max(0, Math.min(copyCount, this.failStyleCopyOnCall - 1)) }
+      };
+    }
+    return {
+      ok: true,
+      backups: ["backup_style_many"],
+      rollbackAvailable: true,
+      result: { copied: request.requests.flatMap((entry: any) => entry.dimensions ?? []), copyCount },
+      validation: { ok: true, issueCount: 0, issues: [] },
+      telemetry: { styleCopyCount: copyCount }
+    };
   }
 
   async repairStyleFromTemplate(request: any) {

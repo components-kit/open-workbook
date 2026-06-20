@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
-import { type AgentRunExecutionContext, type AgentRunInput } from "@components-kit/open-workbook-protocol";
+import { AGENT_DETAIL_LEVELS, AGENT_RUN_MODES, AGENT_RUN_STATUSES, type AgentRunExecutionContext, type AgentRunInput } from "@components-kit/open-workbook-protocol";
 import type { RuntimeFacade } from "../runtime-facade.js";
 import { agentJsonResult } from "../results.js";
 
@@ -38,7 +38,7 @@ function agentRunInputSchema() {
   });
   return {
     request: z.string(),
-    mode: z.enum(["auto", "status", "prepare", "find", "answer", "preview_update", "apply_update", "validate", "rollback"]).optional(),
+    mode: z.enum(AGENT_RUN_MODES).optional(),
     workbookContextId: z.string().optional(),
     operationId: z.string().optional(),
     transactionId: z.string().optional(),
@@ -67,6 +67,7 @@ function agentRunInputSchema() {
         reason: z.string().optional()
       })).optional()
     })).optional(),
+    detailLevel: z.enum(AGENT_DETAIL_LEVELS).optional(),
     responseMode: z.enum(["brief", "standard", "verbose"]).optional(),
     budget: z.object({
       maxPayloadBytes: z.number().int().positive().optional(),
@@ -78,7 +79,7 @@ function agentRunInputSchema() {
 
 function agentRunOutputSchema() {
   return {
-    status: z.enum(["SUCCESS", "PREVIEW_READY", "NEEDS_INPUT", "AMBIGUOUS_TARGET", "NOT_FOUND", "STALE_CONTEXT", "VALIDATION_FAILED", "CONFLICT", "ERROR"]),
+    status: z.enum(AGENT_RUN_STATUSES),
     mode: z.string(),
     workbookContextId: z.string().optional(),
     operationId: z.string().optional(),
@@ -113,6 +114,8 @@ function agentRunOutputSchema() {
       previewOperationId: z.string().optional(),
       validationStatus: z.enum(["passed", "failed", "not_run"]).optional(),
       metadataCacheStatus: z.enum(["hit", "miss", "not_applicable"]).optional(),
+      metadataFreshnessReason: z.string().optional(),
+      metadataDetailLevel: z.enum(["structure", "sampled"]).optional(),
       internalReadCount: z.number().optional(),
       fullReadCellCount: z.number().optional(),
       candidateCount: z.number().optional(),
@@ -125,6 +128,13 @@ function agentRunOutputSchema() {
       operationRisk: z.string().optional(),
       actionHandlerId: z.string().optional(),
       autoApplyBlockedReason: z.string().optional(),
+      workflowKind: z.string().optional(),
+      groupedOperationCount: z.number().optional(),
+      styleCopyCount: z.number().optional(),
+      clearFormatCount: z.number().optional(),
+      fragmentationRedirectCount: z.number().optional(),
+      detectedFamily: z.string().optional(),
+      suggestedWorkflowKind: z.string().optional(),
       targetFingerprintStatus: z.enum(["matched", "changed", "not_applicable"]).optional(),
       targetHintCount: z.number().optional(),
       targetHintUsed: z.boolean().optional(),

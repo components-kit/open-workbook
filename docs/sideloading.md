@@ -82,7 +82,7 @@ For non-store open-source distribution, the expected install flow is:
 
 1. Run `npx -y @components-kit/open-workbook setup`.
 2. Add the printed MCP launch command to the agent UI's local stdio MCP configuration.
-3. Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-excel`.
+3. Install the skill with `npx skills add components-kit/open-workbook --skill open-workbook-skills`.
 4. Open the agent UI, then Excel, then the Open Workbook add-in.
 
 `owb service manifest` remains available for advanced deployments that want startup services. Excel still requires user or admin trust approval for the add-in manifest.

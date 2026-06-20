@@ -58,6 +58,7 @@ export type AgentActionHandlerId =
   | "merge_columns"
   | "sort_table"
   | "filter_range"
+  | "apply_table_view"
   | "autofit_columns"
   | "autofit_rows"
   | "clear_range"
@@ -417,7 +418,9 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "copy_style_from_template",
     requiresResolvedTarget: false,
     riskKind: "safe_format",
-    matches: (_input, request) => /\b(copy|match|apply)\b/.test(request) && /\b(style|format|formatting|look)\b/.test(request) && /\btemplate\b/.test(request)
+    matches: (_input, request) => /\b(copy|match|apply)\b/.test(request)
+      && /\b(style|format|formatting|look)\b/.test(request)
+      && /\b(template|same|source|from|to|target|like|as)\b/.test(request)
   },
   {
     id: "repair_style_consistency",
@@ -545,6 +548,14 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     requiresResolvedTarget: true,
     riskKind: "safe_format",
     matches: (_input, request) => /\b(number\s+format|number\s+formats|currency|percent|percentage|decimal|date format)\b/.test(request)
+  },
+  {
+    id: "apply_table_view",
+    capabilityName: "excel.table.apply_view",
+    intentAction: "apply_table_view",
+    requiresResolvedTarget: true,
+    riskKind: "broad_range_write",
+    matches: (_input, request) => /\b(filter|filters)\b/.test(request) && /\b(sort)\b/.test(request)
   },
   {
     id: "sort_table",

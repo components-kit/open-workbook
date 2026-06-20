@@ -1,6 +1,7 @@
 import {
   appendTableRows,
   applyTableFilters,
+  applyTableView,
   clearTableDataKeepFormulas,
   clearTableFilters,
   clearTableSort,
@@ -30,6 +31,7 @@ export const tableHostOperations = {
   clearTableFilters: (params: unknown) => clearTableFilters(params as Parameters<typeof clearTableFilters>[0]),
   applyTableFilters: (params: unknown) => applyTableFilters(params as Parameters<typeof applyTableFilters>[0]),
   sortTable: (params: unknown) => sortTable(params as Parameters<typeof sortTable>[0]),
+  applyTableView: (params: unknown) => applyTableView(params as Parameters<typeof applyTableView>[0]),
   clearTableSort: (params: unknown) => clearTableSort(params as Parameters<typeof clearTableSort>[0]),
   setTableTotalRow: (params: unknown) => setTableTotalRow(params as Parameters<typeof setTableTotalRow>[0]),
   setTableStyle: (params: unknown) => setTableStyle(params as Parameters<typeof setTableStyle>[0]),

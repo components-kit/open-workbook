@@ -25,6 +25,102 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
       expect(runtime.writeBatchCount).toBe(0);
     });
 
+  it("rejects wrong confirmation tokens without applying", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Update Data B2",
+        mode: "preview_update",
+        target: { sheetName: "Data", range: "B2" },
+        values: { values: [[999]] }
+      });
+      const wrongToken = await agent.run({
+        request: "Apply update",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: "confirm_wrong"
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect(wrongToken.status).toBe("NEEDS_INPUT");
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
+  it("returns terminal apply output on repeated apply without rerunning the batch", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Update Data B2",
+        mode: "preview_update",
+        target: { sheetName: "Data", range: "B2" },
+        values: { values: [[999]] }
+      });
+      const first = await agent.run({
+        request: "Apply update",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+      const second = await agent.run({
+        request: "Apply update again",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+      const status = await agent.run({
+        request: "Check applied operation",
+        mode: "operation_status",
+        operationId: preview.operationId
+      });
+      const cancelApplied = await agent.run({
+        request: "Cancel applied operation",
+        mode: "cancel_operation",
+        operationId: preview.operationId
+      });
+
+      expect(first.status).toBe("SUCCESS");
+      expect(second).toMatchObject({ status: "SUCCESS", operationId: preview.operationId });
+      expect(runtime.writeBatchCount).toBe(1);
+      expect((status.answer as any).applyStatus).toBe("applied");
+      expect(cancelApplied.status).toBe("VALIDATION_FAILED");
+    });
+
+  it("reports and cancels previewed operations without workbook readiness", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Update Data B2",
+        mode: "preview_update",
+        target: { sheetName: "Data", range: "B2" },
+        values: { values: [[999]] }
+      });
+      const status = await agent.run({
+        request: "Check operation",
+        mode: "operation_status",
+        operationId: preview.operationId
+      });
+      const cancelled = await agent.run({
+        request: "Cancel operation",
+        mode: "cancel_operation",
+        operationId: preview.operationId
+      });
+      const applyAfterCancel = await agent.run({
+        request: "Apply cancelled operation",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(status.status).toBe("SUCCESS");
+      expect((status.answer as any).applyStatus).toBe("previewed");
+      expect(cancelled.status).toBe("SUCCESS");
+      expect(applyAfterCancel.status).toBe("NOT_FOUND");
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
   it("previews and applies grouped range patches as one batch operation", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -52,8 +148,55 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
       expect(preview.summary).toContain("Apply this grouped preview once");
       expect(applied.status).toBe("SUCCESS");
       expect(runtime.writeBatchCount).toBe(1);
-      expect(runtime.lastWriteOperations.map((operation) => operation.target.address)).toEqual(["B2:C2", "B3:C3"]);
+      expect(runtime.lastBatchOperations).toHaveLength(1);
+      expect(runtime.lastBatchOperations[0]?.kind).toBe("range.write_values_many");
+      expect((runtime.lastBatchOperations[0] as any).entries.map((entry: any) => entry.target.address)).toEqual(["B2:C2", "B3:C3"]);
     });
+
+  it("summarizes large value previews without reading every before-cell", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+    const metadata = createCachedMetadata("wbctx_large_preview");
+    agent.metadataCache.set(metadata);
+    const values = Array.from({ length: 21 }, (_row, rowIndex) =>
+      Array.from({ length: 10 }, (_cell, columnIndex) => `R${rowIndex + 1}C${columnIndex + 1}`)
+    );
+    const readCountBefore = runtime.readBatchCount;
+
+    const preview = await agent.run({
+      request: "Write large filled matrix",
+      mode: "preview_update",
+      workbookContextId: metadata.workbookContextId,
+      target: { sheetName: "Report", range: "A1:J21" },
+      values: { values }
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect(preview.changes).toHaveLength(1);
+    expect((preview.changes?.[0]?.after as any).kind).toBe("range_write_summary");
+    expect((preview.changes?.[0]?.after as any).cellCount).toBe(210);
+    expect(runtime.readBatchCount).toBe(readCountBefore);
+  });
+
+  it("caps detailed grouped patch preview reads across small patches", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+    const values = Array.from({ length: 1 }, () => Array.from({ length: 50 }, (_cell, index) => index));
+    const preview = await agent.run({
+      request: "Update related wide rows",
+      mode: "preview_update",
+      values: {
+        patches: Array.from({ length: 5 }, (_patch, index) => ({
+          target: { sheetName: "Data", range: `A${index + 1}:AX${index + 1}` },
+          values,
+          reason: `Patch ${index + 1}`
+        }))
+      }
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect(preview.changes?.length).toBeLessThanOrEqual(201);
+  });
 
   it("applies a pending preview under the agent identity that created it", async () => {
       const runtime = new FakeAgentRuntime();
@@ -287,8 +430,61 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
     expect((preview.answer as any).kind).toBe("range_copy_preview");
     expect(applied.status).toBe("SUCCESS");
     expect(runtime.lastWriteOperations[0]?.kind).toBe("range.copy");
+    expect(runtime.lastBatchRequest?.operations[0]?.destructiveLevel).toBe("values");
     expect((runtime.lastWriteOperations[0] as any).source.address).toBe("A1:B2");
     expect(runtime.lastWriteOperations[0]?.target.address).toBe("A1:B2");
+  });
+
+  it("treats full range clear as structural risk", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Clear range including values and formats",
+      mode: "preview_update",
+      intent: { action: "clear_range" },
+      target: { sheetName: "Data", range: "D4:E5" }
+    });
+    await agent.run({
+      request: "Apply clear",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect(runtime.lastWriteOperations[0]?.kind).toBe("range.clear");
+    expect(runtime.lastBatchRequest?.operations[0]?.destructiveLevel).toBe("structure");
+  });
+
+  it("uses conservative destructive levels for range copy-all and move operations", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const copyPreview = await agent.run({
+      request: "Copy range including formulas and formats",
+      mode: "preview_update",
+      intent: { action: "copy_range" },
+      values: {
+        source: { sheetName: "Data", range: "A1:B2" },
+        destination: { sheetName: "Report", range: "A1:B2" },
+        copyType: "all"
+      }
+    });
+    await agent.run({ request: "Apply copy", mode: "apply_update", operationId: copyPreview.operationId, confirmationToken: copyPreview.confirmationToken });
+    expect(runtime.lastBatchRequest?.operations[0]?.destructiveLevel).toBe("structure");
+
+    const movePreview = await agent.run({
+      request: "Move range",
+      mode: "preview_update",
+      intent: { action: "move_range" },
+      values: {
+        source: { sheetName: "Data", range: "A1:B2" },
+        destination: { sheetName: "Report", range: "C1:D2" }
+      }
+    });
+    await agent.run({ request: "Apply move", mode: "apply_update", operationId: movePreview.operationId, confirmationToken: movePreview.confirmationToken });
+    expect(runtime.lastBatchRequest?.operations[0]?.destructiveLevel).toBe("structure");
   });
 
   it("previews and applies safety artifact metadata mutations through the agent state machine", async () => {
@@ -735,6 +931,324 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
     }
   });
 
+  it("previews grouped style copies as one apply operation", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Copy same style from source to targets",
+      mode: "preview_update",
+      intent: { action: "copy_style_from_template" },
+      values: {
+        styleCopies: [
+          { source: { sheetName: "Data", range: "A1:B1" }, destination: { sheetName: "Report", range: "A1:B1" }, dimensions: ["fills", "fonts"] },
+          { source: { sheetName: "Data", range: "A2:B2" }, destination: { sheetName: "Report", range: "C1:D1" }, dimensions: ["fills", "fonts"] }
+        ]
+      }
+    });
+    const applied = await agent.run({
+      request: "Apply grouped style copies",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect((preview.answer as any).kind).toBe("style_copy_many_preview");
+    expect(applied.status).toBe("SUCCESS");
+    expect((applied.answer as any).backupIds).toEqual(["backup_style_many"]);
+    expect((applied.answer as any).rollbackAvailable).toBe(true);
+    expect(runtime.runtimeMethodCalls["style.copy_dimensions_many"]).toBe(1);
+    expect(runtime.runtimeMethodCalls["style.copy_dimensions"]).toBeUndefined();
+  });
+
+  it("previews and applies a styled table replacement as one workflow", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const headers = ["Dated", "Loading Date", "Qty", "Attention", "From (FM)", "Description", "Received (Tons)", "Volume"];
+    const row = ["20/6/26", "20/6/26", "5X40'HQ", "5X40'HQ", "SC88", "Loading at Sai Noi Factory", 32.5, "5X40'HQ UPGRADE"];
+    const preview = await agent.run({
+      request: "Rotate booking fields to headers and replace the old vertical table with same style",
+      mode: "preview_update",
+      intent: { action: "replace_range_with_styled_table" },
+      target: { sheetName: "Report", range: "A1:H2" },
+      values: {
+        headers,
+        row,
+        clearRange: "A1:B25",
+        headerStyleSource: { sheetName: "Data", range: "A1:D1" },
+        bodyStyleSource: { sheetName: "Data", range: "A2:D2" },
+        dimensions: ["fills", "fonts", "borders", "alignment"],
+        autofit: true
+      }
+    });
+    const applied = await agent.run({
+      request: "Apply styled table replacement",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect((preview.answer as any).kind).toBe("replace_range_with_styled_table_preview");
+    expect((preview.answer as any).clearCount).toBe(1);
+    expect((preview.answer as any).styleCopyCount).toBe(4);
+    expect(applied.status).toBe("SUCCESS");
+    expect(runtime.writeBatchCount).toBe(1);
+    expect(runtime.lastWriteOperations.map((operation) => operation.kind)).toEqual(["range.clear", "range.write_values", "range.autofit_columns"]);
+    expect((runtime.lastWriteOperations[0] as any).applyTo).toBe("all");
+    expect(runtime.runtimeMethodCalls["style.copy_dimensions_many"]).toBe(1);
+    expect(runtime.runtimeMethodCalls["style.copy_dimensions"]).toBeUndefined();
+  });
+
+  it("routes generic OCR field/value data to the styled table replacement workflow", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Convert extracted invoice field/value OCR data into a horizontal styled table",
+      mode: "preview_update",
+      target: { sheetName: "Report", range: "A1:D2" },
+      values: {
+        headers: ["Invoice", "Date", "Customer", "Total"],
+        row: ["INV-100", "2026-06-20", "ACME", 2500],
+        clearRange: "A1:D20",
+        headerStyleSource: { sheetName: "Data", range: "A1:D1" },
+        bodyStyleSource: { sheetName: "Data", range: "A2:D2" }
+      }
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect((preview.answer as any).kind).toBe("replace_range_with_styled_table_preview");
+    expect((preview.answer as any).styleCopyCount).toBe(2);
+  });
+
+  it("redirects fragmented style-copy previews to a grouped workflow", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+    const metadata = createCachedMetadata("wbctx_fragmented_style");
+    agent.metadataCache.set(metadata);
+
+    const base = {
+      mode: "preview_update" as const,
+      workbookContextId: metadata.workbookContextId,
+      values: {
+        source: { sheetName: "Data", range: "A2:D2" }
+      }
+    };
+    await agent.run({ ...base, request: "Copy body style to Booking A2:D2", values: { ...base.values, destination: { sheetName: "Report", range: "A2:D2" } } });
+    const redirected = await agent.run({ ...base, request: "Copy body style to Booking E2:H2", values: { ...base.values, destination: { sheetName: "Report", range: "E2:H2" } } });
+
+    expect(redirected.status).toBe("NEEDS_WORKFLOW_REDIRECT");
+    expect(redirected.nextAction).toBe("call_preview_update");
+    expect((redirected.answer as any).kind).toBe("workflow_redirect");
+    expect((redirected.answer as any).suggestedIntentAction).toBe("copy_style_from_template");
+    expect((redirected.answer as any).suggestedValues.styleCopies).toHaveLength(2);
+    expect(redirected.warnings).toContain("Fragmented style-copy previews were redirected to a grouped workflow.");
+  });
+
+  it("redirects repeated value-only cleanup because stale formats can remain", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+    const metadata = createCachedMetadata("wbctx_fragmented_clear");
+    agent.metadataCache.set(metadata);
+
+    await agent.run({
+      request: "Clear leftover data in A3:X10",
+      mode: "preview_update",
+      workbookContextId: metadata.workbookContextId,
+      intent: { action: "clear_values" },
+      target: { sheetName: "Report", range: "A3:X10" }
+    });
+    const redirected = await agent.run({
+      request: "Clear leftover data in A11:X18",
+      mode: "preview_update",
+      workbookContextId: metadata.workbookContextId,
+      intent: { action: "clear_values" },
+      target: { sheetName: "Report", range: "A11:X18" }
+    });
+
+    expect(redirected.status).toBe("NEEDS_WORKFLOW_REDIRECT");
+    expect((redirected.answer as any).suggestedIntentAction).toBe("clear_range");
+    expect((redirected.answer as any).suggestedValues.clearRange).toBe("A3:X18");
+    expect(redirected.warnings).toContain("Fragmented value-only cleanup was redirected because it can leave stale formatting.");
+  });
+
+  it("redirects adjacent value-write previews to grouped patches", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+    const metadata = createCachedMetadata("wbctx_fragmented_write_values");
+    agent.metadataCache.set(metadata);
+
+    await agent.run({
+      request: "Write first extracted value",
+      mode: "preview_update",
+      workbookContextId: metadata.workbookContextId,
+      target: { sheetName: "Report", range: "A1" },
+      values: { values: [["A"]] }
+    });
+    const redirected = await agent.run({
+      request: "Write second extracted value",
+      mode: "preview_update",
+      workbookContextId: metadata.workbookContextId,
+      target: { sheetName: "Report", range: "B1" },
+      values: { values: [["B"]] }
+    });
+
+    expect(redirected.status).toBe("NEEDS_WORKFLOW_REDIRECT");
+    expect((redirected.answer as any).suggestedIntentAction).toBe("write_values");
+    expect((redirected.answer as any).suggestedValues.patches).toEqual([
+      { target: { sheetName: "Report", range: "A1" }, values: [["A"]] },
+      { target: { sheetName: "Report", range: "B1" }, values: [["B"]] }
+    ]);
+    expect(redirected.warnings).toContain("Fragmented value-write previews were redirected to a grouped patch workflow.");
+  });
+
+  it("redirects repeated format previews to write_styles_many", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+    const metadata = createCachedMetadata("wbctx_fragmented_format");
+    agent.metadataCache.set(metadata);
+
+    await agent.run({
+      request: "Make A1 bold",
+      mode: "preview_update",
+      workbookContextId: metadata.workbookContextId,
+      intent: { action: "format_range" },
+      target: { sheetName: "Report", range: "A1" }
+    });
+    const redirected = await agent.run({
+      request: "Make B1 bold",
+      mode: "preview_update",
+      workbookContextId: metadata.workbookContextId,
+      intent: { action: "format_range" },
+      target: { sheetName: "Report", range: "B1" }
+    });
+
+    expect(redirected.status).toBe("NEEDS_WORKFLOW_REDIRECT");
+    expect((redirected.answer as any).suggestedIntentAction).toBe("write_styles_many");
+    expect((redirected.answer as any).suggestedValues.entries).toHaveLength(2);
+    expect(redirected.warnings).toContain("Fragmented format previews were redirected to a grouped style workflow.");
+  });
+
+  it("redirects repeated formula fills to one larger formula workflow", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+    const metadata = createCachedMetadata("wbctx_fragmented_formula_fill");
+    agent.metadataCache.set(metadata);
+
+    const base = {
+      request: "Fill formula down",
+      mode: "preview_update" as const,
+      workbookContextId: metadata.workbookContextId,
+      intent: { action: "fill_formula_down" as const }
+    };
+    await agent.run({
+      ...base,
+      values: {
+        source: { sheetName: "Report", range: "A1" },
+        destination: { sheetName: "Report", range: "A2:A5" }
+      }
+    });
+    const redirected = await agent.run({
+      ...base,
+      values: {
+        source: { sheetName: "Report", range: "A1" },
+        destination: { sheetName: "Report", range: "A6:A10" }
+      }
+    });
+
+    expect(redirected.status).toBe("NEEDS_WORKFLOW_REDIRECT");
+    expect((redirected.answer as any).suggestedIntentAction).toBe("fill_formula_down");
+    expect((redirected.answer as any).suggestedValues.destination).toEqual({ sheetName: "Report", range: "A2:A10" });
+    expect(redirected.warnings).toContain("Fragmented formula-fill-down previews were redirected to a grouped formula workflow.");
+  });
+
+  it("reports partial workflow failure with rollback evidence", async () => {
+    const runtime = new FakeAgentRuntime();
+    runtime.failStyleCopyOnCall = 2;
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Replace table and copy style",
+      mode: "preview_update",
+      intent: { action: "replace_range_with_styled_table" },
+      target: { sheetName: "Report", range: "A1:B2" },
+      values: {
+        headers: ["Dated", "Qty"],
+        row: ["20/6/26", "5X40'HQ"],
+        clearRange: "A1:B20",
+        headerStyleSource: { sheetName: "Data", range: "A1:B1" },
+        bodyStyleSource: { sheetName: "Data", range: "A2:B2" },
+        dimensions: ["fills", "fonts"]
+      }
+    });
+    const applied = await agent.run({
+      request: "Apply styled table replacement",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect(applied.status).toBe("VALIDATION_FAILED");
+    expect((applied.answer as any).partialFailure).toBe(true);
+    expect((applied.answer as any).rollbackAvailable).toBe(true);
+    expect((applied.answer as any).backupIds).toContain("backup_style_many");
+    expect((applied.answer as any).stepResults).toHaveLength(2);
+    expect(applied.warnings).toContain("Style copy failed");
+  });
+
+  it("rejects mismatched direct style copy ranges before apply", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Copy same style from Data to Report",
+      mode: "preview_update",
+      intent: { action: "copy_style_from_template" },
+      values: {
+        source: { sheetName: "Data", range: "A1:D1" },
+        destination: { sheetName: "Report", range: "A1:H1" },
+        dimensions: ["fills", "fonts"]
+      }
+    });
+
+    expect(preview.status).toBe("NEEDS_INPUT");
+    expect(preview.summary).toContain("same dimensions");
+    expect(runtime.runtimeMethodCalls["style.copy_dimensions"]).toBeUndefined();
+  });
+
+  it("returns cached apply results when the same operation is retried", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Write values",
+      mode: "preview_update",
+      intent: { action: "write_values" },
+      target: { sheetName: "Report", range: "A1:B1" },
+      values: { values: [["A", "B"]] }
+    });
+    const first = await agent.run({
+      request: "Apply values",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+    const second = await agent.run({
+      request: "Apply values again",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(first.status).toBe("SUCCESS");
+    expect(second.status).toBe("SUCCESS");
+    expect(runtime.writeBatchCount).toBe(1);
+  });
+
   it("previews and applies repair capabilities through backend orchestration", async () => {
     const cases: Array<{
       action: "repair_style_from_template" | "repair_formulas_from_template" | "repair_table_structure";
@@ -968,7 +1482,7 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
       },
       {
         capabilityName: "excel.range.write_styles_many",
-        expectedOperationKind: "range.write_styles",
+        expectedOperationKind: "range.write_styles_many",
         input: {
           request: "Style multiple ranges",
           mode: "preview_update",
@@ -1092,7 +1606,7 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
       });
 
       expect(applied.status, testCase.capabilityName).toBe("SUCCESS");
-      expect(runtime.lastWriteOperations[0]?.kind, testCase.capabilityName).toBe(testCase.expectedOperationKind);
+      expect(runtime.lastBatchOperations[0]?.kind, testCase.capabilityName).toBe(testCase.expectedOperationKind);
     }
   });
 
@@ -1196,6 +1710,20 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
           mode: "preview_update",
           intent: { action: "sort_table" },
           target: { tableName: "Transactions" }
+        }
+      },
+      {
+        capabilityName: "excel.table.apply_view",
+        expectedMethod: "table.apply_view",
+        input: {
+          request: "Filter Transactions to open and sort by amount descending",
+          mode: "preview_update",
+          intent: { action: "apply_table_view" },
+          target: { tableName: "Transactions" },
+          values: {
+            filters: [{ column: "Status", criteria: { filterOn: "Values", values: ["Open"] } }],
+            sort: { fields: [{ key: 2, ascending: false }] }
+          }
         }
       },
       {
@@ -1425,13 +1953,26 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
   
       const result = await agent.run({
         request: "Can you duplicate Report sheet, remove data and keep only template?",
-        target: { sheetName: "Report" }
+        target: { sheetName: "Report" },
+        values: { dataRegions: ["B2:B3"] }
+      });
+      const applied = await agent.run({
+        request: "Apply template cleanup",
+        mode: "apply_update",
+        operationId: result.operationId,
+        confirmationToken: result.confirmationToken
       });
   
       expect(result.status).toBe("PREVIEW_READY");
       expect((result.answer as any).kind).toBe("template_cleanup_preview");
+      expect((result.answer as any).operationKind).toBe("sheet.copy_clean_data_regions");
+      expect((result.answer as any).dataRegions).toEqual(["B2:B3"]);
       expect((result.answer as any).sourceSheetName).toBe("Report");
       expect(result.nextAction).toBe("call_apply_update");
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.writeBatchCount).toBe(1);
+      expect(runtime.lastBatchOperations).toHaveLength(1);
+      expect(runtime.lastBatchOperations[0]?.kind).toBe("sheet.copy_clean_data_regions");
     });
 
   it("previews and applies table appends through the agent surface", async () => {

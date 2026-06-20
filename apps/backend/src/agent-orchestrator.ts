@@ -28,6 +28,7 @@ import {
   type StyleCopyRequest,
   type StyleDimension,
   type TableApplyFiltersRequest,
+  type TableApplyViewRequest,
   type TableAppendRowsRequest,
   type TableCopyStructureRequest,
   type TableCreateRequest,
@@ -37,6 +38,7 @@ import {
   type TableSelector,
   type TableSetStyleRequest,
   type TableSetTotalRowRequest,
+  type TableSortField,
   type TableSortRequest,
   type TableUpdateRowsRequest,
   type TemplateCaptureRequest,
@@ -61,7 +63,7 @@ import {
   tryParseA1Address
 } from "@components-kit/open-workbook-excel-core";
 import { columnLetter, normalizeHeaderName, type ColumnMetadata, type HeaderMetadata, type TableMetadata, type WorkbookMetadata, WorkbookMetadataCache } from "./workbook-metadata-cache.js";
-import { AgentOperationStore, type AgentCleanMutationAction, type AgentCleanRequest } from "./agent-operation-store.js";
+import { AgentOperationStore, type AgentCleanMutationAction, type AgentCleanRequest, type PendingAgentOperation } from "./agent-operation-store.js";
 import { WorkbookMetadataBuilder } from "./workbook-metadata-builder.js";
 import { findAgentCandidates, resolveAgentReadTarget, resolveAgentUpdateTarget, type AgentTargetResolution } from "./agent-target-resolver.js";
 import type { RuntimeService } from "./runtime-service.js";
@@ -72,6 +74,9 @@ import { findAgentActionHandler, type AgentActionHandlerDefinition, type AgentAc
 
 const AGENT_RESULT_TTL_MS = 60 * 60 * 1000;
 const AGENT_LARGE_RANGE_CELL_LIMIT = 10_000;
+const AGENT_DETAILED_PREVIEW_CELL_LIMIT = 200;
+const AGENT_FRAGMENT_WINDOW_MS = 2 * 60 * 1000;
+const AGENT_FRAGMENT_REDIRECT_THRESHOLD = 2;
 
 type AgentResponseMode = NonNullable<AgentRunInput["responseMode"]>;
 
@@ -143,12 +148,24 @@ class AgentResultStore {
 
 export class AgentOrchestrator {
   readonly metadataCache = new WorkbookMetadataCache();
-  private readonly operations = new AgentOperationStore();
+  private readonly operations: AgentOperationStore;
   private readonly results = new AgentResultStore();
   private readonly metadataBuilder: WorkbookMetadataBuilder;
+  private readonly previewFragments: AgentPreviewFragment[] = [];
 
-  constructor(private readonly runtime: RuntimeService) {
+  constructor(private readonly runtime: RuntimeService, options: { onOperationsChanged?: () => void } = {}) {
+    this.operations = new AgentOperationStore({
+      ...(options.onOperationsChanged !== undefined ? { onChange: options.onOperationsChanged } : {})
+    });
     this.metadataBuilder = new WorkbookMetadataBuilder(runtime, this.metadataCache);
+  }
+
+  dumpOperations(): PendingAgentOperation[] {
+    return this.operations.dump();
+  }
+
+  loadOperations(operations: PendingAgentOperation[]): void {
+    this.operations.load(operations);
   }
 
   async run(rawInput: AgentRunInput, context?: AgentRunExecutionContext): Promise<AgentRunOutput> {
@@ -164,6 +181,15 @@ export class AgentOrchestrator {
       const operationRisk = typeof outputMetrics?.operationRisk === "string" ? outputMetrics.operationRisk : runMetrics.operationRisk;
       const actionHandlerId = typeof outputMetrics?.actionHandlerId === "string" ? outputMetrics.actionHandlerId : runMetrics.actionHandlerId;
       const autoApplyBlockedReason = typeof outputMetrics?.autoApplyBlockedReason === "string" ? outputMetrics.autoApplyBlockedReason : runMetrics.autoApplyBlockedReason;
+      const workflowKind = typeof outputMetrics?.workflowKind === "string" ? outputMetrics.workflowKind : undefined;
+      const groupedOperationCount = typeof outputMetrics?.groupedOperationCount === "number" ? outputMetrics.groupedOperationCount : undefined;
+      const styleCopyCount = typeof outputMetrics?.styleCopyCount === "number" ? outputMetrics.styleCopyCount : undefined;
+      const clearFormatCount = typeof outputMetrics?.clearFormatCount === "number" ? outputMetrics.clearFormatCount : undefined;
+      const fragmentationRedirectCount = typeof outputMetrics?.fragmentationRedirectCount === "number" ? outputMetrics.fragmentationRedirectCount : undefined;
+      const detectedFamily = typeof outputMetrics?.detectedFamily === "string" ? outputMetrics.detectedFamily : undefined;
+      const suggestedWorkflowKind = typeof outputMetrics?.suggestedWorkflowKind === "string" ? outputMetrics.suggestedWorkflowKind : undefined;
+      const metadataFreshnessReason = typeof outputMetrics?.metadataFreshnessReason === "string" ? outputMetrics.metadataFreshnessReason : runMetrics.metadataFreshnessReason;
+      const metadataDetailLevel = outputMetrics?.metadataDetailLevel === "sampled" || outputMetrics?.metadataDetailLevel === "structure" ? outputMetrics.metadataDetailLevel : runMetrics.metadataDetailLevel;
       const targetFingerprintStatus = isTargetFingerprintStatus(outputMetrics?.targetFingerprintStatus) ? outputMetrics.targetFingerprintStatus : runMetrics.targetFingerprintStatus;
       const preBudgetPayloadBytes = Buffer.byteLength(JSON.stringify(output));
       const budgeted = applyOutputBudget(output, input, this.results);
@@ -195,6 +221,15 @@ export class AgentOrchestrator {
           ...(operationRisk !== undefined ? { operationRisk } : {}),
           ...(actionHandlerId !== undefined ? { actionHandlerId } : {}),
           ...(autoApplyBlockedReason !== undefined ? { autoApplyBlockedReason } : {}),
+          ...(workflowKind !== undefined ? { workflowKind } : {}),
+          ...(groupedOperationCount !== undefined ? { groupedOperationCount } : {}),
+          ...(styleCopyCount !== undefined ? { styleCopyCount } : {}),
+          ...(clearFormatCount !== undefined ? { clearFormatCount } : {}),
+          ...(fragmentationRedirectCount !== undefined ? { fragmentationRedirectCount } : {}),
+          ...(detectedFamily !== undefined ? { detectedFamily } : {}),
+          ...(suggestedWorkflowKind !== undefined ? { suggestedWorkflowKind } : {}),
+          ...(metadataFreshnessReason !== undefined ? { metadataFreshnessReason } : {}),
+          ...(metadataDetailLevel !== undefined ? { metadataDetailLevel } : {}),
           ...(targetFingerprintStatus !== undefined ? { targetFingerprintStatus } : {}),
           ...(targetHintCount > 0 ? { targetHintCount, targetHintUsed } : {}),
           intentSource: runMetrics.intent.source,
@@ -240,6 +275,14 @@ export class AgentOrchestrator {
         return finish(await this.applyUpdate(input));
       }
 
+      if (mode === "operation_status") {
+        return finish(this.operationStatus(input));
+      }
+
+      if (mode === "cancel_operation") {
+        return finish(this.cancelOperation(input));
+      }
+
       if (mode === "rollback") {
         return finish(await this.rollback(input));
       }
@@ -261,13 +304,20 @@ export class AgentOrchestrator {
           warnings: connectionReadinessWarnings(readiness.connectionState)
         });
       }
-      const { metadata, cacheHit } = await this.metadataBuilder.getOrBuild({
+      const { metadata, cacheHit, freshnessReason } = await this.metadataBuilder.getOrBuild({
         ...(input.workbookContextId ? { workbookContextId: String(input.workbookContextId) } : {}),
         ...(input.target?.workbookId !== undefined ? { workbookId: input.target.workbookId } : {}),
         ...(input.target?.workbookName !== undefined ? { workbookName: input.target.workbookName } : {}),
         includeSamples
       });
+      runMetrics.metadataFreshnessReason = freshnessReason;
+      runMetrics.metadataDetailLevel = metadata.detailLevel;
       internalCallCount += cacheHit ? 1 : 4;
+
+      const detailLevelOutput = (mode === "answer" || mode === "find" || mode === "prepare" || mode === "auto") ? detailLevelAnswerOutput(metadata, input, mode) : undefined;
+      if (detailLevelOutput) {
+        return finish(detailLevelOutput, cacheHit);
+      }
 
       if (mode === "validate") {
         internalCallCount += 1;
@@ -467,7 +517,12 @@ export class AgentOrchestrator {
       workbookId: pending.workbookId,
       summary: pending.summary,
       changes: pending.changes,
-      createdAt: pending.createdAt
+      createdAt: pending.createdAt,
+      expiresAt: pending.expiresAt,
+      applyStatus: pending.applyStatus,
+      ...(pending.applyStartedAt !== undefined ? { applyStartedAt: pending.applyStartedAt } : {}),
+      ...(pending.completedAt !== undefined ? { completedAt: pending.completedAt } : {}),
+      ...(pending.terminalOutput !== undefined ? { terminalOutput: pending.terminalOutput } : {})
     };
   }
 
@@ -1711,7 +1766,19 @@ export class AgentOrchestrator {
         warnings: ["Use a formula-aware repair/update path for formula regions."]
       };
     }
-    const before = await this.readRangeValues(metadata.workbook.workbookId as WorkbookId, resolved.sheetName, resolved.range);
+    if (shouldTrackFragmentedValueWrite(input.request)) {
+      const redirect = this.fragmentationRedirect(metadata, requestedMode, {
+        family: "write_values",
+        workbookContextId: metadata.workbookContextId,
+        targetSheetName: resolved.sheetName,
+        targetAddress: resolved.range,
+        request: input.request,
+        values: matrix
+      });
+      if (redirect) return redirect;
+    }
+    const detailedPreview = shouldBuildDetailedPreviewChanges(matrix);
+    const before = detailedPreview ? await this.readRangeValues(metadata.workbook.workbookId as WorkbookId, resolved.sheetName, resolved.range) : [];
     const operation: ExcelOperation = {
       kind: "range.write_values",
       operationId: makeId<OperationId>("op"),
@@ -1722,13 +1789,7 @@ export class AgentOrchestrator {
       values: matrix,
       preserveFormats: true
     };
-    const changes = matrix.flatMap((row, rowIndex) => row.map((value, columnIndex) => ({
-      sheetName: resolved.sheetName,
-      cell: cellAddressFor(resolved.range, rowIndex, columnIndex),
-      range: resolved.range,
-      before: before[rowIndex]?.[columnIndex],
-      after: value
-    })));
+    const changes = previewChangesForMatrix(resolved.sheetName, resolved.range, matrix, before);
     const action = { kind: "batch" as const, operations: [operation] };
     const pending = this.createPendingOperation(metadata, {
       action,
@@ -1757,10 +1818,11 @@ export class AgentOrchestrator {
     requestedMode: AgentRunMode,
     patches: AgentValuePatch[]
   ): Promise<Omit<AgentRunOutput, "telemetry">> {
-    const operations: ExcelOperation[] = [];
+    const entries: Array<{ target: A1Range; values: CellMatrix; preserveFormats?: true }> = [];
     const changes: NonNullable<AgentRunOutput["changes"]> = [];
     const warnings: string[] = [];
     let cellCount = 0;
+    let detailedPreviewCells = 0;
 
     for (const [index, patch] of patches.entries()) {
       const resolved = resolveUpdateTarget(metadata, {
@@ -1836,29 +1898,33 @@ export class AgentOrchestrator {
       if (formulaWarning) {
         warnings.push(formulaWarning);
       }
-      const before = await this.readRangeValues(metadata.workbook.workbookId as WorkbookId, resolved.sheetName, resolved.range);
-      operations.push({
-        kind: "range.write_values",
-        operationId: makeId<OperationId>("op"),
-        workbookId: metadata.workbook.workbookId as WorkbookId,
-        destructiveLevel: "values",
-        reason: patch.reason ?? input.request,
+      const patchCellCount = matrixCellCount(patch.values);
+      const detailedPreview = patchCellCount <= Math.max(0, AGENT_DETAILED_PREVIEW_CELL_LIMIT - detailedPreviewCells);
+      const before = detailedPreview ? await this.readRangeValues(metadata.workbook.workbookId as WorkbookId, resolved.sheetName, resolved.range) : [];
+      if (detailedPreview) {
+        detailedPreviewCells += patchCellCount;
+      }
+      entries.push({
         target: { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: resolved.sheetName, address: resolved.range },
         values: patch.values,
         preserveFormats: true
       });
-      cellCount += matrixCellCount(patch.values);
-      changes.push(...patch.values.flatMap((row, rowIndex) => row.map((value, columnIndex) => ({
-        sheetName: resolved.sheetName,
-        cell: cellAddressFor(resolved.range, rowIndex, columnIndex),
-        range: resolved.range,
-        before: before[rowIndex]?.[columnIndex],
-        after: value
-      }))));
+      cellCount += patchCellCount;
+      changes.push(...previewChangesForMatrix(resolved.sheetName, resolved.range, patch.values, before, !detailedPreview));
     }
 
     const pending = this.createPendingOperation(metadata, {
-      action: { kind: "batch", operations },
+      action: {
+        kind: "batch",
+        operations: [{
+          kind: "range.write_values_many",
+          operationId: makeId<OperationId>("op"),
+          workbookId: metadata.workbook.workbookId as WorkbookId,
+          destructiveLevel: "values",
+          reason: input.request,
+          entries
+        }]
+      },
       changes,
       summary: `Prepared ${cellCount} cell update(s) across ${patches.length} grouped range patch(es).`
     });
@@ -1874,7 +1940,7 @@ export class AgentOrchestrator {
         kind: "multi_range_preview",
         patchCount: patches.length,
         cellCount,
-        operationCount: operations.length,
+        operationCount: 1,
         grouped: true
       },
       metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
@@ -1888,6 +1954,9 @@ export class AgentOrchestrator {
 
   private async previewOperationIntent(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
     const action = intentAction(input);
+    if (action === "replace_range_with_styled_table" || shouldPreviewReplaceStyledTable(input)) {
+      return this.previewReplaceStyledTable(metadata, input, requestedMode);
+    }
     const workbookLevelHandler = findAgentActionHandler(input, action, false);
     if (workbookLevelHandler) {
       return this.previewActionHandler(metadata, input, requestedMode, workbookLevelHandler);
@@ -2026,6 +2095,8 @@ export class AgentOrchestrator {
         return this.previewRegionMutation(metadata, input, requestedMode, "fill");
       case "first_open_reviewed":
         return this.previewFirstStatusMatchUpdate(metadata, input, requestedMode);
+      case "apply_table_view":
+        return resolved?.candidate.kind === "table" ? this.previewTableApplyView(metadata, input, requestedMode, resolved) : undefined;
       case "sort_table":
         return this.previewTableSort(metadata, input, requestedMode);
       case "append_table_rows":
@@ -2444,6 +2515,16 @@ export class AgentOrchestrator {
     if (!request) {
       return workbookLevelNeedsInput(metadata, requestedMode, `Formula fill ${direction} needs values.source and values.destination ranges on the same sheet.`);
     }
+    const redirect = this.fragmentationRedirect(metadata, requestedMode, {
+      family: direction === "down" ? "formula_fill_down" : "formula_fill_right",
+      workbookContextId: metadata.workbookContextId,
+      sourceSheetName: request.sheetName,
+      sourceAddress: request.sourceAddress,
+      targetSheetName: request.sheetName,
+      targetAddress: request.targetAddress,
+      request: input.request
+    });
+    if (redirect) return redirect;
     const pending = this.createPendingOperation(metadata, {
       action: { kind: "formula.fill_pattern", request },
       changes: [{ sheetName: request.sheetName, range: request.targetAddress, after: `filled formulas ${direction}` }],
@@ -2561,6 +2642,14 @@ export class AgentOrchestrator {
   }
 
   private previewClearValues(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode, resolved: Extract<AgentTargetResolution, { ok: true }>): Omit<AgentRunOutput, "telemetry"> {
+    const redirect = this.fragmentationRedirect(metadata, requestedMode, {
+      family: "clear_values",
+      workbookContextId: metadata.workbookContextId,
+      targetSheetName: resolved.sheetName,
+      targetAddress: resolved.range,
+      request: input.request
+    });
+    if (redirect) return redirect;
     const operation: ExcelOperation = {
       kind: "range.clear_values_keep_format",
       operationId: makeId<OperationId>("op"),
@@ -2577,7 +2666,7 @@ export class AgentOrchestrator {
       kind: "range.clear",
       operationId: makeId<OperationId>("op"),
       workbookId: metadata.workbook.workbookId as WorkbookId,
-      destructiveLevel: "values",
+      destructiveLevel: "structure",
       reason: input.request,
       target: { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: resolved.sheetName, address: resolved.range },
       applyTo: "all"
@@ -2598,6 +2687,14 @@ export class AgentOrchestrator {
   }
 
   private previewAutofit(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode, resolved: Extract<AgentTargetResolution, { ok: true }>, dimension: "columns" | "rows"): Omit<AgentRunOutput, "telemetry"> {
+    const redirect = this.fragmentationRedirect(metadata, requestedMode, {
+      family: `autofit_${dimension}`,
+      workbookContextId: metadata.workbookContextId,
+      targetSheetName: resolved.sheetName,
+      targetAddress: resolved.range,
+      request: input.request
+    });
+    if (redirect) return redirect;
     const operation: ExcelOperation = {
       kind: dimension === "columns" ? "range.autofit_columns" : "range.autofit_rows",
       operationId: makeId<OperationId>("op"),
@@ -2681,7 +2778,7 @@ export class AgentOrchestrator {
           kind: "range.copy",
           operationId: makeId<OperationId>("op"),
           workbookId: metadata.workbook.workbookId as WorkbookId,
-          destructiveLevel: "values",
+          destructiveLevel: destructiveLevelForRangeCopy(input),
           reason: input.request,
           source: endpoints.source,
           target: endpoints.destination,
@@ -2691,7 +2788,7 @@ export class AgentOrchestrator {
           kind: "range.move",
           operationId: makeId<OperationId>("op"),
           workbookId: metadata.workbook.workbookId as WorkbookId,
-          destructiveLevel: "values",
+          destructiveLevel: "structure",
           reason: input.request,
           source: endpoints.source,
           target: endpoints.destination
@@ -2744,16 +2841,26 @@ export class AgentOrchestrator {
     if (entries.length === 0) {
       return workbookLevelNeedsInput(metadata, requestedMode, "Multi-style writes need values.entries with sheetName, range, and style.");
     }
-    const operations: ExcelOperation[] = entries.map((entry) => ({
-      kind: "range.write_styles",
+    if (entries.length === 1) {
+      const entry = entries[0]!;
+      const redirect = this.fragmentationRedirect(metadata, requestedMode, {
+        family: "format_range",
+        workbookContextId: metadata.workbookContextId,
+        targetSheetName: entry.target.sheetName,
+        targetAddress: entry.target.address,
+        request: input.request,
+        style: entry.style
+      });
+      if (redirect) return redirect;
+    }
+    const operations: ExcelOperation[] = [{
+      kind: "range.write_styles_many",
       operationId: makeId<OperationId>("op"),
       workbookId,
       destructiveLevel: "format",
       reason: input.request,
-      target: entry.target,
-      style: entry.style,
-      preserveValues: true
-    }));
+      entries: entries.map((entry) => ({ target: entry.target, style: entry.style, preserveValues: true }))
+    }];
     return this.previewBatchOperation(
       metadata,
       requestedMode,
@@ -3021,6 +3128,50 @@ export class AgentOrchestrator {
     });
   }
 
+  private previewTableApplyView(
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode,
+    resolved: Extract<AgentTargetResolution, { ok: true }>
+  ): Omit<AgentRunOutput, "telemetry"> {
+    const table = tableFromResolution(metadata, resolved);
+    const tableName = table?.name ?? resolved.candidate.tableName ?? resolved.candidate.label;
+    const values = input.values as Record<string, unknown> | undefined;
+    const filtersResult = Array.isArray(values?.filters) ? tableFiltersFromInput(input) : { ok: true as const, filters: [] };
+    if (!filtersResult.ok) {
+      return tableNeedsInput(metadata, requestedMode, resolved, filtersResult.summary);
+    }
+    const sort = tableApplyViewSortFromInput(input, table);
+    const clearFilters = typeof values?.clearFilters === "boolean" ? values.clearFilters : false;
+    const clearSort = typeof values?.clearSort === "boolean" ? values.clearSort : false;
+    if (filtersResult.filters.length === 0 && sort.fields.length === 0 && !clearFilters && !clearSort) {
+      return tableNeedsInput(metadata, requestedMode, resolved, "Table view previews need values.filters, values.sort.fields, clearFilters, or clearSort.");
+    }
+    const request: TableApplyViewRequest = {
+      workbookId: metadata.workbook.workbookId as WorkbookId,
+      tableName,
+      ...(filtersResult.filters.length > 0 ? { filters: filtersResult.filters } : {}),
+      ...(sort.fields.length > 0 ? { sort } : {}),
+      ...(clearFilters ? { clearFilters } : {}),
+      ...(clearSort ? { clearSort } : {})
+    };
+    const parts = [
+      filtersResult.filters.length > 0 ? `${filtersResult.filters.length} filter(s)` : undefined,
+      sort.fields.length > 0 ? `${sort.fields.length} sort field(s)` : undefined,
+      clearFilters ? "clear filters first" : undefined,
+      clearSort ? "clear sort first" : undefined
+    ].filter((part): part is string => Boolean(part));
+    return this.previewTablePendingAction(metadata, requestedMode, {
+      action: { kind: "table.apply_view", request },
+      tableName,
+      sheetName: resolved.sheetName,
+      range: resolved.range,
+      summary: `Prepared table view update for ${tableName}: ${parts.join(", ")}.`,
+      answer: { kind: "table_apply_view_preview", tableName, filterCount: filtersResult.filters.length, sortFieldCount: sort.fields.length, clearFilters, clearSort },
+      after: "applied table view"
+    });
+  }
+
   private previewTableTotalRow(
     metadata: WorkbookMetadata,
     input: AgentRunInput,
@@ -3174,6 +3325,15 @@ export class AgentOrchestrator {
     resolved: Extract<AgentTargetResolution, { ok: true }>
   ): Omit<AgentRunOutput, "telemetry"> {
     const style = styleFromRequest(input.request);
+    const redirect = this.fragmentationRedirect(metadata, requestedMode, {
+      family: "format_range",
+      workbookContextId: metadata.workbookContextId,
+      targetSheetName: resolved.sheetName,
+      targetAddress: resolved.range,
+      request: input.request,
+      style
+    });
+    if (redirect) return redirect;
     const operation: ExcelOperation = {
       kind: "range.write_styles",
       operationId: makeId<OperationId>("op"),
@@ -3240,10 +3400,48 @@ export class AgentOrchestrator {
   }
 
   private previewStyleCopy(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> {
-    const request = styleCopyRequestFromInput(metadata, input);
-    if (!request) {
+    const requests = styleCopyRequestsFromInput(metadata, input);
+    if (requests.length === 0) {
       return workbookLevelNeedsInput(metadata, requestedMode, "Style copy needs values.source and values.destination, or source/target sheet names.");
     }
+    const mismatch = requests.map((request) => styleCopyDimensionIssue(request)).find(Boolean);
+    if (mismatch) {
+      return workbookLevelNeedsInput(metadata, requestedMode, mismatch);
+    }
+    if (requests.length > 1) {
+      const pending = this.createPendingOperation(metadata, {
+        action: { kind: "style.copy_dimensions_many", requests },
+        changes: requests.map((request) => ({ sheetName: request.targetSheetName, ...(request.targetAddress ? { range: request.targetAddress } : {}), after: `copied style dimensions from ${request.sourceSheetName}` })),
+        summary: `Prepared ${requests.length} grouped style copy operation(s).`
+      });
+      return {
+        status: "PREVIEW_READY",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        operationId: pending.operationId,
+        confirmationToken: pending.confirmationToken,
+        summary: pending.summary,
+        answer: { kind: "style_copy_many_preview", requests, copyCount: requests.length },
+        metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
+        changes: pending.changes,
+        proof: requests.slice(0, 8).map((request) => ({ sheetName: request.targetSheetName, range: request.targetAddress ?? usedRangeForSheet(metadata, request.targetSheetName), label: "style copy target" })),
+        resourceLinks: [operationResource(String(pending.operationId))],
+        nextAction: "call_apply_update",
+        warnings: []
+      };
+    }
+    const request = requests[0]!;
+    const redirect = this.fragmentationRedirect(metadata, requestedMode, {
+      family: "style_copy",
+      workbookContextId: metadata.workbookContextId,
+      sourceSheetName: request.sourceSheetName,
+      sourceAddress: request.sourceAddress,
+      targetSheetName: request.targetSheetName,
+      targetAddress: request.targetAddress,
+      request: input.request,
+      dimensions: request.dimensions
+    });
+    if (redirect) return redirect;
     const pending = this.createPendingOperation(metadata, {
       action: { kind: "style.copy_dimensions", request },
       changes: [{ sheetName: request.targetSheetName, ...(request.targetAddress ? { range: request.targetAddress } : {}), after: `copied style dimensions from ${request.sourceSheetName}` }],
@@ -3263,6 +3461,85 @@ export class AgentOrchestrator {
       resourceLinks: [operationResource(String(pending.operationId))],
       nextAction: "call_apply_update",
       warnings: []
+    };
+  }
+
+  private previewReplaceStyledTable(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> | undefined {
+    const plan = replaceStyledTablePlanFromInput(metadata, input);
+    if (!plan) {
+      return workbookLevelNeedsInput(metadata, requestedMode, "Replacing a styled table needs target.sheetName plus values.headers and values.row or values.rows.");
+    }
+    const mismatch = plan.styleCopies.map((request) => styleCopyDimensionIssue(request)).find(Boolean);
+    if (mismatch) {
+      return workbookLevelNeedsInput(metadata, requestedMode, mismatch);
+    }
+    const pending = this.createPendingOperation(metadata, {
+      action: { kind: "workflow.replace_styled_table", operations: plan.operations, styleCopies: plan.styleCopies },
+      changes: plan.changes,
+      summary: `Prepared styled table replacement on ${plan.sheetName}!${plan.writeRange}.`
+    });
+    return {
+      status: "PREVIEW_READY",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      operationId: pending.operationId,
+      confirmationToken: pending.confirmationToken,
+      summary: `${pending.summary} Apply this preview once; clear, values, style copies, and autofit will run as one ordered workflow.`,
+      answer: {
+        kind: "replace_range_with_styled_table_preview",
+        sheetName: plan.sheetName,
+        range: plan.writeRange,
+        rowCount: plan.matrix.length,
+        columnCount: plan.matrix[0]?.length ?? 0,
+        clearCount: plan.clearRanges.length,
+        styleCopyCount: plan.styleCopies.length,
+        operationCount: plan.operations.length + plan.styleCopies.length
+      },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
+      changes: pending.changes,
+      proof: [{ sheetName: plan.sheetName, range: plan.writeRange, label: "styled table target" }],
+      resourceLinks: [operationResource(String(pending.operationId))],
+      nextAction: "call_apply_update",
+      warnings: []
+    };
+  }
+
+  private fragmentationRedirect(metadata: WorkbookMetadata, requestedMode: AgentRunMode, fragment: AgentPreviewFragmentInput): Omit<AgentRunOutput, "telemetry"> | undefined {
+    const now = Date.now();
+    this.previewFragments.splice(0, this.previewFragments.length, ...this.previewFragments.filter((item) => now - item.createdAt <= AGENT_FRAGMENT_WINDOW_MS));
+    const key = previewFragmentKey(fragment);
+    const related = this.previewFragments.filter((item) => item.key === key);
+    this.previewFragments.push({ ...fragment, key, createdAt: now });
+    if (related.length + 1 < AGENT_FRAGMENT_REDIRECT_THRESHOLD) {
+      return undefined;
+    }
+    const fragments = [...related, { ...fragment, key, createdAt: now }];
+    const suggested = workflowRedirectSuggestion(fragment, fragments);
+    return {
+      status: "NEEDS_WORKFLOW_REDIRECT",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      summary: suggested.summary,
+      answer: {
+        kind: "workflow_redirect",
+        reason: "fragmented_operations_detected",
+        detectedFamily: fragment.family,
+        suggestedIntentAction: suggested.intentAction,
+        suggestedRequest: suggested.request,
+        suggestedValues: suggested.values
+      },
+      metrics: {
+        operationRisk: fragment.family === "clear_values" ? "destructive" : "safe_format",
+        targetFingerprintStatus: "not_applicable",
+        workflowKind: suggested.intentAction,
+        fragmentationRedirectCount: related.length + 1,
+        detectedFamily: fragment.family,
+        suggestedWorkflowKind: suggested.intentAction
+      },
+      proof: fragment.targetSheetName && fragment.targetAddress ? [{ sheetName: fragment.targetSheetName, range: fragment.targetAddress, label: "fragmented operation target" }] : [],
+      resourceLinks: [contextResource(metadata.workbookContextId)],
+      nextAction: "call_preview_update",
+      warnings: [suggested.warning]
     };
   }
 
@@ -3322,33 +3599,29 @@ export class AgentOrchestrator {
         warnings: []
       };
     }
-    const newSheetName = uniqueSheetName(metadata, `${sourceSheet.name} Template`);
+    const values = input.values as Record<string, unknown> | undefined;
+    const newSheetName = stringValue(values?.newSheetName ?? values?.targetSheetName ?? values?.sheetName) ?? uniqueSheetName(metadata, `${sourceSheet.name} Template`);
+    const dataRegions = stringArrayValue(values?.dataRegions).map((region) => normalizeOperationRange(metadata, sourceSheet.name, region));
+    const clearRegions = dataRegions.length > 0 ? dataRegions : [sourceSheet.usedRange];
     const operations: ExcelOperation[] = [
       {
-        kind: "sheet.copy",
+        kind: "sheet.copy_clean_data_regions",
         operationId: makeId<OperationId>("op"),
         workbookId: metadata.workbook.workbookId as WorkbookId,
         destructiveLevel: "structure",
         reason: input.request,
         sourceSheetName: sourceSheet.name,
         newSheetName,
+        dataRegions: clearRegions,
         position: "after",
         relativeToSheetName: sourceSheet.name,
         activate: true
-      },
-      {
-        kind: "range.clear_values_keep_format",
-        operationId: makeId<OperationId>("op"),
-        workbookId: metadata.workbook.workbookId as WorkbookId,
-        destructiveLevel: "values",
-        reason: input.request,
-        target: { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: newSheetName, address: sourceSheet.usedRange }
       }
     ];
     const pending = this.createPendingOperation(metadata, {
       action: { kind: "batch", operations },
-      changes: [{ sheetName: newSheetName, range: sourceSheet.usedRange, before: "copied values", after: "template formatting only" }],
-      summary: `Prepared template copy ${newSheetName} from ${sourceSheet.name} with values cleared.`
+      changes: clearRegions.map((range) => ({ sheetName: newSheetName, range, before: "copied values", after: "cleared data-region values; formatting preserved" })),
+      summary: `Prepared template copy ${newSheetName} from ${sourceSheet.name} with ${clearRegions.length} data region(s) cleared.`
     });
     return {
       status: "PREVIEW_READY",
@@ -3357,7 +3630,7 @@ export class AgentOrchestrator {
       operationId: pending.operationId,
       confirmationToken: pending.confirmationToken,
       summary: pending.summary,
-      answer: { kind: "template_cleanup_preview", sourceSheetName: sourceSheet.name, newSheetName, clearRange: sourceSheet.usedRange },
+      answer: { kind: "template_cleanup_preview", sourceSheetName: sourceSheet.name, newSheetName, dataRegions: clearRegions, operationKind: "sheet.copy_clean_data_regions" },
       metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
       changes: pending.changes,
       proof: [{ sheetName: sourceSheet.name, range: sourceSheet.usedRange, label: "template source" }],
@@ -3589,11 +3862,91 @@ export class AgentOrchestrator {
     };
   }
 
+  private operationStatus(input: AgentRunInput): Omit<AgentRunOutput, "telemetry"> {
+    const operationId = input.operationId ? String(input.operationId) : "";
+    const pending = this.operations.get(operationId);
+    if (!pending) {
+      return { status: "NOT_FOUND", mode: "operation_status", summary: "No pending or terminal operation was found for the supplied operationId.", proof: [], resourceLinks: [], nextAction: "ask_user", warnings: [] };
+    }
+    return {
+      status: pending.applyStatus === "applying" ? "IN_PROGRESS" : "SUCCESS",
+      mode: "operation_status",
+      workbookContextId: pending.workbookContextId,
+      operationId: pending.operationId,
+      summary: `Operation ${pending.operationId} is ${pending.applyStatus ?? "previewed"}.`,
+      answer: this.getOperationResource(String(pending.operationId)),
+      changes: pending.changes,
+      proof: [],
+      resourceLinks: [operationResource(String(pending.operationId))],
+      nextAction: pending.applyStatus === "previewed" ? "call_apply_update" : "answer_now",
+      warnings: []
+    };
+  }
+
+  private cancelOperation(input: AgentRunInput): Omit<AgentRunOutput, "telemetry"> {
+    const operationId = input.operationId ? String(input.operationId) : "";
+    const pending = this.operations.get(operationId);
+    if (!pending) {
+      return { status: "NOT_FOUND", mode: "cancel_operation", summary: "No previewed operation was found for the supplied operationId.", proof: [], resourceLinks: [], nextAction: "ask_user", warnings: [] };
+    }
+    if (pending.applyStatus !== "previewed") {
+      return {
+        status: pending.applyStatus === "applying" ? "IN_PROGRESS" : "VALIDATION_FAILED",
+        mode: "cancel_operation",
+        workbookContextId: pending.workbookContextId,
+        operationId: pending.operationId,
+        summary: `Operation ${pending.operationId} cannot be cancelled because it is ${pending.applyStatus ?? "not previewed"}.`,
+        answer: this.getOperationResource(String(pending.operationId)),
+        changes: pending.changes,
+        proof: [],
+        resourceLinks: [operationResource(String(pending.operationId))],
+        nextAction: pending.applyStatus === "applying" ? "fetch_resource" : "answer_now",
+        warnings: ["Only previewed operations can be cancelled."]
+      };
+    }
+    const cancelled = this.operations.cancel(operationId);
+    return {
+      status: "SUCCESS",
+      mode: "cancel_operation",
+      workbookContextId: pending.workbookContextId,
+      operationId: pending.operationId,
+      summary: `Cancelled previewed operation ${pending.operationId}.`,
+      answer: {
+        kind: "agent_operation_cancelled",
+        operationId: pending.operationId,
+        workbookContextId: pending.workbookContextId,
+        cancelled: Boolean(cancelled)
+      },
+      changes: pending.changes,
+      proof: [],
+      resourceLinks: [],
+      nextAction: "answer_now",
+      warnings: []
+    };
+  }
+
   private async applyUpdate(input: AgentRunInput): Promise<Omit<AgentRunOutput, "telemetry">> {
     const operationId = input.operationId ? String(input.operationId) : "";
     const pending = this.operations.get(operationId);
     if (!pending) {
       return { status: "NOT_FOUND", mode: "apply_update", summary: "No pending previewed operation was found for the supplied operationId.", proof: [], resourceLinks: [], nextAction: "ask_user", warnings: [] };
+    }
+    if (pending.terminalOutput) {
+      return pending.terminalOutput;
+    }
+    if (pending.applyStatus === "applying") {
+      return {
+        status: "IN_PROGRESS",
+        mode: "apply_update",
+        workbookContextId: pending.workbookContextId,
+        operationId: pending.operationId,
+        summary: "Workbook update is still applying. Retry apply_update with the same operationId and confirmationToken to fetch the result.",
+        changes: pending.changes,
+        proof: [],
+        resourceLinks: [operationResource(String(pending.operationId))],
+        nextAction: "fetch_resource",
+        warnings: []
+      };
     }
     if (input.confirmationToken !== pending.confirmationToken) {
       return {
@@ -3643,15 +3996,35 @@ export class AgentOrchestrator {
         };
       }
     }
-    const result = await this.applyPendingAction(pending, operationId);
-    const applyFailed = (result as { ok?: boolean }).ok === false;
-    if (!applyFailed) {
-      this.operations.delete(operationId);
+    this.operations.markApplying(operationId);
+    let result: unknown;
+    try {
+      result = await this.applyPendingAction(pending, operationId);
+    } catch (error) {
+      const output: Omit<AgentRunOutput, "telemetry"> = {
+        status: "VALIDATION_FAILED",
+        mode: "apply_update",
+        workbookContextId: pending.workbookContextId,
+        operationId: pending.operationId,
+        summary: "Workbook update failed.",
+        answer: { kind: "apply_update_result", ok: false, validationOk: false, validationIssueCount: 1, changeCount: pending.changes.length, operationRisk: pending.risk },
+        metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
+        changes: pending.changes,
+        proof: [],
+        resourceLinks: [operationResource(String(pending.operationId))],
+        nextAction: "manual_review",
+        warnings: [error instanceof Error ? error.message : String(error)]
+      };
+      this.operations.markCompleted(operationId, output);
+      return output;
     }
+    const applyFailed = (result as { ok?: boolean }).ok === false;
     const validation = !applyFailed ? await this.runtime.validateWorkbook({ workbookId: pending.workbookId }) : undefined;
     const issueCount = validation?.issues?.length ?? 0;
     const validationFailed = validation?.ok === false;
-    return {
+    const resultRecord = result as { transactionId?: string; backups?: string[]; rollbackAvailable?: boolean; telemetry?: unknown; warnings?: unknown[]; results?: unknown[] };
+    const resultWarnings = Array.isArray(resultRecord.warnings) ? resultRecord.warnings.map(String) : [];
+    const output: Omit<AgentRunOutput, "telemetry"> = {
       status: applyFailed || validationFailed ? "VALIDATION_FAILED" : "SUCCESS",
       mode: "apply_update",
       workbookContextId: pending.workbookContextId,
@@ -3667,19 +4040,23 @@ export class AgentOrchestrator {
         validationOk: !validationFailed,
         validationIssueCount: issueCount,
         changeCount: pending.changes.length,
-        transactionId: (result as { transactionId?: string }).transactionId,
-        backupIds: (result as { backups?: string[] }).backups ?? [],
-        rollbackAvailable: (result as { rollbackAvailable?: boolean }).rollbackAvailable ?? false,
+        transactionId: resultRecord.transactionId,
+        backupIds: resultRecord.backups ?? [],
+        rollbackAvailable: resultRecord.rollbackAvailable ?? false,
+        partialFailure: applyFailed && Array.isArray(resultRecord.results) && resultRecord.results.some((step) => Boolean(step) && typeof step === "object" && (step as { ok?: unknown }).ok !== false),
         operationRisk: pending.risk,
-        telemetry: (result as { telemetry?: unknown }).telemetry
+        telemetry: resultRecord.telemetry,
+        ...(applyFailed && resultRecord.results !== undefined ? { stepResults: resultRecord.results } : {})
       },
       metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
       changes: pending.changes,
       proof: pending.changes.flatMap((change) => change.range ? [{ sheetName: change.sheetName, range: change.range, label: "applied target" }] : []).slice(0, 1),
-      resourceLinks: (result as { transactionId?: string }).transactionId ? [{ uri: `excel://transactions/${(result as { transactionId?: string }).transactionId}`, name: "transaction", description: "Applied workbook transaction.", mimeType: "application/json" }] : [],
+      resourceLinks: resultRecord.transactionId ? [{ uri: `excel://transactions/${resultRecord.transactionId}`, name: "transaction", description: "Applied workbook transaction.", mimeType: "application/json" }] : [],
       nextAction: applyFailed || validationFailed ? "manual_review" : "answer_now",
-      warnings: validation?.issues?.slice(0, 5).map((issue) => issue.message) ?? []
+      warnings: [...resultWarnings, ...(validation?.issues?.slice(0, 5).map((issue) => issue.message) ?? [])]
     };
+    this.operations.markCompleted(operationId, output);
+    return output;
   }
 
   private applyPendingAction(pending: NonNullable<ReturnType<AgentOperationStore["get"]>>, operationId: string) {
@@ -3711,6 +4088,8 @@ export class AgentOrchestrator {
         return this.runtime.applyTableFilters(pending.action.request);
       case "table.sort":
         return this.runtime.sortTable(pending.action.request);
+      case "table.apply_view":
+        return this.runtime.applyTableView(pending.action.request);
       case "table.set_total_row":
         return this.runtime.setTableTotalRow(pending.action.request);
       case "table.set_style":
@@ -3724,7 +4103,11 @@ export class AgentOrchestrator {
       case "template.repair_sheet":
         return this.runtime.repairSheetFromTemplate(pending.action.request);
       case "style.copy_dimensions":
-        return this.runtime.copyStyleDimensions(pending.action.request);
+        return this.runtime.copyStyleDimensions(pending.action.request, { idempotencyKey: `agent:${operationId}:style:0` });
+      case "style.copy_dimensions_many":
+        return this.applyStyleCopyRequests(pending.action.requests, operationId);
+      case "workflow.replace_styled_table":
+        return this.applyReplaceStyledTableWorkflow(pending.workbookId, pending.action.operations, pending.action.styleCopies, operationId);
       case "style.repair_consistency":
         return this.runtime.repairStyleFromTemplate(pending.action.request);
       case "clean.transform":
@@ -3790,6 +4173,34 @@ export class AgentOrchestrator {
       case "region.fill":
         return this.runtime.fillRegion(pending.action.request);
     }
+  }
+
+  private async applyStyleCopyRequests(requests: StyleCopyRequest[], operationId: string) {
+    if (requests.length === 0) {
+      return { ok: true, warnings: [], telemetry: { styleCopyCount: 0 } };
+    }
+    const runtime = this.runtime as RuntimeService & {
+      copyStyleDimensionsMany?: (input: { workbookId: WorkbookId; requests: StyleCopyRequest[] }, options?: { idempotencyKey?: string }) => Promise<unknown>;
+    };
+    if (typeof runtime.copyStyleDimensionsMany === "function") {
+      return runtime.copyStyleDimensionsMany({ workbookId: requests[0]!.workbookId, requests }, { idempotencyKey: `agent:${operationId}:style:many` });
+    }
+    const results = [];
+    for (const [index, request] of requests.entries()) {
+      results.push(await this.runtime.copyStyleDimensions(request, { idempotencyKey: `agent:${operationId}:style:${index}` }));
+    }
+    return combineApplyResults(results);
+  }
+
+  private async applyReplaceStyledTableWorkflow(workbookId: WorkbookId, operations: ExcelOperation[], styleCopies: StyleCopyRequest[], operationId: string) {
+    const results = [];
+    if (operations.length > 0) {
+      results.push(await this.runtime.applyBatch({ workbookId, operations, mode: "apply", idempotencyKey: `agent:${operationId}:values` }));
+    }
+    if (styleCopies.length > 0) {
+      results.push(await this.applyStyleCopyRequests(styleCopies, operationId));
+    }
+    return combineApplyResults(results);
   }
 
   private applyCleanMutation(action: AgentCleanMutationAction, request: AgentCleanRequest) {
@@ -4002,6 +4413,8 @@ interface AgentRunMetrics {
   actionHandlerId?: AgentActionHandlerId | string;
   autoApplyBlockedReason?: string;
   targetFingerprintStatus?: "matched" | "changed" | "not_applicable";
+  metadataFreshnessReason?: string;
+  metadataDetailLevel?: "structure" | "sampled";
   validationStatus: "passed" | "failed" | "not_run";
 }
 
@@ -4009,6 +4422,144 @@ interface AgentValuePatch {
   target: AgentRunTarget;
   values: CellMatrix;
   reason?: string;
+}
+
+type AgentPreviewFragmentFamily =
+  | "style_copy"
+  | "clear_values"
+  | "autofit_columns"
+  | "autofit_rows"
+  | "write_values"
+  | "format_range"
+  | "formula_fill_down"
+  | "formula_fill_right";
+
+interface AgentPreviewFragmentInput {
+  family: AgentPreviewFragmentFamily;
+  workbookContextId: string;
+  sourceSheetName?: string | undefined;
+  sourceAddress?: string | undefined;
+  targetSheetName?: string | undefined;
+  targetAddress?: string | undefined;
+  request: string;
+  dimensions?: StyleDimension[] | undefined;
+  style?: unknown;
+  values?: unknown;
+}
+
+interface AgentPreviewFragment extends AgentPreviewFragmentInput {
+  key: string;
+  createdAt: number;
+}
+
+function previewFragmentKey(fragment: AgentPreviewFragmentInput): string {
+  return [
+    fragment.workbookContextId,
+    fragment.family,
+    fragment.sourceSheetName ?? "",
+    fragment.sourceAddress ?? "",
+    fragment.targetSheetName ?? ""
+  ].join("|");
+}
+
+function workflowRedirectSuggestion(fragment: AgentPreviewFragmentInput, fragments: AgentPreviewFragmentInput[] = [fragment]): {
+  intentAction: AgentIntentAction;
+  request: string;
+  values: Record<string, unknown>;
+  summary: string;
+  warning: string;
+} {
+  const groupedTargetRange = groupedFragmentTargetRange(fragments) ?? fragment.targetAddress;
+  if (fragment.family === "style_copy") {
+    return {
+      intentAction: "copy_style_from_template",
+      request: "Preview one grouped style copy operation for all target ranges instead of splitting by column chunks.",
+      values: {
+        styleCopies: fragments.map((entry) => ({
+          source: { sheetName: fragment.sourceSheetName, range: fragment.sourceAddress },
+          destination: { sheetName: entry.targetSheetName, range: entry.targetAddress },
+          ...(entry.dimensions?.length ? { dimensions: entry.dimensions } : fragment.dimensions?.length ? { dimensions: fragment.dimensions } : {})
+        }))
+      },
+      summary: "Repeated style-copy previews look like one broad formatting task. Use one grouped style-copy preview/apply workflow instead of chunked calls.",
+      warning: "Fragmented style-copy previews were redirected to a grouped workflow."
+    };
+  }
+  if (fragment.family === "clear_values") {
+    return {
+      intentAction: "clear_range",
+      request: "Preview one clear-range operation for the stale layout, or use replace_range_with_styled_table when rewriting a table.",
+      values: { clearRange: groupedTargetRange },
+      summary: "Repeated value clears can leave stale borders and fills. Use clear_range or replace_range_with_styled_table for old layout cleanup.",
+      warning: "Fragmented value-only cleanup was redirected because it can leave stale formatting."
+    };
+  }
+  if (fragment.family === "write_values") {
+    return {
+      intentAction: "write_values",
+      request: "Preview one grouped values.patches operation for adjacent value writes instead of splitting ranges.",
+      values: {
+        patches: fragments.map((entry) => ({
+          target: { sheetName: entry.targetSheetName, range: entry.targetAddress },
+          values: entry.values ?? []
+        }))
+      },
+      summary: "Repeated value-write previews look like one related write task. Use one grouped values.patches preview/apply workflow.",
+      warning: "Fragmented value-write previews were redirected to a grouped patch workflow."
+    };
+  }
+  if (fragment.family === "format_range") {
+    return {
+      intentAction: "write_styles_many",
+      request: "Preview one grouped style write operation for adjacent format ranges instead of splitting format calls.",
+      values: {
+        entries: fragments.map((entry) => ({
+          target: { sheetName: entry.targetSheetName, range: entry.targetAddress },
+          style: entry.style ?? "STYLE_FOR_THIS_RANGE"
+        }))
+      },
+      summary: "Repeated format previews look like one related styling task. Use one write_styles_many preview/apply workflow.",
+      warning: "Fragmented format previews were redirected to a grouped style workflow."
+    };
+  }
+  if (fragment.family === "formula_fill_down" || fragment.family === "formula_fill_right") {
+    const direction = fragment.family === "formula_fill_down" ? "down" : "right";
+    return {
+      intentAction: direction === "down" ? "fill_formula_down" : "fill_formula_right",
+      request: `Preview one formula fill ${direction} operation for the full affected range instead of splitting adjacent fills.`,
+      values: {
+        source: { sheetName: fragment.sourceSheetName, range: fragment.sourceAddress },
+        destination: { sheetName: fragment.targetSheetName, range: groupedTargetRange }
+      },
+      summary: `Repeated formula-fill-${direction} previews look like one formula fill task. Use one full-range formula fill preview/apply workflow.`,
+      warning: `Fragmented formula-fill-${direction} previews were redirected to a grouped formula workflow.`
+    };
+  }
+  return {
+    intentAction: "autofit",
+    request: "Preview one autofit operation for the full affected range instead of splitting adjacent ranges.",
+    values: { targetRange: groupedTargetRange },
+    summary: "Repeated autofit previews look like one broad layout task. Use one full-range autofit preview/apply workflow.",
+    warning: "Fragmented autofit previews were redirected to a grouped workflow."
+  };
+}
+
+function groupedFragmentTargetRange(fragments: AgentPreviewFragmentInput[]): string | undefined {
+  const parsed = fragments
+    .map((fragment) => fragment.targetAddress ? rangeShape(fragment.targetAddress) : undefined)
+    .filter((shape): shape is NonNullable<ReturnType<typeof rangeShape>> => Boolean(shape));
+  if (parsed.length === 0) {
+    return undefined;
+  }
+  const startRow = Math.min(...parsed.map((shape) => shape.startRow));
+  const startColumn = Math.min(...parsed.map((shape) => shape.startColumn));
+  const endRow = Math.max(...parsed.map((shape) => shape.endRow));
+  const endColumn = Math.max(...parsed.map((shape) => shape.endColumn));
+  return addressFromBounds(startRow, startColumn, endRow - startRow + 1, endColumn - startColumn + 1);
+}
+
+function shouldTrackFragmentedValueWrite(request: string): boolean {
+  return /\b(extract(?:ed)?|ocr|field|field\/value|booking|invoice|shipment|manifest|chunk|part|first|second|next|adjacent|split)\b/i.test(request);
 }
 
 function workbookOverviewIntent(input: AgentRunInput): ReturnType<typeof detectWorkbookOverviewIntent> {
@@ -4109,6 +4660,12 @@ function isEveryCellDumpRequest(requestText: string): boolean {
 }
 
 function shouldBuildSampledMetadata(input: AgentRunInput, effectiveMode: AgentRunMode, overviewIntent: ReturnType<typeof detectWorkbookOverviewIntent>): boolean {
+  if (input.detailLevel === "workbook_summary" || input.detailLevel === "sheet_summary") {
+    return false;
+  }
+  if (input.detailLevel === "table_sample" || input.detailLevel === "full_table") {
+    return true;
+  }
   if (isWorkbookDumpRequest(input.request) || isLargeTargetRangeRequest(input)) {
     return false;
   }
@@ -4173,6 +4730,97 @@ function workbookOverviewAnswer(metadata: WorkbookMetadata, input: AgentRunInput
     nextAction: "answer_now",
     warnings: []
   };
+}
+
+function detailLevelAnswerOutput(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> | undefined {
+  if (input.detailLevel === "workbook_summary") {
+    return workbookSummaryDetailOutput(metadata, requestedMode);
+  }
+  if (input.detailLevel === "sheet_summary") {
+    return sheetSummaryDetailOutput(metadata, input, requestedMode);
+  }
+  return undefined;
+}
+
+function workbookSummaryDetailOutput(metadata: WorkbookMetadata, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> {
+  const summary = workbookCompactSummary(metadata);
+  return {
+    status: "SUCCESS",
+    mode: requestedMode,
+    workbookContextId: metadata.workbookContextId,
+    summary: `Returned workbook summary for ${metadata.workbook.name} from cached metadata.`,
+    answer: {
+      kind: "workbook_summary",
+      source: "cached_metadata",
+      workbook: metadata.workbook,
+      sheetCount: metadata.sheets.length,
+      tableCount: metadata.tables.length,
+      namedRangeCount: metadata.namedRanges.length,
+      sheets: summary.sheets
+    },
+    metrics: { source: "cached_metadata", detailLevel: "workbook_summary", fullReadCellCount: 0 },
+    proof: metadata.sheets.slice(0, 5).flatMap((sheet) => sheet.usedRange ? [{ sheetName: sheet.name, range: sheet.usedRange, label: "used range" }] : []),
+    resourceLinks: [contextResource(metadata.workbookContextId)],
+    nextAction: "answer_now",
+    warnings: []
+  };
+}
+
+function sheetSummaryDetailOutput(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> {
+  const requestedSheet = stringValue(input.target?.sheetName)
+    ?? stringValue((input.values as Record<string, unknown> | undefined)?.sheetName)
+    ?? sheetNameFromRequest(metadata, input.request)
+    ?? metadata.workbook.activeSheet
+    ?? metadata.sheets[0]?.name;
+  const sheet = requestedSheet ? metadata.sheets.find((candidate) => normalizeComparableText(candidate.name) === normalizeComparableText(requestedSheet)) : undefined;
+  if (!sheet) {
+    return {
+      status: "AMBIGUOUS_TARGET",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      summary: "Sheet summary needs a sheet target.",
+      candidates: metadata.sheets.slice(0, 10).map((candidate, index) => ({
+        id: candidate.id,
+        kind: "sheet" as const,
+        label: candidate.name,
+        sheetName: candidate.name,
+        ...(candidate.usedRange !== undefined ? { range: candidate.usedRange } : {}),
+        confidence: Math.max(0.1, 0.9 - index * 0.05),
+        reason: "Available sheet"
+      })),
+      proof: [],
+      resourceLinks: [contextResource(metadata.workbookContextId)],
+      nextAction: "call_with_target",
+      warnings: []
+    };
+  }
+  const tableIds = new Set(sheet.tableIds);
+  return {
+    status: "SUCCESS",
+    mode: requestedMode,
+    workbookContextId: metadata.workbookContextId,
+    summary: `Returned sheet summary for ${sheet.name} from cached metadata.`,
+    answer: {
+      kind: "sheet_summary",
+      source: "cached_metadata",
+      sheet,
+      tables: metadata.tables.filter((table) => tableIds.has(table.id)),
+      namedRanges: metadata.namedRanges.filter((name) => name.sheetName === sheet.name),
+      sections: metadata.sections.filter((section) => section.sheetName === sheet.name),
+      summaryBlocks: metadata.summaryBlocks.filter((block) => block.sheetName === sheet.name),
+      formulaRegions: metadata.formulaRegions.filter((region) => region.sheetName === sheet.name)
+    },
+    metrics: { source: "cached_metadata", detailLevel: "sheet_summary", fullReadCellCount: 0 },
+    proof: sheet.usedRange ? [{ sheetName: sheet.name, range: sheet.usedRange, label: "used range" }] : [],
+    resourceLinks: [contextResource(metadata.workbookContextId)],
+    nextAction: "answer_now",
+    warnings: metadata.detailLevel === "sampled" ? [] : ["Sheet sections and formula regions are richer after sampled metadata is available."]
+  };
+}
+
+function sheetNameFromRequest(metadata: WorkbookMetadata, request: string): string | undefined {
+  const normalizedRequest = normalizeComparableText(request);
+  return metadata.sheets.find((sheet) => normalizedRequest.includes(normalizeComparableText(sheet.name)))?.name;
 }
 
 function workbookDumpGuardOutput(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> | undefined {
@@ -5664,6 +6312,52 @@ function tableSortSpecFromInput(input: AgentRunInput, table: TableMetadata): Tab
   };
 }
 
+function tableApplyViewSortFromInput(input: AgentRunInput, table: TableMetadata | undefined): NonNullable<TableApplyViewRequest["sort"]> {
+  const values = input.values as Record<string, unknown> | undefined;
+  const rawSort = values?.sort && typeof values.sort === "object" && !Array.isArray(values.sort) ? values.sort as Record<string, unknown> : undefined;
+  const rawFields = Array.isArray(rawSort?.fields)
+    ? rawSort.fields
+    : Array.isArray(values?.fields)
+      ? values.fields
+      : undefined;
+  const explicitFields = rawFields?.flatMap((field) => normalizeTableSortFieldSpec(field, table)) ?? [];
+  const method = tableSortMethodFromInput(rawSort?.method ?? values?.method);
+  if (explicitFields.length > 0) {
+    return {
+      fields: explicitFields,
+      ...(typeof rawSort?.matchCase === "boolean" ? { matchCase: rawSort.matchCase } : typeof values?.matchCase === "boolean" ? { matchCase: values.matchCase } : {}),
+      ...(method ? { method } : {})
+    };
+  }
+  const inferred = table ? tableSortSpecFromInput(input, table) : undefined;
+  return inferred ? { fields: [inferred] } : { fields: [] };
+}
+
+function normalizeTableSortFieldSpec(field: unknown, table: TableMetadata | undefined): TableSortField[] {
+  if (!field || typeof field !== "object" || Array.isArray(field)) {
+    return [];
+  }
+  const candidate = field as Record<string, unknown>;
+  const rawKey = candidate.key ?? candidate.column ?? candidate.name;
+  const key = typeof rawKey === "number" && Number.isInteger(rawKey) && rawKey >= 0
+    ? rawKey
+    : table ? tableSortKey(table, rawKey) : undefined;
+  if (key === undefined) {
+    return [];
+  }
+  return [{
+    key,
+    ...(typeof candidate.ascending === "boolean" ? { ascending: candidate.ascending } : {}),
+    ...(isTableSortOn(candidate.sortOn) ? { sortOn: candidate.sortOn } : {}),
+    ...(typeof candidate.color === "string" ? { color: candidate.color } : {}),
+    ...(isTableSortDataOption(candidate.dataOption) ? { dataOption: candidate.dataOption } : {})
+  }];
+}
+
+function tableSortMethodFromInput(value: unknown): NonNullable<TableApplyViewRequest["sort"]>["method"] | undefined {
+  return value === "PinYin" || value === "StrokeCount" ? value : undefined;
+}
+
 function tableSortKey(table: TableMetadata, rawColumn: unknown): number | undefined {
   if (typeof rawColumn === "number" && Number.isInteger(rawColumn) && rawColumn >= 0) {
     return rawColumn;
@@ -5729,6 +6423,12 @@ function compactTableRowLimit(input: AgentRunInput, columnCount: number, rowOffs
   const maxCells = input.budget?.maxPayloadBytes ? Math.max(25, Math.floor(input.budget.maxPayloadBytes / 80)) : undefined;
   if (maxCells !== undefined && columnCount > 0) {
     return Math.max(1, Math.min(50, Math.floor(maxCells / columnCount)));
+  }
+  if (input.detailLevel === "table_sample") {
+    return 20;
+  }
+  if (input.detailLevel === "full_table") {
+    return 10_000;
   }
   return 50;
 }
@@ -6792,6 +7492,251 @@ function styleCopyRequestFromInput(metadata: WorkbookMetadata, input: AgentRunIn
   };
 }
 
+function styleCopyRequestsFromInput(metadata: WorkbookMetadata, input: AgentRunInput): StyleCopyRequest[] {
+  const values = input.values as Record<string, unknown> | undefined;
+  const rawEntries = values?.styleCopies ?? values?.copies ?? values?.entries;
+  if (!Array.isArray(rawEntries)) {
+    const request = styleCopyRequestFromInput(metadata, input);
+    return request ? [request] : [];
+  }
+  const requests: StyleCopyRequest[] = [];
+  for (const rawEntry of rawEntries) {
+    if (!rawEntry || typeof rawEntry !== "object") {
+      continue;
+    }
+    const entryValues = rawEntry as Record<string, unknown>;
+    const request = styleCopyRequestFromInput(metadata, { ...input, values: entryValues } as AgentRunInput);
+    if (request) {
+      requests.push(request);
+    }
+  }
+  return requests;
+}
+
+function shouldPreviewReplaceStyledTable(input: AgentRunInput): boolean {
+  const values = input.values as Record<string, unknown> | undefined;
+  return Boolean(
+    values
+    && Array.isArray(values.headers)
+    && (Array.isArray(values.row) || Array.isArray(values.rows))
+    && /\b(replace|rotate|headers?|table|field\/value|field\s+value|ocr|screenshot|extract(?:ed)?|form|invoice|shipment|manifest|booking|horizontal|template style|styled)\b/i.test(input.request)
+  );
+}
+
+function replaceStyledTablePlanFromInput(metadata: WorkbookMetadata, input: AgentRunInput): {
+  sheetName: string;
+  writeRange: string;
+  matrix: CellMatrix;
+  clearRanges: string[];
+  operations: ExcelOperation[];
+  styleCopies: StyleCopyRequest[];
+  changes: NonNullable<AgentRunOutput["changes"]>;
+} | undefined {
+  const values = input.values as Record<string, unknown> | undefined;
+  const headers = Array.isArray(values?.headers) ? values.headers.map((value) => String(value)) : [];
+  const rawRows = Array.isArray(values?.rows) ? values.rows : Array.isArray(values?.row) ? [values.row] : [];
+  const rows = rawRows.filter(Array.isArray) as unknown[][];
+  const sheetName = stringValue(input.target?.sheetName ?? values?.targetSheetName ?? values?.sheetName);
+  if (!sheetName || headers.length === 0 || rows.length === 0) {
+    return undefined;
+  }
+  const workbookId = metadata.workbook.workbookId as WorkbookId;
+  const matrix = [headers, ...rows.map((row) => headers.map((_header, index) => row[index] ?? null))] as CellMatrix;
+  const writeRange = normalizeOperationRange(metadata, sheetName, stringValue(input.target?.range ?? values?.targetAddress ?? values?.address ?? values?.range) ?? matrixRangeFromOrigin("A1", matrix.length, headers.length));
+  const operations: ExcelOperation[] = [];
+  const clearRanges = clearRangesFromReplaceInput(metadata, input, sheetName, writeRange);
+  for (const clearRange of clearRanges) {
+    operations.push({
+      kind: "range.clear",
+      operationId: makeId<OperationId>("op"),
+      workbookId,
+      destructiveLevel: "structure",
+      reason: input.request,
+      target: { workbookId, sheetName, address: clearRange },
+      applyTo: "all"
+    });
+  }
+  operations.push({
+    kind: "range.write_values",
+    operationId: makeId<OperationId>("op"),
+    workbookId,
+    destructiveLevel: "values",
+    reason: input.request,
+    target: { workbookId, sheetName, address: writeRange },
+    values: matrix,
+    preserveFormats: true
+  });
+  if (values?.autofit !== false) {
+    operations.push({
+      kind: "range.autofit_columns",
+      operationId: makeId<OperationId>("op"),
+      workbookId,
+      destructiveLevel: "format",
+      reason: input.request,
+      target: { workbookId, sheetName, address: writeRange }
+    });
+  }
+  const styleCopies = replaceStyledTableStyleCopies(metadata, input, sheetName, writeRange);
+  const changes: NonNullable<AgentRunOutput["changes"]> = [
+    ...clearRanges.map((range) => ({ sheetName, range, before: "existing values and stale formats", after: "cleared values and formats" })),
+    ...matrix.flatMap((row, rowIndex) => row.map((value, columnIndex) => ({
+      sheetName,
+      range: writeRange,
+      cell: cellAddressFor(writeRange, rowIndex, columnIndex),
+      after: value
+    }))),
+    ...styleCopies.map((request) => ({ sheetName: request.targetSheetName, ...(request.targetAddress ? { range: request.targetAddress } : {}), after: `copied style dimensions from ${request.sourceSheetName}` }))
+  ];
+  return { sheetName, writeRange, matrix, clearRanges, operations, styleCopies, changes };
+}
+
+function clearRangesFromReplaceInput(metadata: WorkbookMetadata, input: AgentRunInput, sheetName: string, writeRange: string): string[] {
+  const values = input.values as Record<string, unknown> | undefined;
+  const rawRanges = values?.clearRanges;
+  if (Array.isArray(rawRanges)) {
+    return rawRanges.flatMap((rawRange) => {
+      const range = typeof rawRange === "string"
+        ? rawRange
+        : rawRange && typeof rawRange === "object"
+          ? stringValue((rawRange as Record<string, unknown>).address ?? (rawRange as Record<string, unknown>).range)
+          : undefined;
+      return range ? [normalizeOperationRange(metadata, sheetName, range)] : [];
+    });
+  }
+  const clearRange = stringValue(values?.clearRange ?? values?.clearAddress);
+  if (clearRange) {
+    return [normalizeOperationRange(metadata, sheetName, clearRange)];
+  }
+  const used = usedRangeForSheet(metadata, sheetName);
+  return used && used !== writeRange ? [used] : [];
+}
+
+function replaceStyledTableStyleCopies(metadata: WorkbookMetadata, input: AgentRunInput, sheetName: string, writeRange: string): StyleCopyRequest[] {
+  const values = input.values as Record<string, unknown> | undefined;
+  const explicit = styleCopyRequestsFromInput(metadata, input);
+  if (explicit.length > 0) {
+    return explicit;
+  }
+  const headerSource = explicitRangeTarget(metadata, values?.headerStyleSource ?? values?.headerSource);
+  const bodySource = explicitRangeTarget(metadata, values?.bodyStyleSource ?? values?.bodySource);
+  const parsedTarget = rangeShape(writeRange);
+  if (!parsedTarget) {
+    return [];
+  }
+  const requests: StyleCopyRequest[] = [];
+  if (headerSource?.sheetName && headerSource.address) {
+    requests.push(...chunkStyleCopyRequests(metadata, headerSource.sheetName, headerSource.address, sheetName, rowsRange(writeRange, 1, 1), styleDimensionsFromInput(values)));
+  }
+  if (bodySource?.sheetName && bodySource.address && parsedTarget.rows > 1) {
+    requests.push(...chunkStyleCopyRequests(metadata, bodySource.sheetName, bodySource.address, sheetName, rowsRange(writeRange, 2, parsedTarget.rows - 1), styleDimensionsFromInput(values)));
+  }
+  return requests;
+}
+
+function chunkStyleCopyRequests(metadata: WorkbookMetadata, sourceSheetName: string, sourceAddress: string, targetSheetName: string, targetAddress: string, dimensions: StyleDimension[]): StyleCopyRequest[] {
+  const workbookId = metadata.workbook.workbookId as WorkbookId;
+  const source = rangeShape(normalizeOperationRange(metadata, sourceSheetName, sourceAddress));
+  const target = rangeShape(normalizeOperationRange(metadata, targetSheetName, targetAddress));
+  if (!source || !target) {
+    return [];
+  }
+  const sourceWidth = Math.max(1, source.columns);
+  const sourceHeight = Math.max(1, source.rows);
+  const requests: StyleCopyRequest[] = [];
+  for (let rowOffset = 0; rowOffset < target.rows; rowOffset += sourceHeight) {
+    const height = Math.min(sourceHeight, target.rows - rowOffset);
+    for (let columnOffset = 0; columnOffset < target.columns; columnOffset += sourceWidth) {
+      const width = Math.min(sourceWidth, target.columns - columnOffset);
+      requests.push({
+        workbookId,
+        sourceSheetName,
+        targetSheetName,
+        sourceAddress: addressFromBounds(source.startRow, source.startColumn, height, width),
+        targetAddress: addressFromBounds(target.startRow + rowOffset, target.startColumn + columnOffset, height, width),
+        dimensions
+      });
+    }
+  }
+  return requests;
+}
+
+function styleCopyDimensionIssue(request: StyleCopyRequest): string | undefined {
+  if (!request.sourceAddress || !request.targetAddress) {
+    return undefined;
+  }
+  const source = rangeShape(request.sourceAddress);
+  const target = rangeShape(request.targetAddress);
+  if (!source || !target) {
+    return undefined;
+  }
+  if (source.rows !== target.rows || source.columns !== target.columns) {
+    return `Style copy source and target ranges must have the same dimensions. Got source ${request.sourceSheetName}!${request.sourceAddress} (${source.rows}x${source.columns}) and target ${request.targetSheetName}!${request.targetAddress} (${target.rows}x${target.columns}).`;
+  }
+  return undefined;
+}
+
+function rangeShape(address: string): { startRow: number; startColumn: number; endRow: number; endColumn: number; rows: number; columns: number } | undefined {
+  const parsed = tryParseA1Address(stripSheetName(address));
+  if (!parsed) {
+    return undefined;
+  }
+  return {
+    startRow: parsed.startRow,
+    startColumn: parsed.startColumn,
+    endRow: parsed.endRow,
+    endColumn: parsed.endColumn,
+    rows: parsed.endRow - parsed.startRow + 1,
+    columns: parsed.endColumn - parsed.startColumn + 1
+  };
+}
+
+function matrixRangeFromOrigin(origin: string, rows: number, columns: number): string {
+  const parsed = tryParseA1Address(origin) ?? { startRow: 1, startColumn: 1, endRow: 1, endColumn: 1 };
+  return addressFromBounds(parsed.startRow, parsed.startColumn, rows, columns);
+}
+
+function rowsRange(address: string, oneBasedRowOffset: number, rowCount: number): string {
+  const parsed = rangeShape(address);
+  if (!parsed) {
+    return address;
+  }
+  const row = parsed.startRow + oneBasedRowOffset - 1;
+  return addressFromBounds(row, parsed.startColumn, rowCount, parsed.columns);
+}
+
+function addressFromBounds(startRow: number, startColumn: number, rows: number, columns: number): string {
+  const endRow = startRow + Math.max(1, rows) - 1;
+  const endColumn = startColumn + Math.max(1, columns) - 1;
+  return `${numberToColumn(startColumn)}${startRow}:${numberToColumn(endColumn)}${endRow}`;
+}
+
+function combineApplyResults(results: unknown[]) {
+  const objects = results.filter((result): result is Record<string, unknown> => Boolean(result) && typeof result === "object");
+  const failed = objects.find((result) => result.ok === false);
+  const backups = objects.flatMap((result) => {
+    if (Array.isArray(result.backups)) {
+      return result.backups.map(String);
+    }
+    const backupId = (result.backup as { backupId?: unknown } | undefined)?.backupId
+      ?? (result.backup as { backup?: { backupId?: unknown } } | undefined)?.backup?.backupId;
+    return backupId ? [String(backupId)] : [];
+  });
+  const warnings = objects.flatMap((result) => Array.isArray(result.warnings) ? result.warnings.map(String) : []);
+  const telemetry = {
+    stepCount: objects.length,
+    cellsWritten: objects.reduce((total, result) => total + (numberValue((result.telemetry as Record<string, unknown> | undefined)?.cellsWritten) ?? 0), 0),
+    styleCopyCount: objects.reduce((total, result) => total + (numberValue((result.telemetry as Record<string, unknown> | undefined)?.styleCopyCount) ?? 0), 0)
+  };
+  return {
+    ok: failed ? false : objects.every((result) => result.ok !== false),
+    backups,
+    rollbackAvailable: objects.some((result) => Boolean(result.rollbackAvailable)) || backups.length > 0,
+    warnings,
+    telemetry,
+    results: objects
+  };
+}
+
 function cleanRequestFromInput(metadata: WorkbookMetadata, input: AgentRunInput, resolved?: Extract<AgentTargetResolution, { ok: true }>): AgentCleanRequest | undefined {
   const values = input.values as Record<string, unknown> | undefined;
   const sheetName = stringValue(resolved?.sheetName ?? input.target?.sheetName ?? values?.sheetName);
@@ -7019,6 +7964,17 @@ function rangeCopyTypeFromInput(input: AgentRunInput): NonNullable<Extract<Excel
   return raw === "all" || raw === "values" || raw === "formats" || raw === "formulas" ? raw : "all";
 }
 
+function destructiveLevelForRangeCopy(input: AgentRunInput): Extract<ExcelOperation, { kind: "range.copy" }>["destructiveLevel"] {
+  const copyType = rangeCopyTypeFromInput(input);
+  if (copyType === "formats") {
+    return "format";
+  }
+  if (copyType === "all" || copyType === "formulas") {
+    return "structure";
+  }
+  return "values";
+}
+
 function dimensionsFromAddress(address: string): { rows: number; columns: number } | undefined {
   const range = tryParseA1Address(address);
   if (!range) {
@@ -7072,6 +8028,34 @@ function isSparseBroadWrite(address: string, values: CellMatrix): boolean {
   const nonEmpty = values.flat().filter((value) => value !== null && value !== undefined && value !== "").length;
   const touched = Math.max(matrixCells, cellCountFromAddress(address) ?? 0);
   return touched >= 8 && nonEmpty > 0 && nonEmpty / touched <= 0.25 && touched - nonEmpty >= 4;
+}
+
+function shouldBuildDetailedPreviewChanges(values: CellMatrix): boolean {
+  return matrixCellCount(values) <= AGENT_DETAILED_PREVIEW_CELL_LIMIT;
+}
+
+function previewChangesForMatrix(sheetName: string, range: string, values: CellMatrix, before: CellMatrix, forceSummary = false): NonNullable<AgentRunOutput["changes"]> {
+  if (forceSummary || !shouldBuildDetailedPreviewChanges(values)) {
+    return [{
+      sheetName,
+      range,
+      before: "omitted for large preview",
+      after: {
+        kind: "range_write_summary",
+        rowCount: values.length,
+        columnCount: values.reduce((max, row) => Math.max(max, row.length), 0),
+        cellCount: matrixCellCount(values),
+        sample: values.slice(0, 3).map((row) => row.slice(0, 6))
+      }
+    }];
+  }
+  return values.flatMap((row, rowIndex) => row.map((value, columnIndex) => ({
+    sheetName,
+    cell: cellAddressFor(range, rowIndex, columnIndex),
+    range,
+    before: before[rowIndex]?.[columnIndex],
+    after: value
+  })));
 }
 
 function uniqueProofFromChanges(changes: NonNullable<AgentRunOutput["changes"]>): AgentProofReference[] {

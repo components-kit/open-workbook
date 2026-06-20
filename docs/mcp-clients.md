@@ -18,13 +18,13 @@ Open Workbook is client-neutral. Any MCP-capable agent UI can launch the same co
 Install the Excel skill with skills.sh:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel
+npx skills add components-kit/open-workbook --skill open-workbook-skills
 ```
 
 For OpenCode global install:
 
 ```bash
-npx skills add components-kit/open-workbook --skill open-workbook-excel -a opencode -g -y
+npx skills add components-kit/open-workbook --skill open-workbook-skills -a opencode -g -y
 ```
 
 ## Source Checkout
