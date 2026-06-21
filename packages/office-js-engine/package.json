@@ -1,6 +1,6 @@
 {
   "name": "@components-kit/open-workbook-office-js-engine",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "description": "Office.js engine interfaces and defaults for Open Workbook Excel execution.",
   "license": "MIT",
   "type": "module",

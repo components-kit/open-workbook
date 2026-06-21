@@ -42,6 +42,8 @@ When the caller LLM can infer routing, pass structured fields alongside the natu
 - `target`: explicit `sheetName`, `range`, `tableName`, named item, region, or returned `candidateId`.
 - `values`: 2D values, formulas, styles, table rows, patches, template data, backup IDs, or confirmation data.
 
+For mutations, do not put the write payload only in `request`. Send structured data: `write_values` needs `target.sheetName`, `target.range`, and `values.values` as a 2D matrix; table appends use `values.rows`; multi-range edits use `values.patches`.
+
 Use `detailLevel` conservatively: `workbook_summary` for metadata-only workbook context, `semantic_index` for role-aware workbook targets/candidates, `sheet_summary` for “look at/check/how is this sheet” overview requests without live cell reads, `table_sample` for a bounded live table sample, and `full_table` only when the user explicitly asks for all rows, every value, or full table contents.
 
 For multilingual requests, preserve the original language in `request`, normalize routing fields to canonical English when clear, keep target hints in the workbook/user language, and answer the user in their language unless asked otherwise. Do not translate the whole task into English and discard the original wording.

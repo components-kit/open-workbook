@@ -303,6 +303,14 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+## [0.1.19] - 2026-06-21
+
+### Fixed
+
+- Fixed `apply_update` responses being rejected by strict MCP clients after successful workbook mutations by declaring invalidated workbook context and resource handles in the MCP output schema.
+- Improved mutation preview diagnostics so agents that embed rows only in request text are told to send structured `values` payloads.
+- Updated OpenCode and Open Workbook skill guidance for structured `write_values` payloads and top-level `operationId`/`confirmationToken` apply calls.
+
 ## [0.1.18] - 2026-06-20
 
 ### Added
@@ -632,6 +640,8 @@ When the caller LLM can infer routing, pass structured fields alongside the natu
 - `target`: explicit `sheetName`, `range`, `tableName`, named item, region, or returned `candidateId`.
 - `values`: 2D values, formulas, styles, table rows, patches, template data, backup IDs, or confirmation data.
 
+For mutations, do not put the write payload only in `request`. Send structured data: `write_values` needs `target.sheetName`, `target.range`, and `values.values` as a 2D matrix; table appends use `values.rows`; multi-range edits use `values.patches`.
+
 Use `detailLevel` conservatively: `workbook_summary` for metadata-only workbook context, `semantic_index` for role-aware workbook targets/candidates, `sheet_summary` for “look at/check/how is this sheet” overview requests without live cell reads, `table_sample` for a bounded live table sample, and `full_table` only when the user explicitly asks for all rows, every value, or full table contents.
 
 For multilingual requests, preserve the original language in `request`, normalize routing fields to canonical English when clear, keep target hints in the workbook/user language, and answer the user in their language unless asked otherwise. Do not translate the whole task into English and discard the original wording.
@@ -854,8 +864,9 @@ Avoid prompts that require workbook-wide scans unless the user asked for audit, 
 ## Writing Data
 
 - Use `mode: "preview_update"` for user-reviewable edits.
-- Use `mode: "apply_update"` once with the returned `operationId` and `confirmationToken`.
+- Use `mode: "apply_update"` once with the returned top-level `operationId` and top-level `confirmationToken`; do not put the token inside `values`.
 - For one small explicit value edit, `mode: "auto"` may apply safely after backend checks.
+- For `write_values`, send `target.sheetName`, `target.range`, and `values.values` as a 2D matrix; row data embedded only in `request` is not used for safe writes.
 - For related range edits, send one `values.patches` preview and one apply call.
 - For range inspection, use `read_range_compact`, `get_range_summary`, `read_hyperlinks`, `read_comments`, `read_notes`, `read_merged_cells`, `read_data_validation`, `read_conditional_formatting`, `search_range`, `find_blank_cells`, or `find_range_errors` in answer mode with a concrete range.
 - For formulas, use `intent.action: "write_formulas"` and formula matrices beginning with `=`.
@@ -2916,6 +2927,15 @@ excel.agent.run mode=preview_update request="Change Sales!E2 to Reviewed"
 excel.agent.run mode=apply_update request="Apply the previewed update"
 excel.agent.run mode=operation_status request="Check a pending operation" operationId="..."
 ```
+
+For direct range writes, send the cell values in the structured `values` field, not only in the request text:
+
+```text
+excel.agent.run mode=preview_update intent.action=write_values target.sheetName=Booking target.range=A3:X7 values.values=[[46198,46198,"2X20'GP","2X20'GP","SC89","Loading at Rayong Factory",20,"2X20'GP","RAYONG DEPOT KM.5","STAFF2","038-123456","TER 3","STAFF2","038-654321","EVERGREEN V.123","27/6/26","EVERGREEN","SINGAPORE (SGSIN)","036GX11111","21/6/26","22/6/26","24/6/26","Before 12:00","Standard handling"]]
+excel.agent.run mode=apply_update operationId="..." confirmationToken="..."
+```
+
+Pass `operationId` and `confirmationToken` as top-level tool arguments for `apply_update`; do not put the token in `values`.
 
 For related edits across multiple ranges, send one grouped preview using `values.patches` and then apply that returned operation once. Do not issue one preview/apply pair per zone, column group, or row block unless the grouped apply returns a hard failure with actionable issue details.
 

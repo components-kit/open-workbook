@@ -61,6 +61,15 @@ excel.agent.run mode=apply_update request="Apply the previewed update"
 excel.agent.run mode=operation_status request="Check a pending operation" operationId="..."
 ```
 
+For direct range writes, send the cell values in the structured `values` field, not only in the request text:
+
+```text
+excel.agent.run mode=preview_update intent.action=write_values target.sheetName=Booking target.range=A3:X7 values.values=[[46198,46198,"2X20'GP","2X20'GP","SC89","Loading at Rayong Factory",20,"2X20'GP","RAYONG DEPOT KM.5","STAFF2","038-123456","TER 3","STAFF2","038-654321","EVERGREEN V.123","27/6/26","EVERGREEN","SINGAPORE (SGSIN)","036GX11111","21/6/26","22/6/26","24/6/26","Before 12:00","Standard handling"]]
+excel.agent.run mode=apply_update operationId="..." confirmationToken="..."
+```
+
+Pass `operationId` and `confirmationToken` as top-level tool arguments for `apply_update`; do not put the token in `values`.
+
 For related edits across multiple ranges, send one grouped preview using `values.patches` and then apply that returned operation once. Do not issue one preview/apply pair per zone, column group, or row block unless the grouped apply returns a hard failure with actionable issue details.
 
 For booking images or OCR-extracted client screenshots that need fields rotated into headers/values and styled like an existing sheet, send one `preview_update` with `intent.action: "replace_range_with_styled_table"`, structured `values`, and any style source ranges. Apply the returned operation once. Do not split the task into separate clear, write, autofit, and style calls.

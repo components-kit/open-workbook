@@ -3,6 +3,46 @@ import { AgentOrchestrator } from "./agent-orchestrator.js";
 import { FakeAgentRuntime, createCachedMetadata, selectionInfo, sheets } from "./agent-orchestrator.test-support.js";
 
 describe("AgentOrchestrator Preview Apply Safety", () => {
+  it("requires structured values for write previews even when request text includes rows", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: `Add 2 mockup rows to the Report sheet at range Report!A3:B4.
+
+Data rows:
+["A", "B"]
+["C", "D"]`,
+        mode: "preview_update",
+        intent: { action: "write_values" },
+        target: { sheetName: "Report", range: "Report!A3:B4" }
+      });
+
+      expect(preview.status).toBe("NEEDS_INPUT");
+      expect(preview.summary).toContain("Preview needs structured values");
+      expect(preview.summary).toContain("rows embedded in request text");
+      expect(preview.nextAction).toBe("ask_user");
+      expect(preview.warnings).toContain("Mutation payloads must be supplied in the structured values field, such as values.values, values.rows, or values.patches.");
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
+  it("reports missing structured values before target ambiguity for write previews", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Write rows into the report",
+        mode: "preview_update",
+        intent: { action: "write_values" }
+      });
+
+      expect(preview.status).toBe("NEEDS_INPUT");
+      expect(preview.summary).toContain("Preview needs structured values");
+      expect(preview.nextAction).toBe("ask_user");
+      expect(preview.candidates?.length).toBeGreaterThan(0);
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
   it("requires preview confirmation token before apply", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);

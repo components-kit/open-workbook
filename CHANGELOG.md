@@ -6,6 +6,14 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+## [0.1.19] - 2026-06-21
+
+### Fixed
+
+- Fixed `apply_update` responses being rejected by strict MCP clients after successful workbook mutations by declaring invalidated workbook context and resource handles in the MCP output schema.
+- Improved mutation preview diagnostics so agents that embed rows only in request text are told to send structured `values` payloads.
+- Updated OpenCode and Open Workbook skill guidance for structured `write_values` payloads and top-level `operationId`/`confirmationToken` apply calls.
+
 ## [0.1.18] - 2026-06-20
 
 ### Added

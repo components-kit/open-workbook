@@ -92,6 +92,8 @@ function agentRunOutputSchema() {
     candidates: z.array(z.any()).optional(),
     proof: z.array(z.any()),
     resourceLinks: z.array(z.any()),
+    invalidatedContextIds: z.array(z.string()).optional(),
+    invalidatedResourceUris: z.array(z.string()).optional(),
     continuation: z.object({
       workbookContextId: z.string().optional(),
       operationId: z.string().optional(),

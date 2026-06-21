@@ -7525,11 +7525,11 @@ function resolveUpdateTarget(metadata: WorkbookMetadata, input: AgentRunInput):
     const candidates = findAgentCandidates(metadata, input).slice(0, 5);
     return {
       ok: false,
-      status: candidates.length > 0 ? "AMBIGUOUS_TARGET" : "NEEDS_INPUT",
-      summary: "Preview needs values and a resolvable workbook target.",
+      status: "NEEDS_INPUT",
+      summary: "Preview needs structured values; rows embedded in request text are not used for safe writes.",
       ...(candidates.length > 0 ? { candidates } : {}),
-      nextAction: candidates.length > 0 ? "call_with_target" : "ask_user",
-      warnings: []
+      nextAction: "ask_user",
+      warnings: ["Mutation payloads must be supplied in the structured values field, such as values.values, values.rows, or values.patches."]
     };
   }
   const resolved = resolveAgentUpdateTarget(metadata, input);

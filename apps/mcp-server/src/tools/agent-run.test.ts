@@ -28,4 +28,11 @@ describe("excel.agent.run MCP schema", () => {
     expect(source).toContain("metadataPolicy");
     expect(source).toContain("readPolicy");
   });
+
+  it("allows cache invalidation fields returned after successful applies", () => {
+    const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("invalidatedContextIds");
+    expect(source).toContain("invalidatedResourceUris");
+  });
 });

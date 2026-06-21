@@ -70,8 +70,9 @@ Avoid prompts that require workbook-wide scans unless the user asked for audit, 
 ## Writing Data
 
 - Use `mode: "preview_update"` for user-reviewable edits.
-- Use `mode: "apply_update"` once with the returned `operationId` and `confirmationToken`.
+- Use `mode: "apply_update"` once with the returned top-level `operationId` and top-level `confirmationToken`; do not put the token inside `values`.
 - For one small explicit value edit, `mode: "auto"` may apply safely after backend checks.
+- For `write_values`, send `target.sheetName`, `target.range`, and `values.values` as a 2D matrix; row data embedded only in `request` is not used for safe writes.
 - For related range edits, send one `values.patches` preview and one apply call.
 - For range inspection, use `read_range_compact`, `get_range_summary`, `read_hyperlinks`, `read_comments`, `read_notes`, `read_merged_cells`, `read_data_validation`, `read_conditional_formatting`, `search_range`, `find_blank_cells`, or `find_range_errors` in answer mode with a concrete range.
 - For formulas, use `intent.action: "write_formulas"` and formula matrices beginning with `=`.
