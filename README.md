@@ -193,6 +193,8 @@ node packages/cli/dist/index.js sideload manifest --out open-workbook.xml
 node packages/cli/dist/index.js sideload manifest --development --out open-workbook-local.xml
 ```
 
+The current test strategy and next coverage lanes are documented in [Test Strategy](docs/test-strategy.md).
+
 ## Agent Instructions
 
 Open Workbook includes generic agent instruction source for fast, reliable live Excel automation through the MCP surface:

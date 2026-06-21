@@ -221,6 +221,8 @@ node packages/cli/dist/index.js sideload manifest --out open-workbook.xml
 node packages/cli/dist/index.js sideload manifest --development --out open-workbook-local.xml
 ```
 
+The current test strategy and next coverage lanes are documented in [Test Strategy](docs/test-strategy.md).
+
 ## Agent Instructions
 
 Open Workbook includes generic agent instruction source for fast, reliable live Excel automation through the MCP surface:
@@ -1544,17 +1546,17 @@ The protocol package owns the public MCP tool contract and the internal backend 
 
 This keeps agents on one deterministic workflow surface while still letting backend orchestration compose Excel capabilities internally.
 
-Backend capability modules group the internal Excel catalog by operational domain under `apps/backend/src/capabilities`. The registry maps every cataloged capability to its backend domain, implementation owner, optional runtime facade method, agent handler, host operation dependency, stateful manager dependency, and colocated unit test file. `apps/backend/src/excel-capabilities.ts` remains a compatibility wrapper over this registry. The grouping is a planning and test inventory; it does not mean every internal capability is currently routable through `excel.agent.run`. MCP is a thin adapter over `excel.agent.run`; primitive Excel capabilities are not registered as MCP tools.
+Backend capability modules group the internal Excel catalog by operational domain under `apps/backend/src/capabilities`. The registry maps every cataloged capability to its backend domain, implementation owner, optional runtime facade method, agent handler, host operation dependency, stateful manager dependency, and registry contract test file. `apps/backend/src/excel-capabilities.ts` remains a compatibility wrapper over this registry. The grouping is a planning and test inventory; it does not mean every internal capability is currently routable through `excel.agent.run`. MCP is a thin adapter over `excel.agent.run`; primitive Excel capabilities are not registered as MCP tools.
 
-Add-in host operation modules mirror that grouping under `apps/excel-addin/src/host`. The host registry maps every add-in JSON-RPC method to an implementation owner, related backend capabilities, batch operation kinds when applicable, host dependency class, and colocated unit test file. Backend registry tests verify declared host methods exist in the add-in registry so capability metadata cannot drift silently from the Office.js bridge.
+Add-in host operation modules mirror that grouping under `apps/excel-addin/src/host`. The host registry maps every add-in JSON-RPC method to an implementation owner, related backend capabilities, batch operation kinds when applicable, host dependency class, and registry contract test file. Backend registry tests verify declared host methods exist in the add-in registry so capability metadata cannot drift silently from the Office.js bridge.
 
 Capability coverage planning is tracked separately from public exposure. Each internal capability has an agent status (`agent_entrypoint`, `agent_action_handler`, or `internal_capability`) and a planning status (`covered`, `needs_unit_contract`, `future_orchestration_candidate`, `host_limited`, or `defer`). Run `corepack pnpm capabilities:report` for a grouped Markdown report. The matrix is for engineering planning only and does not enable additional agent routes.
 
 ## Backend Test Layout
 
-Backend tests are grouped by behavior instead of keeping orchestration and runtime coverage in monolithic files. Agent orchestration tests cover prepare/cache, read/answer routing, target resolution, preview/apply safety, and structured intent routing. Runtime service tests cover persistence, transactions/jobs, capabilities/session readiness, range/table behavior, pivot/chart behavior, backups/native file bridge, and locks/tasks. Capability domain tests live beside their domain files in `apps/backend/src/capabilities/domains/*.test.ts`, and the registry test verifies all 306 cataloged capabilities have exactly one backend registry entry and a colocated unit test file. Shared fake runtimes and helper fixtures live in `*.test-support.ts` files so new tests can target the closest subsystem without adding new public MCP tools or expanding orchestration coverage by accident.
+Backend tests are grouped by behavior instead of keeping orchestration and runtime coverage in monolithic files. Agent orchestration tests cover prepare/cache, read/answer routing, target resolution, preview/apply safety, and structured intent routing. Runtime service tests cover persistence, transactions/jobs, capabilities/session readiness, range/table behavior, pivot/chart behavior, backups/native file bridge, and locks/tasks. The capability registry test verifies all 306 cataloged capabilities have exactly one backend registry entry and valid metadata, but it is not operation behavior coverage. Shared fake runtimes and helper fixtures live in `*.test-support.ts` files so new tests can target the closest subsystem without adding new public MCP tools or expanding orchestration coverage by accident.
 
-Add-in host tests live beside grouped host modules in `apps/excel-addin/src/host/*.test.ts`. They validate registry coverage and dispatch metadata without requiring a live Excel process; live Office.js behavior remains covered by focused executor tests and e2e workflows as those paths are extracted further.
+Add-in host tests currently centralize registry and dispatch metadata checks in `apps/excel-addin/src/host/registry.test.ts`, with version behavior covered separately. Live Office.js behavior remains covered by focused executor tests and e2e workflows as those paths are extracted further. See `docs/test-strategy.md` for the target operation, MCP contract, and scenario lanes.
 
 ---
 
@@ -2763,10 +2765,9 @@ Capability-unavailable responses are preferred over simulated success when Offic
 
 - `corepack pnpm verify` passes. This runs build, tests, and synthetic core benchmarks.
 - `corepack pnpm test:e2e` passes before release-gate E2E claims. This runs the default agent surface smoke, default agent workflow smoke, and `test:e2e:agent:core`.
-- `corepack pnpm test:e2e:report` is reviewed when changing E2E coverage policy. It documents release, quality, and live-host lanes but is not part of the default gate.
 - `corepack pnpm test:e2e:agent-surface` passes before default MCP exposure claims. It validates that default `tools/list` exposes only `excel.agent.run` and that status mode returns structured telemetry without Excel.
 - `corepack pnpm test:e2e:agent-workflow` passes before token-saving agent workflow claims. It validates metadata cache reuse, bounded find payloads, targeted answer reads, preview confirmation tokens, apply, and validate on a fake Excel host.
-- `corepack pnpm test:e2e:office-agent:behavior` is reviewed before changing default-surface office workflow guidance. It is logging-first and produces behavior reports from the production office-agent scenario fixture, covering connection, workbook overview, targeting, sheet/table reads, comparisons, formula safety, edits, token guards, multilingual prompts, and multi-step workflows without acting as a release gate.
+- `corepack pnpm test:e2e:office-agent:behavior` is reviewed before changing default-surface office workflow guidance. It calls MCP directly without a real LLM and produces behavior reports from the production office-agent scenario fixture, covering connection, workbook overview, targeting, sheet/table reads, comparisons, formula safety, edits, token guards, multilingual prompts, and multi-step workflows without acting as a release gate.
 - `corepack pnpm test:e2e:agent:core` passes with the default signed-in Codex model (`gpt-5.4-mini`) before large-workbook or multi-agent agent-safety claims. It validates skill-guided decisions for large table reorder/filter/sort/append/update and lock/conflict handling.
 - `corepack pnpm test:e2e:agent:quality` is reviewed before complex workflow quality claims. It is report-only by default and covers sheet/formula creation, formula repair, snapshot/diff/rollback preview, template/style repair, and pivot/chart decisions.
 - `corepack pnpm test:e2e:agent:quality:compare` is reviewed before comparing cheap-model baseline quality with a frontier model. Set `OPEN_WORKBOOK_E2E_CHEAP_MODEL` and `OPEN_WORKBOOK_E2E_FRONTIER_MODEL` to control the profiles.
@@ -3135,7 +3136,6 @@ corepack pnpm verify
 
 ```bash
 corepack pnpm test:e2e
-corepack pnpm test:e2e:report
 corepack pnpm test:e2e:agent-surface
 corepack pnpm test:e2e:agent-workflow
 corepack pnpm test:e2e:office-agent:behavior

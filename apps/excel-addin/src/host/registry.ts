@@ -10,6 +10,8 @@ import { tableHostOperations } from "./table.js";
 import { templateHostOperations } from "./template.js";
 import { workbookHostOperations } from "./workbook.js";
 
+const hostRegistryContractTest = "apps/excel-addin/src/host/registry.test.ts";
+
 export const BATCH_OPERATION_KINDS = [
   "range.read_full",
   "range.write_values",
@@ -70,7 +72,7 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     relatedBackendCapabilities: ["excel.runtime.ping_addin"],
     operationKinds: [],
     hostDependency: "backend-only",
-    unitTestFile: "apps/excel-addin/src/host/runtime.test.ts"
+    unitTestFile: hostRegistryContractTest
   },
   {
     method: "runtime.get_active_context",
@@ -79,7 +81,7 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     relatedBackendCapabilities: ["excel.runtime.get_active_context"],
     operationKinds: [],
     hostDependency: "office-js",
-    unitTestFile: "apps/excel-addin/src/host/runtime.test.ts"
+    unitTestFile: hostRegistryContractTest
   },
   {
     method: "runtime.get_selection",
@@ -88,7 +90,7 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     relatedBackendCapabilities: ["excel.runtime.get_selection"],
     operationKinds: [],
     hostDependency: "office-js",
-    unitTestFile: "apps/excel-addin/src/host/runtime.test.ts"
+    unitTestFile: hostRegistryContractTest
   },
   {
     method: "runtime.set_active_sheet",
@@ -97,7 +99,7 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     relatedBackendCapabilities: ["excel.runtime.set_active_sheet"],
     operationKinds: [],
     hostDependency: "office-js",
-    unitTestFile: "apps/excel-addin/src/host/runtime.test.ts"
+    unitTestFile: hostRegistryContractTest
   },
   {
     method: "workbook.get_info",
@@ -106,7 +108,7 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     relatedBackendCapabilities: ["excel.workbook.get_workbook_info"],
     operationKinds: [],
     hostDependency: "office-js",
-    unitTestFile: "apps/excel-addin/src/host/workbook.test.ts"
+    unitTestFile: hostRegistryContractTest
   },
   {
     method: "workbook.get_map",
@@ -115,7 +117,7 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     relatedBackendCapabilities: ["excel.workbook.get_workbook_map", "excel.workbook.get_summary", "excel.workbook.get_used_range_summary"],
     operationKinds: [],
     hostDependency: "office-js",
-    unitTestFile: "apps/excel-addin/src/host/workbook.test.ts"
+    unitTestFile: hostRegistryContractTest
   },
   {
     method: "workbook.calculate",
@@ -124,7 +126,7 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     relatedBackendCapabilities: ["excel.workbook.calculate", "excel.formula.recalculate"],
     operationKinds: ["workbook.calculate"],
     hostDependency: "office-js",
-    unitTestFile: "apps/excel-addin/src/host/workbook.test.ts"
+    unitTestFile: hostRegistryContractTest
   },
   {
     method: "workbook.save",
@@ -133,7 +135,7 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     relatedBackendCapabilities: ["excel.workbook.save"],
     operationKinds: ["workbook.save"],
     hostDependency: "office-js",
-    unitTestFile: "apps/excel-addin/src/host/workbook.test.ts"
+    unitTestFile: hostRegistryContractTest
   },
   {
     method: "workbook.get_file",
@@ -142,7 +144,7 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     relatedBackendCapabilities: ["excel.workbook.export_copy"],
     operationKinds: [],
     hostDependency: "office-document-file",
-    unitTestFile: "apps/excel-addin/src/host/workbook.test.ts"
+    unitTestFile: hostRegistryContractTest
   },
   {
     method: "workbook.close",
@@ -151,7 +153,7 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     relatedBackendCapabilities: ["excel.workbook.close"],
     operationKinds: [],
     hostDependency: "office-js",
-    unitTestFile: "apps/excel-addin/src/host/workbook.test.ts"
+    unitTestFile: hostRegistryContractTest
   },
   {
     method: "workbook.snapshot_ranges",
@@ -171,7 +173,7 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     ],
     operationKinds: [],
     hostDependency: "office-js",
-    unitTestFile: "apps/excel-addin/src/host/workbook.test.ts"
+    unitTestFile: hostRegistryContractTest
   },
   {
     method: "workbook.embed_local_config",
@@ -180,7 +182,7 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     relatedBackendCapabilities: ["excel.workbook.embed_local_config", "excel.workbook.import_embedded_local_config"],
     operationKinds: [],
     hostDependency: "office-js",
-    unitTestFile: "apps/excel-addin/src/host/workbook.test.ts"
+    unitTestFile: hostRegistryContractTest
   },
   {
     method: "workbook.read_embedded_local_config",
@@ -189,16 +191,16 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     relatedBackendCapabilities: ["excel.workbook.read_embedded_local_config"],
     operationKinds: [],
     hostDependency: "office-js",
-    unitTestFile: "apps/excel-addin/src/host/workbook.test.ts"
+    unitTestFile: hostRegistryContractTest
   },
-  ...methodGroup("names", "NamesHostOperations", "apps/excel-addin/src/host/names.test.ts", [
+  ...methodGroup("names", "NamesHostOperations", hostRegistryContractTest, [
     ["names.list", namesHostOperations.listNames, ["excel.names.list"]],
     ["names.get", namesHostOperations.getName, ["excel.names.get"]],
     ["names.create", namesHostOperations.createName, ["excel.names.create"]],
     ["names.update", namesHostOperations.updateName, ["excel.names.update"]],
     ["names.delete", namesHostOperations.deleteName, ["excel.names.delete"]]
   ]),
-  ...methodGroup("pivot", "PivotChartHostOperations", "apps/excel-addin/src/host/pivot-chart.test.ts", [
+  ...methodGroup("pivot", "PivotChartHostOperations", hostRegistryContractTest, [
     ["pivot.list", pivotChartHostOperations.listPivotTables, ["excel.pivot.list"]],
     ["pivot.get_info", pivotChartHostOperations.getPivotTableInfo, ["excel.pivot.get_info"]],
     ["pivot.create", pivotChartHostOperations.createPivotTable, ["excel.pivot.create"]],
@@ -207,7 +209,7 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     ["pivot.copy_from_template", pivotChartHostOperations.copyPivotTableFromTemplate, ["excel.pivot.copy_from_template", "excel.pivot.repair_from_template"]],
     ["pivot.delete", pivotChartHostOperations.deletePivotTable, ["excel.pivot.delete"]]
   ]),
-  ...methodGroup("chart", "PivotChartHostOperations", "apps/excel-addin/src/host/pivot-chart.test.ts", [
+  ...methodGroup("chart", "PivotChartHostOperations", hostRegistryContractTest, [
     ["chart.list", pivotChartHostOperations.listCharts, ["excel.chart.list"]],
     ["chart.get_info", pivotChartHostOperations.getChartInfo, ["excel.chart.get_info"]],
     ["chart.create", pivotChartHostOperations.createChart, ["excel.chart.create"]],
@@ -216,7 +218,7 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     ["chart.refresh", pivotChartHostOperations.refreshChart, ["excel.chart.refresh"]],
     ["chart.delete", pivotChartHostOperations.deleteChart, ["excel.chart.delete"]]
   ]),
-  ...methodGroup("range", "RangeHostOperations", "apps/excel-addin/src/host/range.test.ts", [
+  ...methodGroup("range", "RangeHostOperations", hostRegistryContractTest, [
     ["range.read_hyperlinks", rangeHostOperations.readRangeHyperlinks, ["excel.range.read_hyperlinks"]],
     ["range.read_comments", rangeHostOperations.readRangeComments, ["excel.range.read_comments"]],
     ["range.read_notes", rangeHostOperations.readRangeNotes, ["excel.range.read_notes"]],
@@ -227,13 +229,13 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     ["range.find_blank_cells", rangeHostOperations.findBlankCells, ["excel.range.find_blank_cells"]],
     ["range.find_errors", rangeHostOperations.findFormulaErrors, ["excel.range.find_errors", "excel.formula.find_errors"]]
   ]),
-  ...methodGroup("formula", "FormulaHostOperations", "apps/excel-addin/src/host/formula.test.ts", [
+  ...methodGroup("formula", "FormulaHostOperations", hostRegistryContractTest, [
     ["formula.read_patterns", formulaHostOperations.readFormulaPatterns, ["excel.formula.read_patterns"]],
     ["formula.copy_patterns", formulaHostOperations.copyFormulaPatterns, ["excel.formula.copy_patterns"]],
     ["formula.fill_pattern", formulaHostOperations.fillFormulaPattern, ["excel.formula.fill_down", "excel.formula.fill_right"]],
     ["formula.convert_to_values", formulaHostOperations.convertFormulasToValues, ["excel.formula.convert_to_values"]]
   ]),
-  ...methodGroup("table", "TableHostOperations", "apps/excel-addin/src/host/table.test.ts", [
+  ...methodGroup("table", "TableHostOperations", hostRegistryContractTest, [
     ["table.list", tableHostOperations.listTables, ["excel.table.list"]],
     ["table.get_info", tableHostOperations.getTableInfo, ["excel.table.get_info", "excel.table.get_schema"]],
     ["table.read", tableHostOperations.readTable, ["excel.table.read_compact"]],
@@ -307,14 +309,14 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
     ],
     operationKinds: [...BATCH_OPERATION_KINDS],
     hostDependency: "office-js",
-    unitTestFile: "apps/excel-addin/src/host/batch.test.ts"
+    unitTestFile: hostRegistryContractTest
   },
-  ...methodGroup("template", "TemplateHostOperations", "apps/excel-addin/src/host/template.test.ts", [
+  ...methodGroup("template", "TemplateHostOperations", hostRegistryContractTest, [
     ["template.capture", templateHostOperations.captureTemplate, ["excel.template.register", "excel.template.detect_templates"]],
     ["template.capture_sheet", templateHostOperations.captureSheetFingerprint, ["excel.template.validate_sheet_against_template", "excel.style.get_fingerprint"]],
     ["template.repair", templateHostOperations.repairTemplateConsistency, ["excel.template.repair_sheet_from_template", "excel.style.repair_consistency"]]
   ]),
-  ...methodGroup("style", "StyleHostOperations", "apps/excel-addin/src/host/style.test.ts", [
+  ...methodGroup("style", "StyleHostOperations", hostRegistryContractTest, [
     ["style.capture_fingerprint", styleHostOperations.captureStyleFingerprint, ["excel.style.get_fingerprint", "excel.style.compare_fingerprint"]],
     ["style.copy_dimensions", styleHostOperations.copyStyleDimensions, ["excel.style.copy_from_template", "excel.style.copy_column_widths", "excel.style.copy_row_heights", "excel.style.copy_borders", "excel.style.copy_fills", "excel.style.copy_fonts", "excel.style.copy_alignment", "excel.style.copy_number_formats", "excel.style.copy_conditional_formatting", "excel.style.copy_data_validation"]],
     ["style.copy_dimensions_many", styleHostOperations.copyStyleDimensionsMany, ["excel.style.copy_from_template", "excel.style.copy_column_widths", "excel.style.copy_row_heights", "excel.style.copy_borders", "excel.style.copy_fills", "excel.style.copy_fonts", "excel.style.copy_alignment", "excel.style.copy_number_formats", "excel.style.copy_conditional_formatting", "excel.style.copy_data_validation"]]

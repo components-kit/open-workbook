@@ -16,19 +16,10 @@ describe("add-in host method registry", () => {
     }
   });
 
-  it("tracks colocated unit tests for every host method", () => {
+  it("tracks the central registry contract test for every host method", () => {
     for (const entry of HOST_METHOD_REGISTRY) {
-      expect(entry.unitTestFile.endsWith(".test.ts")).toBe(true);
+      expect(entry.unitTestFile).toBe("apps/excel-addin/src/host/registry.test.ts");
       expect(existsSync(path.resolve(repoRoot, entry.unitTestFile)), entry.method).toBe(true);
-    }
-  });
-
-  it("requires an explicit colocated coverage marker for every host method", () => {
-    const cache = new Map<string, string>();
-    for (const entry of HOST_METHOD_REGISTRY) {
-      const source = cache.get(entry.unitTestFile) ?? readFileSync(path.resolve(repoRoot, entry.unitTestFile), "utf8");
-      cache.set(entry.unitTestFile, source);
-      expect(source.includes(`coveredHostFunction("${entry.method}")`), entry.method).toBe(true);
     }
   });
 

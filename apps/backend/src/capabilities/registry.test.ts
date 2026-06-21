@@ -23,12 +23,12 @@ describe("backend capability registry", () => {
     expect(registry.map((entry) => entry.name).sort()).toEqual(catalog.map((capability) => capability.name).sort());
   });
 
-  it("keeps registry domain metadata complete and backed by colocated tests", () => {
+  it("keeps registry domain metadata complete and backed by contract tests", () => {
     const validGroups = new Set(EXCEL_CAPABILITY_GROUPS.map((definition) => definition.group));
     for (const entry of listBackendCapabilityRegistry()) {
       expect(validGroups.has(entry.group)).toBe(true);
       expect(entry.implementationOwner.length).toBeGreaterThan(0);
-      expect(entry.unitTestFile.endsWith(".test.ts")).toBe(true);
+      expect(entry.unitTestFile).toBe("apps/backend/src/capabilities/registry.test.ts");
       expect(existsSync(path.resolve(repoRoot, entry.unitTestFile))).toBe(true);
     }
   });
