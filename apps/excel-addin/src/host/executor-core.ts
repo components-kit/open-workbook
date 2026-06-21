@@ -1304,6 +1304,16 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
             counters.cellsWritten += payload.compiled.estimatedCellsTouched;
             break;
           }
+          case "range.write_data_validation": {
+            applyDataValidation(getRange(context, operation.target), operation.validation);
+            counters.cellsWritten += payload.compiled.estimatedCellsTouched;
+            break;
+          }
+          case "range.write_conditional_formatting": {
+            applyConditionalFormatting(getRange(context, operation.target), operation.rule);
+            counters.cellsWritten += payload.compiled.estimatedCellsTouched;
+            break;
+          }
           case "range.clear_style_dimensions": {
             clearRangeStyleDimensions(getRange(context, operation.target), operation.target, operation.dimensions);
             counters.cellsWritten += payload.compiled.estimatedCellsTouched;
@@ -1373,19 +1383,24 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
             counters.cellsWritten += payload.compiled.estimatedCellsTouched;
             break;
           }
+          case "range.reorder_columns": {
+            await reorderRangeColumns(context, operation.target, operation.columnOrder);
+            counters.cellsWritten += payload.compiled.estimatedCellsTouched;
+            break;
+          }
           case "range.insert_rows":
           case "range.insert_columns": {
-            getRange(context, operation.target).insert(
-              operation.kind === "range.insert_rows" ? Excel.InsertShiftDirection.down : Excel.InsertShiftDirection.right
-            );
+            const range = getRange(context, operation.target);
+            const insertTarget = operation.kind === "range.insert_columns" ? range.getEntireColumn() : range.getEntireRow();
+            insertTarget.insert(operation.kind === "range.insert_rows" ? Excel.InsertShiftDirection.down : Excel.InsertShiftDirection.right);
             counters.cellsWritten += payload.compiled.estimatedCellsTouched;
             break;
           }
           case "range.delete_rows":
           case "range.delete_columns": {
-            getRange(context, operation.target).delete(
-              operation.kind === "range.delete_rows" ? Excel.DeleteShiftDirection.up : Excel.DeleteShiftDirection.left
-            );
+            const range = getRange(context, operation.target);
+            const deleteTarget = operation.kind === "range.delete_columns" ? range.getEntireColumn() : range.getEntireRow();
+            deleteTarget.delete(operation.kind === "range.delete_rows" ? Excel.DeleteShiftDirection.up : Excel.DeleteShiftDirection.left);
             counters.cellsWritten += payload.compiled.estimatedCellsTouched;
             break;
           }
@@ -1568,14 +1583,14 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
     };
     return operationResult;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeOfficeError(error);
     return {
       ok: false,
       rollbackAvailable: payload.compiled.requiredBackups.length > 0,
       backups: [],
       warnings,
       telemetry: createTelemetry(started, counters, warnings),
-      error: runtimeError("OPERATION_FAILED", message, { retryable: false })
+      error: runtimeError("OPERATION_FAILED", message, { retryable: false, details: officeErrorDetails(error) })
     };
   }
 }
@@ -2913,6 +2928,117 @@ function applyRangeStyle(range: Excel.Range, style: NonNullable<RangeSnapshot["s
   }
 }
 
+function applyDataValidation(
+  range: Excel.Range,
+  validation: Extract<ExcelOperation, { kind: "range.write_data_validation" }>["validation"]
+): void {
+  if (validation.type !== "list") {
+    throw new Error(`Unsupported data validation type: ${validation.type}`);
+  }
+  const source = Array.isArray(validation.source) ? validation.source.join(",") : validation.source;
+  range.dataValidation.rule = {
+    list: {
+      inCellDropDown: validation.inCellDropDown ?? true,
+      source
+    }
+  };
+  range.dataValidation.ignoreBlanks = validation.ignoreBlanks ?? true;
+  if (validation.prompt) {
+    const prompt: Excel.DataValidationPrompt = {
+      showPrompt: validation.prompt.showPrompt ?? true,
+      title: validation.prompt.title ?? "",
+      message: validation.prompt.message ?? ""
+    };
+    range.dataValidation.prompt = prompt;
+  }
+  if (validation.errorAlert) {
+    const errorAlert: Excel.DataValidationErrorAlert = {
+      showAlert: validation.errorAlert.showAlert ?? true,
+      style: Excel.DataValidationAlertStyle.stop,
+      title: validation.errorAlert.title ?? "",
+      message: validation.errorAlert.message ?? ""
+    };
+    if (validation.errorAlert.style !== undefined) errorAlert.style = validation.errorAlert.style as Excel.DataValidationAlertStyle;
+    range.dataValidation.errorAlert = errorAlert;
+  }
+}
+
+function applyConditionalFormatting(
+  range: Excel.Range,
+  rule: Extract<ExcelOperation, { kind: "range.write_conditional_formatting" }>["rule"]
+): void {
+  if (rule.type !== "custom") {
+    throw new Error(`Unsupported conditional formatting rule type: ${rule.type}`);
+  }
+  const conditionalFormat = range.conditionalFormats.add(Excel.ConditionalFormatType.custom);
+  const custom = conditionalFormat.custom;
+  (custom as unknown as { rule: { formula: string } }).rule = { formula: rule.formula };
+  applyConditionalFormatStyle(custom.format, rule.style);
+}
+
+function applyConditionalFormatStyle(format: Excel.ConditionalRangeFormat, style: NonNullable<RangeSnapshot["style"]>): void {
+  if (style.fillColor) {
+    format.fill.color = style.fillColor;
+  }
+  if (style.fontColor) {
+    format.font.color = style.fontColor;
+  }
+  if (style.fontBold !== undefined) {
+    format.font.bold = style.fontBold;
+  }
+  if (style.fontItalic !== undefined) {
+    format.font.italic = style.fontItalic;
+  }
+}
+
+async function reorderRangeColumns(
+  context: Excel.RequestContext,
+  target: A1Range,
+  columnOrder: Array<string | number>
+): Promise<void> {
+  const range = getRange(context, target);
+  range.load("rowCount,columnCount");
+  await context.sync();
+
+  const sourceIndexes = resolveColumnOrder(columnOrder, range.columnCount);
+  if (sourceIndexes.length !== range.columnCount) {
+    throw new Error("Column order must resolve to every column in the target range exactly once.");
+  }
+
+  const scratchSheet = context.workbook.worksheets.add(`__owb_reorder_${Date.now().toString(36)}`);
+  const originalRange = scratchSheet.getRangeByIndexes(0, 0, range.rowCount, range.columnCount);
+  const reorderedRange = scratchSheet.getRangeByIndexes(0, range.columnCount + 1, range.rowCount, range.columnCount);
+  originalRange.copyFrom(range, Excel.RangeCopyType.all);
+  for (const [targetIndex, sourceIndex] of sourceIndexes.entries()) {
+    reorderedRange.getColumn(targetIndex).copyFrom(originalRange.getColumn(sourceIndex), Excel.RangeCopyType.all);
+  }
+  range.copyFrom(reorderedRange, Excel.RangeCopyType.all);
+  scratchSheet.delete();
+}
+
+function resolveColumnOrder(columnOrder: Array<string | number>, columnCount: number): number[] {
+  const indexes = columnOrder.map((item) => {
+    if (typeof item === "number" && Number.isInteger(item)) {
+      return item >= 1 ? item - 1 : item;
+    }
+    if (typeof item === "string" && /^[A-Za-z]+$/.test(item.trim())) {
+      return columnNameToIndex(item.trim());
+    }
+    const parsed = typeof item === "string" ? Number.parseInt(item, 10) : NaN;
+    return Number.isInteger(parsed) ? parsed - 1 : -1;
+  });
+  const seen = new Set(indexes);
+  return indexes.every((index) => index >= 0 && index < columnCount) && seen.size === columnCount ? indexes : [];
+}
+
+function columnNameToIndex(columnName: string): number {
+  let index = 0;
+  for (const char of columnName.toUpperCase()) {
+    index = index * 26 + (char.charCodeAt(0) - 64);
+  }
+  return index - 1;
+}
+
 function clearRangeStyleDimensions(range: Excel.Range, target: A1Range, dimensions: string[]): void {
   const dimensionSet = new Set(dimensions);
   if (dimensionSet.has("borders")) {
@@ -3272,6 +3398,39 @@ function createTelemetry(started: number, counters: ExecutionCounters, warnings:
     engineName: ENGINE_NAME,
     engineVersion: ENGINE_VERSION,
     warningCount: warnings.length
+  };
+}
+
+function describeOfficeError(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    const message = typeof record.message === "string" ? record.message : undefined;
+    const code = typeof record.code === "string" ? record.code : undefined;
+    if (message && code) return `${code}: ${message}`;
+    if (message) return message;
+    if (code) return code;
+    try {
+      return JSON.stringify(record);
+    } catch {
+      return Object.prototype.toString.call(error);
+    }
+  }
+  return String(error);
+}
+
+function officeErrorDetails(error: unknown): Record<string, unknown> {
+  if (!error || typeof error !== "object") {
+    return {};
+  }
+  const record = error as Record<string, unknown>;
+  return {
+    ...(typeof record.name === "string" ? { name: record.name } : {}),
+    ...(typeof record.code === "string" ? { code: record.code } : {}),
+    ...(typeof record.message === "string" ? { message: record.message } : {}),
+    ...(record.debugInfo && typeof record.debugInfo === "object" ? { debugInfo: record.debugInfo } : {})
   };
 }
 

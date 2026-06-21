@@ -129,6 +129,8 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "A2:B2" });
       expect((result.answer as any).shape).toEqual({ rows: 1, columns: 2 });
+      expect((result.answer as any).valuesPreview).toEqual([["20/6/26", "20/6/26"]]);
+      expect((result.answer as any).previewRange).toBe("A2:B2");
     });
 
   it("diagnoses date-like text formatting issues on the exact range", async () => {
@@ -167,6 +169,81 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(runtime.runtimeMethodCalls["style.get_fingerprint"]).toBe(1);
     });
 
+  it("infers style summary reads from auto-mode styling questions", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Read the style summary of the Data sheet. Tell me about fonts, colors, borders, alignment, fills, and number formats.",
+        target: { sheetName: "Data", range: "A1:D4" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("style_summary");
+      expect((result.answer as any).fills).toEqual({ hash: "fills" });
+      expect(result.nextAction).toBe("answer_now");
+      expect(result.telemetry.routeMode).toBe("answer");
+      expect(result.telemetry.workflowRoute).toBe("style.inspect");
+      expect(runtime.runtimeMethodCalls["style.get_fingerprint"]).toBe(1);
+    });
+
+  it("keeps compact style summaries useful and retrieves full result handles", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.getStyleFingerprint = async (request: any) => {
+        runtime.runtimeMethodCalls["style.get_fingerprint"] = (runtime.runtimeMethodCalls["style.get_fingerprint"] ?? 0) + 1;
+        return {
+          ok: true,
+          fingerprint: {
+            workbookId: request.workbookId,
+            sheetName: request.sheetName,
+            address: request.address,
+            rowCount: 7,
+            columnCount: 24,
+            dimensions: {
+              fills: { hash: "fills", samples: Array.from({ length: 60 }, (_, index) => ({ index, color: `#00${String(index).padStart(4, "0")}` })) },
+              fonts: { hash: "fonts", samples: Array.from({ length: 60 }, (_, index) => ({ index, name: "Aptos", bold: index === 0 })) },
+              borders: { hash: "borders", samples: Array.from({ length: 60 }, (_, index) => ({ index, style: "Continuous" })) },
+              alignment: { hash: "alignment", horizontal: "Center" },
+              numberFormats: { hash: "numberFormats", samples: Array.from({ length: 60 }, (_, index) => ({ index, format: "General" })) }
+            },
+            warnings: []
+          }
+        };
+      };
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Read the existing styles on the Data sheet.",
+        mode: "answer",
+        intent: { action: "read_style_summary" },
+        target: { sheetName: "Data", range: "A1:X7" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("style_summary");
+      expect((result.answer as any).fills.hash).toBe("fills");
+      expect((result.answer as any).fills.samples).toHaveLength(5);
+      expect((result.answer as any).fills.samplesTruncated).toBe(true);
+      expect((result.answer as any).resultUri).toMatch(/^excel:\/\/agent\/results\/agentres_/);
+      expect(result.continuation?.fullResultUri).toMatch(/\?view=full$/);
+
+      const callsAfterRead = runtime.runtimeMethodCalls["style.get_fingerprint"];
+      const full = await agent.run({
+        request: "I need the full uncompacted style summary for Data!A1:X7 including fonts, colors, borders, alignment, fills, and number formats.",
+        continuation: {
+          resultUri: result.continuation!.resultUri!,
+          fullResultUri: result.continuation!.fullResultUri!,
+          responseMode: "verbose"
+        }
+      });
+
+      expect(full.status).toBe("SUCCESS");
+      expect((full.answer as any).kind).toBe("agent_result_resource");
+      expect((full.answer as any).view).toBe("full");
+      expect((full.answer as any).result.answer.fills.samples).toHaveLength(60);
+      expect(runtime.runtimeMethodCalls["style.get_fingerprint"]).toBe(callsAfterRead);
+    });
+
   it("uses compact table reads for table-target value answers", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -191,6 +268,7 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).kind).toBe("table_compact_read");
       expect((result.answer as any).values).toBeUndefined();
+      expect((result.answer as any).valuesPreview).toEqual([[123, "Open"], [456, "Closed"]]);
       expect((result.answer as any).resultUri).toMatch(/^excel:\/\/agent\/results\/agentres_/);
       expect((result.answer as any).fullResultUri).toMatch(/\?view=full$/);
       expect(result.continuation).toMatchObject({

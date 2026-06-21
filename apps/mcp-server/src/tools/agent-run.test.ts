@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { AGENT_DETAIL_LEVELS, AGENT_INTENT_ACTIONS } from "@components-kit/open-workbook-protocol";
+import { agentRunInputSchema } from "./agent-run.js";
 
 describe("excel.agent.run MCP schema", () => {
   it("accepts operation lifecycle statuses returned by the backend", () => {
@@ -34,5 +35,31 @@ describe("excel.agent.run MCP schema", () => {
 
     expect(source).toContain("invalidatedContextIds");
     expect(source).toContain("invalidatedResourceUris");
+  });
+
+  it("normalizes JSON-string structured fields from lenient MCP clients", () => {
+    const schema = agentRunInputSchema();
+
+    expect((schema.target as any).parse("{\"sheetName\":\"Booking\",\"range\":\"A1:X7\"}")).toEqual({ sheetName: "Booking", range: "A1:X7" });
+    expect((schema.intent as any).parse("{\"action\":\"read_values\",\"targetHints\":[\"Booking\"]}")).toEqual({ action: "read_values", targetHints: ["Booking"] });
+    expect((schema.continuation as any).parse("{\"workbookContextId\":\"wbctx_1\",\"fullResultUri\":\"excel://agent/results/agentres_1?view=full\"}")).toEqual({
+      workbookContextId: "wbctx_1",
+      fullResultUri: "excel://agent/results/agentres_1?view=full"
+    });
+    expect((schema.values as any).parse({
+      patches: [
+        {
+          target: "{\"sheetName\":\"Booking\",\"range\":\"A1:B2\"}",
+          values: [[1, 2]]
+        }
+      ]
+    })).toEqual({
+      patches: [
+        {
+          target: { sheetName: "Booking", range: "A1:B2" },
+          values: [[1, 2]]
+        }
+      ]
+    });
   });
 });

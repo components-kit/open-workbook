@@ -625,7 +625,7 @@ export class AgentOrchestrator {
         proof: [],
         resourceLinks: [resource],
         nextAction: "answer_now",
-        warnings: view === "summary" ? ["Full result detail remains behind fullResultUri; fetch it only when the user explicitly needs full detail."] : []
+        warnings: view === "summary" ? ["Full result detail remains behind fullResultUri; call excel.agent.run with that handle when full detail is explicitly needed. Do not use webfetch for excel:// handles."] : []
       };
     }
     if (handle.kind === "semantic_index") {
@@ -792,6 +792,7 @@ export class AgentOrchestrator {
       return this.tableCompactAnswerOutput(metadata, input, requestedMode, resolved, table, runMetrics);
     }
     const profile = await this.readAndProfileRange(metadata.workbook.workbookId as WorkbookId, resolved.sheetName, normalizedRange, runMetrics);
+    const inlinePreview = inlinePreviewForProfile(input, profile, normalizedRange);
     const aggregate = aggregateProfileForRequest(input, profile, adjustedTarget.column);
     if (aggregate) {
       return {
@@ -813,7 +814,7 @@ export class AgentOrchestrator {
       mode: requestedMode,
       workbookContextId: metadata.workbookContextId,
       summary: `Answered from ${resolved.candidate.label} on ${resolved.sheetName} using a targeted compact read.`,
-      answer: profile,
+      answer: { ...profile, ...inlinePreview },
       metrics: profile.metrics,
       candidates: candidates.slice(0, 5),
       proof: [{ sheetName: resolved.sheetName, range: normalizedRange, label: adjustedTarget.column?.name ?? resolved.candidate.label }],
@@ -1166,6 +1167,7 @@ export class AgentOrchestrator {
     const payload = compactTablePayloadFromResult(result);
     const matrix = payload.values ?? payload.text ?? payload.formulas ?? [];
     const profile = profileValues(matrix as CellMatrix, table.dataRange ?? table.range);
+    const inlinePreview = inlinePreviewForMatrix(input, matrix as CellMatrix, table.dataRange ?? table.range);
     const totalRows = dimensionsFromAddress(table.dataRange ?? table.range)?.rows ?? profile.shape.rows;
     const projectedColumns = columns.length > 0
       ? table.columns.filter((column) => columns.includes(column.name) || columns.includes(column.index)).map((column) => ({ name: column.name, index: column.index, letter: column.letter }))
@@ -1190,6 +1192,7 @@ export class AgentOrchestrator {
         ...(truncated ? { nextPage: { rowOffset: rowOffset + rowLimit } } : {}),
         schema: table.columns.map((column) => ({ name: column.name, index: column.index, letter: column.letter, inferredType: column.inferredType })),
         profile,
+        ...inlinePreview,
         ...(payload.headers ? { headers: payload.headers } : {}),
         ...(payload.values ? { values: payload.values } : {}),
         ...(payload.formulas ? { formulas: payload.formulas } : {}),
@@ -1351,7 +1354,7 @@ export class AgentOrchestrator {
     requestedMode: AgentRunMode,
     runMetrics: AgentRunMetrics
   ): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
-    const action = intentAction(input);
+    const action = intentAction(input) ?? (runMetrics.route.workflowRoute === "style.inspect" ? "read_style_summary" : undefined);
     const workbookId = metadata.workbook.workbookId as WorkbookId;
     if (action === "read_style_summary") {
       const resolved = resolveAgentReadTarget(metadata, input);
@@ -1912,8 +1915,21 @@ export class AgentOrchestrator {
         warnings: resolved.warnings
       };
     }
+    const rawValues = input.values as Record<string, unknown> | undefined;
+    if (rawValues?.validation && intentAction(input) !== "write_data_validation") {
+      return {
+        status: "NEEDS_INPUT",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: "Data validation rules must use intent.action write_data_validation; they cannot be applied through generic value writes.",
+        proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "validation target" }],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "call_preview_update",
+        warnings: ["Use values.validation.source or values.options with intent.action write_data_validation."]
+      };
+    }
     const matrix = objectToCellMatrix(input.values ?? {});
-    if (containsFormulaLikeValue(matrix) && (intentAction(input) === "write_formulas" || isFormulaMutationRequest(input.request))) {
+    if (containsFormulaLikeValue(matrix) && intentAction(input) !== "write_conditional_formatting" && (intentAction(input) === "write_formulas" || isFormulaMutationRequest(input.request))) {
       return this.previewFormulaUpdate(metadata, input, requestedMode, resolved, matrix);
     }
     if ((intentAction(input) === "append_table_rows" || isTableAppendIntent(input.request)) && resolved.candidate.kind === "table") {
@@ -1931,7 +1947,7 @@ export class AgentOrchestrator {
         warnings: ["Sparse/null-padded broad writes are blocked by the agent workflow."]
       };
     }
-    if (containsFormulaLikeValue(matrix)) {
+    if (containsFormulaLikeValue(matrix) && intentAction(input) !== "write_conditional_formatting") {
       return {
         status: "VALIDATION_FAILED",
         mode: requestedMode,
@@ -2343,8 +2359,14 @@ export class AgentOrchestrator {
         return this.previewRangeCopyMove(metadata, input, requestedMode, "copy");
       case "move_range":
         return this.previewRangeCopyMove(metadata, input, requestedMode, "move");
+      case "reorder_range_columns":
+        return resolved ? this.previewRangeColumnReorder(metadata, input, requestedMode, resolved) : undefined;
       case "write_styles_many":
         return this.previewWriteStylesMany(metadata, input, requestedMode);
+      case "write_data_validation":
+        return resolved ? this.previewWriteDataValidation(metadata, input, requestedMode, resolved) : undefined;
+      case "write_conditional_formatting":
+        return resolved ? this.previewWriteConditionalFormatting(metadata, input, requestedMode, resolved) : undefined;
       case "insert_rows":
         return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, "range.insert_rows") : undefined;
       case "delete_rows":
@@ -3099,6 +3121,96 @@ export class AgentOrchestrator {
     );
   }
 
+  private previewWriteDataValidation(
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode,
+    resolved: Extract<AgentTargetResolution, { ok: true }>
+  ): Omit<AgentRunOutput, "telemetry"> {
+    const workbookId = metadata.workbook.workbookId as WorkbookId;
+    const validation = dataValidationFromInput(input);
+    if (!validation) {
+      return workbookLevelNeedsInput(metadata, requestedMode, "Data validation writes need values.validation.source or values.options for the dropdown list.");
+    }
+    const operation: ExcelOperation = {
+      kind: "range.write_data_validation",
+      operationId: makeId<OperationId>("op"),
+      workbookId,
+      destructiveLevel: "format",
+      reason: input.request,
+      target: { workbookId, sheetName: resolved.sheetName, address: resolved.range },
+      validation
+    };
+    return this.previewBatchOperation(
+      metadata,
+      requestedMode,
+      [operation],
+      [{ sheetName: resolved.sheetName, range: resolved.range, after: "data validation updated" }],
+      `Prepared data validation update on ${resolved.sheetName}!${resolved.range}.`,
+      { kind: "write_data_validation_preview", sheetName: resolved.sheetName, range: resolved.range, validation }
+    );
+  }
+
+  private previewWriteConditionalFormatting(
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode,
+    resolved: Extract<AgentTargetResolution, { ok: true }>
+  ): Omit<AgentRunOutput, "telemetry"> {
+    const workbookId = metadata.workbook.workbookId as WorkbookId;
+    const rule = conditionalFormattingRuleFromInput(input);
+    if (!rule) {
+      return workbookLevelNeedsInput(metadata, requestedMode, "Conditional formatting writes need values.rule.formula and values.rule.style, or values.formula plus values.style.");
+    }
+    const operation: ExcelOperation = {
+      kind: "range.write_conditional_formatting",
+      operationId: makeId<OperationId>("op"),
+      workbookId,
+      destructiveLevel: "format",
+      reason: input.request,
+      target: { workbookId, sheetName: resolved.sheetName, address: resolved.range },
+      rule
+    };
+    return this.previewBatchOperation(
+      metadata,
+      requestedMode,
+      [operation],
+      [{ sheetName: resolved.sheetName, range: resolved.range, after: { conditionalFormatting: rule } }],
+      `Prepared conditional formatting update on ${resolved.sheetName}!${resolved.range}.`,
+      { kind: "write_conditional_formatting_preview", sheetName: resolved.sheetName, range: resolved.range, rule }
+    );
+  }
+
+  private previewRangeColumnReorder(
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode,
+    resolved: Extract<AgentTargetResolution, { ok: true }>
+  ): Omit<AgentRunOutput, "telemetry"> {
+    const workbookId = metadata.workbook.workbookId as WorkbookId;
+    const columnOrder = columnOrderFromInput(input);
+    if (columnOrder.length === 0) {
+      return workbookLevelNeedsInput(metadata, requestedMode, "Column reorder needs values.columnOrder with every target column exactly once.");
+    }
+    const operation: ExcelOperation = {
+      kind: "range.reorder_columns",
+      operationId: makeId<OperationId>("op"),
+      workbookId,
+      destructiveLevel: "structure",
+      reason: input.request,
+      target: { workbookId, sheetName: resolved.sheetName, address: resolved.range },
+      columnOrder
+    };
+    return this.previewBatchOperation(
+      metadata,
+      requestedMode,
+      [operation],
+      [{ sheetName: resolved.sheetName, range: resolved.range, after: { columnOrder } }],
+      `Prepared column reorder on ${resolved.sheetName}!${resolved.range}.`,
+      { kind: "range.reorder_columns_preview", sheetName: resolved.sheetName, range: resolved.range, columnOrder }
+    );
+  }
+
   private previewBatchOperation(metadata: WorkbookMetadata, requestedMode: AgentRunMode, operations: ExcelOperation[], changes: NonNullable<AgentRunOutput["changes"]>, summary: string, answer: unknown): Omit<AgentRunOutput, "telemetry"> {
     const pending = this.createPendingOperation(metadata, {
       action: { kind: "batch", operations },
@@ -3555,7 +3667,7 @@ export class AgentOrchestrator {
     if (/\b(clear|remove|delete|wipe)\b/i.test(input.request) && styleDimensionsFromAgentInput(input).length > 0) {
       return this.previewClearStyleDimensions(metadata, input, requestedMode, resolved);
     }
-    const style = styleFromRequest(input.request);
+    const style = styleFromInput(input);
     const redirect = this.fragmentationRedirect(metadata, requestedMode, {
       family: "format_range",
       workbookContextId: metadata.workbookContextId,
@@ -3604,6 +3716,29 @@ export class AgentOrchestrator {
     resolved: Extract<AgentTargetResolution, { ok: true }>,
     action: AgentCleanMutationAction
   ): Omit<AgentRunOutput, "telemetry"> {
+    const requests = cleanPatchRequestsFromInput(metadata, input, resolved);
+    if (requests.length > 0) {
+      const pending = this.createPendingOperation(metadata, {
+        action: { kind: "clean.transform_many", action, requests },
+        changes: requests.map((request) => ({ sheetName: request.sheetName, range: cleanOutputAddress(request), after: `cleaned with ${action}` })),
+        summary: `Prepared cleaning operation ${action} across ${requests.length} exact range(s).`
+      });
+      return {
+        status: "PREVIEW_READY",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        operationId: pending.operationId,
+        confirmationToken: pending.confirmationToken,
+        summary: pending.summary,
+        answer: { kind: "cleaning_preview", action, requests, grouped: true, rangeCount: requests.length },
+        metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched", groupedOperationCount: requests.length },
+        changes: pending.changes,
+        proof: requests.slice(0, 5).map((request) => ({ sheetName: request.sheetName, range: request.address, label: "cleaning target" })),
+        resourceLinks: [operationResource(String(pending.operationId))],
+        nextAction: "call_apply_update",
+        warnings: []
+      };
+    }
     const request = cleanRequestFromInput(metadata, input, resolved);
     if (!request) {
       return tableNeedsInput(metadata, requestedMode, resolved, "Cleaning updates need a concrete sheet and range target.");
@@ -4346,6 +4481,8 @@ export class AgentOrchestrator {
         return this.runtime.repairStyleFromTemplate(pending.action.request);
       case "clean.transform":
         return this.applyCleanMutation(pending.action.action, pending.action.request);
+      case "clean.transform_many":
+        return this.applyCleanMutations(pending.action.action, pending.action.requests);
       case "workbook.snapshot":
         return this.runtime.createWorkbookSnapshot(pending.action.request);
       case "workbook.create_backup":
@@ -4458,6 +4595,14 @@ export class AgentOrchestrator {
       case "merge_columns":
         return this.runtime.cleanMergeColumns(request as AgentCleanRequest & { columnIndexes: number[]; targetAddress: string });
     }
+  }
+
+  private async applyCleanMutations(action: AgentCleanMutationAction, requests: AgentCleanRequest[]) {
+    const results = [];
+    for (const request of requests) {
+      results.push(await this.applyCleanMutation(action, request));
+    }
+    return combineApplyResults(results);
   }
 
   private async rollback(input: AgentRunInput): Promise<Omit<AgentRunOutput, "telemetry">> {
@@ -6215,16 +6360,186 @@ function isDateLikeText(value: unknown): value is string {
   return typeof value === "string" && /^\s*\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s*$/.test(value);
 }
 
-function styleFromRequest(request: string) {
+function styleFromInput(input: AgentRunInput): NonNullable<RangeSnapshot["style"]> {
+  const values = input.values as Record<string, unknown> | undefined;
+  const structured = normalizeStyleRecord(values?.style);
+  const flattened = normalizeStyleRecord(values);
+  const requested = styleFromRequest(input.request);
+  return { ...requested, ...flattened, ...structured };
+}
+
+function normalizeStyleRecord(value: unknown): NonNullable<RangeSnapshot["style"]> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  const record = value as Record<string, unknown>;
+  const fillColor = colorString(record.fillColor ?? record.fill ?? record.backgroundColor ?? record.background);
+  const fontColor = colorString(record.fontColor ?? record.textColor);
+  const style: NonNullable<RangeSnapshot["style"]> = {};
+  if (fillColor !== undefined) style.fillColor = fillColor;
+  if (fontColor !== undefined) style.fontColor = fontColor;
+  const fontBold = booleanValue(record.fontBold ?? record.bold);
+  if (fontBold !== undefined) style.fontBold = fontBold;
+  const fontItalic = booleanValue(record.fontItalic ?? record.italic);
+  if (fontItalic !== undefined) style.fontItalic = fontItalic;
+  const fontName = stringValue(record.fontName);
+  if (fontName !== undefined) style.fontName = fontName;
+  const fontSize = numberValue(record.fontSize);
+  if (fontSize !== undefined) style.fontSize = fontSize;
+  const horizontalAlignment = stringValue(record.horizontalAlignment ?? record.align);
+  if (horizontalAlignment !== undefined) style.horizontalAlignment = horizontalAlignment;
+  const verticalAlignment = stringValue(record.verticalAlignment);
+  if (verticalAlignment !== undefined) style.verticalAlignment = verticalAlignment;
+  const rowHeight = numberValue(record.rowHeight);
+  if (rowHeight !== undefined) style.rowHeight = rowHeight;
+  const columnWidth = numberValue(record.columnWidth);
+  if (columnWidth !== undefined) style.columnWidth = columnWidth;
+  const borders = record.borders && typeof record.borders === "object"
+    ? record.borders as NonNullable<RangeSnapshot["style"]>["borders"]
+    : undefined;
+  if (borders !== undefined) {
+    style.borders = borders;
+  }
+  return style;
+}
+
+function styleFromRequest(request: string): NonNullable<RangeSnapshot["style"]> {
   const lower = request.toLowerCase();
+  const fillColor =
+    /\b(fill|background|highlight|turn|make|set|color|colour)\b/.test(lower)
+      ? colorNearContext(lower, ["fill", "background", "highlight"]) ?? colorFromText(lower, ["fill", "background", "highlight", "turn", "make", "set", "color", "colour"])
+      : undefined;
+  const fontColor =
+    /\b(font|text)\b/.test(lower)
+      ? colorNearContext(lower, ["font", "text"]) ?? colorFromText(lower, ["font", "text"])
+      : undefined;
   return {
-    ...(lower.includes("header") ? { fontBold: true, fillColor: "#D9EAF7", fontColor: "#1F2937", horizontalAlignment: "center" } : {}),
+    ...(lower.includes("header") ? {
+      fontBold: true,
+      ...(fillColor ? {} : { fillColor: "#D9EAF7" }),
+      ...(fontColor || fillColor ? {} : { fontColor: "#1F2937" }),
+      horizontalAlignment: "center"
+    } : {}),
+    ...(fillColor ? { fillColor } : {}),
+    ...(fontColor ? { fontColor } : fillColor === "#000000" ? { fontColor: "#FFFFFF" } : {}),
     ...(/\bbold\b/.test(lower) ? { fontBold: true } : {}),
     ...(/\bitalic\b/.test(lower) ? { fontItalic: true } : {}),
     ...(/\bborders?\b/.test(lower) && /\b(add|apply|draw|thin|outline|all sides?)\b/.test(lower)
       ? { borders: { style: "continuous" as const, weight: "thin" as const } }
       : {})
   };
+}
+
+function colorString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) return trimmed.toUpperCase();
+  return colorFromText(trimmed.toLowerCase());
+}
+
+function colorFromText(text: string, contextWords?: string[]): string | undefined {
+  const hex = text.match(/#[0-9a-fA-F]{6}/)?.[0];
+  if (hex) return hex.toUpperCase();
+  const colorMap: Record<string, string> = {
+    black: "#000000",
+    white: "#FFFFFF",
+    yellow: "#FFFF00",
+    red: "#FF0000",
+    green: "#00B050",
+    blue: "#0070C0",
+    gray: "#808080",
+    grey: "#808080",
+    orange: "#FFC000"
+  };
+  for (const [name, color] of Object.entries(colorMap)) {
+    if (!new RegExp(`\\b${name}\\b`).test(text)) continue;
+    if (!contextWords || contextWords.some((word) => new RegExp(`\\b${word}\\b`).test(text))) {
+      return color;
+    }
+  }
+  return undefined;
+}
+
+function colorNearContext(text: string, contextWords: string[]): string | undefined {
+  const colors = ["black", "white", "yellow", "red", "green", "blue", "gray", "grey", "orange"];
+  let best: { color: string; distance: number } | undefined;
+  for (const context of contextWords) {
+    for (const contextMatch of text.matchAll(new RegExp(`\\b${context}\\b`, "g"))) {
+      for (const color of colors) {
+        for (const colorMatch of text.matchAll(new RegExp(`\\b${color}\\b`, "g"))) {
+          const distance = Math.abs((colorMatch.index ?? 0) - (contextMatch.index ?? 0));
+          if (distance <= 40 && (!best || distance < best.distance)) {
+            best = { color, distance };
+          }
+        }
+      }
+    }
+  }
+  return best ? colorFromText(best.color) : undefined;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function dataValidationFromInput(input: AgentRunInput): Extract<ExcelOperation, { kind: "range.write_data_validation" }>["validation"] | undefined {
+  const values = input.values as Record<string, unknown> | undefined;
+  const validation = values?.validation && typeof values.validation === "object" ? values.validation as Record<string, unknown> : undefined;
+  const source = validation?.source ?? validation?.formula1 ?? values?.source ?? values?.options ?? values?.allowedValues;
+  const options = Array.isArray(source)
+    ? source.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
+    : typeof source === "string"
+      ? source.split(",").map((item) => item.trim()).filter(Boolean)
+      : optionsFromRequest(input.request);
+  if (options.length === 0) {
+    return undefined;
+  }
+  return {
+    type: "list",
+    source: options,
+    inCellDropDown: booleanValue(validation?.inCellDropDown ?? values?.inCellDropDown) ?? true,
+    ignoreBlanks: booleanValue(validation?.ignoreBlanks ?? values?.ignoreBlanks) ?? true
+  };
+}
+
+function optionsFromRequest(request: string): string[] {
+  const including = request.match(/\b(?:including|include|values?|options?|allowed values?)[:\s]+([^.;]+)/i)?.[1];
+  if (!including) {
+    return [];
+  }
+  return including.split(/,|\bor\b/i).map((item) => item.trim()).filter((item) => /^[A-Za-z0-9' -]+$/.test(item));
+}
+
+function conditionalFormattingRuleFromInput(input: AgentRunInput): Extract<ExcelOperation, { kind: "range.write_conditional_formatting" }>["rule"] | undefined {
+  const values = input.values as Record<string, unknown> | undefined;
+  const rawRule = values?.rule && typeof values.rule === "object" ? values.rule as Record<string, unknown> : undefined;
+  const formula = stringValue(rawRule?.formula ?? values?.formula) ?? formulaFromRequest(input.request);
+  const style = normalizeStyleRecord(rawRule?.style ?? values?.style ?? values);
+  if (!formula || Object.keys(style).length === 0) {
+    return undefined;
+  }
+  return { type: "custom", formula, style };
+}
+
+function formulaFromRequest(request: string): string | undefined {
+  const explicit = request.match(/=\s*[^.。\n]+/)?.[0]?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const fortyHq = request.match(/\b40HQ\b/i);
+  const column = request.match(/\b(?:column|col)\s+([A-Z])\b/i)?.[1] ?? request.match(/\$([A-Z])\d+/)?.[1];
+  if (fortyHq && column) {
+    return `=$${column.toUpperCase()}2="40HQ"`;
+  }
+  return undefined;
+}
+
+function columnOrderFromInput(input: AgentRunInput): Array<string | number> {
+  const values = input.values as Record<string, unknown> | undefined;
+  const raw = values?.columnOrder ?? values?.columns ?? values?.order;
+  return Array.isArray(raw)
+    ? raw.filter((item): item is string | number => typeof item === "string" || typeof item === "number")
+    : [];
 }
 
 function styleDimensionsFromAgentInput(input: AgentRunInput): StyleDimension[] {
@@ -6302,16 +6617,18 @@ function styleEntriesFromInput(
       const entry = rawEntry as Record<string, unknown>;
       const sheetName = stringValue(entry.sheetName);
       const address = stringValue(entry.address ?? entry.range);
-      const style = entry.style && typeof entry.style === "object" ? entry.style as Extract<ExcelOperation, { kind: "range.write_styles" }>["style"] : undefined;
-      if (sheetName && address && style) {
+      const style = entry.style && typeof entry.style === "object"
+        ? normalizeStyleRecord(entry.style)
+        : normalizeStyleRecord(entry);
+      if (sheetName && address && Object.keys(style).length > 0) {
         entries.push({ target: { workbookId, sheetName, address }, style });
       }
     }
   }
   const sheetName = stringValue(input.target?.sheetName ?? values?.sheetName);
   const address = stringValue(input.target?.range ?? values?.address ?? values?.range);
-  const style = values?.style && typeof values.style === "object" ? values.style as Extract<ExcelOperation, { kind: "range.write_styles" }>["style"] : undefined;
-  if (entries.length === 0 && sheetName && address && style) {
+  const style = normalizeStyleRecord(values?.style ?? values);
+  if (entries.length === 0 && sheetName && address && Object.keys(style).length > 0) {
     entries.push({ target: { workbookId, sheetName, address }, style });
   }
   return entries;
@@ -7026,10 +7343,61 @@ function applyOutputBudget(output: Omit<AgentRunOutput, "telemetry">, input: Age
       ...compactWithoutContinuation,
       answer: undefined,
       ...(compactContinuation !== undefined ? { continuation: compactContinuation } : {}),
-      warnings: [...compact.warnings, "Answer details were omitted from the inline response; use resourceLinks for cached context."]
+      warnings: [...compact.warnings, "Answer details were omitted from the inline response; use resourceLinks as MCP/Open Workbook handles, not HTTP URLs."]
     });
   }
   return stripUndefinedOptionals(compact);
+}
+
+function inlinePreviewForProfile(input: AgentRunInput, profile: ReturnType<typeof profileValues>, range: string): Record<string, unknown> | undefined {
+  if (!shouldIncludeInlineValuesPreview(input, profile.shape.rows * profile.shape.columns)) {
+    return undefined;
+  }
+  const rows = Array.isArray(profile.rows) ? profile.rows as CellMatrix : undefined;
+  if (!rows || rows.length === 0) {
+    return undefined;
+  }
+  return inlinePreviewForMatrix(input, rows, range);
+}
+
+function inlinePreviewForMatrix(input: AgentRunInput, matrix: CellMatrix, range?: string): Record<string, unknown> | undefined {
+  const cellCount = matrixCellCount(matrix);
+  if (!shouldIncludeInlineValuesPreview(input, cellCount) || cellCount === 0) {
+    return undefined;
+  }
+  const maxCells = Math.min(500, input.budget?.maxPayloadBytes ? Math.max(25, Math.floor(input.budget.maxPayloadBytes / 80)) : 500);
+  const preview: CellMatrix = [];
+  let usedCells = 0;
+  let truncated = false;
+  for (const row of matrix) {
+    const width = row.length;
+    if (usedCells + width > maxCells) {
+      truncated = true;
+      break;
+    }
+    preview.push(row);
+    usedCells += width;
+  }
+  if (preview.length === 0 && matrix[0]) {
+    preview.push(matrix[0].slice(0, maxCells));
+    truncated = matrix[0].length > maxCells || matrix.length > 1;
+  }
+  return stripUndefinedRecord({
+    valuesPreview: preview,
+    previewRange: range,
+    previewTruncated: truncated || preview.length < matrix.length
+  });
+}
+
+function shouldIncludeInlineValuesPreview(input: AgentRunInput, cellCount: number): boolean {
+  if (cellCount > 500 && input.budget?.maxPayloadBytes === undefined) {
+    return false;
+  }
+  const action = intentAction(input);
+  return action === "read_values"
+    || input.detailLevel === "table_sample"
+    || input.detailLevel === "full_table"
+    || /\b(?:actual|raw|all|full|every|show|read|print)\b.{0,40}\b(?:values?|rows?|data|headers?)\b/i.test(input.request);
 }
 
 function responseModeFromInput(input: AgentRunInput): AgentResponseMode {
@@ -7047,10 +7415,10 @@ function detectAgentResourceHandle(input: AgentRunInput): AgentDetectedResourceH
   if (input.operationId) {
     return { kind: "operation", id: String(input.operationId) };
   }
-  const continuationResult = input.continuation?.resultUri ?? input.continuation?.fullResultUri;
-  const continuationHandle = continuationResult ? parseAgentResourceUri(continuationResult) : undefined;
-  if ((continuationHandle?.kind === "result" || continuationHandle?.kind === "compact") && isResultHandleContinuationRequest(input)) {
-    return input.continuation?.resultUri ? continuationHandle : { kind: continuationHandle.kind, id: continuationHandle.id };
+  const continuationHandle = continuationResultHandle(input);
+  if ((continuationHandle?.kind === "result" || continuationHandle?.kind === "compact")
+    && (isResultHandleContinuationRequest(input) || shouldReturnFullResource(input, continuationHandle.view))) {
+    return continuationHandle;
   }
   const requestHandle = parseAgentResourceUri(input.request);
   if (requestHandle) {
@@ -7060,6 +7428,14 @@ function detectAgentResourceHandle(input: AgentRunInput): AgentDetectedResourceH
     return { kind: "context", id: String(input.workbookContextId) };
   }
   return undefined;
+}
+
+function continuationResultHandle(input: AgentRunInput): AgentDetectedResourceHandle | undefined {
+  const resultUri = input.continuation?.resultUri;
+  const fullResultUri = input.continuation?.fullResultUri;
+  const wantsFull = input.responseMode === "verbose" || shouldReturnFullResource(input);
+  const selected = wantsFull && fullResultUri ? fullResultUri : resultUri ?? fullResultUri;
+  return selected ? parseAgentResourceUri(selected) : undefined;
 }
 
 function parseAgentResourceUri(text: string): AgentDetectedResourceHandle | undefined {
@@ -7196,6 +7572,9 @@ function compactAnswerForResponseMode(answer: unknown, responseMode: AgentRespon
   if (kind === "workbook_overview") {
     return compactWorkbookOverviewAnswer(typed, resultUri, fullResultUri);
   }
+  if (kind === "style_summary") {
+    return compactStyleSummaryAnswer(typed, resultUri, fullResultUri);
+  }
   return compactGenericAnswer(typed, resultUri, fullResultUri);
 }
 
@@ -7239,6 +7618,9 @@ function compactRangeProfileAnswer(answer: Record<string, unknown>, resultUri?: 
     range: answer.range,
     shape: answer.shape,
     metrics: compactProfileMetrics(answer.metrics),
+    valuesPreview: answer.valuesPreview,
+    previewRange: answer.previewRange,
+    previewTruncated: answer.previewTruncated,
     resultUri,
     fullResultUri
   });
@@ -7276,6 +7658,9 @@ function compactTableReadAnswer(answer: Record<string, unknown>, responseMode: A
     schemaSummary: schemaSummary(schema, responseMode === "standard" ? 16 : 10),
     shape: profile?.shape,
     metrics: compactProfileMetrics(profile?.metrics),
+    valuesPreview: answer.valuesPreview,
+    previewRange: answer.previewRange,
+    previewTruncated: answer.previewTruncated,
     resultUri,
     fullResultUri
   });
@@ -7355,6 +7740,59 @@ function compactWorkbookOverviewAnswer(answer: Record<string, unknown>, resultUr
   });
 }
 
+function compactStyleSummaryAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    sheetName: answer.sheetName,
+    range: answer.range,
+    rowCount: answer.rowCount,
+    columnCount: answer.columnCount,
+    truncated: answer.truncated,
+    fills: compactStyleDimension(answer.fills),
+    fonts: compactStyleDimension(answer.fonts),
+    borders: compactStyleDimension(answer.borders),
+    alignment: compactStyleDimension(answer.alignment),
+    numberFormats: compactStyleDimension(answer.numberFormats),
+    conditionalFormatting: compactStyleDimension(answer.conditionalFormatting),
+    rowHeights: compactStyleDimension(answer.rowHeights),
+    columnWidths: compactStyleDimension(answer.columnWidths),
+    dataValidation: compactStyleDimension(answer.dataValidation),
+    resultUri,
+    fullResultUri
+  });
+}
+
+function compactStyleDimension(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const full = JSON.stringify(value);
+  if (full.length <= 800) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 5);
+  }
+  const record = value as Record<string, unknown>;
+  const compact: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(record)) {
+    if (entry === undefined) {
+      continue;
+    }
+    if (entry === null || typeof entry !== "object") {
+      compact[key] = entry;
+    } else if (Array.isArray(entry)) {
+      compact[key] = entry.slice(0, 5);
+      if (entry.length > 5) {
+        compact[`${key}Truncated`] = true;
+      }
+    } else if (["hash", "summary", "dominant", "default", "uniqueCount", "count", "truncated"].includes(key)) {
+      compact[key] = entry;
+    }
+  }
+  return Object.keys(compact).length > 0 ? compact : { truncated: true, fullBytes: Buffer.byteLength(full) };
+}
+
 function compactGenericAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
   const next = { ...answer };
   for (const key of ["headers", "values", "formulas", "text", "numberFormat", "sample", "sparseRows", "rows", "emptySummary", "schema", "profile"]) {
@@ -7395,7 +7833,7 @@ function nextContinuationRequest(output: Omit<AgentRunOutput, "telemetry">, stor
     return "Continue with mode apply_update, operationId, and confirmationToken after user confirmation.";
   }
   if (stored?.resourceUri) {
-    return "Reuse workbookContextId and read resultUri only when full detail is needed.";
+    return "Reuse workbookContextId. For full detail, call excel.agent.run again with fullResultUri in request or continuation; do not use webfetch.";
   }
   if (output.workbookContextId) {
     return "Reuse workbookContextId on the next excel.agent.run call.";
@@ -8415,6 +8853,7 @@ function cleanRequestFromInput(metadata: WorkbookMetadata, input: AgentRunInput,
   const columnIndexes = numberArrayValue(values?.columnIndexes);
   const delimiter = stringValue(values?.delimiter);
   const separator = stringValue(values?.separator);
+  const numberFormat = stringValue(values?.numberFormat);
   const request: AgentCleanRequest = {
     workbookId: metadata.workbook.workbookId as WorkbookId,
     sheetName,
@@ -8428,9 +8867,37 @@ function cleanRequestFromInput(metadata: WorkbookMetadata, input: AgentRunInput,
     ...(columnIndexes.length > 0 ? { columnIndexes } : {}),
     ...(delimiter ? { delimiter } : {}),
     ...(separator ? { separator } : {}),
-    ...(targetAddress ? { targetAddress: normalizeOperationRange(metadata, sheetName, targetAddress) } : {})
+    ...(targetAddress ? { targetAddress: normalizeOperationRange(metadata, sheetName, targetAddress) } : {}),
+    ...(numberFormat ? { numberFormat } : {})
   };
   return request;
+}
+
+function cleanPatchRequestsFromInput(metadata: WorkbookMetadata, input: AgentRunInput, resolved?: Extract<AgentTargetResolution, { ok: true }>): AgentCleanRequest[] {
+  const values = input.values as Record<string, unknown> | undefined;
+  const patches = Array.isArray(values?.patches) ? values.patches : [];
+  const workbookId = metadata.workbook.workbookId as WorkbookId;
+  const requests: AgentCleanRequest[] = [];
+  for (const patch of patches) {
+    if (!patch || typeof patch !== "object") {
+      continue;
+    }
+    const typed = patch as Record<string, unknown>;
+    const target = typed.target && typeof typed.target === "object" ? typed.target as Record<string, unknown> : {};
+    const sheetName = stringValue(target.sheetName ?? typed.sheetName ?? resolved?.sheetName ?? input.target?.sheetName);
+    const range = stringValue(target.range ?? typed.range ?? typed.address);
+    if (!sheetName || !range) {
+      continue;
+    }
+    const numberFormat = stringValue(typed.numberFormat ?? values?.numberFormat);
+    requests.push({
+      workbookId,
+      sheetName,
+      address: normalizeOperationRange(metadata, sheetName, range),
+      ...(numberFormat ? { numberFormat } : {})
+    });
+  }
+  return requests;
 }
 
 function cleanOutputAddress(request: AgentCleanRequest): string {

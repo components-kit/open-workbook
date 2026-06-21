@@ -48,6 +48,8 @@ describe("MCP result rendering", () => {
     expect(text.length).toBeLessThan(500);
     expect(text).toContain("SUCCESS answer");
     expect(text).toContain("resultUri: excel://agent/results/agentres_1");
+    expect(text).toContain("call excel.agent.run with fullResultUri");
+    expect(text).toContain("do not use webfetch");
     expect(text).not.toContain("sparseRows");
     expect(result.structuredContent.answer).toEqual(output.answer);
     expect(result.resources).toEqual([

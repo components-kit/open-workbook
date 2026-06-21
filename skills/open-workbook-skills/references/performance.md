@@ -27,7 +27,7 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 Avoid workbook-wide reads unless the task is search, validation, audit, or discovery.
 
 Compact reads return payload/token telemetry, truncation status, result handles, and continuation metadata. Page only when more rows or columns are needed.
-When a compact response includes `resultUri`, `fullResultUri`, or a resource link, fetch it only if the user explicitly needs full detail, an audit trail, all rows, or raw values.
+When a compact response includes `resultUri`, `fullResultUri`, or a resource link, use it only if the user explicitly needs full detail, an audit trail, all rows, or raw values. `excel://...` handles are not HTTP URLs; retrieve them by calling `excel.agent.run` again with the handle in `request` or `continuation`, not with `webfetch`.
 
 ## Writes
 

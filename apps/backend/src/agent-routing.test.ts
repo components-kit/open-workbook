@@ -38,4 +38,41 @@ describe("agent workflow routing", () => {
     expect(route.readPolicy).toBe(readPolicy);
     expect(route.workflowConfidence).toBe(0.91);
   });
+
+  it.each([
+    "Okay, what about the styling?",
+    "Read the style summary of the Booking sheet",
+    "Inspect current fonts, colors, borders, alignment, fills, and number formats"
+  ])("routes style inspection wording to answer mode: %s", (request) => {
+    const route = routeAgentRequest(request, "auto");
+
+    expect(route.mode).toBe("answer");
+    expect(route.matchedRule).toBe("read_inspection.keyword");
+    expect(route.workflowRoute).toBe("style.inspect");
+    expect(route.readPolicy).toBe("targeted_read");
+  });
+
+  it.each([
+    "Read columns P, T, U, V from Booking sheet rows 2-7 to check if dates are now proper date serials with 4-digit year format.",
+    "Verify the displayed date values and formats in P2:V7",
+    "Check cells P2:V7 and confirm the date serials"
+  ])("routes read/verify wording with format terms to answer mode: %s", (request) => {
+    const route = routeAgentRequest(request, "auto");
+
+    expect(route.mode).toBe("answer");
+    expect(route.matchedRule).toBe("read_inspection.keyword");
+    expect(route.workflowRoute).toBe("range.read");
+    expect(route.readPolicy).toBe("targeted_read");
+  });
+
+  it.each([
+    "Change the styling of A1:X7",
+    "Set the fill color on Booking",
+    "Format A1:X7 with borders"
+  ])("keeps explicit style writes on preview mode: %s", (request) => {
+    const route = routeAgentRequest(request, "auto");
+
+    expect(route.mode).toBe("preview_update");
+    expect(route.workflowRoute).toBe("mutation.preview");
+  });
 });

@@ -3779,7 +3779,16 @@ export class RuntimeService {
   }
 
   async cleanParseDates(input: CleanRangeInput): Promise<CleaningReport> {
-    return this.cleanTransform(input, "parse_dates", (value) => parseDateValue(value));
+    const target = targetFromCleanInput(input);
+    const read = await this.readRangeValues(target);
+    if (!read.ok) {
+      return cleaningError(input.workbookId, "parse_dates", target, read.error);
+    }
+    const values = read.values.map((row) => row.map((value) => parseDateValue(value) as CellValue));
+    const changedCells = changedCellCount(read.values, values);
+    const numberFormat = input.numberFormat ?? "dd/mm/yyyy";
+    const result = changedCells > 0 ? await this.writeParsedDateValues(target, values, numberFormat) : undefined;
+    return cleaningReport(input.workbookId, "parse_dates", target, changedCells, { numberFormat }, result);
   }
 
   async cleanParseNumbers(input: CleanRangeInput): Promise<CleaningReport> {
@@ -6187,6 +6196,36 @@ export class RuntimeService {
     });
   }
 
+  private async writeParsedDateValues(target: A1Range, values: CellMatrix, numberFormat: string): Promise<OperationResult> {
+    const numberFormats = values.map((row) => row.map(() => numberFormat));
+    return this.applyBatch({
+      workbookId: target.workbookId,
+      mode: "apply",
+      operations: [
+        {
+          kind: "range.write_values",
+          operationId: makeId<OperationId>("op"),
+          workbookId: target.workbookId,
+          destructiveLevel: "values",
+          reason: "Parse dates",
+          target,
+          values,
+          preserveFormats: true
+        } as ExcelOperation,
+        {
+          kind: "range.write_number_formats",
+          operationId: makeId<OperationId>("op"),
+          workbookId: target.workbookId,
+          destructiveLevel: "format",
+          reason: "Format parsed dates",
+          target,
+          numberFormat: numberFormats,
+          preserveValues: true
+        } as ExcelOperation
+      ]
+    });
+  }
+
   private async writeChangedCleanValues(target: A1Range, before: CellMatrix, after: CellMatrix, reason: string): Promise<OperationResult | undefined> {
     const operations = changedValueRunOperations(target, before, after, reason);
     if (operations.length === 0) {
@@ -7639,6 +7678,8 @@ function scopesFromOperation(workbookId: WorkbookId, operation: ExcelOperation):
     case "range.write_values":
     case "range.write_number_formats":
     case "range.write_styles":
+    case "range.write_data_validation":
+    case "range.write_conditional_formatting":
     case "range.clear_style_dimensions":
     case "range.write_hyperlinks":
     case "range.write_comments":
@@ -7656,6 +7697,8 @@ function scopesFromOperation(workbookId: WorkbookId, operation: ExcelOperation):
     case "range.merge":
     case "range.unmerge":
     case "range.restore_snapshot":
+      return [rangeScope(operation.target)];
+    case "range.reorder_columns":
       return [rangeScope(operation.target)];
     case "range.write_values_many":
       return operation.entries.map((entry) => rangeScope(entry.target));
@@ -7782,6 +7825,7 @@ interface CleanRangeInput {
   workbookId: WorkbookId;
   sheetName: string;
   address: string;
+  numberFormat?: string;
 }
 
 function targetFromCleanInput(input: CleanRangeInput): A1Range {
@@ -7950,11 +7994,42 @@ function parseDateValue(value: unknown): unknown {
   if (typeof value !== "string" || !value.trim()) {
     return value;
   }
-  const timestamp = Date.parse(value);
-  if (Number.isNaN(timestamp)) {
+  const parsed = parseSpreadsheetDate(value.trim());
+  if (!parsed) {
     return value;
   }
-  return new Date(timestamp).toISOString().slice(0, 10);
+  return excelSerialDate(parsed.year, parsed.month, parsed.day);
+}
+
+function parseSpreadsheetDate(value: string): { year: number; month: number; day: number } | undefined {
+  const numeric = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2}|\d{4})$/.exec(value);
+  if (numeric) {
+    const day = Number(numeric[1]);
+    const month = Number(numeric[2]);
+    const rawYear = Number(numeric[3]);
+    const year = rawYear < 100 ? 2000 + rawYear : rawYear;
+    return validDateParts(year, month, day) ? { year, month, day } : undefined;
+  }
+  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(value);
+  if (iso) {
+    const year = Number(iso[1]);
+    const month = Number(iso[2]);
+    const day = Number(iso[3]);
+    return validDateParts(year, month, day) ? { year, month, day } : undefined;
+  }
+  return undefined;
+}
+
+function validDateParts(year: number, month: number, day: number): boolean {
+  if (year < 1900 || month < 1 || month > 12 || day < 1 || day > 31) {
+    return false;
+  }
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+function excelSerialDate(year: number, month: number, day: number): number {
+  return Math.floor((Date.UTC(year, month - 1, day) - Date.UTC(1899, 11, 30)) / 86_400_000);
 }
 
 function parseNumberValue(value: unknown): unknown {

@@ -117,6 +117,29 @@ export interface WriteStylesManyOperation extends OperationBase {
   }>;
 }
 
+export interface WriteDataValidationOperation extends OperationBase {
+  kind: "range.write_data_validation";
+  target: A1Range;
+  validation: {
+    type: "list";
+    source: string | string[];
+    inCellDropDown?: boolean;
+    ignoreBlanks?: boolean;
+    prompt?: { title?: string; message?: string; showPrompt?: boolean };
+    errorAlert?: { title?: string; message?: string; showAlert?: boolean; style?: "stop" | "warning" | "information" };
+  };
+}
+
+export interface WriteConditionalFormattingOperation extends OperationBase {
+  kind: "range.write_conditional_formatting";
+  target: A1Range;
+  rule: {
+    type: "custom";
+    formula: string;
+    style: NonNullable<RangeSnapshot["style"]>;
+  };
+}
+
 export interface WriteHyperlinksOperation extends OperationBase {
   kind: "range.write_hyperlinks";
   target: A1Range;
@@ -183,6 +206,12 @@ export interface MoveRangeOperation extends OperationBase {
   kind: "range.move";
   source: A1Range;
   target: A1Range;
+}
+
+export interface ReorderRangeColumnsOperation extends OperationBase {
+  kind: "range.reorder_columns";
+  target: A1Range;
+  columnOrder: Array<string | number>;
 }
 
 export interface InsertRowsOperation extends OperationBase {
@@ -354,6 +383,8 @@ export type ExcelOperation =
   | WriteNumberFormatsManyOperation
   | WriteStylesOperation
   | WriteStylesManyOperation
+  | WriteDataValidationOperation
+  | WriteConditionalFormattingOperation
   | WriteHyperlinksOperation
   | WriteCommentsOperation
   | ClearRangeOperation
@@ -365,6 +396,7 @@ export type ExcelOperation =
   | ClearStyleDimensionsManyOperation
   | CopyRangeOperation
   | MoveRangeOperation
+  | ReorderRangeColumnsOperation
   | InsertRowsOperation
   | DeleteRowsOperation
   | InsertColumnsOperation

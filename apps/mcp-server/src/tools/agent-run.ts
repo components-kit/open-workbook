@@ -24,8 +24,8 @@ export function registerAgentTools(mcp: McpServer, runtime: RuntimeFacade, conte
   );
 }
 
-function agentRunInputSchema() {
-  const targetSchema = z.object({
+export function agentRunInputSchema() {
+  const targetObjectSchema = z.object({
     workbookId: z.string().optional(),
     workbookName: z.string().optional(),
     candidateId: z.string().optional(),
@@ -36,6 +36,30 @@ function agentRunInputSchema() {
     column: z.string().optional(),
     entity: z.string().optional()
   });
+  const targetSchema = jsonObjectString(targetObjectSchema, "target");
+  const continuationSchema = jsonObjectString(z.object({
+    workbookContextId: z.string().optional(),
+    operationId: z.string().optional(),
+    transactionId: z.string().optional(),
+    resultUri: z.string().optional(),
+    fullResultUri: z.string().optional(),
+    nextRequest: z.string().optional(),
+    responseMode: z.enum(["brief", "standard", "verbose"]).optional()
+  }), "continuation");
+  const intentSchema = jsonObjectString(z.object({
+    action: z.string().optional().describe("Optional internal action hint, such as read_values, write_values, validate_workbook, or create_pivot_chart_summary. Invalid hints are ignored by the backend."),
+    confidence: z.number().min(0).max(1).optional(),
+    reason: z.string().optional(),
+    targetHints: z.array(z.string()).optional()
+  }), "intent");
+  const valuesSchema = jsonObjectString(z.object({
+    patches: z.array(z.object({
+      target: targetSchema,
+      values: z.array(z.array(z.any())).optional(),
+      rows: z.array(z.array(z.any())).optional(),
+      reason: z.string().optional()
+    })).optional()
+  }).catchall(z.any()), "values");
   return {
     request: z.string(),
     mode: z.enum(AGENT_RUN_MODES).optional(),
@@ -43,30 +67,10 @@ function agentRunInputSchema() {
     operationId: z.string().optional(),
     transactionId: z.string().optional(),
     confirmationToken: z.string().optional(),
-    continuation: z.object({
-      workbookContextId: z.string().optional(),
-      operationId: z.string().optional(),
-      transactionId: z.string().optional(),
-      resultUri: z.string().optional(),
-      fullResultUri: z.string().optional(),
-      nextRequest: z.string().optional(),
-      responseMode: z.enum(["brief", "standard", "verbose"]).optional()
-    }).optional(),
-    intent: z.object({
-      action: z.string().optional().describe("Optional internal action hint, such as read_values, write_values, validate_workbook, or create_pivot_chart_summary. Invalid hints are ignored by the backend."),
-      confidence: z.number().min(0).max(1).optional(),
-      reason: z.string().optional(),
-      targetHints: z.array(z.string()).optional()
-    }).optional(),
+    continuation: continuationSchema.optional(),
+    intent: intentSchema.optional(),
     target: targetSchema.optional(),
-    values: z.record(z.string(), z.any()).and(z.object({
-      patches: z.array(z.object({
-        target: targetSchema,
-        values: z.array(z.array(z.any())).optional(),
-        rows: z.array(z.array(z.any())).optional(),
-        reason: z.string().optional()
-      })).optional()
-    })).optional(),
+    values: valuesSchema.optional(),
     detailLevel: z.enum(AGENT_DETAIL_LEVELS).optional(),
     responseMode: z.enum(["brief", "standard", "verbose"]).optional(),
     budget: z.object({
@@ -156,4 +160,18 @@ function agentRunOutputSchema() {
       intentRejectedReason: z.string().optional()
     })
   };
+}
+
+function jsonObjectString<T extends z.ZodType>(schema: T, fieldName: string): T {
+  return z.preprocess((value) => {
+    if (typeof value !== "string") {
+      return value;
+    }
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : value;
+    } catch {
+      return value;
+    }
+  }, schema.describe(`${fieldName} must be an object. If an agent has a JSON string, it should send the parsed object instead.`)) as unknown as T;
 }

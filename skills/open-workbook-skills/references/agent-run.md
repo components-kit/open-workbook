@@ -51,8 +51,8 @@ Small explicit value edits may use `auto` when the backend can prove the target 
 
 ## Result Handling
 
-Treat `resourceLinks`, `proof`, `compactProof`, `continuation`, `invalidatedContextIds`, `invalidatedResourceUris`, `nextAction`, warnings, telemetry, backup IDs, transaction IDs, and rollback options as the evidence contract. Reuse `workbookContextId` or `continuation` on follow-up calls; fetch `resultUri` or `fullResultUri` only when the user explicitly asks for full details, all rows, raw values, or an audit.
+Treat `resourceLinks`, `proof`, `compactProof`, `continuation`, `invalidatedContextIds`, `invalidatedResourceUris`, `nextAction`, warnings, telemetry, backup IDs, transaction IDs, and rollback options as the evidence contract. Reuse `workbookContextId` or `continuation` on follow-up calls. `excel://...` handles are MCP/Open Workbook handles, not web URLs: never pass them to `webfetch`. When the user explicitly asks for full details, all rows, raw values, or an audit, call `excel.agent.run` again with the returned `resultUri` or `fullResultUri` in `request` or `continuation`.
 
-If `nextAction` is `answer_now`, answer from the returned proof. Fetch full detail only when the user asks for an audit or the proof says detail is required.
+If `nextAction` is `answer_now`, answer from the returned proof. Retrieve full detail through `excel.agent.run` only when the user asks for an audit or the proof says detail is required.
 
 If the result is `AMBIGUOUS_TARGET`, retry with one returned `target.candidateId` and the same `workbookContextId`. Do not switch to offline parsing for a connected workbook.

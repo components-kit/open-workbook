@@ -89,6 +89,8 @@ function getOperationTargets(operation: ExcelOperation) {
     case "range.write_formulas":
     case "range.write_number_formats":
     case "range.write_styles":
+    case "range.write_data_validation":
+    case "range.write_conditional_formatting":
     case "range.clear_style_dimensions":
     case "range.write_hyperlinks":
     case "range.write_comments":
@@ -102,6 +104,7 @@ function getOperationTargets(operation: ExcelOperation) {
     case "range.merge":
     case "range.unmerge":
     case "range.restore_snapshot":
+    case "range.reorder_columns":
       return [operation.target];
     case "range.write_values_many":
       return operation.entries.map((entry) => entry.target);

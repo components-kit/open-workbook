@@ -68,7 +68,10 @@ export type AgentActionHandlerId =
   | "clear_formats"
   | "copy_range"
   | "move_range"
+  | "reorder_range_columns"
   | "write_styles_many"
+  | "write_data_validation"
+  | "write_conditional_formatting"
   | "insert_rows"
   | "delete_rows"
   | "insert_columns"
@@ -111,6 +114,8 @@ export interface AgentActionHandlerDefinition {
     | "destructive";
   matches: (input: AgentRunInput, request: string) => boolean;
 }
+
+const RANGE_MUTATION_WORDS = /\b(filter|filters|autofilter|auto\s*filter|style|format|formatting|conditional|validation|dropdown|drop\s*down|select\s+list|border|borders|fill|font|alignment|range|cells?|rows?|columns?|cols?|header row)\b/;
 
 export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
   {
@@ -419,9 +424,10 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "copy_style_from_template",
     requiresResolvedTarget: false,
     riskKind: "safe_format",
-    matches: (_input, request) => /\b(copy|match|apply)\b/.test(request)
+    matches: (input, request) => hasStyleCopyEndpoints(input)
+      || /\b(copy|match|apply)\b/.test(request)
       && /\b(style|format|formatting|look)\b/.test(request)
-      && /\b(template|same|source|from|to|target|like|as)\b/.test(request)
+      && /\b(template|source|from|like|same as|as template)\b/.test(request)
   },
   {
     id: "repair_style_consistency",
@@ -453,7 +459,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "create_sheet",
     requiresResolvedTarget: false,
     riskKind: "structure_change",
-    matches: (_input, request) => /\b(create|add|new)\b/.test(request) && /\bsheet\b/.test(request)
+    matches: (_input, request) => /\b(create|add|new|make)\b/.test(request) && /\b(work)?sheet\b/.test(request) && !RANGE_MUTATION_WORDS.test(request)
   },
   {
     id: "copy_sheet",
@@ -477,7 +483,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "delete_sheet",
     requiresResolvedTarget: false,
     riskKind: "destructive",
-    matches: (_input, request) => /\b(delete|remove)\b/.test(request) && /\bsheet\b/.test(request)
+    matches: (_input, request) => /\b(delete|remove)\b/.test(request) && /\bsheet\b/.test(request) && !RANGE_MUTATION_WORDS.test(request)
   },
   {
     id: "hide_sheet",
@@ -540,7 +546,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "write_formulas",
     requiresResolvedTarget: true,
     riskKind: "destructive",
-    matches: (input, request) => /\b(write|copy|fill|update|fix)\b/.test(request) && /\b(formula|formulas)\b/.test(request) && hasFormulaLikeValue(input.values)
+    matches: (input, request) => /\b(write|copy|fill|update|fix)\b/.test(request) && /\b(formula|formulas)\b/.test(request) && !/\b(conditional\s+format|conditional\s+formatting|formula\s+(format|color|colour|fill))\b/.test(request) && hasFormulaLikeValue(input.values)
   },
   {
     id: "write_number_formats",
@@ -580,7 +586,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "append_table_rows",
     requiresResolvedTarget: true,
     riskKind: "broad_range_write",
-    matches: (_input, request) => /\b(append|add|insert)\b/.test(request) && /\b(rows?|records?|table)\b/.test(request) && !/\bborders?\b/.test(request)
+    matches: (_input, request) => /\b(append|add|insert)\b/.test(request) && /\b(rows?|records?|table)\b/.test(request) && !/\b(borders?|filters?|autofilter|auto\s*filter|conditional|validation|dropdown|drop\s*down)\b/.test(request)
   },
   {
     id: "update_table_rows",
@@ -596,7 +602,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "create_table",
     requiresResolvedTarget: false,
     riskKind: "structure_change",
-    matches: (_input, request) => /\b(create|add|make)\b/.test(request) && /\btable\b/.test(request)
+    matches: (_input, request) => /\b(create|add|make)\b/.test(request) && /\btable\b/.test(request) && !/\b(filter|filters|autofilter|auto\s*filter|border|borders)\b/.test(request)
   },
   {
     id: "resize_table",
@@ -615,6 +621,14 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     matches: (_input, request) => /\b(reorder|move|rearrange|swap)\b/.test(request) && /\b(columns?|table columns?)\b/.test(request)
   },
   {
+    id: "reorder_range_columns",
+    capabilityName: "excel.range.reorder_columns",
+    intentAction: "reorder_range_columns",
+    requiresResolvedTarget: true,
+    riskKind: "structure_change",
+    matches: (_input, request) => /\b(reorder|rearrange|swap)\b/.test(request) && /\b(columns?|cols?)\b/.test(request) && !/\btable\b/.test(request)
+  },
+  {
     id: "clear_table_data",
     capabilityName: "excel.table.clear_data_keep_formulas",
     intentAction: "clear_table_data",
@@ -628,7 +642,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "clear_table_filters",
     requiresResolvedTarget: true,
     riskKind: "safe_format",
-    matches: (_input, request) => /\b(clear|remove)\b/.test(request) && /\b(filters?|table filters?)\b/.test(request)
+    matches: (_input, request) => /\b(clear|remove)\b/.test(request) && /\b(filters?|table filters?|autofilter|auto\s*filter)\b/.test(request)
   },
   {
     id: "filter_range",
@@ -636,7 +650,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "filter_range",
     requiresResolvedTarget: true,
     riskKind: "safe_format",
-    matches: (_input, request) => /\b(filter|filters)\b/.test(request)
+    matches: (_input, request) => /\b(filters?|autofilter|auto\s*filter)\b/.test(request)
   },
   {
     id: "set_table_total_row",
@@ -815,6 +829,22 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     matches: (_input, request) => /\b(format|style)\b/.test(request) && /\b(multiple|many|several|ranges?)\b/.test(request)
   },
   {
+    id: "write_data_validation",
+    capabilityName: "excel.range.write_data_validation",
+    intentAction: "write_data_validation",
+    requiresResolvedTarget: true,
+    riskKind: "safe_format",
+    matches: (_input, request) => /\b(data\s+validation|validation|dropdown|drop\s*down|select\s+list|selection\s+list)\b/.test(request)
+  },
+  {
+    id: "write_conditional_formatting",
+    capabilityName: "excel.range.write_conditional_formatting",
+    intentAction: "write_conditional_formatting",
+    requiresResolvedTarget: true,
+    riskKind: "safe_format",
+    matches: (_input, request) => /\b(conditional\s+format|conditional\s+formatting|formula\s+(format|color|colour|fill)|if\b.*\b(fill|color|colour|format))\b/.test(request)
+  },
+  {
     id: "insert_rows",
     capabilityName: "excel.range.insert_rows",
     intentAction: "insert_rows",
@@ -836,7 +866,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "insert_columns",
     requiresResolvedTarget: true,
     riskKind: "structure_change",
-    matches: (_input, request) => /\binsert\b/.test(request) && /\bcolumns?\b/.test(request)
+    matches: (_input, request) => /\b(insert|add|new|create)\b/.test(request) && /\b(columns?|cols?)\b/.test(request) && !/\b(work)?sheet\b/.test(request)
   },
   {
     id: "delete_columns",
@@ -879,6 +909,11 @@ export function findAgentActionHandler(input: AgentRunInput, action: AgentIntent
     return scopeHandlers.find((handler) => handler.intentAction === action);
   }
   return scopeHandlers.find((handler) => handler.matches(input, request));
+}
+
+function hasStyleCopyEndpoints(input: AgentRunInput): boolean {
+  const values = input.values as Record<string, unknown> | undefined;
+  return Boolean(values?.source && values?.destination);
 }
 
 function hasFormulaLikeValue(values: AgentRunInput["values"]): boolean {

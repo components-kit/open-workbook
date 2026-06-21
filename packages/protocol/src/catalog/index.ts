@@ -136,6 +136,8 @@ const STABLE_TOOLS = new Set([
   "excel.range.write_number_formats_many",
   "excel.range.write_styles",
   "excel.range.write_styles_many",
+  "excel.range.write_data_validation",
+  "excel.range.write_conditional_formatting",
   "excel.range.clear_style_dimensions",
   "excel.range.clear_style_dimensions_many",
   "excel.range.clear",
@@ -146,6 +148,7 @@ const STABLE_TOOLS = new Set([
   "excel.range.clear_values_keep_format",
   "excel.range.copy",
   "excel.range.move",
+  "excel.range.reorder_columns",
   "excel.range.insert_rows",
   "excel.range.delete_rows",
   "excel.range.insert_columns",
@@ -444,6 +447,8 @@ const TOOL_NAMES = [
   "excel.range.write_number_formats_many",
   "excel.range.write_styles",
   "excel.range.write_styles_many",
+  "excel.range.write_data_validation",
+  "excel.range.write_conditional_formatting",
   "excel.range.clear_style_dimensions",
   "excel.range.clear_style_dimensions_many",
   "excel.range.clear",
@@ -454,6 +459,7 @@ const TOOL_NAMES = [
   "excel.range.clear_values_keep_format",
   "excel.range.copy",
   "excel.range.move",
+  "excel.range.reorder_columns",
   "excel.range.insert_rows",
   "excel.range.delete_rows",
   "excel.range.insert_columns",
@@ -785,7 +791,7 @@ function isMutatingTool(name: string): boolean {
   if (name === "excel.workflow.preview_risky_edit") {
     return true;
   }
-  return /\.(set_|write_|create|copy|rename|delete|move|hide|unhide|protect|unprotect|clear|apply|repair|fill|append|update|resize|sort|save|restore|close|insert|merge|unmerge|lock|unlock|convert|calculate|recalculate|register|unregister|commit|rollback|cancel|refresh|invalidate|parse|normalize|trim|remove|standardize|split|import|embed)/.test(
+  return /\.(set_|write_|create|copy|rename|delete|move|reorder|hide|unhide|protect|unprotect|clear|apply|repair|fill|append|update|resize|sort|save|restore|close|insert|merge|unmerge|lock|unlock|convert|calculate|recalculate|register|unregister|commit|rollback|cancel|refresh|invalidate|parse|normalize|trim|remove|standardize|split|import|embed)/.test(
     name
   );
 }
@@ -800,7 +806,7 @@ function getDestructiveLevel(name: string, namespace: CapabilityNamespace): Dest
   if (namespace === "workbook" || name.includes(".close") || name.includes(".save_as") || name.includes(".restore_backup")) {
     return "workbook";
   }
-  if (namespace === "sheet" || namespace === "template" || name.includes("insert_") || name.includes("delete_")) {
+  if (namespace === "sheet" || namespace === "template" || name.includes("insert_") || name.includes("delete_") || name.includes("reorder_")) {
     return "structure";
   }
   if (namespace === "workflow") {

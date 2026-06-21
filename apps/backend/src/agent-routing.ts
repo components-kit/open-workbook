@@ -69,6 +69,16 @@ export function routeAgentRequest(request: string, requestedMode: AgentRunMode =
     };
   }
 
+  if (workflow.workflowRoute === "style.inspect" || workflow.workflowRoute === "format.diagnostics" || isReadVerificationRequest(request)) {
+    return {
+      mode: "answer",
+      matchedRule: "read_inspection.keyword",
+      confidence: workflow.workflowRoute === "range.read" ? 0.78 : workflow.workflowConfidence,
+      reasons: workflow.workflowRoute === "range.read" ? ["Request asks to read or verify existing workbook values."] : workflow.workflowReasons,
+      ...workflow
+    };
+  }
+
   const matched = ROUTE_RULES.find((rule) => rule.pattern.test(request));
   if (matched) {
     return {
@@ -116,6 +126,15 @@ function routeAgentWorkflow(
   if (action && modeForIntentAction(action) === "preview_update") return workflow("mutation.preview", intent?.confidence ?? 0.9, "Structured mutation action.", "sampled_allowed", "preview_only");
 
   const lower = request.toLowerCase();
+  if (/\b(style|styling|formatting|border|fill|font|alignment|number format)\b/.test(lower) && /\b(current|inspect|what|show|read|look|existing|summary)\b/.test(lower)) {
+    return workflow("style.inspect", 0.82, "Request asks for current styling.", "sampled_allowed", "targeted_read");
+  }
+  if (/\b(formatting error|wrong format|date format|number format|diagnos(e|is)|why.*format)\b/.test(lower)) {
+    return workflow("format.diagnostics", 0.84, "Request asks for formatting diagnostics.", "sampled_allowed", "targeted_read");
+  }
+  if (isReadVerificationRequest(request)) {
+    return workflow("range.read", 0.78, "Request asks to read or verify existing workbook values.", "sampled_allowed", "targeted_read");
+  }
   if (/\b(semantic index|workbook index|find|where is|locate|which sheet|which table)\b/.test(lower)) {
     return workflow("semantic_index.find", 0.84, "Request asks for workbook target discovery.", "sampled_allowed", "metadata_only");
   }
@@ -125,12 +144,6 @@ function routeAgentWorkflow(
   if (/\b(this|current|active)?\s*sheet\b/.test(lower) && /\b(look|overview|summar(y|ize)|inspect|what)\b/.test(lower)) {
     return workflow("sheet.summary", 0.82, "Request asks for sheet overview.", "structure_only", "metadata_only");
   }
-  if (/\b(style|styling|formatting|border|fill|font|alignment|number format)\b/.test(lower) && /\b(current|inspect|what|show|read|look)\b/.test(lower)) {
-    return workflow("style.inspect", 0.82, "Request asks for current styling.", "sampled_allowed", "targeted_read");
-  }
-  if (/\b(formatting error|wrong format|date format|number format|diagnos(e|is)|why.*format)\b/.test(lower)) {
-    return workflow("format.diagnostics", 0.84, "Request asks for formatting diagnostics.", "sampled_allowed", "targeted_read");
-  }
   if (/\b(sample|first rows|table sample)\b/.test(lower)) {
     return workflow("table.sample", 0.8, "Request asks for bounded table sample.", "sampled_required", "targeted_read");
   }
@@ -138,6 +151,13 @@ function routeAgentWorkflow(
     return workflow("mutation.preview", 0.82, "Request contains workbook mutation language.", "sampled_allowed", "preview_only");
   }
   return workflow("range.read", 0.65, "Default answer route may use targeted reads after metadata.", "sampled_allowed", "targeted_read");
+}
+
+function isReadVerificationRequest(request: string): boolean {
+  const lower = request.toLowerCase();
+  return /\b(read|check|verify|inspect|show|confirm)\b/.test(lower)
+    && /\b(values?|columns?|cells?|dates?|serials?|display(?:ed)?|formats?)\b/.test(lower)
+    && !/\b(apply|set|write|replace|convert|parse|change|update|fix|repair|clear|remove|delete|create|add|insert)\b/.test(lower);
 }
 
 function workflow(

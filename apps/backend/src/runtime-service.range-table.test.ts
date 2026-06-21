@@ -180,6 +180,50 @@ describe("RuntimeService performance-oriented scoping", () => {
     expect(executed?.params.request.operations.map((operation: any) => operation.values)).toEqual([[["keep"]], [["trim"]]]);
   });
 
+  it("parses day/month/two-digit-year dates to Excel serials and applies date formats", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_clean_dates" as WorkbookId;
+    const session = runtime.sessions.createSession();
+    const calls: Array<{ method: string; params: any }> = [];
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string, params: any) => {
+        calls.push({ method, params });
+        if (method === "workbook.snapshot_ranges") {
+          return {
+            workbookFingerprint: {
+              workbookId,
+              workbookHash: "clean_dates_workbook",
+              structureHash: "structure",
+              capturedAt: new Date().toISOString()
+            },
+            rangeSnapshots: params.ranges.map((range: any) => ({
+              fingerprint: { range, hash: `hash_${range.address}`, cellCount: 3, capturedAt: new Date().toISOString() },
+              values: [["26/6/26"], ["2026-06-27"], ["not a date"]]
+            }))
+          };
+        }
+        if (method === "operation.execute_batch") {
+          return { ok: true, rollbackAvailable: true, backups: [], warnings: [], telemetry: { cellsWritten: 6 } };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const result = await runtime.cleanParseDates({
+      workbookId,
+      sheetName: "Booking",
+      address: "P2:P4",
+      numberFormat: "dd/mm/yyyy"
+    });
+
+    const executed = calls.find((call) => call.method === "operation.execute_batch");
+    expect(result.ok).toBe(true);
+    expect(result.changedCells).toBe(2);
+    expect(executed?.params.request.operations.map((operation: any) => operation.kind)).toEqual(["range.write_values", "range.write_number_formats"]);
+    expect(executed?.params.request.operations[0].values).toEqual([[46199], [46200], ["not a date"]]);
+    expect(executed?.params.request.operations[1].numberFormat).toEqual([["dd/mm/yyyy"], ["dd/mm/yyyy"], ["dd/mm/yyyy"]]);
+  });
+
   it("reorders table columns through a table mutation with a scoped backup", async () => {
     const runtime = new RuntimeService({ persistState: false });
     const workbookId = "workbook_table_reorder" as WorkbookId;

@@ -62,6 +62,7 @@ export type PendingAgentAction =
   | { kind: "style.copy_dimensions"; request: StyleCopyRequest }
   | { kind: "style.repair_consistency"; request: { workbookId: WorkbookId; templateId: TemplateId; targetSheetName: string } }
   | { kind: "clean.transform"; action: AgentCleanMutationAction; request: AgentCleanRequest }
+  | { kind: "clean.transform_many"; action: AgentCleanMutationAction; requests: AgentCleanRequest[] }
   | { kind: "workbook.snapshot"; request: { workbookId: WorkbookId; reason?: string; ranges?: A1Range[] } }
   | { kind: "workbook.create_backup"; request: { workbookId: WorkbookId; reason?: string; ranges?: A1Range[] } }
   | { kind: "snapshot.refresh"; snapshotId: SnapshotId; reason?: string }
@@ -115,6 +116,7 @@ export interface AgentCleanRequest {
   delimiter?: string;
   separator?: string;
   targetAddress?: string;
+  numberFormat?: string;
 }
 
 export interface PendingAgentOperation {

@@ -18,7 +18,7 @@ const deprecatedInternalSurfaceEnv = "OPEN_WORKBOOK_" + "INTERNAL_TOOL_SURFACE";
 const deprecatedInternalSurfaceFlag = "expose" + "InternalToolSurface";
 const forbiddenPrimitiveRegistrations = ["Runtime", "Workbook", "Range", "Batch", "Workflow", "Table", "Chart", "Pivot"]
   .map((name) => `register${name}Tools(server)`);
-const expectedInternalCapabilityCount = 303;
+const expectedInternalCapabilityCount = 306;
 
 const requiredInternalCapabilities = [
   "excel.workflow.prepare_session",
@@ -33,6 +33,9 @@ const requiredInternalCapabilities = [
   "excel.range.write_values",
   "excel.range.write_formulas",
   "excel.range.write_styles_many",
+  "excel.range.write_data_validation",
+  "excel.range.write_conditional_formatting",
+  "excel.range.reorder_columns",
   "excel.table.apply_filters",
   "excel.table.sort"
 ];

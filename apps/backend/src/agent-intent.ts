@@ -15,13 +15,35 @@ export interface NormalizedAgentIntent {
 }
 
 const ACTIONS = new Set<string>(AGENT_INTENT_ACTIONS);
+const ACTION_ALIASES: Record<string, AgentIntentAction> = {
+  apply_style_from_template: "copy_style_from_template",
+  apply_styles_from_template: "copy_style_from_template",
+  copy_style: "copy_style_from_template",
+  copy_styles: "copy_style_from_template",
+  apply_filter: "filter_range",
+  apply_filters: "filter_range",
+  add_filter: "filter_range",
+  add_filters: "filter_range",
+  autofilter: "filter_range",
+  auto_filter: "filter_range",
+  add_dropdown: "write_data_validation",
+  set_dropdown: "write_data_validation",
+  data_validation: "write_data_validation",
+  add_data_validation: "write_data_validation",
+  conditional_format: "write_conditional_formatting",
+  conditional_formatting: "write_conditional_formatting",
+  add_conditional_formatting: "write_conditional_formatting",
+  formula_format: "write_conditional_formatting",
+  swap_columns: "reorder_range_columns"
+};
 
 export function normalizeAgentIntent(input: AgentRunInput): NormalizedAgentIntent {
   const raw = input.intent as { action?: unknown; confidence?: unknown; reason?: unknown; targetHints?: unknown } | undefined;
   if (!raw) {
     return { source: "deterministic_fallback", accepted: true };
   }
-  if (typeof raw.action !== "string" || !ACTIONS.has(raw.action)) {
+  const action = typeof raw.action === "string" ? ACTION_ALIASES[raw.action] ?? raw.action : undefined;
+  if (typeof action !== "string" || !ACTIONS.has(action)) {
     return {
       source: "mixed",
       accepted: false,
@@ -35,10 +57,10 @@ export function normalizeAgentIntent(input: AgentRunInput): NormalizedAgentInten
     ? raw.targetHints.filter((hint): hint is string => typeof hint === "string" && hint.trim().length > 0).slice(0, 8)
     : undefined;
   return {
-    source: "caller_structured",
-    action: raw.action as AgentIntentAction,
+    source: action === raw.action ? "caller_structured" : "mixed",
+    action: action as AgentIntentAction,
     ...(confidence !== undefined ? { confidence } : {}),
-    ...(typeof raw.reason === "string" && raw.reason.trim() ? { reason: raw.reason.trim() } : {}),
+    ...(typeof raw.reason === "string" && raw.reason.trim() ? { reason: raw.reason.trim() } : raw.action !== action ? { reason: `Normalized alias ${String(raw.action)} to ${action}.` } : {}),
     ...(targetHints && targetHints.length > 0 ? { targetHints } : {}),
     accepted: true
   };

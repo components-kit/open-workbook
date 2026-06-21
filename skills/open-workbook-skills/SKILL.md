@@ -56,8 +56,11 @@ Read `references/agent-run.md` for mode contracts, preview/apply behavior, multi
 - Create from template: use template workflows to preserve structure, formulas, styles, validation, and layout while clearing old data regions for fresh entry.
 - Apply style from template: use `copy_style_from_template`; the source/template sheet is a style source only and must not be duplicated or mutated.
 - Replace styled table: use `replace_range_with_styled_table` to clear stale layout, write headers/rows, copy header/body style samples, and autofit in one preview/apply workflow.
-- Inspect current styling: use `read_style_summary` with an exact range or current selection. Use `read_style_fingerprint` for template comparison, not normal user-facing style inspection.
+- Inspect current styling: call `excel.agent.run` with `mode: "answer"`, `intent.action: "read_style_summary"`, and an exact range or current selection. Use `read_style_fingerprint` for template comparison, not normal user-facing style inspection.
 - Formatting errors: use `format_diagnostics` before mutating. It returns raw value, displayed text, formulas, number formats, style summary, likely issues, and suggested fix actions.
+- Filters, borders, dropdowns, and conditional formatting: send canonical intent early. Use `intent.action: "filter_range"` for autofilters, `clear_table_filters` for table filter removal, `format_range` for borders/fills/fonts/alignment, `write_data_validation` for dropdown/list cells, and `write_conditional_formatting` for formula-based formatting. Do not retry as sheet creation or value writes when the target sheet already exists.
+- Column changes: use `insert_columns`/`delete_columns` for sheet structure and `reorder_range_columns` for plain range swaps/reorders; use `reorder_table_columns` only for real Excel tables.
+- Date text cleanup: diagnose first, then use `parse_dates` only on exact date columns/ranges. If conversion needs explicit known dates, use one grouped `write_values` preview with per-range `numberFormat`.
 
 ## Safety Rules
 
@@ -66,8 +69,9 @@ Read `references/agent-run.md` for mode contracts, preview/apply behavior, multi
 - Do not fetch the full sheet before every preview. Reuse `workbookContextId`; preview may perform narrow metadata/fingerprint checks for safety, but agents should only read values first when target resolution is ambiguous, the user refers to current selection, or the change depends on existing values/styles.
 - For “what is this workbook”, “look at this workbook/sheet”, “where is the invoice/customer/receipt/template area”, or similar context requests, use `workbook_summary`, `semantic_index`, or `sheet_summary`. Do not fetch `table_sample` or `full_table` unless the user asks for actual rows/values.
 - For border-only, fill-only, font-only, alignment-only, or number-format-only clearing, use `clear_style_dimensions` with `values.dimensions` such as `["borders"]`. Use `clear_formats` only when the user asks to remove all formatting.
+- For date-display verification, use answer-mode reads or `format_diagnostics`; wording that includes “format” is not by itself a mutation request.
 - For OCR output, screenshots, forms, invoices, shipment documents, booking images, or other field/value data that must become a styled horizontal table, use one `preview_update` with `intent.action: "replace_range_with_styled_table"` and one `apply_update`; do not split clear/write/autofit/style copy into separate calls. If old borders/fills must disappear, do not clear leftovers by writing blanks.
-- If a response returns `status: "NEEDS_WORKFLOW_REDIRECT"`, stop the fragmented plan and call the suggested grouped `preview_update` workflow instead.
+- If a response returns `status: "NEEDS_WORKFLOW_REDIRECT"` during a real mutation, stop the fragmented plan and call the suggested grouped `preview_update` workflow instead. If you were only reading existing styles, retry as `mode: "answer"` with `intent.action: "read_style_summary"` and do not apply the suggested style-write workflow.
 - Never pad broad ranges with blanks or `null` when only a smaller rectangle should change.
 - Treat `CAPABILITY_UNAVAILABLE`, unsupported, partial, disconnected, and Office.js host-limit warnings as real results.
 - After risky mutations, validate affected scopes and report important proof: transaction IDs, backup IDs, warnings, diffs, rollback options, compact proof, and telemetry.

@@ -47,8 +47,11 @@ describe("agent action handlers", () => {
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "autofit_rows" }, target }, "autofit_rows", true)?.id).toBe("autofit_rows");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "copy_range" } }, "copy_range", false)?.id).toBe("copy_range");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "move_range" } }, "move_range", false)?.id).toBe("move_range");
+    expect(findAgentActionHandler({ request: "Do it", intent: { action: "reorder_range_columns" }, target }, "reorder_range_columns", true)?.id).toBe("reorder_range_columns");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "clear_values_raw" }, target }, "clear_values_raw", true)?.id).toBe("clear_values_raw");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "write_styles_many" } }, "write_styles_many", false)?.id).toBe("write_styles_many");
+    expect(findAgentActionHandler({ request: "Do it", intent: { action: "write_data_validation" }, target }, "write_data_validation", true)?.id).toBe("write_data_validation");
+    expect(findAgentActionHandler({ request: "Do it", intent: { action: "write_conditional_formatting" }, target }, "write_conditional_formatting", true)?.id).toBe("write_conditional_formatting");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "insert_rows" }, target }, "insert_rows", true)?.id).toBe("insert_rows");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "delete_rows" }, target }, "delete_rows", true)?.id).toBe("delete_rows");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "insert_columns" }, target }, "insert_columns", true)?.id).toBe("insert_columns");
@@ -136,6 +139,20 @@ describe("agent action handlers", () => {
     expect(findAgentActionHandler({ request: "Match the same style from source to target" }, undefined, false)?.id).toBe("copy_style_from_template");
     expect(findAgentActionHandler({ request: "Repair style consistency" }, undefined, false)?.id).toBe("repair_style_consistency");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "repair_table_structure" }, target: { tableName: "Transactions" } }, "repair_table_structure", true)?.id).toBe("repair_table_structure");
+  });
+
+  it("does not let range formatting and filtering requests fall through to sheet creation", () => {
+    expect(findAgentActionHandler({ request: "Add autofilter to the header row of Booking sheet range A1:X7" }, undefined, false)).toBeUndefined();
+    expect(findAgentActionHandler({ request: "Add autofilter to the header row of Booking sheet range A1:X7", target: { sheetName: "Booking", range: "A1:X7" } }, undefined, true)?.id).toBe("filter_range");
+    expect(findAgentActionHandler({ request: "Add borders to Booking sheet range A1:X7" }, undefined, false)).toBeUndefined();
+    expect(findAgentActionHandler({ request: "Add borders to Booking sheet range A1:X7", target: { sheetName: "Booking", range: "A1:X7" } }, undefined, true)?.id).toBe("format_range");
+    expect(findAgentActionHandler({ request: "format_range action: Apply borders to range Booking!A1:X7", target: { sheetName: "Booking", range: "A1:X7" } }, undefined, true)?.id).toBe("format_range");
+    expect(findAgentActionHandler({ request: "Remove all filters from Booking sheet range A1:X7" }, undefined, false)).toBeUndefined();
+    expect(findAgentActionHandler({ request: "Remove all filters from Booking sheet range A1:X7", target: { sheetName: "Booking", range: "A1:X7" } }, undefined, true)?.id).toBe("clear_table_filters");
+    expect(findAgentActionHandler({ request: "Add conditional formatting rule on Booking sheet range A2:X20. Formula =$D2=\"40HQ\" should fill the row yellow." }, undefined, false)).toBeUndefined();
+    expect(findAgentActionHandler({ request: "Add conditional formatting rule on Booking sheet range A2:X20. Formula =$D2=\"40HQ\" should fill the row yellow.", target: { sheetName: "Booking", range: "A2:X20" } }, undefined, true)?.id).toBe("write_conditional_formatting");
+    expect(findAgentActionHandler({ request: "Add data validation dropdown list to Booking D2:D7.", target: { sheetName: "Booking", range: "D2:D7" } }, undefined, true)?.id).toBe("write_data_validation");
+    expect(findAgentActionHandler({ request: "Add new col next to Qty", target: { sheetName: "Booking", range: "D:D" } }, undefined, true)?.id).toBe("insert_columns");
   });
 
   it("matches promoted cleaning mutation actions by caller intent", () => {

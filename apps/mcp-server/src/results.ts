@@ -52,6 +52,7 @@ function compactAgentResultText(value: AgentRunOutput): string {
   }
   if (value.continuation?.fullResultUri) {
     lines.push(`fullResultUri: ${value.continuation.fullResultUri}`);
+    lines.push("full detail: call excel.agent.run with fullResultUri in request/continuation; do not use webfetch for excel:// handles");
   }
   if (value.resourceLinks.length > 0) {
     lines.push(`resources: ${value.resourceLinks.map((resource) => resource.uri).join(", ")}`);
