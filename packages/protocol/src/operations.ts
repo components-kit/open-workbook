@@ -337,6 +337,21 @@ export interface ProtectSheetOperation extends OperationBase {
   kind: "sheet.protect";
   sheetName: string;
   password?: string;
+  options?: {
+    allowFormatCells?: boolean;
+    allowFormatColumns?: boolean;
+    allowFormatRows?: boolean;
+    allowInsertColumns?: boolean;
+    allowInsertRows?: boolean;
+    allowDeleteColumns?: boolean;
+    allowDeleteRows?: boolean;
+    allowSort?: boolean;
+    allowAutoFilter?: boolean;
+    allowPivotTables?: boolean;
+    selectionMode?: "normal" | "unlocked" | "none";
+    protectDrawingObjects?: boolean;
+    protectScenarios?: boolean;
+  };
 }
 
 export interface UnprotectSheetOperation extends OperationBase {

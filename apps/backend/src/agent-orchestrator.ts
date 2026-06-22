@@ -2643,6 +2643,7 @@ export class AgentOrchestrator {
     const newSheetName = stringValue(values?.newSheetName ?? values?.sheetName ?? values?.name ?? (behavior === "create" ? input.target?.sheetName : undefined));
     const color = stringValue(values?.color ?? values?.tabColor);
     const password = stringValue(values?.password);
+    const protectionOptions = sheetProtectionOptionsFromInput(values);
     const clearApplyTo = sheetClearApplyToFromInput(values?.applyTo);
     let operation: ExcelOperation;
     let summary = "";
@@ -2690,10 +2691,10 @@ export class AgentOrchestrator {
         return sheetNeedsInput(metadata, requestedMode, `Sheet ${behavior} needs target.sheetName.`);
       }
       operation = behavior === "protect"
-        ? { kind: "sheet.protect", operationId: makeId<OperationId>("op"), workbookId, destructiveLevel: "structure", reason: input.request, sheetName: targetSheetName, ...(password ? { password } : {}) }
+        ? { kind: "sheet.protect", operationId: makeId<OperationId>("op"), workbookId, destructiveLevel: "structure", reason: input.request, sheetName: targetSheetName, ...(password ? { password } : {}), ...(protectionOptions ? { options: protectionOptions } : {}) }
         : { kind: "sheet.unprotect", operationId: makeId<OperationId>("op"), workbookId, destructiveLevel: "structure", reason: input.request, sheetName: targetSheetName, ...(password ? { password } : {}) };
       summary = `Prepared sheet ${behavior} for ${targetSheetName}.`;
-      answer = { ...answer, sheetName: targetSheetName };
+      answer = { ...answer, sheetName: targetSheetName, ...(protectionOptions ? { options: protectionOptions } : {}) };
     } else if (behavior === "clear") {
       if (!targetSheetName) {
         return sheetNeedsInput(metadata, requestedMode, "Sheet clear needs target.sheetName.");
@@ -4186,6 +4187,23 @@ export class AgentOrchestrator {
       };
     }
     const tableName = resolved.candidate.tableName ?? resolved.candidate.label;
+    const table = tableFromResolution(metadata, resolved);
+    const expectedColumnCount = table?.columns.length ?? 0;
+    if (expectedColumnCount > 0) {
+      const invalidRowIndex = matrix.findIndex((row) => row.length !== expectedColumnCount);
+      if (invalidRowIndex >= 0) {
+        return {
+          status: "VALIDATION_FAILED",
+          mode: requestedMode,
+          workbookContextId: metadata.workbookContextId,
+          summary: `Table append row ${invalidRowIndex + 1} has ${matrix[invalidRowIndex]?.length ?? 0} value(s), but ${tableName} has ${expectedColumnCount} column(s).`,
+          proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: tableName }],
+          resourceLinks: [contextResource(metadata.workbookContextId)],
+          nextAction: "ask_user",
+          warnings: ["Provide one value per table column or explicitly confirm which missing cells should be blank."]
+        };
+      }
+    }
     const request: TableAppendRowsRequest = {
       workbookId: metadata.workbook.workbookId as WorkbookId,
       tableName,
@@ -6413,6 +6431,9 @@ function styleFromRequest(request: string): NonNullable<RangeSnapshot["style"]> 
     /\b(font|text)\b/.test(lower)
       ? colorNearContext(lower, ["font", "text"]) ?? colorFromText(lower, ["font", "text"])
       : undefined;
+  const horizontalAlignment = /\b(?:center|centered|centre|centred)\s+(?:align|aligned|alignment)|\b(?:align|aligned)\s+(?:center|centre)\b/.test(lower)
+    ? "center"
+    : undefined;
   return {
     ...(lower.includes("header") ? {
       fontBold: true,
@@ -6424,6 +6445,7 @@ function styleFromRequest(request: string): NonNullable<RangeSnapshot["style"]> 
     ...(fontColor ? { fontColor } : fillColor === "#000000" ? { fontColor: "#FFFFFF" } : {}),
     ...(/\bbold\b/.test(lower) ? { fontBold: true } : {}),
     ...(/\bitalic\b/.test(lower) ? { fontItalic: true } : {}),
+    ...(horizontalAlignment ? { horizontalAlignment } : {}),
     ...(/\bborders?\b/.test(lower) && /\b(add|apply|draw|thin|outline|all sides?)\b/.test(lower)
       ? { borders: { style: "continuous" as const, weight: "thin" as const } }
       : {})
@@ -6461,21 +6483,26 @@ function colorFromText(text: string, contextWords?: string[]): string | undefine
 }
 
 function colorNearContext(text: string, contextWords: string[]): string | undefined {
-  const colors = ["black", "white", "yellow", "red", "green", "blue", "gray", "grey", "orange"];
-  let best: { color: string; distance: number } | undefined;
+  const colorNames = ["black", "white", "yellow", "red", "green", "blue", "gray", "grey", "orange"];
+  const candidates = [
+    ...[...text.matchAll(/#[0-9a-fA-F]{6}/g)].map((match) => ({ value: match[0].toUpperCase(), index: match.index ?? 0, explicit: true })),
+    ...colorNames.flatMap((color) => [...text.matchAll(new RegExp(`\\b${color}\\b`, "g"))].map((match) => ({ value: color, index: match.index ?? 0, explicit: false })))
+  ];
+  let best: { value: string; distance: number; explicit: boolean } | undefined;
   for (const context of contextWords) {
     for (const contextMatch of text.matchAll(new RegExp(`\\b${context}\\b`, "g"))) {
-      for (const color of colors) {
-        for (const colorMatch of text.matchAll(new RegExp(`\\b${color}\\b`, "g"))) {
-          const distance = Math.abs((colorMatch.index ?? 0) - (contextMatch.index ?? 0));
-          if (distance <= 40 && (!best || distance < best.distance)) {
-            best = { color, distance };
-          }
+      for (const candidate of candidates) {
+        const distance = Math.abs(candidate.index - (contextMatch.index ?? 0));
+        if (
+          distance <= 40 &&
+          (!best || (candidate.explicit && !best.explicit) || (candidate.explicit === best.explicit && distance < best.distance))
+        ) {
+          best = { value: candidate.value, distance, explicit: candidate.explicit };
         }
       }
     }
   }
-  return best ? colorFromText(best.color) : undefined;
+  return best ? colorString(best.value) : undefined;
 }
 
 function booleanValue(value: unknown): boolean | undefined {
@@ -8235,6 +8262,41 @@ function backupRetentionKindFromInput(value: unknown): WorkbookBackupRetentionRe
 function sheetClearApplyToFromInput(value: unknown): "all" | "contents" | "formats" {
   const applyTo = stringValue(value);
   return applyTo === "contents" || applyTo === "formats" ? applyTo : "all";
+}
+
+function sheetProtectionOptionsFromInput(values: Record<string, unknown> | undefined): Extract<ExcelOperation, { kind: "sheet.protect" }>["options"] | undefined {
+  const rawOptions = values?.options && typeof values.options === "object" ? values.options as Record<string, unknown> : {};
+  const valueFor = (...keys: string[]) => {
+    for (const key of keys) {
+      if (rawOptions[key] !== undefined) return rawOptions[key];
+      if (values?.[key] !== undefined) return values[key];
+    }
+    return undefined;
+  };
+  const options: NonNullable<Extract<ExcelOperation, { kind: "sheet.protect" }>["options"]> = {};
+  const setBoolean = (field: Exclude<keyof typeof options, "selectionMode">, ...keys: string[]) => {
+    const value = booleanValue(valueFor(...keys));
+    if (value !== undefined) {
+      options[field] = value;
+    }
+  };
+  setBoolean("allowFormatCells", "allowFormatCells", "allowFormat", "formatCells");
+  setBoolean("allowFormatColumns", "allowFormatColumns", "formatColumns");
+  setBoolean("allowFormatRows", "allowFormatRows", "formatRows");
+  setBoolean("allowInsertColumns", "allowInsertColumns", "insertColumns");
+  setBoolean("allowInsertRows", "allowInsertRows", "insertRows");
+  setBoolean("allowDeleteColumns", "allowDeleteColumns", "deleteColumns");
+  setBoolean("allowDeleteRows", "allowDeleteRows", "deleteRows");
+  setBoolean("allowSort", "allowSort", "sort");
+  setBoolean("allowAutoFilter", "allowAutoFilter", "allowFilter", "filter", "autoFilter");
+  setBoolean("allowPivotTables", "allowPivotTables", "pivotTables");
+  setBoolean("protectDrawingObjects", "protectDrawingObjects", "objects");
+  setBoolean("protectScenarios", "protectScenarios", "scenarios");
+  const selectionMode = stringValue(valueFor("selectionMode"));
+  if (selectionMode === "normal" || selectionMode === "unlocked" || selectionMode === "none") {
+    options.selectionMode = selectionMode;
+  }
+  return Object.keys(options).length > 0 ? options : undefined;
 }
 
 function positiveNumber(value: unknown): number | undefined {

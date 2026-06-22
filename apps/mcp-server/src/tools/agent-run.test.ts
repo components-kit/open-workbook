@@ -62,4 +62,47 @@ describe("excel.agent.run MCP schema", () => {
       ]
     });
   });
+
+  it("accepts common structured update payloads without requiring agents to send schemas", () => {
+    const schema = agentRunInputSchema();
+
+    expect((schema.values as any).parse({
+      values: [["Reviewed"]],
+      style: { fillColor: "#1F4E78", fontColor: "#FFFFFF", fontBold: true },
+      options: ["Open", "Reviewed", "Closed"],
+      validation: { type: "list", source: ["Open", "Reviewed", "Closed"], inCellDropDown: true },
+      rule: { type: "custom", formula: "=$E2=\"Open\"", style: { fillColor: "#FFFF00" } },
+      columnOrder: [2, 1],
+      numberFormat: "dd/mm/yyyy"
+    })).toMatchObject({
+      values: [["Reviewed"]],
+      style: { fillColor: "#1F4E78", fontColor: "#FFFFFF", fontBold: true },
+      options: ["Open", "Reviewed", "Closed"],
+      validation: { type: "list", source: ["Open", "Reviewed", "Closed"], inCellDropDown: true },
+      rule: { type: "custom", formula: "=$E2=\"Open\"", style: { fillColor: "#FFFF00" } },
+      columnOrder: [2, 1],
+      numberFormat: "dd/mm/yyyy"
+    });
+    expect((schema.values as any).parse({ numberFormats: [["dd/mm/yyyy"]] })).toMatchObject({ numberFormats: [["dd/mm/yyyy"]] });
+    expect((schema.values as any).parse({
+      rows: [
+        { index: 1, values: ["2026-01-04", "Northwind", "Support", 525, "Closed"] }
+      ]
+    })).toMatchObject({
+      rows: [
+        { index: 1, values: ["2026-01-04", "Northwind", "Support", 525, "Closed"] }
+      ]
+    });
+  });
+
+  it("rejects malformed common update payloads with field-level schema errors", () => {
+    const schema = agentRunInputSchema();
+
+    expect(() => (schema.values as any).parse({ style: { fillColor: 42 } })).toThrow(/fillColor/i);
+    expect(() => (schema.values as any).parse({ options: ["Open", 7] })).toThrow(/options/i);
+    expect(() => (schema.values as any).parse({ validation: { source: ["Open", 7] } })).toThrow(/source/i);
+    expect(() => (schema.values as any).parse({ rule: { formula: 42, style: { fillColor: "#FFFF00" } } })).toThrow(/formula/i);
+    expect(() => (schema.values as any).parse({ columnOrder: [2, { bad: true }] })).toThrow(/columnOrder/i);
+    expect(() => (schema.values as any).parse({ numberFormat: [["dd/mm/yyyy", 42]] })).toThrow(/numberFormat/i);
+  });
 });

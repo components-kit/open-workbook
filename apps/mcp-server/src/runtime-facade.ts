@@ -24,6 +24,9 @@ export async function createRuntimeFacade(config: McpServerConfig): Promise<Runt
   }
 
   const localRuntime = new RuntimeService() as RuntimeFacade;
+  if (process.env.OPEN_WORKBOOK_E2E_ALLOW_DESTRUCTIVE_ACTIONS === "1") {
+    localRuntime.setPermissions({ allowDestructiveActions: true, requireConfirmationFor: [] });
+  }
   const registration = localRuntime.registerAgent({ agentName: config.agentName, clientType: "mcp", pid: process.pid });
   const agentExecutionContext = agentContextFromRegistration(registration, config.agentName);
   await startBackendServer(localRuntime, { host: config.host, port: config.port, addinPath: config.addinPath });

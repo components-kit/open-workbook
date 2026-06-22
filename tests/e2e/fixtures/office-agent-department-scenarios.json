@@ -1,0 +1,781 @@
+[
+  {
+    "id": "department-finance-read-summary",
+    "category": "department workflow: finance",
+    "difficulty": "simple",
+    "intent": "read_values",
+    "prompt": "Review the January finance summary without changing it.",
+    "input": {
+      "request": "Summarize January A1:C5 without making changes.",
+      "mode": "answer",
+      "intent": { "action": "read_values" },
+      "target": { "sheetName": "January", "range": "A1:C5" }
+    },
+    "expected": {
+      "shouldMutateWorkbook": false,
+      "mustNotReadFullWorkbook": true
+    },
+    "budgets": { "maxToolCalls": 1, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-finance-mutate-note",
+    "category": "department workflow: finance",
+    "difficulty": "medium",
+    "intent": "write_values",
+    "prompt": "Add a finance variance note and apply it.",
+    "input": {
+      "request": "Write Finance review complete to January C5.",
+      "mode": "preview_update",
+      "intent": { "action": "write_values" },
+      "target": { "sheetName": "January", "range": "C5" },
+      "values": { "values": [["Finance review complete"]] }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_values"],
+      "cellValues": [
+        { "sheetName": "January", "cell": "C5", "value": "Finance review complete" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-sales-ops-read-open-items",
+    "category": "department workflow: sales/ops",
+    "difficulty": "simple",
+    "intent": "read_values",
+    "prompt": "Review Sales open items without changing them.",
+    "input": {
+      "request": "Read Sales A1:E6 and summarize open items without making changes.",
+      "mode": "answer",
+      "intent": { "action": "read_values" },
+      "target": { "sheetName": "Sales", "range": "A1:E6" }
+    },
+    "expected": {
+      "shouldMutateWorkbook": false,
+      "mustNotReadFullWorkbook": true
+    },
+    "budgets": { "maxToolCalls": 1, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-sales-ops-mutate-status",
+    "category": "department workflow: sales/ops",
+    "difficulty": "medium",
+    "intent": "write_values",
+    "prompt": "Mark the first Sales item reviewed and apply it.",
+    "input": {
+      "request": "Write Reviewed to Sales E2.",
+      "mode": "preview_update",
+      "intent": { "action": "write_values" },
+      "target": { "sheetName": "Sales", "range": "E2" },
+      "values": { "values": [["Reviewed"]] }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_values"],
+      "cellValues": [
+        { "sheetName": "Sales", "cell": "E2", "value": "Reviewed" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-logistics-read-actions",
+    "category": "department workflow: logistics",
+    "difficulty": "simple",
+    "intent": "read_values",
+    "prompt": "Review operations logistics actions without changing them.",
+    "input": {
+      "request": "Read Operations H4:J7 and summarize action owners without making changes.",
+      "mode": "answer",
+      "intent": { "action": "read_values" },
+      "target": { "sheetName": "Operations", "range": "H4:J7" }
+    },
+    "expected": {
+      "shouldMutateWorkbook": false,
+      "mustNotReadFullWorkbook": true
+    },
+    "budgets": { "maxToolCalls": 1, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-logistics-mutate-due-date",
+    "category": "department workflow: logistics",
+    "difficulty": "medium",
+    "intent": "write_values",
+    "prompt": "Update a logistics due date and apply it.",
+    "input": {
+      "request": "Write 2026-06-24 to Operations J6.",
+      "mode": "preview_update",
+      "intent": { "action": "write_values" },
+      "target": { "sheetName": "Operations", "range": "J6" },
+      "values": { "values": [["2026-06-24"]] }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_values"],
+      "cellValues": [
+        { "sheetName": "Operations", "cell": "J6", "value": "2026-06-24" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-hr-read-tracker",
+    "category": "department workflow: HR",
+    "difficulty": "simple",
+    "intent": "read_values",
+    "prompt": "Review the HR employee tracker without changing it.",
+    "input": {
+      "request": "Read HR A1:E5 and summarize employee statuses without making changes.",
+      "mode": "answer",
+      "intent": { "action": "read_values" },
+      "target": { "sheetName": "HR", "range": "A1:E5" }
+    },
+    "expected": {
+      "shouldMutateWorkbook": false,
+      "mustNotReadFullWorkbook": true
+    },
+    "budgets": { "maxToolCalls": 1, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-hr-mutate-review",
+    "category": "department workflow: HR",
+    "difficulty": "medium",
+    "intent": "write_values",
+    "prompt": "Add an HR review note and apply it.",
+    "input": {
+      "request": "Write Q3 review scheduled to HR E2.",
+      "mode": "preview_update",
+      "intent": { "action": "write_values" },
+      "target": { "sheetName": "HR", "range": "E2" },
+      "values": { "values": [["Q3 review scheduled"]] }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_values"],
+      "cellValues": [
+        { "sheetName": "HR", "cell": "E2", "value": "Q3 review scheduled" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-executive-read-summary",
+    "category": "department workflow: executive reporting",
+    "difficulty": "simple",
+    "intent": "read_values",
+    "prompt": "Review executive summary space without changing it.",
+    "input": {
+      "request": "Read Summary A1:C5 without making changes.",
+      "mode": "answer",
+      "intent": { "action": "read_values" },
+      "target": { "sheetName": "Summary", "range": "A1:C5" }
+    },
+    "expected": {
+      "shouldMutateWorkbook": false,
+      "mustNotReadFullWorkbook": true
+    },
+    "budgets": { "maxToolCalls": 1, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-executive-mutate-headline",
+    "category": "department workflow: executive reporting",
+    "difficulty": "medium",
+    "intent": "write_values",
+    "prompt": "Add an executive report headline and apply it.",
+    "input": {
+      "request": "Write Executive Snapshot to Summary A1.",
+      "mode": "preview_update",
+      "intent": { "action": "write_values" },
+      "target": { "sheetName": "Summary", "range": "A1" },
+      "values": { "values": [["Executive Snapshot"]] }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_values"],
+      "cellValues": [
+        { "sheetName": "Summary", "cell": "A1", "value": "Executive Snapshot" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-executive-pivot-chart-workflow-plan",
+    "category": "department workflow: executive reporting pivot chart",
+    "difficulty": "workflow",
+    "intent": "create_pivot_chart_summary",
+    "prompt": "Plan an executive PivotTable and chart summary without mutating the workbook.",
+    "input": {
+      "request": "Create a PivotTable summary by Sales status with an amount chart for executive reporting, and report any host limits.",
+      "mode": "answer",
+      "intent": { "action": "create_pivot_chart_summary" },
+      "target": { "sheetName": "Sales", "range": "A1:E6" }
+    },
+    "expected": {
+      "status": "SUCCESS",
+      "nextAction": "manual_review",
+      "answerKind": "workflow_plan",
+      "answerAction": "create_pivot_chart_summary",
+      "shouldMutateWorkbook": false,
+      "mustNotReadFullWorkbook": true,
+      "requiredCapabilities": [
+        "excel.pivot.get_capability_matrix",
+        "excel.pivot.create",
+        "excel.chart.create",
+        "excel.pivot.validate_source"
+      ],
+      "warningIncludes": ["host-limited"]
+    },
+    "budgets": { "maxToolCalls": 1, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-data-cleanup-read-raw",
+    "category": "department workflow: data cleanup",
+    "difficulty": "simple",
+    "intent": "read_values",
+    "prompt": "Inspect raw cleanup data without changing it.",
+    "input": {
+      "request": "Read Data Cleanup A1:D5 and summarize cleanup needs without making changes.",
+      "mode": "answer",
+      "intent": { "action": "read_values" },
+      "target": { "sheetName": "Data Cleanup", "range": "A1:D5" }
+    },
+    "expected": {
+      "shouldMutateWorkbook": false,
+      "mustNotReadFullWorkbook": true
+    },
+    "budgets": { "maxToolCalls": 1, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-data-cleanup-mutate-status",
+    "category": "department workflow: data cleanup",
+    "difficulty": "medium",
+    "intent": "write_values",
+    "prompt": "Mark the first cleanup row normalized and apply it.",
+    "input": {
+      "request": "Write Normalized to Data Cleanup D2.",
+      "mode": "preview_update",
+      "intent": { "action": "write_values" },
+      "target": { "sheetName": "Data Cleanup", "range": "D2" },
+      "values": { "values": [["Normalized"]] }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_values"],
+      "cellValues": [
+        { "sheetName": "Data Cleanup", "cell": "D2", "value": "Normalized" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-data-cleanup-trim-whitespace",
+    "category": "department workflow: data cleanup",
+    "difficulty": "medium",
+    "intent": "trim_whitespace",
+    "prompt": "Trim whitespace in the raw cleanup rows and apply it.",
+    "input": {
+      "request": "Trim whitespace in Data Cleanup A2:B5.",
+      "mode": "preview_update",
+      "intent": { "action": "trim_whitespace" },
+      "target": { "sheetName": "Data Cleanup", "range": "A2:B5" }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "cleaning_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.read_full", "range.write_values"],
+      "cellValues": [
+        { "sheetName": "Data Cleanup", "cell": "A2", "value": "acme co" },
+        { "sheetName": "Data Cleanup", "cell": "B2", "value": "INFO@ACME.COM" },
+        { "sheetName": "Data Cleanup", "cell": "B3", "value": "sales@northwind.example" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-data-cleanup-parse-raw-dates",
+    "category": "department workflow: data cleanup",
+    "difficulty": "medium",
+    "intent": "parse_dates",
+    "prompt": "Parse raw date text and apply date formatting.",
+    "input": {
+      "request": "Parse dates in Data Cleanup E2:E5 and format them as dd/mm/yyyy.",
+      "mode": "preview_update",
+      "intent": { "action": "parse_dates" },
+      "target": { "sheetName": "Data Cleanup", "range": "E2:E5" },
+      "values": { "numberFormat": "dd/mm/yyyy" }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "cleaning_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_values", "range.write_number_formats"],
+      "cellValues": [
+        { "sheetName": "Data Cleanup", "cell": "E2", "value": 46199 },
+        { "sheetName": "Data Cleanup", "cell": "E3", "value": 46200 },
+        { "sheetName": "Data Cleanup", "cell": "E4", "value": "not a date" },
+        { "sheetName": "Data Cleanup", "cell": "E5", "value": 46201 }
+      ],
+      "cellNumberFormats": [
+        { "sheetName": "Data Cleanup", "cell": "E2", "numberFormat": "dd/mm/yyyy" },
+        { "sheetName": "Data Cleanup", "cell": "E3", "numberFormat": "dd/mm/yyyy" },
+        { "sheetName": "Data Cleanup", "cell": "E4", "numberFormat": "dd/mm/yyyy" },
+        { "sheetName": "Data Cleanup", "cell": "E5", "numberFormat": "dd/mm/yyyy" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-data-cleanup-parse-amount-numbers",
+    "category": "department workflow: data cleanup",
+    "difficulty": "medium",
+    "intent": "parse_numbers",
+    "prompt": "Parse amount text into numeric values and apply it.",
+    "input": {
+      "request": "Parse numbers in Data Cleanup C2:C5.",
+      "mode": "preview_update",
+      "intent": { "action": "parse_numbers" },
+      "target": { "sheetName": "Data Cleanup", "range": "C2:C5" }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "cleaning_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_values"],
+      "cellValues": [
+        { "sheetName": "Data Cleanup", "cell": "C2", "value": 1200 },
+        { "sheetName": "Data Cleanup", "cell": "C3", "value": 450 },
+        { "sheetName": "Data Cleanup", "cell": "C4", "value": 3200 },
+        { "sheetName": "Data Cleanup", "cell": "C5", "value": 650 }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-data-cleanup-standardize-currency",
+    "category": "department workflow: data cleanup",
+    "difficulty": "medium",
+    "intent": "standardize_currency",
+    "prompt": "Standardize currency text into numeric values and apply it.",
+    "input": {
+      "request": "Standardize currency values in Data Cleanup F2:F5.",
+      "mode": "preview_update",
+      "intent": { "action": "standardize_currency" },
+      "target": { "sheetName": "Data Cleanup", "range": "F2:F5" }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "cleaning_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_values"],
+      "cellValues": [
+        { "sheetName": "Data Cleanup", "cell": "F2", "value": 1200 },
+        { "sheetName": "Data Cleanup", "cell": "F3", "value": 450 },
+        { "sheetName": "Data Cleanup", "cell": "F4", "value": -3200 },
+        { "sheetName": "Data Cleanup", "cell": "F5", "value": 650 }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-data-cleanup-remove-duplicates",
+    "category": "department workflow: data cleanup",
+    "difficulty": "medium",
+    "intent": "remove_duplicates",
+    "prompt": "Remove duplicate cleanup rows and apply it.",
+    "input": {
+      "request": "Remove duplicate rows from Data Cleanup A1:F6 using the header row.",
+      "mode": "preview_update",
+      "intent": { "action": "remove_duplicates" },
+      "target": { "sheetName": "Data Cleanup", "range": "A1:F6" },
+      "values": { "hasHeader": true }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "cleaning_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_values"],
+      "cellValues": [
+        { "sheetName": "Data Cleanup", "cell": "A6", "value": "" },
+        { "sheetName": "Data Cleanup", "cell": "B6", "value": "" },
+        { "sheetName": "Data Cleanup", "cell": "F6", "value": "" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-finance-formula-repair-boundary",
+    "category": "department workflow: finance formula repair",
+    "difficulty": "medium",
+    "intent": "repair_formula_errors",
+    "prompt": "Check whether formula errors can be automatically repaired.",
+    "input": {
+      "request": "Repair formula errors in the workbook if safe.",
+      "mode": "answer",
+      "intent": { "action": "repair_formula_errors" },
+      "target": { "sheetName": "January", "range": "D2:D5" }
+    },
+    "expected": {
+      "resultType": "error",
+      "status": "VALIDATION_FAILED",
+      "nextAction": "manual_review",
+      "answerKind": "repair_report",
+      "shouldMutateWorkbook": false,
+      "mustNotReadFullWorkbook": true
+    },
+    "budgets": { "maxToolCalls": 1, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-finance-formula-template-repair",
+    "category": "department workflow: finance formula repair",
+    "difficulty": "hard",
+    "intent": "repair_formulas_from_template",
+    "prompt": "Register a finance formula template, then repair a target sheet from it.",
+    "steps": [
+      {
+        "label": "register",
+        "input": {
+          "request": "Register FormulaSheet as the finance formula template.",
+          "mode": "preview_update",
+          "intent": { "action": "register_template" },
+          "target": { "sheetName": "FormulaSheet" },
+          "values": { "name": "Finance Formula Template", "dataRegions": [] }
+        }
+      },
+      {
+        "label": "repair",
+        "input": {
+          "request": "Repair FormulaTarget formulas from the registered finance formula template.",
+          "mode": "preview_update",
+          "intent": { "action": "repair_formulas_from_template" },
+          "target": { "sheetName": "FormulaTarget" },
+          "values": { "templateId": "$steps.register:applied.templateId" }
+        }
+      }
+    ],
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "allowDestructiveActions": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "formula_repair_patterns_preview",
+      "hostMethods": ["template.capture", "template.repair", "template.capture_sheet"],
+      "cellFormulas": [
+        { "sheetName": "FormulaTarget", "cell": "D2", "formula": "=B2+C2" },
+        { "sheetName": "FormulaTarget", "cell": "D10", "formula": "=B10+C10" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 4, "maxPayloadBytes": 45000, "maxLatencyMs": 9000 }
+  },
+  {
+    "id": "department-finance-conditional-format-profit-risk",
+    "category": "department workflow: finance",
+    "difficulty": "medium",
+    "intent": "write_conditional_formatting",
+    "prompt": "Highlight low finance values and apply it.",
+    "input": {
+      "request": "Add conditional formatting to January A2:C5. Formula =$B2<3000 should fill matching rows light red.",
+      "mode": "preview_update",
+      "intent": { "action": "write_conditional_formatting" },
+      "target": { "sheetName": "January", "range": "A2:C5" },
+      "values": { "formula": "=$B2<3000", "style": { "fillColor": "#FCE4D6", "fontColor": "#9C0006" } }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "write_conditional_formatting_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_conditional_formatting"],
+      "conditionalFormatRanges": [
+        { "sheetName": "January", "range": "A2:C5", "formula": "=$B2<3000" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-finance-write-variance-formulas",
+    "category": "department workflow: finance formula",
+    "difficulty": "medium",
+    "intent": "write_formulas",
+    "prompt": "Add finance variance formulas and apply them.",
+    "input": {
+      "request": "Write finance variance formulas to January D2:D5.",
+      "mode": "preview_update",
+      "intent": { "action": "write_formulas" },
+      "target": { "sheetName": "January", "range": "D2:D5" },
+      "values": {
+        "values": [
+          ["=B2-B3"],
+          ["=B3/B2"],
+          ["=B4/B2"],
+          ["=B5*1000"]
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "formula_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_formulas"],
+      "cellFormulas": [
+        { "sheetName": "January", "cell": "D2", "formula": "=B2-B3" },
+        { "sheetName": "January", "cell": "D3", "formula": "=B3/B2" },
+        { "sheetName": "January", "cell": "D4", "formula": "=B4/B2" },
+        { "sheetName": "January", "cell": "D5", "formula": "=B5*1000" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-sales-ops-dropdown-status",
+    "category": "department workflow: sales/ops",
+    "difficulty": "medium",
+    "intent": "write_data_validation",
+    "prompt": "Add a Sales status dropdown and apply it.",
+    "input": {
+      "request": "Add a dropdown list to Sales E2:E6 with Open, Reviewed, Closed.",
+      "mode": "preview_update",
+      "intent": { "action": "write_data_validation" },
+      "target": { "sheetName": "Sales", "range": "E2:E6" },
+      "values": { "options": ["Open", "Reviewed", "Closed"], "inCellDropDown": true }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "write_data_validation_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_data_validation"],
+      "validationRanges": [
+        { "sheetName": "Sales", "range": "E2:E6", "source": ["Open", "Reviewed", "Closed"] }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-logistics-insert-review-column",
+    "category": "department workflow: logistics",
+    "difficulty": "medium",
+    "intent": "insert_columns",
+    "prompt": "Insert a logistics review column and apply it.",
+    "input": {
+      "request": "Insert a new review column before the Operations owner/actions area.",
+      "mode": "preview_update",
+      "intent": { "action": "insert_columns" },
+      "target": { "sheetName": "Operations", "range": "G:G" }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "allowDestructiveActions": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "range.insert_columns_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.insert_columns"],
+      "insertedColumns": [
+        { "sheetName": "Operations", "address": "G1:G17", "minDimensionEndColumn": "K" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-hr-style-protected-header",
+    "category": "department workflow: HR",
+    "difficulty": "medium",
+    "intent": "format_range",
+    "prompt": "Style the HR tracker header and apply it.",
+    "input": {
+      "request": "Set HR A1:E1 to dark blue fill (#1F4E78), white font (#FFFFFF), bold text, center aligned.",
+      "mode": "preview_update",
+      "intent": { "action": "format_range" },
+      "target": { "sheetName": "HR", "range": "A1:E1" }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "style_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_styles"],
+      "cellStyles": [
+        { "sheetName": "HR", "cell": "A1", "style": { "fillColor": "#1F4E78", "fontColor": "#FFFFFF", "fontBold": true } }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-hr-protect-tracker-sheet",
+    "category": "department workflow: HR protected header",
+    "difficulty": "medium",
+    "intent": "protect_sheet",
+    "prompt": "Protect the HR tracker sheet with reviewer permissions and apply it.",
+    "input": {
+      "request": "Protect the HR sheet so reviewed headers are not accidentally edited, but allow filtering and sorting for reviewers.",
+      "mode": "preview_update",
+      "intent": { "action": "protect_sheet" },
+      "target": { "sheetName": "HR" },
+      "values": {
+        "password": "review",
+        "allowFilter": true,
+        "allowSort": true,
+        "allowFormatCells": false,
+        "protectDrawingObjects": true,
+        "protectScenarios": true
+      }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "allowDestructiveActions": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "sheet_protect_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["sheet.protect"],
+      "sheetProtections": [
+        {
+          "sheetName": "HR",
+          "protected": true,
+          "options": {
+            "allowAutoFilter": true,
+            "allowSort": true,
+            "allowFormatCells": false,
+            "protectDrawingObjects": true,
+            "protectScenarios": true
+          }
+        }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-executive-style-summary-bands",
+    "category": "department workflow: executive reporting",
+    "difficulty": "medium",
+    "intent": "write_styles_many",
+    "prompt": "Style executive reporting bands and apply them as one grouped operation.",
+    "input": {
+      "request": "Style Operations KPI header A4:C4 and notes header H4:J4 for executive review.",
+      "mode": "preview_update",
+      "intent": { "action": "write_styles_many" },
+      "target": { "sheetName": "Operations" },
+      "values": {
+        "entries": [
+          { "sheetName": "Operations", "range": "A4:C4", "fillColor": "#D9EAD3", "fontColor": "#274E13", "fontBold": true },
+          { "sheetName": "Operations", "range": "H4:J4", "fillColor": "#D9EAD3", "fontColor": "#274E13", "fontBold": true }
+        ]
+      }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "write_styles_many_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_styles_many"],
+      "cellStyles": [
+        { "sheetName": "Operations", "cell": "A4", "style": { "fillColor": "#D9EAD3", "fontColor": "#274E13", "fontBold": true } },
+        { "sheetName": "Operations", "cell": "H4", "style": { "fillColor": "#D9EAD3", "fontColor": "#274E13", "fontBold": true } }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "department-data-cleanup-reorder-name-email",
+    "category": "department workflow: data cleanup",
+    "difficulty": "medium",
+    "intent": "reorder_range_columns",
+    "prompt": "Swap cleanup name and email columns and apply it.",
+    "input": {
+      "request": "Swap Data Cleanup columns Raw Name and Email.",
+      "mode": "preview_update",
+      "intent": { "action": "reorder_range_columns" },
+      "target": { "sheetName": "Data Cleanup", "range": "A1:B5" },
+      "values": { "columnOrder": [2, 1] }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "range.reorder_columns_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.reorder_columns"],
+      "cellValues": [
+        { "sheetName": "Data Cleanup", "cell": "A1", "value": "Email" },
+        { "sheetName": "Data Cleanup", "cell": "B1", "value": "Raw Name" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  }
+]

@@ -186,4 +186,60 @@ describe("BatchCompiler", () => {
     expect(compiled.targetFingerprints.map((fingerprint) => fingerprint.range.address)).toEqual(["B3:D1048576", "F10:XFD12"]);
     expect(compiled.estimatedCellsTouched).toBe((1_048_576 - 3 + 1) * 3 + (16_384 - 6 + 1) * 3);
   });
+
+  it("expands whole-row and whole-column structure operations to affected workbook ranges", () => {
+    const workbookId = "workbook_test" as WorkbookId;
+    const request: BatchRequest = {
+      workbookId,
+      mode: "dry_run",
+      operations: [
+        {
+          kind: "range.insert_columns",
+          operationId: "op_insert_column" as OperationId,
+          workbookId,
+          destructiveLevel: "structure",
+          reason: "Insert a whole column",
+          target: { workbookId, sheetName: "Sheet1", address: "F:F" }
+        },
+        {
+          kind: "range.delete_rows",
+          operationId: "op_delete_row" as OperationId,
+          workbookId,
+          destructiveLevel: "structure",
+          reason: "Delete a whole row",
+          target: { workbookId, sheetName: "Sheet1", address: "3:3" }
+        }
+      ]
+    };
+
+    const compiled = new BatchCompiler({ now: () => "2026-06-12T00:00:00.000Z" }).compile(request);
+
+    expect(compiled.requiredBackups).toContain("workbook-copy");
+    expect(compiled.targetFingerprints.map((fingerprint) => fingerprint.range.address)).toEqual(["F1:XFD1048576", "A3:XFD1048576"]);
+    expect(compiled.estimatedCellsTouched).toBe((16_384 - 6 + 1) * 1_048_576 + (1_048_576 - 3 + 1) * 16_384);
+  });
+
+  it("does not crash when a runtime operation has no target fingerprint mapping", () => {
+    const workbookId = "workbook_test" as WorkbookId;
+    const request: BatchRequest = {
+      workbookId,
+      mode: "dry_run",
+      operations: [
+        {
+          kind: "range.runtime_host_only",
+          operationId: "op_runtime_only" as OperationId,
+          workbookId,
+          destructiveLevel: "format",
+          reason: "Host-only operation shape"
+        } as unknown as BatchRequest["operations"][number]
+      ]
+    };
+
+    const compiled = new BatchCompiler({ now: () => "2026-06-12T00:00:00.000Z" }).compile(request);
+
+    expect(compiled.requiredBackups).toContain("region");
+    expect(compiled.destructiveLevel).toBe("format");
+    expect(compiled.targetFingerprints).toHaveLength(0);
+    expect(compiled.estimatedCellsTouched).toBe(0);
+  });
 });

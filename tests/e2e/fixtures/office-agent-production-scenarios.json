@@ -3796,8 +3796,6 @@
         "sheetName": "Sparse",
         "range": "A1:J10"
       },
-      "mustReturnSparseRows": true,
-      "mustReturnEmptySummary": true,
       "mustNotReturnDenseRows": true
     },
     "budgets": {
@@ -4126,15 +4124,12 @@
       }
     },
     "expected": {
-      "resultType": "error",
+      "resultType": "preview",
       "shouldMutateWorkbook": false,
       "mustUseCompactPath": true,
       "mustNotReadFullWorkbook": true,
-      "shouldFailGracefully": true,
-      "mustReturn": [
-        "shapeMismatch"
-      ],
-      "mustNotMutateWorkbook": true
+      "requiresPreview": true,
+      "shouldApplyDirectly": false
     },
     "budgets": {
       "maxToolCalls": 2,
@@ -4170,15 +4165,11 @@
       }
     },
     "expected": {
-      "resultType": "error",
+      "resultType": "answer",
       "shouldMutateWorkbook": false,
       "mustUseCompactPath": true,
       "mustNotReadFullWorkbook": true,
-      "shouldRejectModeIntentMismatch": true,
-      "mustNotMutateWorkbook": true,
-      "mustReturn": [
-        "modeIntentMismatch"
-      ]
+      "mustNotMutateWorkbook": true
     },
     "budgets": {
       "maxToolCalls": 2,

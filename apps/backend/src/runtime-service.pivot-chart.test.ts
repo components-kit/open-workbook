@@ -228,6 +228,60 @@ describe("RuntimeService PivotTable template copy", () => {
     expect(calls).toEqual(["pivot.get_info", "pivot.get_info"]);
     expect(runtime.transactions.list(workbookId)).toHaveLength(0);
   });
+
+  it("ignores Excel's synthetic Values hierarchy when checking PivotTable template compatibility", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_pivot_copy_values_hierarchy" as WorkbookId;
+    const session = runtime.sessions.createSession();
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string, params: any) => {
+        if (method === "pivot.get_info") {
+          const isTemplate = params.pivotTableName === "TemplatePivot";
+          return {
+            ok: true,
+            info: {
+              workbookId,
+              pivotTableName: params.pivotTableName,
+              sheetName: "Report",
+              range: { address: isTemplate ? "Report!E3:F7" : "Report!J3:K7" },
+              source: "Transactions",
+              sourceType: "Table",
+              hierarchies: [{ name: "Status" }, { name: "Region" }, { name: "Amount" }],
+              rowHierarchies: [{ name: isTemplate ? "Region" : "Status" }],
+              columnHierarchies: [{ name: "Values" }],
+              filterHierarchies: [],
+              dataHierarchies: [{ name: "Sum of Amount", field: { name: "Amount" }, summarizeBy: "Sum" }]
+            }
+          };
+        }
+        if (method === "workbook.snapshot_ranges") {
+          return {
+            workbookId,
+            workbookHash: "pivot_copy_values_workbook",
+            structureHash: "structure",
+            capturedAt: new Date().toISOString(),
+            rangeSnapshots: params.ranges.map((range: any) => ({
+              range,
+              values: [["snapshot"]],
+              fingerprint: { range, hash: "pivot_copy_values_range", cellCount: 1, capturedAt: new Date().toISOString() }
+            }))
+          };
+        }
+        if (method === "pivot.copy_from_template") {
+          return { ok: true, copied: ["fields"], source: { workbookId, pivotTableName: params.templatePivotTableName }, target: { workbookId, pivotTableName: params.pivotTableName } };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const result = await runtime.copyPivotFromTemplate({
+      workbookId,
+      pivotTableName: "ReportPivot",
+      templatePivotTableName: "TemplatePivot"
+    });
+
+    expect((result as { ok?: boolean }).ok).toBe(true);
+  });
 });
 
 describe("RuntimeService PivotTable validation", () => {
@@ -450,6 +504,41 @@ describe("RuntimeService PivotTable validation", () => {
     expect(result.issues.some((issue) => issue.code === "PIVOT_EXPECTED_AGGREGATION_MISMATCH")).toBe(true);
     expect(result.issues.some((issue) => issue.code === "PIVOT_EXPECTED_NUMBER_FORMAT_MISMATCH")).toBe(true);
     expect(result.issues.some((issue) => issue.code === "PIVOT_EXPECTED_LAYOUT_SETTING_MISMATCH")).toBe(true);
+  });
+
+  it("normalizes Office.js PivotTable aggregation enum casing when validating settings", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_pivot_validate_aggregation_alias" as WorkbookId;
+    const session = runtime.sessions.createSession();
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string) => {
+        if (method === "pivot.get_info") {
+          return {
+            ok: true,
+            info: {
+              workbookId,
+              pivotTableName: "SalesPivot",
+              sheetName: "Report",
+              range: { address: "Report!A3:E20" },
+              source: "SalesTable",
+              sourceType: "Table",
+              hierarchies: [{ name: "Amount" }],
+              dataHierarchies: [{ name: "Sum of Amount", field: { name: "Amount" }, summarizeBy: "Sum", numberFormat: "#,##0" }]
+            }
+          };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const result = await runtime.validatePivotSource({
+      workbookId,
+      pivotTableName: "SalesPivot",
+      expectedDataFieldSettings: [{ sourceFieldName: "Amount", summarizeBy: "sum", numberFormat: "#,##0" }]
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.issues.some((issue) => issue.code === "PIVOT_EXPECTED_AGGREGATION_MISMATCH")).toBe(false);
   });
 
   it("marks missing PivotTables as validation errors", async () => {

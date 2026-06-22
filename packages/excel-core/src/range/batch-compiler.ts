@@ -7,7 +7,7 @@ import type {
   A1Range
 } from "@components-kit/open-workbook-protocol";
 import { createRangeFingerprint } from "./fingerprint.js";
-import { cellCount, formatA1Address, parseA1Address, stripSheetName } from "./range-address.js";
+import { cellCount, columnNameToNumber, formatA1Address, parseA1Address, stripSheetName } from "./range-address.js";
 
 const EXCEL_MAX_ROW = 1_048_576;
 const EXCEL_MAX_COLUMN = 16_384;
@@ -82,7 +82,7 @@ function maxDestructiveLevel(left: DestructiveLevel, right: DestructiveLevel): D
   return DESTRUCTIVE_RANK[right] > DESTRUCTIVE_RANK[left] ? right : left;
 }
 
-function getOperationTargets(operation: ExcelOperation) {
+function getOperationTargets(operation: ExcelOperation): A1Range[] {
   switch (operation.kind) {
     case "range.read_full":
     case "range.write_values":
@@ -145,11 +145,13 @@ function getOperationTargets(operation: ExcelOperation) {
     case "sheet.clear":
     case "sheet.set_tab_color":
       return [];
+    default:
+      return [];
   }
 }
 
 function shiftedRowRange(target: A1Range): A1Range {
-  const parsed = parseA1Address(stripSheetName(target.address));
+  const parsed = parseStructuralAddress(stripSheetName(target.address));
   return {
     ...target,
     address: formatA1Address({
@@ -162,7 +164,7 @@ function shiftedRowRange(target: A1Range): A1Range {
 }
 
 function shiftedColumnRange(target: A1Range): A1Range {
-  const parsed = parseA1Address(stripSheetName(target.address));
+  const parsed = parseStructuralAddress(stripSheetName(target.address));
   return {
     ...target,
     address: formatA1Address({
@@ -172,4 +174,26 @@ function shiftedColumnRange(target: A1Range): A1Range {
       endColumn: EXCEL_MAX_COLUMN
     })
   };
+}
+
+function parseStructuralAddress(address: string) {
+  const wholeColumn = /^([A-Z]+)(?::([A-Z]+))?$/i.exec(address);
+  if (wholeColumn) {
+    return {
+      startRow: 1,
+      endRow: EXCEL_MAX_ROW,
+      startColumn: columnNameToNumber(wholeColumn[1]!),
+      endColumn: columnNameToNumber(wholeColumn[2] ?? wholeColumn[1]!)
+    };
+  }
+  const wholeRow = /^(\d+)(?::(\d+))?$/.exec(address);
+  if (wholeRow) {
+    return {
+      startRow: Number(wholeRow[1]),
+      endRow: Number(wholeRow[2] ?? wholeRow[1]),
+      startColumn: 1,
+      endColumn: EXCEL_MAX_COLUMN
+    };
+  }
+  return parseA1Address(address);
 }

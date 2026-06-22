@@ -26,6 +26,7 @@ import type {
   PivotCopyFromTemplateResponse,
   PivotCopyFromTemplateRequest,
   PivotCreateRequest,
+  PivotLayoutInfo,
   PivotSelector,
   PivotTableInfo,
   RangeMetadataRequest,
@@ -87,6 +88,7 @@ interface ExecutionCounters {
 
 const ENGINE_NAME = "office-js-addin";
 const ENGINE_VERSION = OPEN_WORKBOOK_VERSION;
+const TASKPANE_BUNDLE_VERSION = "20260622-9";
 const CHUNK_CELL_LIMIT = 50_000;
 const OPEN_WORKBOOK_CUSTOM_XML_NAMESPACE = "https://open-workbook.dev/schema/local-config/1";
 const EXCEL_API_VERSIONS = ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17"] as const;
@@ -107,6 +109,7 @@ export function getRuntimeCapabilities(): RuntimeCapabilities {
       version: ENGINE_VERSION,
       platform,
       host: String(Office.context.host ?? "Excel"),
+      taskpaneBundleVersion: TASKPANE_BUNDLE_VERSION,
       ...(officeVersion !== undefined ? { officeVersion } : {})
     },
     apiSets,
@@ -596,15 +599,14 @@ export async function getPivotTableInfo(request: PivotSelector): Promise<{ ok: b
 
 export async function createPivotTable(request: PivotCreateRequest): Promise<{ ok: boolean; info: PivotTableInfo }> {
   return Excel.run(async (context) => {
+    const destinationWorksheet = context.workbook.worksheets.getItem(request.destinationSheetName);
     const source = request.sourceTableName
       ? context.workbook.tables.getItem(request.sourceTableName)
       : context.workbook.worksheets.getItem(request.sourceSheetName ?? request.destinationSheetName).getRange(stripSheetName(request.sourceAddress ?? ""));
-    const destination = context.workbook.worksheets.getItem(request.destinationSheetName).getRange(stripSheetName(request.destinationAddress));
-    const pivot = context.workbook.pivotTables.add(request.pivotTableName, source, destination);
+    const destination = destinationWorksheet.getRange(stripSheetName(request.destinationAddress));
+    const pivot = destinationWorksheet.pivotTables.add(request.pivotTableName, source, destination);
     await context.sync();
     if (hasPivotCreateLayout(request)) {
-      loadPivotTemplateReplayObjects(pivot);
-      await context.sync();
       applyPivotCreateLayout(request, pivot);
       await context.sync();
       if (request.refresh !== false) {
@@ -1385,6 +1387,7 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
           }
           case "range.reorder_columns": {
             await reorderRangeColumns(context, operation.target, operation.columnOrder);
+            counters.syncCount += 1;
             counters.cellsWritten += payload.compiled.estimatedCellsTouched;
             break;
           }
@@ -1517,7 +1520,7 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
             break;
           }
           case "sheet.protect": {
-            context.workbook.worksheets.getItem(operation.sheetName).protection.protect(undefined, operation.password);
+            context.workbook.worksheets.getItem(operation.sheetName).protection.protect(toWorksheetProtectionOptions(operation.options), operation.password);
             sheetsChanged += 1;
             break;
           }
@@ -2451,28 +2454,47 @@ function hasPivotCreateLayout(request: PivotCreateRequest): boolean {
 
 function applyPivotCreateLayout(request: PivotCreateRequest, targetPivot: Excel.PivotTable): void {
   if (request.layout !== undefined) {
-    targetPivot.layout.set(request.layout as Excel.Interfaces.PivotLayoutUpdateData);
+    applyPivotCreateLayoutInfo(targetPivot.layout, request.layout);
   }
-  replayPivotAxis(targetPivot, "row", (request.rowFields ?? []).map(pivotAxisInfoFromName));
-  replayPivotAxis(targetPivot, "column", (request.columnFields ?? []).map(pivotAxisInfoFromName));
-  replayPivotAxis(targetPivot, "filter", (request.filterFields ?? []).map(pivotAxisInfoFromName));
-  replayPivotDataHierarchies(targetPivot, (request.dataFields ?? []).map((field, index) => {
-    const info: NonNullable<PivotTableInfo["dataHierarchies"]>[number] = {
-      name: field.name ?? field.sourceFieldName,
-      position: index,
-      field: { name: field.sourceFieldName }
-    };
-    assignIfDefined(info, "numberFormat", field.numberFormat);
-    assignIfDefined(info, "summarizeBy", field.summarizeBy);
-    return info;
-  }));
+  addPivotAxisFields(targetPivot, "row", request.rowFields ?? []);
+  addPivotAxisFields(targetPivot, "column", request.columnFields ?? []);
+  addPivotAxisFields(targetPivot, "filter", request.filterFields ?? []);
+  addPivotDataFields(targetPivot, request.dataFields ?? []);
 }
 
-function pivotAxisInfoFromName(name: string, index: number): NonNullable<PivotTableInfo["rowHierarchies"]>[number] {
-  return {
-    name,
-    position: index
-  };
+function addPivotAxisFields(targetPivot: Excel.PivotTable, axis: "row" | "column" | "filter", fields: string[]): void {
+  if (fields.length === 0) {
+    return;
+  }
+  const collection = axis === "row"
+    ? targetPivot.rowHierarchies
+    : axis === "column"
+      ? targetPivot.columnHierarchies
+      : targetPivot.filterHierarchies;
+  for (const [index, fieldName] of fields.entries()) {
+    const added = collection.add(findPivotHierarchy(targetPivot, fieldName));
+    if (index > 0) {
+      added.position = index;
+    }
+  }
+}
+
+function addPivotDataFields(targetPivot: Excel.PivotTable, fields: NonNullable<PivotCreateRequest["dataFields"]>): void {
+  for (const [index, field] of fields.entries()) {
+    const added = targetPivot.dataHierarchies.add(findPivotHierarchy(targetPivot, field.sourceFieldName));
+    if (index > 0) {
+      added.position = index;
+    }
+    if (field.name !== undefined && field.name !== field.sourceFieldName) {
+      added.name = field.name;
+    }
+    if (field.numberFormat !== undefined) {
+      added.numberFormat = field.numberFormat;
+    }
+    if (field.summarizeBy !== undefined) {
+      added.summarizeBy = field.summarizeBy as Excel.AggregationFunction;
+    }
+  }
 }
 
 function applyPivotTemplateMetadata(source: PivotTableInfo, targetPivot: Excel.PivotTable, dimensions?: PivotCopyFromTemplateRequest["dimensions"]): string[] {
@@ -2486,7 +2508,7 @@ function applyPivotTemplateMetadata(source: PivotTableInfo, targetPivot: Excel.P
     copied.push("refreshOnOpen", "useCustomSortLists", "enableDataValueEditing", "allowMultipleFiltersPerField");
   }
   if (includes("layout") && source.layout !== undefined) {
-    targetPivot.layout.set(source.layout as Excel.Interfaces.PivotLayoutUpdateData);
+    applyPivotLayoutInfo(targetPivot.layout, source.layout);
     copied.push("layout");
   }
   if (includes("fields")) {
@@ -2521,34 +2543,37 @@ function replayPivotAxis(
     return;
   }
   const collection = axis === "row" ? targetPivot.rowHierarchies : targetPivot.columnHierarchies;
-  for (const existing of collection.items) {
-    collection.remove(existing);
-  }
-  for (const [index, hierarchyInfo] of hierarchies.entries()) {
-    const hierarchy = targetPivot.hierarchies.getItem(hierarchyInfo.name);
+  const desiredHierarchies = hierarchies.filter((hierarchy) => !isSyntheticPivotValuesHierarchy(hierarchy.name));
+  const desiredNames = new Set(desiredHierarchies.map((hierarchy) => hierarchy.name));
+  for (const [index, hierarchyInfo] of desiredHierarchies.entries()) {
+    const hierarchy = findPivotHierarchy(targetPivot, hierarchyInfo.name);
     const added = collection.add(hierarchy);
-    added.position = hierarchyInfo.position ?? index;
-    for (const fieldInfo of hierarchyInfo.fields ?? []) {
-      const field = added.fields.getItem(fieldInfo.name);
-      applyPivotFieldMetadata(field, fieldInfo);
+    if (hierarchyInfo.position !== undefined && hierarchyInfo.position !== index) {
+      added.position = hierarchyInfo.position;
+    }
+  }
+  for (const existing of collection.items) {
+    if (!isSyntheticPivotValuesHierarchy(existing.name) && !desiredNames.has(existing.name)) {
+      collection.remove(existing);
     }
   }
 }
 
 function replayFilterPivotAxis(targetPivot: Excel.PivotTable, hierarchies: NonNullable<PivotTableInfo["filterHierarchies"]>): void {
-  for (const existing of targetPivot.filterHierarchies.items) {
-    targetPivot.filterHierarchies.remove(existing);
-  }
+  const desiredNames = new Set(hierarchies.map((hierarchy) => hierarchy.name));
   for (const [index, hierarchyInfo] of hierarchies.entries()) {
-    const hierarchy = targetPivot.hierarchies.getItem(hierarchyInfo.name);
+    const hierarchy = findPivotHierarchy(targetPivot, hierarchyInfo.name);
     const added = targetPivot.filterHierarchies.add(hierarchy);
-    added.position = hierarchyInfo.position ?? index;
+    if (hierarchyInfo.position !== undefined && hierarchyInfo.position !== index) {
+      added.position = hierarchyInfo.position;
+    }
     if (hierarchyInfo.enableMultipleFilterItems !== undefined) {
       added.enableMultipleFilterItems = hierarchyInfo.enableMultipleFilterItems;
     }
-    for (const fieldInfo of hierarchyInfo.fields ?? []) {
-      const field = added.fields.getItem(fieldInfo.name);
-      applyPivotFieldMetadata(field, fieldInfo);
+  }
+  for (const existing of targetPivot.filterHierarchies.items) {
+    if (!desiredNames.has(existing.name)) {
+      targetPivot.filterHierarchies.remove(existing);
     }
   }
 }
@@ -2559,8 +2584,10 @@ function replayPivotDataHierarchies(targetPivot: Excel.PivotTable, hierarchies: 
   }
   for (const [index, hierarchyInfo] of hierarchies.entries()) {
     const sourceFieldName = hierarchyInfo.field?.name ?? hierarchyInfo.name;
-    const added = targetPivot.dataHierarchies.add(targetPivot.hierarchies.getItem(sourceFieldName));
-    added.position = hierarchyInfo.position ?? index;
+    const added = targetPivot.dataHierarchies.add(findPivotHierarchy(targetPivot, sourceFieldName));
+    if (hierarchyInfo.position !== undefined && hierarchyInfo.position !== index) {
+      added.position = hierarchyInfo.position;
+    }
     if (hierarchyInfo.name !== undefined) {
       added.name = hierarchyInfo.name;
     }
@@ -2570,18 +2597,49 @@ function replayPivotDataHierarchies(targetPivot: Excel.PivotTable, hierarchies: 
     if (hierarchyInfo.summarizeBy !== undefined) {
       added.summarizeBy = hierarchyInfo.summarizeBy as Excel.AggregationFunction;
     }
-    if (hierarchyInfo.field !== undefined) {
-      applyPivotFieldMetadata(added.field, hierarchyInfo.field);
-    }
   }
 }
 
-function applyPivotFieldMetadata(field: Excel.PivotField, fieldInfo: NonNullable<NonNullable<PivotTableInfo["rowHierarchies"]>[number]["fields"]>[number]): void {
-  if (fieldInfo.showAllItems !== undefined) {
-    field.showAllItems = fieldInfo.showAllItems;
+function findPivotHierarchy(targetPivot: Excel.PivotTable, name: string): Excel.PivotHierarchy {
+  return targetPivot.hierarchies.getItem(name);
+}
+
+function isSyntheticPivotValuesHierarchy(name: string | undefined): boolean {
+  return typeof name === "string" && name.toLowerCase() === "values";
+}
+
+function applyPivotLayoutInfo(layout: Excel.PivotLayout, layoutInfo: PivotLayoutInfo): void {
+  assignPivotLayoutValue(layout, "altTextDescription", layoutInfo.altTextDescription);
+  assignPivotLayoutValue(layout, "altTextTitle", layoutInfo.altTextTitle);
+  assignPivotLayoutValue(layout, "autoFormat", layoutInfo.autoFormat);
+  assignPivotLayoutValue(layout, "emptyCellText", layoutInfo.emptyCellText);
+  assignPivotLayoutValue(layout, "enableFieldList", layoutInfo.enableFieldList);
+  assignPivotLayoutValue(layout, "fillEmptyCells", layoutInfo.fillEmptyCells);
+  assignPivotLayoutValue(layout, "layoutType", layoutInfo.layoutType);
+  assignPivotLayoutValue(layout, "preserveFormatting", layoutInfo.preserveFormatting);
+  assignPivotLayoutValue(layout, "showColumnGrandTotals", layoutInfo.showColumnGrandTotals);
+  assignPivotLayoutValue(layout, "showFieldHeaders", layoutInfo.showFieldHeaders);
+  assignPivotLayoutValue(layout, "showRowGrandTotals", layoutInfo.showRowGrandTotals);
+  assignPivotLayoutValue(layout, "subtotalLocation", layoutInfo.subtotalLocation);
+}
+
+function applyPivotCreateLayoutInfo(layout: Excel.PivotLayout, layoutInfo: PivotLayoutInfo): void {
+  const createLayoutInfo = { ...layoutInfo };
+  if (createLayoutInfo.showRowGrandTotals === true) {
+    delete createLayoutInfo.showRowGrandTotals;
   }
-  if (fieldInfo.subtotals !== undefined) {
-    field.subtotals = fieldInfo.subtotals as Excel.Subtotals;
+  if (createLayoutInfo.showColumnGrandTotals === true) {
+    delete createLayoutInfo.showColumnGrandTotals;
+  }
+  if (createLayoutInfo.showFieldHeaders === true) {
+    delete createLayoutInfo.showFieldHeaders;
+  }
+  applyPivotLayoutInfo(layout, createLayoutInfo);
+}
+
+function assignPivotLayoutValue(layout: Excel.PivotLayout, key: keyof PivotLayoutInfo, value: unknown): void {
+  if (value !== undefined) {
+    (layout as unknown as Record<keyof PivotLayoutInfo, unknown>)[key] = value;
   }
 }
 
@@ -2972,7 +3030,12 @@ function applyConditionalFormatting(
   }
   const conditionalFormat = range.conditionalFormats.add(Excel.ConditionalFormatType.custom);
   const custom = conditionalFormat.custom;
-  (custom as unknown as { rule: { formula: string } }).rule = { formula: rule.formula };
+  const customRule = custom as unknown as { rule?: { formula?: string } };
+  if (customRule.rule) {
+    customRule.rule.formula = rule.formula;
+  } else {
+    customRule.rule = { formula: rule.formula };
+  }
   applyConditionalFormatStyle(custom.format, rule.style);
 }
 
@@ -3224,6 +3287,29 @@ function toWorksheetPositionType(position: "beginning" | "end" | "before" | "aft
       return Excel.WorksheetPositionType.before;
     case "after":
       return Excel.WorksheetPositionType.after;
+  }
+}
+
+function toWorksheetProtectionOptions(options: Extract<ExcelOperation, { kind: "sheet.protect" }>["options"]): Excel.WorksheetProtectionOptions | undefined {
+  if (!options) {
+    return undefined;
+  }
+  const { selectionMode, protectDrawingObjects: _protectDrawingObjects, protectScenarios: _protectScenarios, ...rest } = options;
+  const mapped: Excel.WorksheetProtectionOptions = {
+    ...rest,
+    ...(selectionMode ? { selectionMode: toProtectionSelectionMode(selectionMode) } : {})
+  };
+  return mapped;
+}
+
+function toProtectionSelectionMode(selectionMode: "normal" | "unlocked" | "none"): Excel.ProtectionSelectionMode {
+  switch (selectionMode) {
+    case "normal":
+      return Excel.ProtectionSelectionMode.normal;
+    case "unlocked":
+      return Excel.ProtectionSelectionMode.unlocked;
+    case "none":
+      return Excel.ProtectionSelectionMode.none;
   }
 }
 

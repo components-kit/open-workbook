@@ -7505,10 +7505,14 @@ function validatePivotTemplateCompatibility(source: PivotTableInfo, target: Pivo
 function pivotTemplateRequiredSourceFields(info: PivotTableInfo): string[] {
   return uniqueDefined([
     ...(info.rowHierarchies ?? []).map((hierarchy) => hierarchy.name),
-    ...(info.columnHierarchies ?? []).map((hierarchy) => hierarchy.name),
+    ...(info.columnHierarchies ?? []).map((hierarchy) => hierarchy.name).filter((name) => !isSyntheticPivotValuesHierarchy(name)),
     ...(info.filterHierarchies ?? []).map((hierarchy) => hierarchy.name),
     ...(info.dataHierarchies ?? []).map((hierarchy) => hierarchy.field?.name ?? hierarchy.name)
   ]);
+}
+
+function isSyntheticPivotValuesHierarchy(name: string | undefined): boolean {
+  return typeof name === "string" && name.toLowerCase() === "values";
 }
 
 function uniqueDefined(values: Array<string | undefined>): string[] {
@@ -7613,7 +7617,7 @@ function addExpectedPivotDataSettingIssues(
       });
       continue;
     }
-    if (expected.summarizeBy !== undefined && actual.summarizeBy !== expected.summarizeBy) {
+    if (expected.summarizeBy !== undefined && !pivotAggregationMatches(actual.summarizeBy, expected.summarizeBy)) {
       issues.push({
         code: "PIVOT_EXPECTED_AGGREGATION_MISMATCH",
         severity: "error",
@@ -7630,6 +7634,39 @@ function addExpectedPivotDataSettingIssues(
       });
     }
   }
+}
+
+function pivotAggregationMatches(actual: string | undefined, expected: string): boolean {
+  return normalizePivotAggregation(actual) === normalizePivotAggregation(expected);
+}
+
+function normalizePivotAggregation(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  const aliases: Record<string, string> = {
+    average: "average",
+    avg: "average",
+    count: "count",
+    countnumbers: "countnumbers",
+    countnums: "countnumbers",
+    max: "max",
+    min: "min",
+    product: "product",
+    standarddeviation: "standarddeviation",
+    stdev: "standarddeviation",
+    standarddeviationp: "standarddeviationp",
+    stdevp: "standarddeviationp",
+    sum: "sum",
+    variance: "variance",
+    var: "variance",
+    variancep: "variancep",
+    varp: "variancep",
+    automatic: "automatic",
+    auto: "automatic"
+  };
+  return aliases[normalized] ?? normalized;
 }
 
 function addExpectedPivotLayoutIssues(

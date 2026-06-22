@@ -177,6 +177,12 @@ With the shared daemon, multiple MCP sessions get distinct trusted agent identit
 corepack pnpm check
 corepack pnpm test
 corepack pnpm capabilities:report
+corepack pnpm test:regression:opencode
+corepack pnpm test:e2e:mcp-contract
+corepack pnpm test:e2e:workbook
+corepack pnpm test:e2e:scenarios
+corepack pnpm test:e2e:scenarios:regression
+corepack pnpm test:e2e:scenarios:departments
 corepack pnpm test:e2e:agent-surface
 corepack pnpm test:e2e:agent-workflow
 corepack pnpm test:e2e:office-agent:behavior

@@ -52,7 +52,68 @@ export function agentRunInputSchema() {
     reason: z.string().optional(),
     targetHints: z.array(z.string()).optional()
   }), "intent");
+  const colorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$|^[A-Za-z]+$/, "colors must be CSS-style names or #RRGGBB hex strings");
+  const styleSchema = z.object({
+    fillColor: colorSchema.optional(),
+    fill: colorSchema.optional(),
+    backgroundColor: colorSchema.optional(),
+    background: colorSchema.optional(),
+    fontColor: colorSchema.optional(),
+    textColor: colorSchema.optional(),
+    fontBold: z.boolean().optional(),
+    bold: z.boolean().optional(),
+    fontItalic: z.boolean().optional(),
+    italic: z.boolean().optional(),
+    fontName: z.string().optional(),
+    fontSize: z.number().positive().optional(),
+    horizontalAlignment: z.string().optional(),
+    align: z.string().optional(),
+    verticalAlignment: z.string().optional(),
+    rowHeight: z.number().positive().optional(),
+    columnWidth: z.number().positive().optional(),
+    borders: z.any().optional()
+  }).catchall(z.any());
+  const validationSchema = z.object({
+    type: z.enum(["list"]).optional(),
+    source: z.union([z.string(), z.array(z.string())]).optional(),
+    formula1: z.string().optional(),
+    inCellDropDown: z.boolean().optional(),
+    ignoreBlanks: z.boolean().optional()
+  }).catchall(z.any());
+  const conditionalRuleSchema = z.object({
+    type: z.enum(["custom"]).optional(),
+    formula: z.string().optional(),
+    style: styleSchema.optional()
+  }).catchall(z.any());
+  const numberFormatSchema = z.union([z.string(), z.array(z.array(z.string()))]);
+  const tableRowUpdateSchema = z.object({
+    index: z.number().int(),
+    values: z.array(z.any())
+  }).catchall(z.any());
   const valuesSchema = jsonObjectString(z.object({
+    values: z.array(z.array(z.any())).optional(),
+    rows: z.array(z.union([z.array(z.any()), tableRowUpdateSchema])).optional(),
+    formulas: z.array(z.array(z.union([z.string(), z.null()]))).optional(),
+    numberFormat: numberFormatSchema.optional(),
+    numberFormats: numberFormatSchema.optional(),
+    formats: numberFormatSchema.optional(),
+    style: styleSchema.optional(),
+    entries: z.array(z.object({
+      sheetName: z.string().optional(),
+      range: z.string().optional(),
+      address: z.string().optional(),
+      target: targetSchema.optional(),
+      style: styleSchema.optional()
+    }).catchall(z.any())).optional(),
+    options: z.array(z.string()).optional(),
+    allowedValues: z.array(z.string()).optional(),
+    source: z.union([z.string(), z.array(z.string())]).optional(),
+    validation: validationSchema.optional(),
+    formula: z.string().optional(),
+    rule: conditionalRuleSchema.optional(),
+    columnOrder: z.array(z.union([z.string(), z.number()])).optional(),
+    columns: z.array(z.union([z.string(), z.number()])).optional(),
+    order: z.array(z.union([z.string(), z.number()])).optional(),
     patches: z.array(z.object({
       target: targetSchema,
       values: z.array(z.array(z.any())).optional(),

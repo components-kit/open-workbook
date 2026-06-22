@@ -1,0 +1,193 @@
+[
+  {
+    "id": "regression-black-header-apply",
+    "category": "production regression",
+    "difficulty": "medium",
+    "intent": "format_range",
+    "prompt": "Set the Sales header row to black fill with white bold centered text and apply it.",
+    "input": {
+      "request": "Set Sales A1:E1 to black fill (#000000), white font (#FFFFFF), bold text, center aligned.",
+      "mode": "preview_update",
+      "intent": { "action": "format_range" },
+      "target": { "sheetName": "Sales", "range": "A1:E1" }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "allowDestructiveActions": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "style_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_styles"],
+      "cellStyles": [
+        { "sheetName": "Sales", "cell": "A1", "style": { "fillColor": "#000000", "fontColor": "#FFFFFF", "fontBold": true } }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "regression-insert-column-apply",
+    "category": "production regression",
+    "difficulty": "medium",
+    "intent": "insert_columns",
+    "prompt": "Insert a reviewer column after Status and apply it.",
+    "input": {
+      "request": "Add a new column after Status on Sales.",
+      "mode": "preview_update",
+      "intent": { "action": "insert_columns" },
+      "target": { "sheetName": "Sales", "range": "F:F" }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "allowDestructiveActions": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "range.insert_columns_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.insert_columns"],
+      "insertedColumns": [
+        { "sheetName": "Sales", "address": "F1:F6", "minDimensionEndColumn": "F" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "regression-range-column-swap-apply",
+    "category": "production regression",
+    "difficulty": "medium",
+    "intent": "reorder_range_columns",
+    "prompt": "Swap the Date and Customer columns and apply it.",
+    "input": {
+      "request": "Swap Sales columns Date and Customer.",
+      "mode": "preview_update",
+      "intent": { "action": "reorder_range_columns" },
+      "target": { "sheetName": "Sales", "range": "A1:B6" },
+      "values": { "columnOrder": [2, 1] }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "range.reorder_columns_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.reorder_columns"],
+      "cellValues": [
+        { "sheetName": "Sales", "cell": "A1", "value": "Customer" },
+        { "sheetName": "Sales", "cell": "B1", "value": "Date" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "regression-dropdown-validation-apply",
+    "category": "production regression",
+    "difficulty": "medium",
+    "intent": "write_data_validation",
+    "prompt": "Add a Status dropdown list and apply it.",
+    "input": {
+      "request": "Add a dropdown list to Sales E2:E6 with Open, Reviewed, Closed.",
+      "mode": "preview_update",
+      "intent": { "action": "write_data_validation" },
+      "target": { "sheetName": "Sales", "range": "E2:E6" },
+      "values": { "options": ["Open", "Reviewed", "Closed"] }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "write_data_validation_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_data_validation"],
+      "validationRanges": [
+        { "sheetName": "Sales", "range": "E2:E6", "source": ["Open", "Reviewed", "Closed"] }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "regression-formula-conditional-format-apply",
+    "category": "production regression",
+    "difficulty": "medium",
+    "intent": "write_conditional_formatting",
+    "prompt": "Add formula conditional color and apply it.",
+    "input": {
+      "request": "Add conditional formatting to Sales A2:E6. Formula =$E2=\"Open\" should fill matching rows yellow.",
+      "mode": "preview_update",
+      "intent": { "action": "write_conditional_formatting" },
+      "target": { "sheetName": "Sales", "range": "A2:E6" },
+      "values": { "formula": "=$E2=\"Open\"", "style": { "fillColor": "#FFFF00" } }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "write_conditional_formatting_preview",
+      "hostMethods": ["operation.execute_batch"],
+      "operationKinds": ["range.write_conditional_formatting"],
+      "conditionalFormatRanges": [
+        { "sheetName": "Sales", "range": "A2:E6", "formula": "=$E2=\"Open\"" }
+      ]
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "regression-table-column-reorder-apply",
+    "category": "production regression",
+    "difficulty": "medium",
+    "intent": "reorder_table_columns",
+    "prompt": "Move Status to the first Transactions table column and apply it.",
+    "input": {
+      "request": "Move Status to the first column in Transactions.",
+      "mode": "preview_update",
+      "intent": { "action": "reorder_table_columns" },
+      "target": { "tableName": "Transactions" },
+      "values": { "columns": ["Status", "Date", "Customer", "Product", "Amount"] }
+    },
+    "expected": {
+      "resultType": "apply",
+      "autoApply": true,
+      "xlsxAssertions": true,
+      "shouldMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "previewAnswerKind": "table_reorder_columns_preview",
+      "hostMethods": ["table.reorder_columns"],
+      "tableColumnOrder": {
+        "tableName": "Transactions",
+        "columns": ["Status", "Date", "Customer", "Product", "Amount"]
+      }
+    },
+    "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
+  },
+  {
+    "id": "regression-closed-workbook-status-error",
+    "category": "production regression",
+    "difficulty": "negative",
+    "intent": "connection",
+    "prompt": "Report a closed workbook state without crashing or mutating anything.",
+    "input": {
+      "request": "Can you connect to Excel and tell me what workbook is active?",
+      "mode": "status"
+    },
+    "expected": {
+      "resultType": "error",
+      "shouldMutateWorkbook": false,
+      "mustNotMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "shouldFailGracefully": true
+    },
+    "budgets": { "maxToolCalls": 1, "maxPayloadBytes": 12000, "maxLatencyMs": 4000 },
+    "fixture": {
+      "excelState": "noActiveWorkbook"
+    }
+  }
+]

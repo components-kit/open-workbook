@@ -33,6 +33,7 @@ export interface RuntimeCapabilities {
     platform: "mac" | "windows" | "web" | "unknown";
     host?: string;
     officeVersion?: string;
+    taskpaneBundleVersion?: string;
   };
   apiSets?: OfficeApiSetSupport[];
   capabilities: EngineCapability[];

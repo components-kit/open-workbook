@@ -1258,6 +1258,243 @@ Data rows:
     expect(redirected.warnings).toContain("Fragmented format previews were redirected to a grouped style workflow.");
   });
 
+  describe("OpenCode production regressions", () => {
+    it("applies explicit black header styling without falling back to default header colors", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Set header row A1:X1 on Data sheet to black fill (#000000) with white font color (#FFFFFF), bold text, center aligned.",
+        mode: "preview_update",
+        intent: { action: "format_range" },
+        target: { sheetName: "Data", range: "A1:X1" }
+      });
+      const applied = await agent.run({
+        request: "Apply black header style.",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).kind).toBe("style_preview");
+      expect((preview.answer as any).style).toMatchObject({
+        fillColor: "#000000",
+        fontColor: "#FFFFFF",
+        fontBold: true,
+        horizontalAlignment: "center"
+      });
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations[0]).toMatchObject({
+        kind: "range.write_styles",
+        target: { sheetName: "Data", address: "A1:X1" },
+        style: {
+          fillColor: "#000000",
+          fontColor: "#FFFFFF",
+          fontBold: true,
+          horizontalAlignment: "center"
+        },
+        preserveValues: true
+      });
+    });
+
+    it("applies flattened multi-style entries as one write_styles_many batch", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Set yellow fill #FFFF00 on rows 2, 4, and 7 of Booking sheet for full row A:X.",
+        mode: "preview_update",
+        intent: { action: "write_styles_many" },
+        target: { sheetName: "Booking" },
+        values: {
+          entries: [
+            { range: "A2:X2", sheetName: "Booking", fillColor: "#FFFF00" },
+            { range: "A4:X4", sheetName: "Booking", fillColor: "#FFFF00" },
+            { range: "A7:X7", sheetName: "Booking", fillColor: "#FFFF00" }
+          ]
+        }
+      });
+      const applied = await agent.run({
+        request: "Apply yellow row highlights.",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.writeBatchCount).toBe(1);
+      expect(runtime.lastBatchOperations).toEqual([
+        expect.objectContaining({
+          kind: "range.write_styles_many",
+          entries: [
+            { target: expect.objectContaining({ sheetName: "Booking", address: "A2:X2" }), style: { fillColor: "#FFFF00" }, preserveValues: true },
+            { target: expect.objectContaining({ sheetName: "Booking", address: "A4:X4" }), style: { fillColor: "#FFFF00" }, preserveValues: true },
+            { target: expect.objectContaining({ sheetName: "Booking", address: "A7:X7" }), style: { fillColor: "#FFFF00" }, preserveValues: true }
+          ]
+        })
+      ]);
+    });
+
+    it("applies inserted columns through the structural batch operation", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Add new columns next to Qty on Data.",
+        mode: "preview_update",
+        intent: { action: "insert_columns" },
+        target: { sheetName: "Data", range: "C:D" }
+      });
+      const applied = await agent.run({
+        request: "Apply inserted columns.",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).kind).toBe("range.insert_columns_preview");
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations[0]).toMatchObject({
+        kind: "range.insert_columns",
+        destructiveLevel: "structure",
+        target: { sheetName: "Data", address: "C1:D4" }
+      });
+    });
+
+    it("applies range column swaps with a normalized columnOrder payload", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Swap columns A and B in Data",
+        mode: "preview_update",
+        intent: { action: "reorder_range_columns" },
+        target: { sheetName: "Data", range: "A1:B4" },
+        values: { order: [2, 1] }
+      });
+      const applied = await agent.run({
+        request: "Apply column swap.",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).columnOrder).toEqual([2, 1]);
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations[0]).toMatchObject({
+        kind: "range.reorder_columns",
+        destructiveLevel: "structure",
+        target: { sheetName: "Data", address: "A1:B4" },
+        columnOrder: [2, 1]
+      });
+    });
+
+    it("applies table column swaps through the table host method", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Move Status before Date in the Transactions table.",
+        mode: "preview_update",
+        intent: { action: "reorder_table_columns" },
+        target: { tableName: "Transactions" },
+        values: { columns: ["Status", "Date", "Account", "Amount"] }
+      });
+      const applied = await agent.run({
+        request: "Apply table column order.",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).kind).toBe("table_reorder_columns_preview");
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.tableMethodCalls).toContainEqual({
+        method: "table.reorder_columns",
+        request: expect.objectContaining({
+          tableName: "Transactions",
+          columnOrder: ["Status", "Date", "Account", "Amount"]
+        })
+      });
+    });
+
+    it("applies dropdown validation from agent-friendly options", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Add select list to Data D2:D4.",
+        mode: "preview_update",
+        intent: { action: "write_data_validation" },
+        target: { sheetName: "Data", range: "D2:D4" },
+        values: { options: ["20GP", "40GP", "40HQ"], inCellDropDown: true }
+      });
+      const applied = await agent.run({
+        request: "Apply dropdown validation.",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).validation).toEqual({
+        type: "list",
+        source: ["20GP", "40GP", "40HQ"],
+        inCellDropDown: true,
+        ignoreBlanks: true
+      });
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations[0]).toMatchObject({
+        kind: "range.write_data_validation",
+        target: { sheetName: "Data", address: "D2:D4" },
+        validation: {
+          type: "list",
+          source: ["20GP", "40GP", "40HQ"],
+          inCellDropDown: true,
+          ignoreBlanks: true
+        }
+      });
+    });
+
+    it("applies formula conditional formatting from formula and style fields", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Add formula color on Data A2:D4 when column D is 40HQ.",
+        mode: "preview_update",
+        intent: { action: "write_conditional_formatting" },
+        target: { sheetName: "Data", range: "A2:D4" },
+        values: { formula: "=$D2=\"40HQ\"", style: { fillColor: "#FFFF00", fontColor: "#000000" } }
+      });
+      const applied = await agent.run({
+        request: "Apply formula conditional formatting.",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).kind).toBe("write_conditional_formatting_preview");
+      expect((preview.answer as any).kind).not.toBe("sheet_create_preview");
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations[0]).toMatchObject({
+        kind: "range.write_conditional_formatting",
+        target: { sheetName: "Data", address: "A2:D4" },
+        rule: {
+          type: "custom",
+          formula: "=$D2=\"40HQ\"",
+          style: { fillColor: "#FFFF00", fontColor: "#000000" }
+        }
+      });
+    });
+  });
+
   it("honors explicit black header colors instead of default header styling", async () => {
     const runtime = new FakeAgentRuntime();
     const agent = new AgentOrchestrator(runtime as any);
@@ -1274,6 +1511,26 @@ Data rows:
       fillColor: "#000000",
       fontColor: "#FFFFFF",
       fontBold: true
+    });
+  });
+
+  it("honors explicit header fill hex when the request also names a color family", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Set HR A1:E1 to dark blue fill (#1F4E78), white font (#FFFFFF), bold text, center aligned.",
+      mode: "preview_update",
+      intent: { action: "format_range" },
+      target: { sheetName: "Data", range: "A1:E1" }
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect((preview.answer as any).style).toMatchObject({
+      fillColor: "#1F4E78",
+      fontColor: "#FFFFFF",
+      fontBold: true,
+      horizontalAlignment: "center"
     });
   });
 
@@ -2043,6 +2300,24 @@ Data rows:
       expect(applied.status, testCase.capabilityName).toBe("SUCCESS");
       expect(runtime.tableMethodCalls.at(-1)?.method, testCase.capabilityName).toBe(testCase.expectedMethod);
     }
+  });
+
+  it("rejects incomplete table append rows before creating a preview", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Append a row to Transactions with one missing value.",
+      mode: "preview_update",
+      target: { tableName: "Transactions" },
+      values: { rows: [["2026-01-15", "Globex", "Support"]] }
+    });
+
+    expect(preview.status).toBe("VALIDATION_FAILED");
+    expect(preview.summary).toContain("has 3 value(s)");
+    expect(preview.summary).toContain("4 column(s)");
+    expect(preview.nextAction).toBe("ask_user");
+    expect(runtime.tableMethodCalls.length).toBe(0);
   });
 
   it("routes every covered sheet-core mutation to its internal operation", async () => {
