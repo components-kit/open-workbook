@@ -34,6 +34,7 @@ This map groups backend-owned action concepts for `excel.agent.run`. It is for r
 ## Mode Defaults
 
 - Use `answer` for read-only discovery, schema, metadata, safety artifact inspection, and deterministic analysis.
-- Use `preview_update` then `apply_update` for workbook mutations, backup lifecycle changes, restores, template fills, table writes, and structural edits.
+- Use `auto` for small exact value writes with explicit targets and values after session write access is allowed.
+- Use `preview_update` then `apply_update` for workbook mutations, backup lifecycle changes, restores, template fills, table writes, structural edits, formulas, styles, and broad or user-reviewable changes.
 - Use `validate` for explicit validation or post-change proof.
 - Use `rollback` for recovery planning and confirmed rollback/restore flows.

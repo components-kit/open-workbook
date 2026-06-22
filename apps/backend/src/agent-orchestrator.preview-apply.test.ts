@@ -515,6 +515,47 @@ Data rows:
       expect(runtime.writeBatchCount).toBe(1);
     });
 
+  it("auto-applies fix/correct wording when explicit values and target are safe", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Fix Data C15 to 71-0409 and correct D15 to Maintenance fee",
+        mode: "auto",
+        intent: { action: "write_values" },
+        target: { sheetName: "Data", range: "C15:D15" },
+        values: { values: [["71-0409", "Maintenance fee"]] }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.taskOutcome).toBe("apply_complete");
+      expect(result.maxRecommendedFollowupCalls).toBe(0);
+      expect(result.confirmationToken).toBeUndefined();
+      expect(result.telemetry.autoApplied).toBe(true);
+      expect(result.telemetry.safetyDecision).toBe("auto_apply:scoped_value_edit");
+      expect(runtime.writeBatchCount).toBe(1);
+    });
+
+  it("auto-applies exact dropdown source-list value corrections as normal value writes", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Dropdown options 71-5226 and 71-5229 are wrong; update the source list values to 700-5226 and 700-5229.",
+        mode: "auto",
+        intent: { action: "write_values", targetHints: ["Truck ID dropdown source list"] },
+        target: { sheetName: "Data", range: "A3:A4" },
+        values: { values: [["700-5226"], ["700-5229"]] }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.taskOutcome).toBe("apply_complete");
+      expect(result.telemetry.autoApplied).toBe(true);
+      expect(result.telemetry.safetyDecision).toBe("auto_apply:scoped_value_edit");
+      expect(runtime.writeBatchCount).toBe(1);
+      expect(runtime.lastBatchOperations[0]?.kind).toBe("range.write_values");
+    });
+
   it("previews header formatting as a style mutation instead of reading values", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);

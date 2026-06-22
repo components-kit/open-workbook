@@ -23,13 +23,13 @@ Use modes deliberately:
 - `prepare`: cache workbook identity, sheet/table/name/region metadata, and collaboration state.
 - `find`: locate candidate sheets, tables, headers, named ranges, regions, formulas, and summary blocks.
 - `answer`: targeted live reads, schemas, summaries, comparisons, and deterministic inspection.
-- `preview_update`: preview mutations and get an `operationId` plus `confirmationToken`.
+- `preview_update`: preview mutations and get an `operationId` plus `confirmationToken` when review is required.
 - `apply_update`: apply only a previewed operation with the returned token.
 - `operation_status`: check a returned operation without reissuing preview/apply.
 - `cancel_operation`: cancel a pending preview before apply starts.
 - `validate`: validate workbook, sheet, table, formula, style, filter, print-layout, or unintended-change scope.
 - `rollback`: inspect or apply recovery through returned transaction, snapshot, or backup guidance.
-- `auto`: compatibility route for casual prompts; explicit modes are preferred when the workflow step is known.
+- `auto`: default route for casual prompts and small explicit value edits; safe narrow edits may apply in one call after workbook write access is allowed for the session unless `autoApply: false`.
 
 The backend owns primitive Excel capabilities, compact reads, batches, plans, validation, snapshots, backups, locks, jobs, transactions, resources, and collaboration records. Do not ask for or assume a separate primitive MCP surface in user workflows.
 
@@ -75,7 +75,7 @@ For reads, start with a bounded `answer` call on the selected range. For mutatio
 - Inspect current styling: call `excel.agent.run` with `mode: "answer"`, `intent.action: "read_style_summary"`, and an exact range or current selection. Use `read_style_fingerprint` for template comparison, not normal user-facing style inspection.
 - Formatting errors: use `format_diagnostics` before mutating. It returns raw value, displayed text, formulas, number formats, style summary, likely issues, and suggested fix actions.
 - Historical labels and similar rows: when the user asks how something was labeled/classified before, start with `semantic_index` or `sheet_summary`, then call `intent.action: "find_similar_rows"` on the current row/range/table before reading whole prior sheets.
-- Dropdowns and allowed values: call `intent.action: "read_data_validation"` on the selected/current column or exact target before guessing from visible values. Use `write_data_validation` only when the user wants to change the dropdown rule.
+- Dropdowns and allowed values: call `intent.action: "read_data_validation"` on the selected/current column or exact target before guessing from visible values. When dropdown options are wrong, read validation/source-list proof first, then update exact source-list cells with `mode: "auto"` if it is a bounded value correction. Use `write_data_validation` only when the user wants to change the dropdown rule.
 - Filters, borders, dropdowns, and conditional formatting: send canonical intent early. Use `intent.action: "filter_range"` for autofilters, `clear_table_filters` for table filter removal, `format_range` for borders/fills/fonts/alignment, `write_data_validation` for dropdown/list cells, and `write_conditional_formatting` for formula-based formatting. Do not retry as sheet creation or value writes when the target sheet already exists.
 - Column changes: use `insert_columns`/`delete_columns` for sheet structure and `reorder_range_columns` for plain range swaps/reorders; use `reorder_table_columns` only for real Excel tables.
 - Date text cleanup: diagnose first, then use `parse_dates` only on exact date columns/ranges. If conversion needs explicit known dates, use one grouped `write_values` preview with per-range `numberFormat`.
@@ -83,6 +83,7 @@ For reads, start with a bounded `answer` call on the selected range. For mutatio
 ## Safety Rules
 
 - Never bypass permissions, scoped locks, snapshots, backups, fingerprints, Office.js execution, validation, transaction records, or rollback metadata for mutations.
+- For small explicit value edits the user already asked you to make, use `mode: "auto"` and leave `autoApply` unset. Once workbook write access is allowed for the session, do not ask the user to confirm every small exact edit. Use `autoApply: false` or `preview_update` when the user asks to review first, the edit is broad/risky, or the backend says preview is required.
 - Never write cell-by-cell loops. Batch values, formulas, number formats, and styles as narrow 2D matrices or grouped patches.
 - Do not fetch the full sheet before every preview. Reuse `workbookContextId`; preview may perform narrow metadata/fingerprint checks for safety, but agents should only read values first when target resolution is ambiguous, the user refers to current selection, or the change depends on existing values/styles.
 - For “what is this workbook”, “look at this workbook/sheet”, “where is the invoice/customer/receipt/template area”, or similar context requests, use `workbook_summary`, `semantic_index`, or `sheet_summary`. Do not fetch `table_sample` or `full_table` unless the user asks for actual rows/values.

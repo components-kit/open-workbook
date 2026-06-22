@@ -67,6 +67,8 @@ describe("RuntimeService permission contracts", () => {
       "WORKBOOK_SCOPE_BLOCKED",
       "SHEET_SCOPE_BLOCKED"
     ]));
+    expect(result.warnings.find((warning) => warning.code === "WRITES_DISABLED")?.message).toContain("this Open Workbook session");
+    expect(result.warnings.find((warning) => warning.code === "WORKBOOK_SCOPE_BLOCKED")?.message).toContain("targets workbook_permissions_apply");
   });
 
   it("allows confirmed scoped writes and blocks locked regions until unlocked", async () => {
@@ -132,6 +134,82 @@ describe("RuntimeService permission contracts", () => {
     expect(outOfScope.ok).toBe(false);
     expect(outOfScope.warnings.some((warning) => warning.code === "REGION_SCOPE_BLOCKED")).toBe(true);
     expect(runtime.getPermissions().permissions.lockedRegions).toHaveLength(0);
+  });
+
+  it("repairs stale workbook-only permission scope for the active connected workbook", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "transactions.xlsx" as WorkbookId;
+    const staleWorkbookId = "sample.xlsx" as WorkbookId;
+    const session = runtime.sessions.createSession();
+    runtime.sessions.update(session.connectionId, {
+      activeWorkbook: { workbookId, name: "transactions.xlsx", platform: "mac" }
+    });
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string, params: any) => {
+        if (method === "workbook.snapshot_ranges") {
+          return snapshotResponse(workbookId, params.ranges);
+        }
+        if (method === "operation.execute_batch") {
+          return operationOk();
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+    runtime.setPermissions({
+      allowWrites: true,
+      allowDestructiveActions: true,
+      allowWorkbookActions: true,
+      requireConfirmationFor: [],
+      scope: { workbookId: staleWorkbookId }
+    });
+
+    const result = await runtime.applyBatch({
+      workbookId,
+      mode: "apply",
+      operations: [permissionWriteOperation(workbookId, "May 2026", "C15")]
+    });
+
+    expect(result.ok).toBe(true);
+    expect(runtime.getPermissions().permissions.scope.workbookId).toBeUndefined();
+    expect(runtime.getCollaborationStatus(workbookId).events.some((event) => event.type === "permission.updated")).toBe(true);
+  });
+
+  it("allows repeated scoped value writes in the same session without confirmation when confirmations are disabled", async () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_permissions_session" as WorkbookId;
+    const session = runtime.sessions.createSession();
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string, params: any) => {
+        if (method === "workbook.snapshot_ranges") {
+          return snapshotResponse(workbookId, params.ranges);
+        }
+        if (method === "operation.execute_batch") {
+          return operationOk();
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+    runtime.setPermissions({
+      allowWrites: true,
+      allowDestructiveActions: true,
+      allowWorkbookActions: true,
+      requireConfirmationFor: [],
+      scope: { workbookId }
+    });
+
+    const first = await runtime.applyBatch({
+      workbookId,
+      mode: "apply",
+      operations: [permissionWriteOperation(workbookId, "Report", "B2")]
+    });
+    const second = await runtime.applyBatch({
+      workbookId,
+      mode: "apply",
+      operations: [permissionWriteOperation(workbookId, "Report", "B3")]
+    });
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
   });
 });
 

@@ -424,6 +424,11 @@ export class AgentOrchestrator {
         const sectionAnswer = sectionAnswerOutput(metadata, input, mode);
         return finish(sectionAnswer ?? this.findOutput(metadata, input, mode), cacheHit);
       }
+      if (effectiveMode === "preview_update" && isReadOnlyInspectionRequest(input.request) && !hasStructuredMutationPayload(input)) {
+        internalCallCount += 1;
+        const answerInput: AgentRunInput = { ...input, mode: "answer" };
+        return finish(await this.answerOutput(metadata, answerInput, "answer", runMetrics), cacheHit);
+      }
       if (effectiveMode === "preview_update") {
         internalCallCount += 1;
       const preview = await this.previewUpdate(metadata, input, mode);
@@ -7725,7 +7730,11 @@ function tableReadRowOffset(input: AgentRunInput): number {
     return explicit;
   }
   const rowStart = positiveIntegerValue(values?.rowStart);
-  return rowStart !== undefined && rowStart > 0 ? rowStart - 1 : 0;
+  if (rowStart !== undefined && rowStart > 0) {
+    return rowStart - 1;
+  }
+  const requested = tableRowWindowFromRequest(input.request);
+  return requested?.rowStart !== undefined && requested.rowStart > 0 ? requested.rowStart - 1 : 0;
 }
 
 function compactTableRowLimit(input: AgentRunInput, columnCount: number, rowOffset = 0): number {
@@ -7734,9 +7743,17 @@ function compactTableRowLimit(input: AgentRunInput, columnCount: number, rowOffs
   if (rowEnd !== undefined && rowEnd > rowOffset) {
     return rowEnd - rowOffset;
   }
+  const requestedWindow = tableRowWindowFromRequest(input.request);
+  if (requestedWindow?.rowEnd !== undefined && requestedWindow.rowEnd > rowOffset) {
+    return requestedWindow.rowEnd - rowOffset;
+  }
   const requested = nonNegativeInteger(values?.rowLimit ?? values?.maxRows ?? input.budget?.maxExamples);
   if (requested !== undefined && requested > 0) {
     return requested;
+  }
+  const firstRows = /\bfirst\s+(\d{1,5})\s+(?:table\s+)?rows?\b/i.exec(input.request);
+  if (firstRows?.[1]) {
+    return Math.min(10_000, Math.max(1, Number(firstRows[1])));
   }
   const maxCells = input.budget?.maxPayloadBytes ? Math.max(25, Math.floor(input.budget.maxPayloadBytes / 80)) : undefined;
   if (maxCells !== undefined && columnCount > 0) {
@@ -7749,6 +7766,29 @@ function compactTableRowLimit(input: AgentRunInput, columnCount: number, rowOffs
     return 10_000;
   }
   return 50;
+}
+
+function tableRowWindowFromRequest(request: string): { rowStart: number; rowEnd: number } | undefined {
+  const match = /\brows?\s+(\d{1,5})\s*(?:-|to|through|thru)\s*(\d{1,5})\b/i.exec(request);
+  if (!match?.[1] || !match[2]) {
+    return undefined;
+  }
+  const rowStart = Math.max(1, Number(match[1]));
+  const rowEnd = Math.max(rowStart, Number(match[2]));
+  return { rowStart, rowEnd };
+}
+
+function isReadOnlyInspectionRequest(request: string): boolean {
+  return /\b(?:read|show|inspect|look(?:\s+at|\s+into)?|review|summari[sz]e|analy[sz]e|list|print|describe)\b/i.test(request)
+    && !/\b(?:add|write|update|change|set|replace|append|insert|delete|clear|format|style|apply|create|modify|fix|remove|sort|filter)\b/i.test(request);
+}
+
+function hasStructuredMutationPayload(input: AgentRunInput): boolean {
+  const values = input.values as Record<string, unknown> | undefined;
+  if (!values) {
+    return false;
+  }
+  return ["values", "rows", "patches", "formulas", "style", "validation", "rule", "entries", "options", "totalRow", "showTotals"].some((key) => values[key] !== undefined);
 }
 
 function tableNeedsInput(
@@ -9638,6 +9678,9 @@ type AdvancedMutationKind = "formula" | "template" | "style" | "other";
 
 function advancedMutationDecision(input: AgentRunInput): { kind: AdvancedMutationKind; safetyDecision: string; summary: string; warning: string } | undefined {
   const request = input.request.toLowerCase();
+  if (isSmallExplicitValueWrite(input) && !hasAdvancedMutationKeyword(request)) {
+    return undefined;
+  }
   const kind: AdvancedMutationKind = /\b(formula|formulas|calculate|calculation|total\s+row)\b/.test(request)
     ? "formula"
     : /\b(template|duplicate|copy)\b/.test(request)
@@ -9645,7 +9688,7 @@ function advancedMutationDecision(input: AgentRunInput): { kind: AdvancedMutatio
       : /\b(style|format|formatting|header\s+row)\b/.test(request)
         ? "style"
         : "other";
-  if (kind !== "other" || /\b(repair|fix|pivot|chart)\b/.test(request)) {
+  if (kind !== "other" || /\b(repair|pivot|chart)\b/.test(request)) {
     return {
       kind,
       safetyDecision: "manual_review:advanced_workflow",
@@ -9654,6 +9697,10 @@ function advancedMutationDecision(input: AgentRunInput): { kind: AdvancedMutatio
     };
   }
   return undefined;
+}
+
+function hasAdvancedMutationKeyword(request: string): boolean {
+  return /\b(formula|formulas|calculate|calculation|total\s+row|template|duplicate|copy|style|format|formatting|header\s+row|repair|pivot|chart)\b/.test(request);
 }
 
 function autoApplyDecision(input: AgentRunInput, preview: Omit<AgentRunOutput, "telemetry">): { allow: true; safetyDecision: string } | { allow: false; safetyDecision: string; reason: string } {
@@ -9683,6 +9730,14 @@ function autoApplyDecision(input: AgentRunInput, preview: Omit<AgentRunOutput, "
     return { allow: false, safetyDecision: "manual_review:change_count", reason: "the previewed change count is not safe for auto-apply" };
   }
   return { allow: true, safetyDecision: "auto_apply:scoped_value_edit" };
+}
+
+function isSmallExplicitValueWrite(input: AgentRunInput): boolean {
+  if (!input.values || !hasExplicitAutoApplyTarget(input) || containsFormulaLikeAutoApplyValue(input.values)) {
+    return false;
+  }
+  const cellCount = autoApplyValueCellCount(input.values);
+  return cellCount > 0 && cellCount <= 16;
 }
 
 function hasExplicitAutoApplyTarget(input: AgentRunInput): boolean {

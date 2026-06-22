@@ -5,7 +5,7 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 ## Defaults
 
 - On the public surface, use `excel.agent.run`; the backend owns compact reads, summaries, proof, resource handles, and response budgeting.
-- Optimize for cost per completed user task, not cost per individual tool call. A good read-only task usually finishes from one `excel.agent.run` result; a normal mutation should be preview plus apply, with validation only when needed.
+- Optimize for cost per completed user task, not cost per individual tool call. A good read-only task usually finishes from one `excel.agent.run` result. A small exact value mutation should usually finish in one `auto` call after workbook write access is allowed for the session; broader or risky mutations should be preview plus apply, with validation only when needed.
 - Prefer bulk Office.js operations over per-cell actions.
 - Use 2D matrices for values, formulas, and number formats.
 - Use table APIs for table-shaped work.
@@ -35,6 +35,7 @@ When only a preview is inline and the next step requires exact rows, raw values,
 ## Task Completion And Freshness
 
 - If the result has `taskOutcome: "final_answer"` and `maxRecommendedFollowupCalls: 0`, answer the user now. Do not call again to “double check” unless the result says data is stale, unavailable, or incomplete.
+- If the result has `taskOutcome: "apply_complete"` and `maxRecommendedFollowupCalls: 0`, report the returned proof and stop.
 - If the result has `taskOutcome: "preview_ready"`, the next call should normally be only `apply_update` with the returned `operationId` and `confirmationToken` after user approval.
 - Reuse `continuation.workbookContextId`, `resultUri`, and `fullResultUri`. If `continuation.freshness` is present and the workbook content/structure version has not changed, prefer cached context/result handles over rediscovery reads.
 - Treat freshness as a first-pass safety check: unchanged fingerprints or no overlapping journal entries mean the agent can skip rereading latest context. If the backend reports stale context, changed target fingerprints, or overlapping changes, refresh the relevant target only.
@@ -42,7 +43,7 @@ When only a preview is inline and the next step requires exact rows, raw values,
 ## Writes
 
 - Use one batch or plan for related edits.
-- On the public agent surface, group related range value edits with `values.patches` in one `preview_update`, then call `apply_update` once for the returned operation.
+- On the public agent surface, group related small exact range value edits with `values.patches` in one `auto` call. Use `preview_update` plus one `apply_update` when the grouped edit is large, broad, ambiguous, formula/style/template/table-related, or user-reviewable.
 - For repeated values, number formats, styles, clears, or autofit across related ranges, use one grouped preview; the backend compiles it to internal `*_many` range operations so stale checks, backups, telemetry, and rollback stay single-operation.
 - Ask for preview before applying large generated changes.
 - Keep matrix shapes exact: rows and columns must match the target range.

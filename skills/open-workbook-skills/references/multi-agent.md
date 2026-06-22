@@ -6,7 +6,7 @@ Open Workbook coordinates multiple agents through the shared `owb daemon`. Multi
 
 1. Start with `excel.agent.run` `mode: "status"` or `mode: "prepare"` to establish workbook context and read the returned `collaboration` summary.
 2. Describe substantial work and guarded scopes clearly in the request.
-3. Use `preview_update` before scoped workbook changes.
+3. Use `auto` for small exact value edits in known non-overlapping ranges after session write access is allowed; use `preview_update` before broad, risky, table, formula, style, template, structural, or user-reviewable workbook changes.
 4. Respect returned lock, task, transaction, or conflict guidance.
 
 Use specific scopes: workbook, sheet, range, table, named range, chart, pivot, or template.

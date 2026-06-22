@@ -22,15 +22,15 @@ Do not read the whole workbook when a named table, used range, or explicit range
 
 ## Write Values Safely
 
-On the public surface, use `excel.agent.run` with `mode: "preview_update"` and then `mode: "apply_update"` for scoped value edits. Pass `intent.action`, `target`, and `values` when known; the backend owns the primitive safety lifecycle.
+On the public surface, use `excel.agent.run` with `mode: "auto"` for small exact value edits the user already asked you to make. Pass `intent.action`, `target`, and `values` when known; the backend owns the primitive safety lifecycle, session write-permission check, preview when required, backups, validation, and rollback metadata.
 
 1. Resolve workbook, sheet, and target address.
-2. Preview non-trivial changes instead of applying blindly.
-3. Apply only with the returned confirmation token.
+2. Auto-apply only bounded explicit value writes; use `autoApply: false` or `preview_update` when the user asks to review first.
+3. Preview non-trivial, broad, formula, style, template, table, or structural changes instead of applying blindly.
 4. Validate the target through `excel.agent.run` `mode: "validate"` for unintended changes, formula errors, or a scoped validator.
 5. Return transaction IDs, backup IDs, warnings, and rollback options.
 
-For a one-range value update, keep the call on `excel.agent.run`; the backend may route internally to range write capabilities.
+For a one-range value update, keep the call on `excel.agent.run` with `mode: "auto"`; the backend may route internally to range write capabilities and apply in one call after write access exists for the session.
 
 For new sheets with formulas and number formats, describe a formula-sheet request through `excel.agent.run`; the backend may route to its formula-sheet workflow.
 
@@ -63,7 +63,7 @@ Do not convert formulas to values unless the user explicitly asks or the workflo
 
 1. Use `find`/`answer` to locate the range and inspect headers.
 2. Prefer read-only analysis before mutation.
-3. For mutations, use `preview_update` with a scoped target and structured values/patches.
+3. For small exact value cleanup, use `auto` with a scoped target and structured values/patches; for broad cleaning transforms, use `preview_update`.
 4. Validate formulas, tables, and unintended changes after cleaning.
 
 Cleaning writes must stay within the requested sheet, range, table, or registered region.
@@ -76,7 +76,7 @@ Backend table workflow, expressed through `excel.agent.run`:
 
 1. Use `prepare`/`find` to identify the table.
 2. Use `answer` for schema or targeted row reads.
-3. Use `preview_update` for appends, filters, sorts, or updates.
+3. Use `preview_update` for appends, filters, sorts, structural table updates, or broad row updates. Use `auto` only for small exact value writes to known source-list or range cells.
 4. Apply once with the returned confirmation token.
 5. Validate through `agent.run`.
 

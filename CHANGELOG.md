@@ -6,6 +6,27 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+## [0.1.21] - 2026-06-22
+
+### Added
+
+- Added regression coverage for selection-aware live reads, targeted table/range samples, continuation-only result fetches, and no-Python fallback behavior when Open Workbook is connected.
+- Added cross-sheet context hints and similar-row discovery so agents can find prior-period labels, style/template candidates, dropdown columns, and validation rules without reading whole worksheets.
+- Added compact-response safeguards for wide rows, column-role projections, dictionary-encoded repeated values, workbook-context freshness handles, and task-completion telemetry.
+
+### Fixed
+
+- Fixed bloated runtime state by migrating inline workbook backup payloads to `payloadRef` JSON files and repairing existing oversized state on startup.
+- Fixed live read routing so targeted sheet/table/range requests return exact values instead of empty snapshots or active-selection data.
+- Fixed patch target handling, stale workbook-only permission scopes, object-placeholder apply warnings, and small exact value edits that were being forced through preview/apply loops.
+- Fixed OpenCode workflow guidance so connected live workbooks use `excel.agent.run` first, avoid Webfetch/Python/openpyxl fallbacks, and stop after `taskOutcome: final_answer` with `maxRecommendedFollowupCalls: 0`.
+
+### Changed
+
+- Changed safe explicit value edits to use `mode: "auto"` by default after session write access is allowed, while keeping preview/apply for formulas, styles, tables, templates, structural changes, broad edits, and user-reviewable changes.
+- Improved dropdown workflows so agents read validation/source-list proof before correcting exact source-list cells.
+- Refreshed packaged and installed Open Workbook skill guidance for selection-first targeting, dropdowns, small-edit auto-apply, context reuse, and multi-agent coordination.
+
 ## [0.1.20] - 2026-06-22
 
 ### Added

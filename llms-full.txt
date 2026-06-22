@@ -311,6 +311,27 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+## [0.1.21] - 2026-06-22
+
+### Added
+
+- Added regression coverage for selection-aware live reads, targeted table/range samples, continuation-only result fetches, and no-Python fallback behavior when Open Workbook is connected.
+- Added cross-sheet context hints and similar-row discovery so agents can find prior-period labels, style/template candidates, dropdown columns, and validation rules without reading whole worksheets.
+- Added compact-response safeguards for wide rows, column-role projections, dictionary-encoded repeated values, workbook-context freshness handles, and task-completion telemetry.
+
+### Fixed
+
+- Fixed bloated runtime state by migrating inline workbook backup payloads to `payloadRef` JSON files and repairing existing oversized state on startup.
+- Fixed live read routing so targeted sheet/table/range requests return exact values instead of empty snapshots or active-selection data.
+- Fixed patch target handling, stale workbook-only permission scopes, object-placeholder apply warnings, and small exact value edits that were being forced through preview/apply loops.
+- Fixed OpenCode workflow guidance so connected live workbooks use `excel.agent.run` first, avoid Webfetch/Python/openpyxl fallbacks, and stop after `taskOutcome: final_answer` with `maxRecommendedFollowupCalls: 0`.
+
+### Changed
+
+- Changed safe explicit value edits to use `mode: "auto"` by default after session write access is allowed, while keeping preview/apply for formulas, styles, tables, templates, structural changes, broad edits, and user-reviewable changes.
+- Improved dropdown workflows so agents read validation/source-list proof before correcting exact source-list cells.
+- Refreshed packaged and installed Open Workbook skill guidance for selection-first targeting, dropdowns, small-edit auto-apply, context reuse, and multi-agent coordination.
+
 ## [0.1.20] - 2026-06-22
 
 ### Added
@@ -630,7 +651,7 @@ description: "Use when an agent needs to automate live Microsoft Excel workbooks
 
 Use Open Workbook MCP for live desktop Excel work. It is the required first path when the workbook is open in Excel and the user expects current cell values, unsaved edits, formatting, formulas, filters, tables, pivots, charts, snapshots, backups, transaction history, and rollback safety to survive.
 
-Do not inspect or modify a connected live workbook with shell scripts, Python, openpyxl, pandas, manual UI automation, or offline `.xlsx` parsing unless the user explicitly asks for offline file analysis or the MCP path is unavailable and the user approves the fallback.
+Do not inspect or modify a connected live workbook with shell scripts, Python, openpyxl, pandas, manual UI automation, or offline `.xlsx` parsing unless the user explicitly asks for offline file analysis or the MCP path is unavailable and the user approves the fallback. For workbook/worksheet "look at", "inspect", "review", or "what is this" requests, do not run `ls`, `stat`, Python, or offline file checks as a preflight; call `excel.agent.run` first. If Open Workbook is connected but returns an empty live-read diagnostic or `cannot_complete`, report that Open Workbook live-read failure instead of switching to saved-file parsing.
 
 ## Public Surface
 
@@ -646,15 +667,17 @@ Use modes deliberately:
 - `prepare`: cache workbook identity, sheet/table/name/region metadata, and collaboration state.
 - `find`: locate candidate sheets, tables, headers, named ranges, regions, formulas, and summary blocks.
 - `answer`: targeted live reads, schemas, summaries, comparisons, and deterministic inspection.
-- `preview_update`: preview mutations and get an `operationId` plus `confirmationToken`.
+- `preview_update`: preview mutations and get an `operationId` plus `confirmationToken` when review is required.
 - `apply_update`: apply only a previewed operation with the returned token.
 - `operation_status`: check a returned operation without reissuing preview/apply.
 - `cancel_operation`: cancel a pending preview before apply starts.
 - `validate`: validate workbook, sheet, table, formula, style, filter, print-layout, or unintended-change scope.
 - `rollback`: inspect or apply recovery through returned transaction, snapshot, or backup guidance.
-- `auto`: compatibility route for casual prompts; explicit modes are preferred when the workflow step is known.
+- `auto`: default route for casual prompts and small explicit value edits; safe narrow edits may apply in one call after workbook write access is allowed for the session unless `autoApply: false`.
 
 The backend owns primitive Excel capabilities, compact reads, batches, plans, validation, snapshots, backups, locks, jobs, transactions, resources, and collaboration records. Do not ask for or assume a separate primitive MCP surface in user workflows.
+
+`excel://...` result handles returned by Open Workbook are internal MCP/Open Workbook handles, not web URLs. Never use Webfetch, browser fetch, curl, or HTTP tooling for `resultUri`, `fullResultUri`, or `resourceLinks`. If hidden detail is genuinely required, call `excel.agent.run` once with `continuation.fullResultUri` or paste the `excel://...` handle in the `request`.
 
 ## Structured Intent
 
@@ -667,11 +690,25 @@ When the caller LLM can infer routing, pass structured fields alongside the natu
 
 For mutations, do not put the write payload only in `request`. Send structured data: `write_values` needs `target.sheetName`, `target.range`, and `values.values` as a 2D matrix; table appends use `values.rows`; multi-range edits use `values.patches`.
 
-Use `detailLevel` conservatively: `workbook_summary` for metadata-only workbook context, `semantic_index` for role-aware workbook targets/candidates, `sheet_summary` for “look at/check/how is this sheet” overview requests without live cell reads, `table_sample` for a bounded live table sample, and `full_table` only when the user explicitly asks for all rows, every value, or full table contents.
+Use `detailLevel` conservatively: `workbook_summary` for metadata-only workbook context, `semantic_index` for role-aware workbook targets/candidates, `sheet_summary` for “look at/check/how is this sheet” overview requests without live cell reads, `table_sample` for a bounded live table sample, and `full_table` only when the task requires all rows, every value, or full table contents.
 
 For multilingual requests, preserve the original language in `request`, normalize routing fields to canonical English when clear, keep target hints in the workbook/user language, and answer the user in their language unless asked otherwise. Do not translate the whole task into English and discard the original wording.
 
 Read `references/agent-run.md` for mode contracts, preview/apply behavior, multilingual routing, and result handling. Read `references/capability-map.md` when you need exact internal action groups.
+
+## Selection-First Targeting
+
+When the user request points at the current place in Excel, prefer the current selection as the first target. This includes one cell, whole rows, whole columns, and rectangular ranges. A selected cell is normal while someone works in Excel; do not treat it as the target for broad workbook/worksheet overview requests unless the wording says "this", "here", "selected", "current cell/range/row/column", or asks for values/rows from the selected area.
+
+Never tell the user you cannot detect the selected row/cell/range before calling `excel.agent.run`. The model cannot see Excel selection by itself, but Open Workbook can read it through the connected add-in. If the user says "what do you think about this?", "check this", "does this look right?", or similar vague wording, call `excel.agent.run` with `mode: "answer"` and no explicit `target`; let the backend resolve the live selection. Ask the user to select a cell/range or reload the taskpane only after `excel.agent.run` returns selection unavailable or stale.
+
+Target priority:
+
+1. Explicit user target in the prompt or structured `target`.
+2. Current Excel selection when the user says "this", "here", "selected", "current cell/range/row/column", "look at this", "fix this", or asks for values/rows from the selected area.
+3. Sheet, table, or workbook discovery only when no usable selection exists or the prompt clearly asks for broader context.
+
+For reads, start with a bounded `answer` call on the selected range. For mutations, preview only the selected scope unless the user explicitly asks to expand to a table, sheet, or workbook. If a single selected cell is inside a table or header-shaped region and the request is vague ("this", "check this", "what do you think"), let the backend include the active record row as context while preserving proof of the exact selected cell.
 
 ## Workflow Semantics
 
@@ -681,6 +718,8 @@ Read `references/agent-run.md` for mode contracts, preview/apply behavior, multi
 - Replace styled table: use `replace_range_with_styled_table` to clear stale layout, write headers/rows, copy header/body style samples, and autofit in one preview/apply workflow.
 - Inspect current styling: call `excel.agent.run` with `mode: "answer"`, `intent.action: "read_style_summary"`, and an exact range or current selection. Use `read_style_fingerprint` for template comparison, not normal user-facing style inspection.
 - Formatting errors: use `format_diagnostics` before mutating. It returns raw value, displayed text, formulas, number formats, style summary, likely issues, and suggested fix actions.
+- Historical labels and similar rows: when the user asks how something was labeled/classified before, start with `semantic_index` or `sheet_summary`, then call `intent.action: "find_similar_rows"` on the current row/range/table before reading whole prior sheets.
+- Dropdowns and allowed values: call `intent.action: "read_data_validation"` on the selected/current column or exact target before guessing from visible values. When dropdown options are wrong, read validation/source-list proof first, then update exact source-list cells with `mode: "auto"` if it is a bounded value correction. Use `write_data_validation` only when the user wants to change the dropdown rule.
 - Filters, borders, dropdowns, and conditional formatting: send canonical intent early. Use `intent.action: "filter_range"` for autofilters, `clear_table_filters` for table filter removal, `format_range` for borders/fills/fonts/alignment, `write_data_validation` for dropdown/list cells, and `write_conditional_formatting` for formula-based formatting. Do not retry as sheet creation or value writes when the target sheet already exists.
 - Column changes: use `insert_columns`/`delete_columns` for sheet structure and `reorder_range_columns` for plain range swaps/reorders; use `reorder_table_columns` only for real Excel tables.
 - Date text cleanup: diagnose first, then use `parse_dates` only on exact date columns/ranges. If conversion needs explicit known dates, use one grouped `write_values` preview with per-range `numberFormat`.
@@ -688,6 +727,7 @@ Read `references/agent-run.md` for mode contracts, preview/apply behavior, multi
 ## Safety Rules
 
 - Never bypass permissions, scoped locks, snapshots, backups, fingerprints, Office.js execution, validation, transaction records, or rollback metadata for mutations.
+- For small explicit value edits the user already asked you to make, use `mode: "auto"` and leave `autoApply` unset. Once workbook write access is allowed for the session, do not ask the user to confirm every small exact edit. Use `autoApply: false` or `preview_update` when the user asks to review first, the edit is broad/risky, or the backend says preview is required.
 - Never write cell-by-cell loops. Batch values, formulas, number formats, and styles as narrow 2D matrices or grouped patches.
 - Do not fetch the full sheet before every preview. Reuse `workbookContextId`; preview may perform narrow metadata/fingerprint checks for safety, but agents should only read values first when target resolution is ambiguous, the user refers to current selection, or the change depends on existing values/styles.
 - For “what is this workbook”, “look at this workbook/sheet”, “where is the invoice/customer/receipt/template area”, or similar context requests, use `workbook_summary`, `semantic_index`, or `sheet_summary`. Do not fetch `table_sample` or `full_table` unless the user asks for actual rows/values.
@@ -724,11 +764,11 @@ Source: skills/open-workbook-skills/references/agent-run.md
 - `prepare`: workbook identity plus lightweight structure metadata for follow-up calls.
 - `find`: target discovery across sheets, tables, headers, named items, regions, summary blocks, formulas, semantic roles, and workbook labels.
 - `answer`: live reads, schema questions, deterministic summaries, comparisons, metadata inspection, and validation-style facts that do not mutate.
-- `preview_update`: target resolution, permission checks, lock checks, safety capture, and preview for writes or workbook actions.
+- `preview_update`: target resolution, permission checks, lock checks, safety capture, and preview for writes or workbook actions when review is required.
 - `apply_update`: apply a previously previewed operation with its exact `operationId` and `confirmationToken`.
 - `validate`: scoped validation after risky changes or when the user asks for proof.
 - `rollback`: recovery inspection or confirmed rollback/restore using returned transaction, snapshot, or backup guidance.
-- `auto`: compatibility for casual prompts; use explicit modes for predictable agent workflows.
+- `auto`: default for casual prompts and small explicit value edits; safe narrow edits may preview and apply in one call after workbook write access is allowed for the session unless `autoApply: false`.
 
 ## Intent Fields
 
@@ -759,17 +799,27 @@ Do not rely on deterministic English keyword parsing for every language. The cal
 
 ## Preview And Apply
 
+Use `auto` for small explicit value edits that the user already asked you to make. Leave `autoApply` unset unless the user asks for preview-only behavior; if the user says "ask before editing", "show preview first", or similar, set `autoApply: false`. Once workbook write access is allowed for the session, do not ask the user to confirm every small exact edit.
+
 Use `preview_update` for non-trivial mutations, broad edits, table appends, template actions, workbook lifecycle operations, backup lifecycle changes, or anything the user may want to review.
 
 Only call `apply_update` with the returned `operationId` and `confirmationToken`. If the backend reports stale context, target drift, ambiguity, missing permission, an active lock, or validation failure, stop and create a fresh preview or ask the user for direction.
+
+If `auto` returns `taskOutcome: "apply_complete"`, stop and report the applied change. If `auto` returns `taskOutcome: "preview_ready"` or `nextAction: "call_apply_update"`, ask the user once unless the user's configuration/instruction already permits applying previews, then call one `apply_update` with the returned `operationId` and `confirmationToken`.
 
 Small explicit value edits may use `auto` when the backend can prove the target and risk are narrow. Related changes should use one grouped preview with `values.patches`, then one apply call.
 
 ## Result Handling
 
-Treat `resourceLinks`, `proof`, `compactProof`, `continuation`, `invalidatedContextIds`, `invalidatedResourceUris`, `nextAction`, warnings, telemetry, backup IDs, transaction IDs, and rollback options as the evidence contract. Reuse `workbookContextId` or `continuation` on follow-up calls. `excel://...` handles are MCP/Open Workbook handles, not web URLs: never pass them to `webfetch`. When the user explicitly asks for full details, all rows, raw values, or an audit, call `excel.agent.run` again with the returned `resultUri` or `fullResultUri` in `request` or `continuation`.
+Treat `resourceLinks`, `proof`, `compactProof`, `continuation`, `invalidatedContextIds`, `invalidatedResourceUris`, `nextAction`, warnings, telemetry, backup IDs, transaction IDs, and rollback options as the evidence contract. Reuse `workbookContextId` or `continuation` on follow-up calls. `excel://...` handles are MCP/Open Workbook handles, not web URLs: never pass them to Webfetch, browser fetch, curl, or HTTP tooling. Use inline `values`, `rows`, or `sparseRows` when returned. If the next task needs exact rows, raw values, transformation input, validation evidence, full details, or an audit and only a preview is inline, call `excel.agent.run` once with `continuation.fullResultUri` or paste the returned `resultUri`/`fullResultUri` in `request`.
 
-If `nextAction` is `answer_now`, answer from the returned proof. Retrieve full detail through `excel.agent.run` only when the user asks for an audit or the proof says detail is required.
+If `taskOutcome` is `final_answer` and `maxRecommendedFollowupCalls` is `0`, stop calling tools and answer the user from `finalAnswer`, `summary`, proof, and inline data. If `taskOutcome` is `preview_ready`, only continue with the required apply call after user approval.
+
+Compact answers may use `encodedValues` with `valueEncoding.kind: "domain_dictionary_by_column"` for repeated readable values such as statuses, labels, vendors, dates, and categories. Decode integer codes with the per-column domain dictionary before reasoning. Wide rows may include `inlineColumnProjection`; use those high-signal columns first and retrieve `fullResultUri` only if omitted columns are necessary.
+
+When `continuation.freshness` is present, carry it forward with the continuation. It is proof for cached workbook context/result reuse: unchanged workbook content version, structure hash, or no overlapping change journal entries means you can avoid rediscovery and reread calls. If freshness is stale or overlapping changes are reported, refresh only the affected target.
+
+If `nextAction` is `answer_now`, answer from the returned proof and inline data. Retrieve full detail through `excel.agent.run` when the task cannot be completed correctly from the proof and inline data.
 
 If the result is `AMBIGUOUS_TARGET`, retry with one returned `target.candidateId` and the same `workbookContextId`. Do not switch to offline parsing for a connected workbook.
 
@@ -784,7 +834,7 @@ This map groups backend-owned action concepts for `excel.agent.run`. It is for r
 ## Discovery And Reads
 
 - Workbook/session: `list_open_workbooks`, `get_workbook_info`, `prepare_session`, `refresh_workbook_snapshot`, `get_workbook_snapshot`, `detect_external_changes`.
-- Target discovery: `find_target`, `read_schema`, `get_range_summary`, `read_range_compact`.
+- Target discovery: `find_target`, `find_similar_rows`, `read_schema`, `get_range_summary`, `read_range_compact`.
 - Range metadata: `read_hyperlinks`, `read_comments`, `read_notes`, `read_merged_cells`, `read_data_validation`, `read_conditional_formatting`, `search_range`, `find_blank_cells`, `find_range_errors`.
 - Names/regions/templates: `read_named_item`, `read_region`, `list_templates`, `read_template`, `detect_templates`, `infer_template_regions`.
 
@@ -813,7 +863,8 @@ This map groups backend-owned action concepts for `excel.agent.run`. It is for r
 ## Mode Defaults
 
 - Use `answer` for read-only discovery, schema, metadata, safety artifact inspection, and deterministic analysis.
-- Use `preview_update` then `apply_update` for workbook mutations, backup lifecycle changes, restores, template fills, table writes, and structural edits.
+- Use `auto` for small exact value writes with explicit targets and values after session write access is allowed.
+- Use `preview_update` then `apply_update` for workbook mutations, backup lifecycle changes, restores, template fills, table writes, structural edits, formulas, styles, and broad or user-reviewable changes.
 - Use `validate` for explicit validation or post-change proof.
 - Use `rollback` for recovery planning and confirmed rollback/restore flows.
 
@@ -837,7 +888,7 @@ Do not call backend primitive capabilities directly in normal MCP clients. Looku
 - `prepare`: cache workbook identity and lightweight structure for sheets, tables, named ranges, regions, and sheet kind; shared workbook sessions also return compact collaboration state.
 - `find`: search cached metadata for candidate sheets, tables, headers, named ranges, regions, summary blocks, and formula regions.
 - `answer`: perform targeted live reads and deterministic summaries; cached metadata is enough for schema-only answers.
-- `auto`: compatibility route for casual prompts; explicit modes are preferred when the workflow step is known.
+- `auto`: default route for casual prompts and small exact value edits; explicit modes are still preferred for risky, structural, formula, style, template, or table workflows.
 - `preview_update`: resolve targets, preview safe writes/table appends, block unsafe edits, and return an operation plus confirmation token.
 - `apply_update`: apply only a previewed update with the returned confirmation token.
 - `rollback`: map transaction or backup identifiers to recovery.
@@ -856,7 +907,7 @@ When the user's LLM/client can infer intent, pass structured fields instead of r
 - `target`: explicit `sheetName`, `range`, `tableName`, or returned `candidateId` when known.
 - `values`: 2D matrices, `values.patches`, formulas, styles, or table rows for updates.
 
-Structured intent is only a routing hint. The backend still performs target resolution, ambiguity checks, preview/apply confirmation, stale checks, permissions, locks, backups, validation, and rollback bookkeeping.
+Structured intent is only a routing hint. The backend still performs target resolution, ambiguity checks, session write-permission checks, preview/apply confirmation when required, stale checks, permissions, locks, backups, validation, and rollback bookkeeping.
 
 ## Multi-Agent Coordination
 
@@ -892,15 +943,16 @@ Avoid prompts that require workbook-wide scans unless the user asked for audit, 
 
 ## Writing Data
 
-- Use `mode: "preview_update"` for user-reviewable edits.
+- Use `mode: "auto"` for small exact value edits the user already asked you to make: explicit `target.range` or per-patch ranges, explicit `values`, no formula-like values, and no broad/structural/style/template/table intent. Leave `autoApply` unset so the backend can auto-apply after workbook write access is allowed for the session.
+- Use `mode: "preview_update"` for user-reviewable edits, large or ambiguous changes, formulas, styles/templates, table appends/updates, structural workbook actions, safety artifact lifecycle changes, or when the user asks to review first.
 - Use `mode: "apply_update"` once with the returned top-level `operationId` and top-level `confirmationToken`; do not put the token inside `values`.
-- For one small explicit value edit, `mode: "auto"` may apply safely after backend checks.
+- If `preview_ready` is returned, ask/apply once with the returned token and do not rediscover workbook context.
 - For `write_values`, send `target.sheetName`, `target.range`, and `values.values` as a 2D matrix; row data embedded only in `request` is not used for safe writes.
-- For related range edits, send one `values.patches` preview and one apply call.
-- For range inspection, use `read_range_compact`, `get_range_summary`, `read_hyperlinks`, `read_comments`, `read_notes`, `read_merged_cells`, `read_data_validation`, `read_conditional_formatting`, `search_range`, `find_blank_cells`, or `find_range_errors` in answer mode with a concrete range.
+- For related small exact range edits, send one `mode: "auto"` call with `values.patches`. Use preview/apply only when the grouped edit is broad, risky, ambiguous, or reviewable.
+- For range inspection, use `read_range_compact`, `get_range_summary`, `read_hyperlinks`, `read_comments`, `read_notes`, `read_merged_cells`, `read_data_validation`, `read_conditional_formatting`, `search_range`, `find_blank_cells`, or `find_range_errors` in answer mode with a concrete range. For historical labeling/classification examples across sheets, use `find_similar_rows` with the current row/range/table instead of reading whole prior sheets.
 - For formulas, use `intent.action: "write_formulas"` and formula matrices beginning with `=`. For formula-based cell coloring or row highlighting, use `intent.action: "write_conditional_formatting"` with `values.formula` or `values.rule.formula` plus `values.style`; do not route conditional-format rules through `write_formulas`.
 - For formula pattern repair from a registered template, use `repair_formula_patterns` with `values.templateId` and `target.sheetName`, then apply the returned preview once.
-- For current styling, use `mode: "answer"` with `intent.action: "read_style_summary"` and an exact `target` or current selection. For formatting errors, use `intent.action: "format_diagnostics"` before mutating. If a read-style request ever returns a write-style preview or `NEEDS_WORKFLOW_REDIRECT`, do not apply it; retry the read with the explicit answer-mode style intent. For direct style writes, use `intent.action: "format_range"` with a narrow `target`; include border payloads when adding borders. For dropdown/list cells, use `intent.action: "write_data_validation"` with `values.validation.source`, `values.validation.formula1`, or `values.options`. For autofilters, use `intent.action: "filter_range"` with the header/data range; use `clear_table_filters` for table filter removal. Do not retry these requests as sheet creation or generic value writes. For border-only/fill-only/font-only/alignment-only cleanup, use `intent.action: "clear_style_dimensions"` with `values.dimensions`, for example `["borders"]`. Use `clear_formats` only when the user asks to remove all formatting. For style audit/comparison, use `read_style_fingerprint` or `compare_style_fingerprint` with explicit source and target sheets/ranges. For workbook theme requests, use `get_theme` or `apply_theme` in answer mode and report the returned capability status; do not synthesize theme changes when the host says unavailable. For template style copy or repair, use `copy_style_from_template` or `repair_style_consistency` with explicit source/destination or `values.templateId`, then apply once.
+- For current styling, use `mode: "answer"` with `intent.action: "read_style_summary"` and an exact `target` or current selection. For formatting errors, use `intent.action: "format_diagnostics"` before mutating. If a read-style request ever returns a write-style preview or `NEEDS_WORKFLOW_REDIRECT`, do not apply it; retry the read with the explicit answer-mode style intent. For direct style writes, use `intent.action: "format_range"` with a narrow `target`; include border payloads when adding borders. For dropdown/list cells, use `read_data_validation` first when the user asks what is allowed. When dropdown options are wrong, read the validation/source-list proof, then update exact source-list cells with `mode: "auto"` if the change is a bounded value correction; use `intent.action: "write_data_validation"` only when changing the validation rule itself. For autofilters, use `intent.action: "filter_range"` with the header/data range; use `clear_table_filters` for table filter removal. Do not retry these requests as sheet creation or generic value writes. For border-only/fill-only/font-only/alignment-only cleanup, use `intent.action: "clear_style_dimensions"` with `values.dimensions`, for example `["borders"]`. Use `clear_formats` only when the user asks to remove all formatting. For style audit/comparison, use `read_style_fingerprint` or `compare_style_fingerprint` with explicit source and target sheets/ranges. For workbook theme requests, use `get_theme` or `apply_theme` in answer mode and report the returned capability status; do not synthesize theme changes when the host says unavailable. For template style copy or repair, use `copy_style_from_template` or `repair_style_consistency` with explicit source/destination or `values.templateId`, then apply once.
 - For style-only requests such as “make Booking look like Employees,” use `copy_style_from_template`; never duplicate the source/template sheet or change source values.
 - For OCR, screenshots, forms, invoices, shipment documents, booking images, or other field/value data that must become a horizontal styled table, use `replace_range_with_styled_table` with `values.headers`, `values.row` or `values.rows`, optional `values.clearRange`, and optional `values.headerStyleSource` / `values.bodyStyleSource`. This workflow clears stale layout, writes the table, styles header/body, and autofits in one preview/apply path.
 - For explicit repair intents, use `repair_style_from_template`, `repair_formulas_from_template`, or `repair_table_structure` with `mode: "preview_update"` and then apply once. Use `repair_filters_from_template`, `repair_print_layout`, `repair_named_ranges`, `repair_formula_errors`, or `repair_merged_cells` with `mode: "answer"` to get a structured repair report when the host cannot safely execute the category.
@@ -936,7 +988,7 @@ Describe the user's goal through `excel.agent.run` and let the backend choose in
 
 ## Result Handling
 
-Treat returned `resourceLinks`, `compactProof`, `proof`, `continuation`, `invalidatedContextIds`, `invalidatedResourceUris`, `nextAction`, warnings, backup IDs, transaction IDs, and telemetry as evidence. Reuse `workbookContextId` or the returned `continuation` on follow-up `excel.agent.run` calls. `excel://...` handles are MCP/Open Workbook handles, not web URLs; never use `webfetch` for them. If full detail is needed, call `excel.agent.run` again with the returned `resultUri` or `fullResultUri` in `request` or `continuation`. If `nextAction` says `answer_now`, answer from the proof and inline preview instead of fetching more detail unless the user explicitly requested an audit, full rows, or raw values.
+Treat returned `resourceLinks`, `compactProof`, `proof`, `continuation`, `invalidatedContextIds`, `invalidatedResourceUris`, `nextAction`, warnings, backup IDs, transaction IDs, and telemetry as evidence. Reuse `workbookContextId` or the returned `continuation` on follow-up `excel.agent.run` calls. `excel://...` handles are MCP/Open Workbook handles, not web URLs; never use Webfetch, browser fetch, curl, or HTTP tooling for them. Use inline `values`, `rows`, or `sparseRows` when present. If exact rows, raw values, validation evidence, transformation input, or audit detail is needed and only a preview is inline, call `excel.agent.run` once with `continuation.fullResultUri` or paste the returned `resultUri`/`fullResultUri` in `request`. If `nextAction` says `answer_now`, answer from the proof and inline data unless the task truly needs more detail.
 
 ---
 
@@ -966,15 +1018,15 @@ Do not read the whole workbook when a named table, used range, or explicit range
 
 ## Write Values Safely
 
-On the public surface, use `excel.agent.run` with `mode: "preview_update"` and then `mode: "apply_update"` for scoped value edits. Pass `intent.action`, `target`, and `values` when known; the backend owns the primitive safety lifecycle.
+On the public surface, use `excel.agent.run` with `mode: "auto"` for small exact value edits the user already asked you to make. Pass `intent.action`, `target`, and `values` when known; the backend owns the primitive safety lifecycle, session write-permission check, preview when required, backups, validation, and rollback metadata.
 
 1. Resolve workbook, sheet, and target address.
-2. Preview non-trivial changes instead of applying blindly.
-3. Apply only with the returned confirmation token.
+2. Auto-apply only bounded explicit value writes; use `autoApply: false` or `preview_update` when the user asks to review first.
+3. Preview non-trivial, broad, formula, style, template, table, or structural changes instead of applying blindly.
 4. Validate the target through `excel.agent.run` `mode: "validate"` for unintended changes, formula errors, or a scoped validator.
 5. Return transaction IDs, backup IDs, warnings, and rollback options.
 
-For a one-range value update, keep the call on `excel.agent.run`; the backend may route internally to range write capabilities.
+For a one-range value update, keep the call on `excel.agent.run` with `mode: "auto"`; the backend may route internally to range write capabilities and apply in one call after write access exists for the session.
 
 For new sheets with formulas and number formats, describe a formula-sheet request through `excel.agent.run`; the backend may route to its formula-sheet workflow.
 
@@ -1007,7 +1059,7 @@ Do not convert formulas to values unless the user explicitly asks or the workflo
 
 1. Use `find`/`answer` to locate the range and inspect headers.
 2. Prefer read-only analysis before mutation.
-3. For mutations, use `preview_update` with a scoped target and structured values/patches.
+3. For small exact value cleanup, use `auto` with a scoped target and structured values/patches; for broad cleaning transforms, use `preview_update`.
 4. Validate formulas, tables, and unintended changes after cleaning.
 
 Cleaning writes must stay within the requested sheet, range, table, or registered region.
@@ -1020,7 +1072,7 @@ Backend table workflow, expressed through `excel.agent.run`:
 
 1. Use `prepare`/`find` to identify the table.
 2. Use `answer` for schema or targeted row reads.
-3. Use `preview_update` for appends, filters, sorts, or updates.
+3. Use `preview_update` for appends, filters, sorts, structural table updates, or broad row updates. Use `auto` only for small exact value writes to known source-list or range cells.
 4. Apply once with the returned confirmation token.
 5. Validate through `agent.run`.
 
@@ -1067,7 +1119,7 @@ Source: skills/open-workbook-skills/references/reliability.md
 
 Open Workbook treats Excel as a transaction target. Preserve that contract.
 
-For live workbook tasks, Open Workbook MCP is the source of truth. Do not switch to shell scripts, Python, openpyxl, pandas, manual UI automation, or offline `.xlsx` parsing unless the user explicitly asked for offline file analysis, or MCP is unavailable and the user approves a non-live fallback. Saved-file parsing can be stale because it does not include unsaved Excel state.
+For live workbook tasks, Open Workbook MCP is the source of truth. Do not switch to shell scripts, Python, openpyxl, pandas, manual UI automation, or offline `.xlsx` parsing unless the user explicitly asked for offline file analysis, or MCP is unavailable and the user approves a non-live fallback. Saved-file parsing can be stale because it does not include unsaved Excel state. If Open Workbook is connected but returns an empty live-read diagnostic or `cannot_complete`, report that Open Workbook failure and stop; do not silently fall back to saved-file parsing.
 
 ## Mutation Contract
 
@@ -1155,6 +1207,7 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 ## Defaults
 
 - On the public surface, use `excel.agent.run`; the backend owns compact reads, summaries, proof, resource handles, and response budgeting.
+- Optimize for cost per completed user task, not cost per individual tool call. A good read-only task usually finishes from one `excel.agent.run` result. A small exact value mutation should usually finish in one `auto` call after workbook write access is allowed for the session; broader or risky mutations should be preview plus apply, with validation only when needed.
 - Prefer bulk Office.js operations over per-cell actions.
 - Use 2D matrices for values, formulas, and number formats.
 - Use table APIs for table-shaped work.
@@ -1177,12 +1230,22 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 Avoid workbook-wide reads unless the task is search, validation, audit, or discovery.
 
 Compact reads return payload/token telemetry, truncation status, result handles, and continuation metadata. Page only when more rows or columns are needed.
-When a compact response includes `resultUri`, `fullResultUri`, or a resource link, use it only if the user explicitly needs full detail, an audit trail, all rows, or raw values. `excel://...` handles are not HTTP URLs; retrieve them by calling `excel.agent.run` again with the handle in `request` or `continuation`, not with `webfetch`.
+When a compact response includes inline `values`, `encodedValues`, `rows`, or `sparseRows`, use them directly before asking for more data. If `valueEncoding.kind` is `domain_dictionary_by_column`, decode `encodedValues` by replacing integer codes with `valueEncoding.columns[position].domain[code]`; the full raw matrix remains behind `fullResultUri`.
+Wide table/range results may include `inlineColumnProjection`. Treat the selected inline columns as high-signal columns chosen from selection, requested fields, cached column roles, validation/format hints, and cardinality. Ask for full detail only when omitted columns are required for the task.
+When only a preview is inline and the next step requires exact rows, raw values, transformation input, validation evidence, or audit detail, call `excel.agent.run` once with `continuation.fullResultUri` or paste the returned `resultUri`/`fullResultUri` in `request`. `excel://...` handles are not HTTP URLs; never use Webfetch, browser fetch, curl, or HTTP tooling for them.
+
+## Task Completion And Freshness
+
+- If the result has `taskOutcome: "final_answer"` and `maxRecommendedFollowupCalls: 0`, answer the user now. Do not call again to “double check” unless the result says data is stale, unavailable, or incomplete.
+- If the result has `taskOutcome: "apply_complete"` and `maxRecommendedFollowupCalls: 0`, report the returned proof and stop.
+- If the result has `taskOutcome: "preview_ready"`, the next call should normally be only `apply_update` with the returned `operationId` and `confirmationToken` after user approval.
+- Reuse `continuation.workbookContextId`, `resultUri`, and `fullResultUri`. If `continuation.freshness` is present and the workbook content/structure version has not changed, prefer cached context/result handles over rediscovery reads.
+- Treat freshness as a first-pass safety check: unchanged fingerprints or no overlapping journal entries mean the agent can skip rereading latest context. If the backend reports stale context, changed target fingerprints, or overlapping changes, refresh the relevant target only.
 
 ## Writes
 
 - Use one batch or plan for related edits.
-- On the public agent surface, group related range value edits with `values.patches` in one `preview_update`, then call `apply_update` once for the returned operation.
+- On the public agent surface, group related small exact range value edits with `values.patches` in one `auto` call. Use `preview_update` plus one `apply_update` when the grouped edit is large, broad, ambiguous, formula/style/template/table-related, or user-reviewable.
 - For repeated values, number formats, styles, clears, or autofit across related ranges, use one grouped preview; the backend compiles it to internal `*_many` range operations so stale checks, backups, telemetry, and rollback stay single-operation.
 - Ask for preview before applying large generated changes.
 - Keep matrix shapes exact: rows and columns must match the target range.
@@ -1218,7 +1281,7 @@ Open Workbook coordinates multiple agents through the shared `owb daemon`. Multi
 
 1. Start with `excel.agent.run` `mode: "status"` or `mode: "prepare"` to establish workbook context and read the returned `collaboration` summary.
 2. Describe substantial work and guarded scopes clearly in the request.
-3. Use `preview_update` before scoped workbook changes.
+3. Use `auto` for small exact value edits in known non-overlapping ranges after session write access is allowed; use `preview_update` before broad, risky, table, formula, style, template, structural, or user-reviewable workbook changes.
 4. Respect returned lock, task, transaction, or conflict guidance.
 
 Use specific scopes: workbook, sheet, range, table, named range, chart, pivot, or template.

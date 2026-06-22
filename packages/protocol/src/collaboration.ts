@@ -297,6 +297,7 @@ export interface CollaborationEvent {
     | "backup.deleted"
     | "backup.pruned"
     | "backup.updated"
+    | "permission.updated"
     | "conflict.detected";
   workbookId?: WorkbookId | undefined;
   agentId?: AgentId | undefined;

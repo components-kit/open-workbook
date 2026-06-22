@@ -174,6 +174,61 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect((result.answer as any).rowMetadata[0]).toMatchObject({ rowIndex: 0, sheetRowNumber: 2, address: "A2:D2" });
     });
 
+  it("does not let active selection hijack table names mentioned in the request", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.selection = selectionInfo("Data", "C3", { row: 3, column: 3 });
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Read all data from the Transactions table and show the first 20 rows",
+        mode: "answer"
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("table_compact_read");
+      expect((result.answer as any).tableName).toBe("Transactions");
+      expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "A2:D4", label: "Transactions" });
+      expect(runtime.runtimeMethodCalls["table.read"]).toBe(1);
+      expect(runtime.lastSnapshotRanges).toEqual([]);
+    });
+
+  it("uses row windows from table read requests instead of the active selected row", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.selection = selectionInfo("Data", "C3", { row: 3, column: 3 });
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Read rows 2-3 from the Transactions table. Show actual values.",
+        mode: "answer"
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("table_compact_read");
+      expect((result.answer as any).rowOffset).toBe(1);
+      expect((result.answer as any).rowLimit).toBe(2);
+      expect((result.answer as any).valuesPreview).toEqual([
+        ["2026-06-02", "A-101", 456, "Closed"],
+        ["2026-06-03", "A-102", 789, "Open"]
+      ]);
+    });
+
+  it("routes read-only preview_update requests to answer mode instead of asking for write values", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.selection = selectionInfo("Data", "C3", { row: 3, column: 3 });
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Read ALL cell values from range A1:D4 on Data sheet. Return every row.",
+        mode: "preview_update",
+        target: { sheetName: "Data", range: "A1:D4" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.mode).toBe("answer");
+      expect((result.answer as any).kind).toBe("range_profile");
+      expect((result.answer as any).rows[0]).toEqual(["Date", "Account", "Amount", "Status"]);
+    });
+
   it("includes a tiny exact table preview so overview reads can answer without a follow-up", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);

@@ -487,6 +487,9 @@ function shouldPreferImplicitSelectionForRead(input: AgentRunInput): boolean {
   if (requestMentionsWorkbookOrSheetOverview(input.request)) {
     return false;
   }
+  if (requestMentionsExplicitWorkbookTarget(input.request)) {
+    return false;
+  }
   if (input.target?.candidateId || input.target?.tableName || input.target?.sheetName || input.target?.range) {
     return false;
   }
@@ -500,6 +503,14 @@ function shouldPreferImplicitSelectionForRead(input: AgentRunInput): boolean {
     return true;
   }
   return input.mode === "answer";
+}
+
+function requestMentionsExplicitWorkbookTarget(request: string): boolean {
+  return parseSheetRangeReference(request) !== undefined
+    || /\b[A-Za-z]{3,9}\s+\d{4}\b/i.test(request)
+    || /\b(?:table|worksheet|sheet|range|rows?|columns?|headers?)\b/i.test(request)
+    || /\b[A-Z]{1,3}\d+(?::[A-Z]{1,3}\d+)?\b/i.test(request)
+    || /\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*\b/.test(request);
 }
 
 function requestMentionsWorkbookOrSheetOverview(request: string): boolean {

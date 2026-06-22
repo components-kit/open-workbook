@@ -8,11 +8,11 @@
 - `prepare`: workbook identity plus lightweight structure metadata for follow-up calls.
 - `find`: target discovery across sheets, tables, headers, named items, regions, summary blocks, formulas, semantic roles, and workbook labels.
 - `answer`: live reads, schema questions, deterministic summaries, comparisons, metadata inspection, and validation-style facts that do not mutate.
-- `preview_update`: target resolution, permission checks, lock checks, safety capture, and preview for writes or workbook actions.
+- `preview_update`: target resolution, permission checks, lock checks, safety capture, and preview for writes or workbook actions when review is required.
 - `apply_update`: apply a previously previewed operation with its exact `operationId` and `confirmationToken`.
 - `validate`: scoped validation after risky changes or when the user asks for proof.
 - `rollback`: recovery inspection or confirmed rollback/restore using returned transaction, snapshot, or backup guidance.
-- `auto`: compatibility for casual prompts; use explicit modes for predictable agent workflows.
+- `auto`: default for casual prompts and small explicit value edits; safe narrow edits may preview and apply in one call after workbook write access is allowed for the session unless `autoApply: false`.
 
 ## Intent Fields
 
@@ -43,9 +43,13 @@ Do not rely on deterministic English keyword parsing for every language. The cal
 
 ## Preview And Apply
 
+Use `auto` for small explicit value edits that the user already asked you to make. Leave `autoApply` unset unless the user asks for preview-only behavior; if the user says "ask before editing", "show preview first", or similar, set `autoApply: false`. Once workbook write access is allowed for the session, do not ask the user to confirm every small exact edit.
+
 Use `preview_update` for non-trivial mutations, broad edits, table appends, template actions, workbook lifecycle operations, backup lifecycle changes, or anything the user may want to review.
 
 Only call `apply_update` with the returned `operationId` and `confirmationToken`. If the backend reports stale context, target drift, ambiguity, missing permission, an active lock, or validation failure, stop and create a fresh preview or ask the user for direction.
+
+If `auto` returns `taskOutcome: "apply_complete"`, stop and report the applied change. If `auto` returns `taskOutcome: "preview_ready"` or `nextAction: "call_apply_update"`, ask the user once unless the user's configuration/instruction already permits applying previews, then call one `apply_update` with the returned `operationId` and `confirmationToken`.
 
 Small explicit value edits may use `auto` when the backend can prove the target and risk are narrow. Related changes should use one grouped preview with `values.patches`, then one apply call.
 

@@ -45,9 +45,18 @@ describe("excel.agent.run MCP schema", () => {
     const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
 
     expect(source).toContain("safe exact small edits may auto-apply");
+    expect(source).toContain("session-scoped write permission");
+    expect(source).toContain("Do not ask the user to confirm every small exact edit");
     expect(source).toContain("apply_complete");
     expect(source).toContain("maxRecommendedFollowupCalls 0");
     expect(source).toContain("autoApply false");
+  });
+
+  it("advertises dropdown source-list proof before value corrections", () => {
+    const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("read data validation/source-list proof");
+    expect(source).toContain("exact source-list value corrections should use auto");
   });
 
   it("advertises live Excel selection handling in the public tool description", () => {
@@ -75,6 +84,23 @@ describe("excel.agent.run MCP schema", () => {
     expect(source).toContain("report that Open Workbook failure");
     expect(source).toContain("do not fall back to Python/openpyxl");
     expect(source).toContain("offline file analysis");
+  });
+
+  it("keeps packaged Open Workbook skill guidance aligned with auto small edits", () => {
+    const root = new URL("../../../../", import.meta.url);
+    const skill = readFileSync(new URL("skills/open-workbook-skills/SKILL.md", root), "utf8");
+    const agentRun = readFileSync(new URL("skills/open-workbook-skills/references/agent-run.md", root), "utf8");
+    const workflows = readFileSync(new URL("skills/open-workbook-skills/references/workflows.md", root), "utf8");
+    const performance = readFileSync(new URL("skills/open-workbook-skills/references/performance.md", root), "utf8");
+    const toolSelection = readFileSync(new URL("skills/open-workbook-skills/references/tool-selection.md", root), "utf8");
+    const combined = [skill, agentRun, workflows, performance, toolSelection].join("\n");
+
+    expect(combined).toContain("write access is allowed for the session");
+    expect(combined).toContain("do not ask the user to confirm every small exact edit");
+    expect(combined).toContain("dropdown options are wrong");
+    expect(combined).toContain("source-list proof");
+    expect(combined).not.toContain("use `excel.agent.run` with `mode: \"preview_update\"` and then `mode: \"apply_update\"` for scoped value edits");
+    expect(combined).not.toContain("group related range value edits with `values.patches` in one `preview_update`");
   });
 
   it("accepts continuation-only stored result fetches", () => {

@@ -6339,7 +6339,7 @@ export class RuntimeService {
     const warnings: OperationWarning[] = [];
     const policy = this.permissionState;
     if (!policy.allowWrites && compiled.destructiveLevel !== "none") {
-      warnings.push({ code: "WRITES_DISABLED", message: "Writes are disabled by permission policy." });
+      warnings.push({ code: "WRITES_DISABLED", message: "Write access has not been allowed for this Open Workbook session. Allow write access for the workbook, then retry; safe small edits will not need per-edit confirmation after writes are allowed." });
     }
     if (!policy.allowDestructiveActions && (compiled.destructiveLevel === "structure" || compiled.destructiveLevel === "workbook")) {
       warnings.push({ code: "DESTRUCTIVE_ACTION_BLOCKED", message: "Structure and workbook actions are disabled by permission policy." });
@@ -6348,7 +6348,7 @@ export class RuntimeService {
       warnings.push({ code: "WORKBOOK_ACTION_BLOCKED", message: "Workbook-level actions are disabled by permission policy." });
     }
     if (policy.requireConfirmationFor.includes(compiled.destructiveLevel) && !request.confirmationToken) {
-      warnings.push({ code: "CONFIRMATION_REQUIRED", message: `Confirmation token is required for ${compiled.destructiveLevel} operations.` });
+      warnings.push({ code: "CONFIRMATION_REQUIRED", message: `A preview confirmation token is required for ${compiled.destructiveLevel} operations by the current Open Workbook permission policy.` });
     }
     warnings.push(...this.validatePermissionScope(request.workbookId, compiled.targetFingerprints.map((fingerprint) => fingerprint.range)));
     warnings.push(...this.validateLockedRegions(request.workbookId, compiled.targetFingerprints.map((fingerprint) => fingerprint.range)));
@@ -6356,10 +6356,11 @@ export class RuntimeService {
   }
 
   private validatePermissionScope(workbookId: WorkbookId, ranges: A1Range[]): OperationWarning[] {
+    this.repairStaleWorkbookOnlyPermissionScope(workbookId);
     const scope = this.permissionState.scope;
     const warnings: OperationWarning[] = [];
     if (scope.workbookId !== undefined && scope.workbookId !== workbookId) {
-      warnings.push({ code: "WORKBOOK_SCOPE_BLOCKED", message: `Permission scope is restricted to workbook ${scope.workbookId}.` });
+      warnings.push({ code: "WORKBOOK_SCOPE_BLOCKED", message: `Write permission is scoped to workbook ${scope.workbookId}, but this operation targets ${workbookId}. Re-open or reload the Open Workbook taskpane for the active workbook and allow write access for this session.` });
     }
     if (scope.sheetNames?.length) {
       for (const range of ranges) {
@@ -6379,6 +6380,32 @@ export class RuntimeService {
       }
     }
     return warnings;
+  }
+
+  private repairStaleWorkbookOnlyPermissionScope(workbookId: WorkbookId): void {
+    const scope = this.permissionState.scope;
+    if (
+      scope.workbookId === undefined
+      || scope.workbookId === workbookId
+      || scope.sheetNames?.length
+      || scope.regionNames?.length
+    ) {
+      return;
+    }
+    const activeWorkbook = this.sessions.getActive()?.activeWorkbook;
+    if (activeWorkbook?.workbookId !== workbookId) {
+      return;
+    }
+    this.permissionState = {
+      ...this.permissionState,
+      scope: {}
+    };
+    this.recordCollabEvent({
+      type: "permission.updated",
+      workbookId,
+      message: `Cleared stale workbook-only permission scope ${scope.workbookId}; active workbook is ${workbookId}.`
+    });
+    this.persistState();
   }
 
   private validateLockedRegions(workbookId: WorkbookId, ranges: A1Range[]): OperationWarning[] {
@@ -6402,7 +6429,7 @@ export class RuntimeService {
   private validateDirectMutation(workbookId: WorkbookId, ranges: A1Range[], destructiveLevel: PermissionPolicy["requireConfirmationFor"][number]): OperationWarning[] {
     const warnings: OperationWarning[] = [];
     if (!this.permissionState.allowWrites && destructiveLevel !== "none") {
-      warnings.push({ code: "WRITES_DISABLED", message: "Writes are disabled by permission policy." });
+      warnings.push({ code: "WRITES_DISABLED", message: "Write access has not been allowed for this Open Workbook session. Allow write access for the workbook, then retry; safe small edits will not need per-edit confirmation after writes are allowed." });
     }
     if (!this.permissionState.allowDestructiveActions && (destructiveLevel === "structure" || destructiveLevel === "workbook")) {
       warnings.push({ code: "DESTRUCTIVE_ACTION_BLOCKED", message: "Structure and workbook actions are disabled by permission policy." });
