@@ -10,7 +10,7 @@ export function registerAgentTools(mcp: McpServer, runtime: RuntimeFacade, conte
     {
       title: "Run Open Workbook agent workflow",
       description:
-        "Single default Open Workbook interface. Send workbook intent; the backend handles discovery, cached metadata, target resolution, preview/apply, validation, rollback, and compact proof without exposing low-level Excel tools. This tool can read the current live Excel selection; when the user says this, here, selected, current, this row/cell/range/column, or asks a vague question while Excel is connected, call excel.agent.run before asking for row or column numbers.",
+        "Single default Open Workbook interface. Send workbook intent; the backend handles discovery, cached metadata, target resolution, preview/apply, validation, rollback, and compact proof without exposing low-level Excel tools. In default auto mode, safe exact small edits may auto-apply and return taskOutcome apply_complete with maxRecommendedFollowupCalls 0; set autoApply false when you need preview-only behavior. This tool can read the current live Excel selection; when the user says this, here, selected, current, this row/cell/range/column, or asks a vague question while Excel is connected, call excel.agent.run before asking for row or column numbers.",
       inputSchema: agentRunInputSchema(),
       outputSchema: agentRunOutputSchema(),
       annotations: {
@@ -138,6 +138,7 @@ export function agentRunInputSchema() {
     intent: intentSchema.optional(),
     target: targetSchema.optional(),
     values: valuesSchema.optional(),
+    autoApply: z.boolean().optional(),
     detailLevel: z.enum(AGENT_DETAIL_LEVELS).optional(),
     responseMode: z.enum(["brief", "standard", "verbose"]).optional(),
     budget: z.object({

@@ -430,7 +430,7 @@ export class AgentOrchestrator {
         if (mode !== "auto" || preview.status !== "PREVIEW_READY") {
           return finish(preview, cacheHit);
         }
-        if (process.env.OPEN_WORKBOOK_AGENT_AUTO_APPLY !== "1") {
+        if (input.autoApply === false || process.env.OPEN_WORKBOOK_AGENT_AUTO_APPLY === "0") {
           runMetrics.safetyDecision = "manual_review:auto_apply_disabled";
           return finish({
             ...preview,
@@ -465,6 +465,7 @@ export class AgentOrchestrator {
         const autoOutput: Omit<AgentRunOutput, "telemetry"> = {
           ...applied,
           mode,
+          ...(applied.status === "SUCCESS" ? { taskOutcome: "apply_complete" as const, maxRecommendedFollowupCalls: 0 } : {}),
           summary: applied.status === "SUCCESS"
             ? `${applied.summary} Auto-applied after safe preview.`
             : `${preview.summary} Auto-apply attempted after safe preview but did not complete.`,
@@ -9370,23 +9371,68 @@ function autoApplyDecision(input: AgentRunInput, preview: Omit<AgentRunOutput, "
   if (!input.values) {
     return { allow: false, safetyDecision: "manual_review:missing_values", reason: "values were not provided explicitly" };
   }
-  if (!input.target?.range) {
+  if (!hasExplicitAutoApplyTarget(input)) {
     return { allow: false, safetyDecision: "manual_review:implicit_range", reason: "the target range was not explicit enough for auto-apply" };
   }
   if (isRiskyMutationRequest(input.request)) {
     return { allow: false, safetyDecision: "manual_review:risky_request", reason: "the request may be structural, destructive, or formula-sensitive" };
   }
-  const matrix = objectToCellMatrix(input.values);
-  if (matrixCellCount(matrix) > 16) {
+  const cellCount = autoApplyValueCellCount(input.values);
+  if (cellCount <= 0) {
+    return { allow: false, safetyDecision: "manual_review:missing_values", reason: "values were not provided explicitly" };
+  }
+  if (cellCount > 16) {
     return { allow: false, safetyDecision: "manual_review:large_scope", reason: "the edit touches more than 16 cells" };
   }
-  if (containsFormulaLikeValue(matrix)) {
+  if (containsFormulaLikeAutoApplyValue(input.values)) {
     return { allow: false, safetyDecision: "manual_review:formula_values", reason: "formula writes require a formula-aware workflow" };
   }
   if ((preview.changes?.length ?? 0) === 0 || (preview.changes?.length ?? 0) > 16) {
     return { allow: false, safetyDecision: "manual_review:change_count", reason: "the previewed change count is not safe for auto-apply" };
   }
   return { allow: true, safetyDecision: "auto_apply:scoped_value_edit" };
+}
+
+function hasExplicitAutoApplyTarget(input: AgentRunInput): boolean {
+  if (input.target?.range) {
+    return true;
+  }
+  const patches = input.values?.patches;
+  return Array.isArray(patches) && patches.length > 0 && patches.every((patch) => Boolean(patch?.target?.range));
+}
+
+function autoApplyValueCellCount(values: AgentRunInput["values"]): number {
+  if (!values) {
+    return 0;
+  }
+  if (Array.isArray(values.patches)) {
+    return values.patches.reduce((total, patch) => {
+      const matrix = Array.isArray(patch.values)
+        ? patch.values
+        : Array.isArray(patch.rows)
+          ? patch.rows
+          : [];
+      return total + matrixCellCount(matrix as CellMatrix);
+    }, 0);
+  }
+  return matrixCellCount(objectToCellMatrix(values));
+}
+
+function containsFormulaLikeAutoApplyValue(values: AgentRunInput["values"]): boolean {
+  if (!values) {
+    return false;
+  }
+  if (Array.isArray(values.patches)) {
+    return values.patches.some((patch) => {
+      const matrix = Array.isArray(patch.values)
+        ? patch.values
+        : Array.isArray(patch.rows)
+          ? patch.rows
+          : [];
+      return containsFormulaLikeValue(matrix as CellMatrix);
+    });
+  }
+  return containsFormulaLikeValue(objectToCellMatrix(values));
 }
 
 function isRiskyMutationRequest(request: string): boolean {

@@ -287,6 +287,7 @@ export interface AgentRunInput {
       reason?: string;
     }>;
   };
+  autoApply?: boolean;
   detailLevel?: AgentDetailLevel;
   responseMode?: "brief" | "standard" | "verbose";
   budget?: {

@@ -41,6 +41,15 @@ describe("excel.agent.run MCP schema", () => {
     expect(source).toContain("requiredFollowup");
   });
 
+  it("advertises safe default auto-apply and preview opt-out", () => {
+    const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("safe exact small edits may auto-apply");
+    expect(source).toContain("apply_complete");
+    expect(source).toContain("maxRecommendedFollowupCalls 0");
+    expect(source).toContain("autoApply false");
+  });
+
   it("advertises live Excel selection handling in the public tool description", () => {
     const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
 
