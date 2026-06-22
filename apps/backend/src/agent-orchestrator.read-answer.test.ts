@@ -38,6 +38,90 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(result.telemetry.internalReadCount).toBe(1);
     });
 
+  it("prefers the active selected range for generic read requests", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.selection = {
+        ...selectionInfo("Data", "A2:D3", { row: 2, column: 1 }),
+        endCell: { ...selectionInfo("Data", "A2:D3", { row: 3, column: 4 }).endCell },
+        rowCount: 2,
+        columnCount: 4,
+        cellCount: 8,
+        isSingleCell: false
+      };
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({ request: "Can you check this?", mode: "answer" });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "A2:D3", label: "selected range" });
+      expect(runtime.runtimeMethodCalls["table.read"]).toBeUndefined();
+      expect(runtime.lastBatchOperations[0]).toMatchObject({ kind: "range.read_full", target: { sheetName: "Data", address: "A2:D3" } });
+      expect((result.answer as any).rowMetadata[0]).toMatchObject({ rowIndex: 0, sheetRowNumber: 2, address: "A2:D2" });
+      expect((result.answer as any).rows).toEqual([
+        ["2026-06-01", "A-100", 123, "Open"],
+        ["2026-06-02", "A-101", 456, "Closed"]
+      ]);
+    });
+
+  it("uses the active table row for generic reads from a single selected table cell", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.selection = selectionInfo("Data", "C3", { row: 3, column: 3 });
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({ request: "Look into transactions.xlsx", mode: "answer" });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "A3:D3", label: "active table row" });
+      expect(runtime.runtimeMethodCalls["table.read"]).toBeUndefined();
+      expect(runtime.lastBatchOperations[0]).toMatchObject({ kind: "range.read_full", target: { sheetName: "Data", address: "A3:D3" } });
+      expect((result.answer as any).rowMetadata[0]).toMatchObject({ rowIndex: 0, sheetRowNumber: 3, address: "A3:D3" });
+      expect((result.answer as any).rows).toEqual([["2026-06-02", "A-101", 456, "Closed"]]);
+    });
+
+  it("uses an inferred record row for vague prompts from a single selected cell in a header-shaped sheet", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.selection = selectionInfo("Apr 2026", "D2", { row: 2, column: 4 });
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({ request: "what do you think about this?", mode: "answer" });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.proof[0]).toMatchObject({ sheetName: "Apr 2026", range: "A2:AJ2", label: "active record row" });
+      expect(result.proof[1]).toMatchObject({ sheetName: "Apr 2026", range: "D2", label: "current Excel selection" });
+      expect(runtime.lastBatchOperations[0]).toMatchObject({ kind: "range.read_full", target: { sheetName: "Apr 2026", address: "A2:AJ2" } });
+      expect((result.answer as any).rowMetadata[0]).toMatchObject({ rowIndex: 0, sheetRowNumber: 2, address: "A2:AJ2" });
+      expect((result.answer as any).rows[0][3]).toBe("Company gas top-up");
+    });
+
+  it("uses a small active-cell neighborhood outside tables for generic reads", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.selection = selectionInfo("Report", "B5", { row: 5, column: 2 });
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({ request: "Look into this workbook", mode: "answer" });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.proof[0]).toMatchObject({ sheetName: "Report", range: "A4:B6", label: "active cell neighborhood" });
+      expect(runtime.lastBatchOperations[0]).toMatchObject({ kind: "range.read_full", target: { sheetName: "Report", address: "A4:B6" } });
+    });
+
+  it("keeps explicit table reads broad instead of overriding with selection", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.selection = selectionInfo("Data", "C3", { row: 3, column: 3 });
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Read Transactions table",
+        mode: "answer",
+        target: { tableName: "Transactions" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("table_compact_read");
+      expect(runtime.runtimeMethodCalls["table.read"]).toBe(1);
+      expect((result.answer as any).rowMetadata[0]).toMatchObject({ rowIndex: 0, sheetRowNumber: 2, address: "A2:D2" });
+    });
+
   it("summarizes large range requests without reading cell values", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -95,6 +179,69 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(workbookSummary.telemetry.metadataDetailLevel).toBe("structure");
       expect(sheetSummary.telemetry.cacheHit).toBe(true);
       expect(runtime.readBatchCount).toBe(0);
+      expect(JSON.stringify(workbookSummary.answer)).toContain("dropdown rules");
+      expect(JSON.stringify(workbookSummary.answer)).not.toContain("Company gas top-up");
+      expect(JSON.stringify(workbookSummary.answer).length).toBeLessThan(20000);
+    });
+
+  it("returns semantic index context hints for dropdowns, styles, and historical labels without row payloads", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_semantic_hints");
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Map workbook context",
+        mode: "answer",
+        detailLevel: "semantic_index",
+        workbookContextId: metadata.workbookContextId
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      const entries = (result.answer as any).entries;
+      const apr = entries.find((entry: any) => entry.sheetName === "Apr 2026");
+      expect(apr.nextRequestHints.join(" ")).toContain("find_similar_rows");
+      expect(apr.nextRequestHints.join(" ")).toContain("read_data_validation");
+      expect(JSON.stringify(result.answer)).not.toContain("Company gas top-up");
+      expect(result.telemetry.fullReadCellCount).toBe(0);
+    });
+
+  it("reads exact dropdown validation rules for a selected/status column", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "What dropdown values are allowed in this status column?",
+        mode: "answer",
+        intent: { action: "read_data_validation" },
+        target: { sheetName: "Data", range: "D1:D4" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(runtime.runtimeMethodCalls["range.read_data_validation"]).toBe(1);
+      expect((result.answer as any).result.data.rules[0].source).toEqual(["Open", "Closed", "Pending"]);
+    });
+
+  it("finds similar prior-period rows across related workbook sheets", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_similar_rows");
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Look back at last month and show how this kind of transaction was labeled.",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "find_similar_rows" },
+        target: { sheetName: "Apr 2026", range: "A2:AJ2" },
+        budget: { maxExamples: 3 }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("similar_rows");
+      expect((result.answer as any).rows[0]).toMatchObject({ sheetName: "Mar 2026", range: "A2:AJ2" });
+      expect((result.answer as any).rows[0].values).toContain("company_gas_topup");
+      expect(result.proof[0]).toMatchObject({ sheetName: "Mar 2026", range: "A2:AJ2" });
     });
 
   it("downgrades vague full table detail requests to sheet summaries", async () => {
@@ -267,7 +414,7 @@ describe("AgentOrchestrator Read Answer Routing", () => {
 
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).kind).toBe("table_compact_read");
-      expect((result.answer as any).values).toBeUndefined();
+      expect((result.answer as any).values).toEqual([[123, "Open"], [456, "Closed"]]);
       expect((result.answer as any).valuesPreview).toEqual([[123, "Open"], [456, "Closed"]]);
       expect((result.answer as any).resultUri).toMatch(/^excel:\/\/agent\/results\/agentres_/);
       expect((result.answer as any).fullResultUri).toMatch(/\?view=full$/);
@@ -275,7 +422,11 @@ describe("AgentOrchestrator Read Answer Routing", () => {
         workbookContextId: metadata.workbookContextId,
         resultUri: (result.answer as any).resultUri,
         fullResultUri: (result.answer as any).fullResultUri,
-        responseMode: "brief"
+        responseMode: "brief",
+        freshness: {
+          workbookId: metadata.workbook.workbookId,
+          workbookStructureHash: metadata.fingerprint.structureHash
+        }
       });
       expect((result.answer as any).projectedColumns.map((column: any) => column.name)).toEqual(["Amount", "Status"]);
       const resultId = String((result.answer as any).resultUri).split("/").pop()!;
@@ -283,6 +434,9 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       const summary = agent.getResultResource(resultId, { view: "summary" }) as any;
       expect(summary.answer.values).toBeUndefined();
       expect(summary.answer.resultUri).toBe((result.answer as any).resultUri);
+      expect(summary.freshness).toMatchObject({
+        workbookStructureHash: metadata.fingerprint.structureHash
+      });
       const callsAfterRead = runtime.runtimeMethodCalls["table.read"];
       const continued = await agent.run({
         request: "Continue using the stored result",
@@ -304,6 +458,139 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(result.telemetry.internalReadCount).toBe(1);
       expect(runtime.runtimeMethodCalls["table.read"]).toBe(1);
       expect(runtime.readBatchCount).toBe(0);
+    });
+
+  it("projects wide table rows inline using cached column role importance", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_wide_projection");
+      const wideColumns = [
+        { name: "Transaction Date", role: "date", importance: 0.97 },
+        { name: "Internal Seq", role: "identifier", importance: 0.55 },
+        { name: "Upload Batch", role: "dimension", importance: 0.45 },
+        { name: "Description", role: "description", importance: 1 },
+        { name: "Vendor", role: "vendor", importance: 0.92 },
+        { name: "Department", role: "dimension", importance: 0.58 },
+        { name: "Account", role: "account", importance: 0.82 },
+        { name: "Memo", role: "note", importance: 0.7 },
+        { name: "Cash Amount", role: "amount", importance: 0.99 },
+        { name: "Actual Amount", role: "amount", importance: 0.96 },
+        { name: "Variance", role: "formula", importance: 0.78 },
+        { name: "Category", role: "category", importance: 0.94 },
+        { name: "Status", role: "status", importance: 0.93 },
+        { name: "Reviewer", role: "dimension", importance: 0.5 },
+        { name: "Comment", role: "note", importance: 0.72 },
+        { name: "Source File", role: "identifier", importance: 0.68 },
+        { name: "Import Row", role: "identifier", importance: 0.6 },
+        { name: "Audit Flag", role: "status", importance: 0.88 },
+        { name: "Unused 1", role: "unknown", importance: 0.2 },
+        { name: "Unused 2", role: "unknown", importance: 0.2 }
+      ].map((column, index) => ({
+        ...column,
+        normalizedName: column.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""),
+        inferredType: column.role === "date" ? "date" : column.role === "amount" ? "currency" : column.role === "status" ? "status" : "text",
+        index,
+        letter: String.fromCharCode(65 + index)
+      }));
+      metadata.tables[0]!.range = "A1:T4";
+      metadata.tables[0]!.dataRange = "A2:T4";
+      metadata.tables[0]!.columns = wideColumns as any;
+      agent.metadataCache.set(metadata);
+      runtime.readTable = async () => {
+        runtime.runtimeMethodCalls["table.read"] = (runtime.runtimeMethodCalls["table.read"] ?? 0) + 1;
+        return {
+          ok: true,
+          table: {
+            tableName: "Transactions",
+            headers: wideColumns.map((column) => column.name),
+            values: [wideColumns.map((column) => `value:${column.name}`)]
+          }
+        };
+      };
+
+      const result = await agent.run({
+        request: "Read the first transaction row",
+        mode: "answer",
+        responseMode: "brief",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "read_values" },
+        target: { tableName: "Transactions" },
+        values: { rowLimit: 1 },
+        budget: { maxPayloadBytes: 20_000 }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      const answer = result.answer as any;
+      expect(answer.inlineColumnProjection).toMatchObject({
+        reason: "role_aware_wide_row_projection",
+        omittedColumnCount: 8
+      });
+      expect(answer.values[0]).toHaveLength(12);
+      expect(answer.headers).toHaveLength(12);
+      expect(answer.headers).toEqual(expect.arrayContaining([
+        "Transaction Date",
+        "Description",
+        "Vendor",
+        "Cash Amount",
+        "Category",
+        "Status"
+      ]));
+      expect(JSON.stringify(answer.values)).not.toContain("value:Unused 2");
+      expect(answer.schemaSummary.columns[0]).toMatchObject({ name: "Transaction Date", role: "date", importance: 0.97 });
+      expect(result.telemetry.internalReadCount).toBe(1);
+    });
+
+  it("uses domain dictionary encoding for repeated compact table values", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_domain_encoding");
+      metadata.tables[0]!.columns = [
+        { name: "Date", normalizedName: "date", inferredType: "date", role: "date", importance: 0.97, index: 0, letter: "A" },
+        { name: "Description", normalizedName: "description", inferredType: "text", role: "description", importance: 1, index: 1, letter: "B" },
+        { name: "Amount", normalizedName: "amount", inferredType: "currency", role: "amount", importance: 0.99, index: 2, letter: "C" },
+        { name: "Status", normalizedName: "status", inferredType: "status", role: "status", importance: 0.93, index: 3, letter: "D" }
+      ];
+      agent.metadataCache.set(metadata);
+      const descriptions = [
+        "Company fuel top-up requiring month-end operating expense label",
+        "Customer invoice settlement requiring accounts receivable label"
+      ];
+      runtime.readTable = async () => {
+        runtime.runtimeMethodCalls["table.read"] = (runtime.runtimeMethodCalls["table.read"] ?? 0) + 1;
+        return {
+          ok: true,
+          table: {
+            tableName: "Transactions",
+            headers: ["Date", "Description", "Amount", "Status"],
+            values: Array.from({ length: 12 }, (_value, index) => [
+              `2026-06-${String((index % 4) + 1).padStart(2, "0")}`,
+              descriptions[index % descriptions.length],
+              100 + index,
+              index % 3 === 0 ? "Needs review" : "Approved"
+            ])
+          }
+        };
+      };
+
+      const result = await agent.run({
+        request: "Read recent transaction labels",
+        mode: "answer",
+        responseMode: "brief",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "read_values" },
+        target: { tableName: "Transactions" },
+        values: { rowLimit: 12 }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      const answer = result.answer as any;
+      expect(answer.values).toBeUndefined();
+      expect(answer.encodedValues).toHaveLength(12);
+      expect(answer.encodedValues[0][2]).toBe(100);
+      expect(answer.valueEncoding).toMatchObject({ kind: "domain_dictionary_by_column" });
+      expect(answer.valueEncoding.columns.map((column: any) => column.name)).toEqual(expect.arrayContaining(["Description", "Status"]));
+      expect(JSON.stringify(answer.encodedValues)).not.toContain("Company fuel top-up");
+      expect(JSON.stringify(answer.valueEncoding.columns)).toContain("Company fuel top-up");
     });
 
   it("uses deterministic table sample and full table detail levels", async () => {

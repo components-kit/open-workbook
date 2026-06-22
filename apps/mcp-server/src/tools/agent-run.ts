@@ -10,7 +10,7 @@ export function registerAgentTools(mcp: McpServer, runtime: RuntimeFacade, conte
     {
       title: "Run Open Workbook agent workflow",
       description:
-        "Single default Open Workbook interface. Send workbook intent; the backend handles discovery, cached metadata, target resolution, preview/apply, validation, rollback, and compact proof without exposing low-level Excel tools.",
+        "Single default Open Workbook interface. Send workbook intent; the backend handles discovery, cached metadata, target resolution, preview/apply, validation, rollback, and compact proof without exposing low-level Excel tools. This tool can read the current live Excel selection; when the user says this, here, selected, current, this row/cell/range/column, or asks a vague question while Excel is connected, call excel.agent.run before asking for row or column numbers.",
       inputSchema: agentRunInputSchema(),
       outputSchema: agentRunOutputSchema(),
       annotations: {
@@ -43,6 +43,12 @@ export function agentRunInputSchema() {
     transactionId: z.string().optional(),
     resultUri: z.string().optional(),
     fullResultUri: z.string().optional(),
+    freshness: z.object({
+      workbookId: z.string().optional(),
+      workbookContentVersion: z.number().optional(),
+      workbookStructureHash: z.string().optional(),
+      contextUpdatedAt: z.number().optional()
+    }).optional(),
     nextRequest: z.string().optional(),
     responseMode: z.enum(["brief", "standard", "verbose"]).optional()
   }), "continuation");
@@ -165,10 +171,27 @@ function agentRunOutputSchema() {
       transactionId: z.string().optional(),
       resultUri: z.string().optional(),
       fullResultUri: z.string().optional(),
+      freshness: z.object({
+        workbookId: z.string().optional(),
+        workbookContentVersion: z.number().optional(),
+        workbookStructureHash: z.string().optional(),
+        contextUpdatedAt: z.number().optional()
+      }).optional(),
       nextRequest: z.string().optional(),
       responseMode: z.enum(["brief", "standard", "verbose"]).optional()
     }).optional(),
     nextAction: z.string(),
+    taskOutcome: z.enum(["final_answer", "preview_ready", "apply_complete", "needs_user_input", "cannot_complete"]).optional(),
+    finalAnswer: z.string().optional(),
+    agentInstruction: z.string().optional(),
+    maxRecommendedFollowupCalls: z.number().int().nonnegative().optional(),
+    requiredFollowup: z.object({
+      mode: z.enum(AGENT_RUN_MODES).optional(),
+      nextAction: z.string().optional(),
+      operationId: z.string().optional(),
+      confirmationToken: z.string().optional(),
+      instruction: z.string()
+    }).optional(),
     warnings: z.array(z.string()),
     telemetry: z.object({
       internalCallCount: z.number(),

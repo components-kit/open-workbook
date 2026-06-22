@@ -1,4 +1,5 @@
 import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
@@ -175,6 +176,16 @@ import { addinHealthTimeoutMs, addinStaleTtlMs, defaultLockLeasePolicy, runtimeV
 
 type AddinConnectionState = "disconnected" | "connected_no_workbook" | "ready" | "stale";
 
+interface WorkbookChangeJournalEntry {
+  entryId: string;
+  workbookId: WorkbookId | string;
+  version: number;
+  source: "addin_event" | "runtime_batch" | "transaction";
+  method?: string;
+  ranges: A1Range[];
+  recordedAt: string;
+}
+
 export interface RuntimeServiceOptions {
   stateDir?: string;
   persistState?: boolean;
@@ -199,6 +210,7 @@ export class RuntimeService {
   private readonly jobs = new Map<JobId, JobRecord>();
   private readonly directMutationResults = new Map<string, unknown>();
   private readonly workbookContentVersions = new Map<string, number>();
+  private readonly workbookChangeJournal: WorkbookChangeJournalEntry[] = [];
   private readonly collabEvents: CollaborationEvent[] = [];
   private readonly conflicts: ConflictRecord[] = [];
   private readonly conflictTelemetry: ConflictTelemetryRecord[] = [];
@@ -1153,7 +1165,7 @@ export class RuntimeService {
       this.permissionState = mergePermissionState(this.permissionState, snapshot.permissions);
     }
     this.plans.load(snapshot.plans ?? []);
-    this.backups.load(snapshot.backups ?? []);
+    this.backups.load(this.normalizeRestoredBackupRecords(snapshot.backups ?? []));
     this.agent.loadOperations(snapshot.agentOperations ?? []);
   }
 
@@ -1222,6 +1234,27 @@ export class RuntimeService {
     });
   }
 
+  private normalizeRestoredBackupRecords(records: BackupRecord[]): BackupRecord[] {
+    return records.map((record) => this.normalizeRestoredBackupRecord(record));
+  }
+
+  private normalizeRestoredBackupRecord(record: BackupRecord): BackupRecord {
+    if (record.kind === "file-copy" || record.payload === undefined) {
+      return { ...record };
+    }
+    if (record.payloadRef?.endsWith(".json") === true && backupPayloadFileLooksReadable(record.payloadRef)) {
+      const { payload: _payload, ...metadata } = record;
+      return metadata;
+    }
+    try {
+      const payloadRef = this.persistBackupPayloadSync(record.backupId, record.payload as WorkbookSnapshotResponse);
+      const { payload: _payload, ...metadata } = record;
+      return { ...metadata, payloadRef };
+    } catch {
+      return { ...record };
+    }
+  }
+
   attachAddinClient(connectionId: ConnectionId, client: AddinRpcClient): void {
     this.addinClients.set(connectionId, client);
   }
@@ -1246,7 +1279,12 @@ export class RuntimeService {
     }
     const workbookId = eventWorkbookId(params) ?? this.sessions.getActive()?.activeWorkbook?.workbookId;
     if (workbookId && /change|changed|mutation|write|clear|format|style|table|sheet|range/i.test(method)) {
-      this.bumpWorkbookContentVersion(workbookId);
+      this.recordWorkbookChange({
+        workbookId,
+        source: "addin_event",
+        method,
+        ranges: eventAffectedRanges(params)
+      });
     }
   }
 
@@ -1254,11 +1292,46 @@ export class RuntimeService {
     return this.workbookContentVersions.get(String(workbookId)) ?? 0;
   }
 
+  getWorkbookChangeJournal(input: { workbookId: WorkbookId | string; sinceVersion?: number; ranges?: A1Range[]; limit?: number }) {
+    const limit = Math.max(1, Math.min(input.limit ?? 50, 250));
+    const ranges = input.ranges ?? [];
+    const entries = this.workbookChangeJournal
+      .filter((entry) => String(entry.workbookId) === String(input.workbookId))
+      .filter((entry) => input.sinceVersion === undefined || entry.version > input.sinceVersion)
+      .filter((entry) => ranges.length === 0 || entry.ranges.length === 0 || entry.ranges.some((changed) => ranges.some((range) =>
+        changed.sheetName === range.sheetName && rangesOverlapAddresses(changed.address, range.address)
+      )))
+      .slice(-limit)
+      .reverse();
+    return {
+      ok: true,
+      workbookId: input.workbookId,
+      currentVersion: this.getWorkbookContentVersion(input.workbookId),
+      sinceVersion: input.sinceVersion,
+      overlapStatus: entries.length === 0 ? "no_overlap" : "changed",
+      entries
+    };
+  }
+
   private bumpWorkbookContentVersion(workbookId: WorkbookId | string): number {
     const key = String(workbookId);
     const next = (this.workbookContentVersions.get(key) ?? 0) + 1;
     this.workbookContentVersions.set(key, next);
     return next;
+  }
+
+  private recordWorkbookChange(input: Omit<WorkbookChangeJournalEntry, "entryId" | "version" | "recordedAt">): number {
+    const version = this.bumpWorkbookContentVersion(input.workbookId);
+    this.workbookChangeJournal.push({
+      ...input,
+      entryId: makeId<string>("change"),
+      version,
+      recordedAt: new Date().toISOString()
+    });
+    if (this.workbookChangeJournal.length > 1_000) {
+      this.workbookChangeJournal.splice(0, this.workbookChangeJournal.length - 1_000);
+    }
+    return version;
   }
 
   private recordCollabEvent(input: Omit<CollaborationEvent, "eventId" | "createdAt">): void {
@@ -1440,15 +1513,15 @@ export class RuntimeService {
     return this.agent.getSemanticIndexResource(workbookContextId);
   }
 
-  getAgentOperationResource(operationId: string) {
+  getAgentOperationResource(operationId: string): unknown {
     return this.agent.getOperationResource(operationId);
   }
 
-  getAgentResultResource(resultId: string, options?: { view?: "summary" | "full"; maxBytes?: number }) {
+  getAgentResultResource(resultId: string, options?: { view?: "summary" | "full"; maxBytes?: number }): unknown {
     return this.agent.getResultResource(resultId, options);
   }
 
-  getCompactResource(resourceId: string, options?: { view?: "summary" | "full"; maxBytes?: number }) {
+  getCompactResource(resourceId: string, options?: { view?: "summary" | "full"; maxBytes?: number }): unknown {
     return this.agent.getCompactResource(resourceId, options);
   }
 
@@ -5547,7 +5620,12 @@ export class RuntimeService {
     const scheduled = this.scheduleBatch(request);
     void scheduled.promise.then((result) => {
       if (result.ok) {
-        this.bumpWorkbookContentVersion(request.workbookId);
+        this.recordWorkbookChange({
+          workbookId: request.workbookId,
+          source: "runtime_batch",
+          method: "batch.apply",
+          ranges: operationAffectedRanges(request.operations)
+        });
         if (batchInvalidatesWorkbookMetadata(request)) {
           this.agent.invalidateWorkbook(request.workbookId);
         }
@@ -6011,7 +6089,12 @@ export class RuntimeService {
           });
         }
         if (resultRecord.ok !== false) {
-          this.bumpWorkbookContentVersion(input.workbookId);
+          this.recordWorkbookChange({
+            workbookId: input.workbookId,
+            source: "transaction",
+            method: "transaction.apply",
+            ranges: operationAffectedRanges((input as { operations?: ExcelOperation[] }).operations)
+          });
           if (transactionInvalidatesWorkbookMetadata(input)) {
             this.agent.invalidateWorkbook(input.workbookId);
           }
@@ -6547,6 +6630,26 @@ export class RuntimeService {
     return filePath;
   }
 
+  private persistBackupPayloadSync(backupId: BackupId, payload: WorkbookSnapshotResponse): string {
+    const directory = this.getBackupDirectory();
+    mkdirSync(directory, { recursive: true });
+    const filePath = path.join(directory, `${backupId}.json`);
+    writeFileSync(
+      filePath,
+      JSON.stringify(
+        {
+          backupId,
+          persistedAt: new Date().toISOString(),
+          payload
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    return filePath;
+  }
+
   private async loadBackupPayload(backup: BackupRecord): Promise<WorkbookSnapshotResponse | undefined> {
     if (backup.payload) {
       return backup.payload as WorkbookSnapshotResponse;
@@ -6684,6 +6787,18 @@ interface PruneCandidate {
 
 function isPersistedBackup(backup: BackupRecord): boolean {
   return backup.kind === "file-copy" || backup.payloadRef?.endsWith(".json") === true;
+}
+
+function backupPayloadFileLooksReadable(filePath: string): boolean {
+  try {
+    if (!existsSync(filePath) || statSync(filePath).isFile() !== true) {
+      return false;
+    }
+    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as { payload?: unknown };
+    return parsed.payload !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 function backupMatchesRetentionKind(backup: BackupRecord, kind: NonNullable<WorkbookBackupRetentionRequest["kind"]>): boolean {
@@ -7731,6 +7846,7 @@ function scopesFromOperation(workbookId: WorkbookId, operation: ExcelOperation):
     case "range.autofit_columns":
     case "range.autofit_rows":
     case "range.apply_autofilter":
+    case "range.clear_autofilter":
     case "range.merge":
     case "range.unmerge":
     case "range.restore_snapshot":
@@ -8660,6 +8776,62 @@ function eventWorkbookId(params: unknown): WorkbookId | string | undefined {
     }
   }
   return undefined;
+}
+
+function eventAffectedRanges(params: unknown): A1Range[] {
+  const workbookId = eventWorkbookId(params);
+  if (!workbookId || !params || typeof params !== "object") {
+    return [];
+  }
+  return rangesFromUnknown(params, workbookId as WorkbookId);
+}
+
+function operationAffectedRanges(operations: ExcelOperation[] | undefined): A1Range[] {
+  if (!Array.isArray(operations)) {
+    return [];
+  }
+  const ranges = operations.flatMap((operation) => rangesFromUnknown(operation, operation.workbookId));
+  const seen = new Set<string>();
+  return ranges.filter((range) => {
+    const key = `${range.workbookId}:${range.sheetName}!${range.address}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function rangesFromUnknown(value: unknown, workbookId: WorkbookId): A1Range[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const record = value as Record<string, unknown>;
+  const nestedRanges = Array.isArray(record.ranges)
+    ? record.ranges.flatMap((entry) => rangesFromUnknown(entry, workbookId))
+    : [];
+  const targetRanges = record.target && typeof record.target === "object"
+    ? rangesFromUnknown(record.target, workbookId)
+    : [];
+  const range = rangeFromRecord(record, workbookId);
+  return [...nestedRanges, ...targetRanges, ...(range ? [range] : [])];
+}
+
+function rangeFromRecord(record: Record<string, unknown>, workbookId: WorkbookId): A1Range | undefined {
+  const sheetName = typeof record.sheetName === "string"
+    ? record.sheetName
+    : typeof record.worksheetName === "string"
+      ? record.worksheetName
+      : undefined;
+  const address = typeof record.address === "string"
+    ? record.address
+    : typeof record.range === "string"
+      ? record.range
+      : undefined;
+  if (!sheetName || !address) {
+    return undefined;
+  }
+  return { workbookId, sheetName, address: stripSheetName(address) };
 }
 
 function operationsInvalidateWorkbookMetadata(operations: ExcelOperation[]): boolean {

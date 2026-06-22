@@ -1,5 +1,5 @@
 import type { AgentCandidate, AgentRunInput, AgentRunOutput, AgentSemanticRole } from "@components-kit/open-workbook-protocol";
-import { numberToColumnName as numberToColumn } from "@components-kit/open-workbook-excel-core";
+import { numberToColumnName as numberToColumn, stripSheetName, tryParseA1Address } from "@components-kit/open-workbook-excel-core";
 import { normalizeHeaderName, type WorkbookMetadata } from "./workbook-metadata-cache.js";
 import { semanticIndexEntries } from "./semantic-workbook-index.js";
 
@@ -125,6 +125,10 @@ export function resolveAgentReadTarget(metadata: WorkbookMetadata, input: AgentR
         range: input.target.range
       };
     }
+  }
+  const implicitSelection = resolveImplicitReadSelectionTarget(metadata, input);
+  if (implicitSelection) {
+    return implicitSelection;
   }
   return resolveAgentTarget(metadata, input, {
     requireRange: true,
@@ -383,9 +387,9 @@ function resolveSelectedTarget(
     return {
       ok: false,
       status: "NEEDS_INPUT",
-      summary: "The request refers to the selected cell or range, but the current Excel selection is unavailable.",
+      summary: "OpenWorkbook tried to read the current live Excel selection, but the selected cell or range is unavailable.",
       nextAction: "ask_user",
-      warnings: ["Select a cell/range in Excel, then retry the request."]
+      warnings: ["Reload or reopen the OpenWorkbook Local taskpane if Excel is connected, then select a cell/range in Excel and retry the request."]
     };
   }
   const range = requestMentionsSelectedColumn(request) ? selectedColumnRange(metadata, selection) : selection.address;
@@ -397,6 +401,130 @@ function resolveSelectedTarget(
     range,
     searchValues: ["selected", "selection", "active cell", "current cell", "selected range", "selected column"]
   }, options);
+}
+
+function resolveImplicitReadSelectionTarget(metadata: WorkbookMetadata, input: AgentRunInput): AgentTargetResolution | undefined {
+  if (!shouldPreferImplicitSelectionForRead(input)) {
+    return undefined;
+  }
+  const selection = metadata.selection;
+  if (!selection?.sheetName || !selection.address) {
+    return undefined;
+  }
+  const range = implicitSelectionReadRange(metadata, selection);
+  return exactSourceResolution({
+    kind: "range",
+    id: "selection:implicit",
+    label: implicitSelectionReadLabel(metadata, selection, range),
+    sheetName: selection.sheetName,
+    range,
+    searchValues: ["active cell", "current selection", "selected range", selection.sheetName, range]
+  }, { requireRange: true });
+}
+
+function shouldPreferImplicitSelectionForRead(input: AgentRunInput): boolean {
+  if (requestMentionsSelection(input.request)) {
+    return false;
+  }
+  if (input.target?.candidateId || input.target?.tableName || input.target?.sheetName || input.target?.range) {
+    return false;
+  }
+  if (input.detailLevel === "table_sample" || input.detailLevel === "full_table") {
+    return false;
+  }
+  if (/\b(all|every|entire|whole|full)\s+(?:table|sheet|rows?|data|values?|workbook)\b/i.test(input.request)) {
+    return false;
+  }
+  if (/\b(?:read|show|inspect|summari[sz]e|look(?:\s+into)?|check|analy[sz]e|what|why|which|where|current)\b/i.test(input.request)) {
+    return true;
+  }
+  return input.mode === "answer";
+}
+
+function implicitSelectionReadRange(metadata: WorkbookMetadata, selection: NonNullable<WorkbookMetadata["selection"]>): string {
+  if (!selection.isSingleCell) {
+    return selection.address;
+  }
+  const tableRow = selectedTableRowRange(metadata, selection);
+  if (tableRow) {
+    return tableRow;
+  }
+  const headerRecordRow = selectedHeaderRecordRowRange(metadata, selection);
+  if (headerRecordRow) {
+    return headerRecordRow;
+  }
+  return selectedCellNeighborhoodRange(metadata, selection);
+}
+
+function implicitSelectionReadLabel(metadata: WorkbookMetadata, selection: NonNullable<WorkbookMetadata["selection"]>, range: string): string {
+  if (!selection.isSingleCell) {
+    return "selected range";
+  }
+  if (selectedTableRowRange(metadata, selection) === range) {
+    return "active table row";
+  }
+  if (selectedHeaderRecordRowRange(metadata, selection) === range) {
+    return "active record row";
+  }
+  return "active cell neighborhood";
+}
+
+function selectedTableRowRange(metadata: WorkbookMetadata, selection: NonNullable<WorkbookMetadata["selection"]>): string | undefined {
+  const selectedRow = selection.startCell.row;
+  const selectedColumn = selection.startCell.column;
+  const table = metadata.tables.find((candidate) => {
+    if (candidate.sheetName !== selection.sheetName) {
+      return false;
+    }
+    const parsed = tryParseA1Address(stripSheetName(candidate.range));
+    return parsed !== undefined &&
+      selectedRow >= parsed.startRow &&
+      selectedRow <= parsed.endRow &&
+      selectedColumn >= parsed.startColumn &&
+      selectedColumn <= parsed.endColumn;
+  });
+  const parsed = table ? tryParseA1Address(stripSheetName(table.range)) : undefined;
+  if (!parsed) {
+    return undefined;
+  }
+  return `${numberToColumn(parsed.startColumn)}${selectedRow}:${numberToColumn(parsed.endColumn)}${selectedRow}`;
+}
+
+function selectedHeaderRecordRowRange(metadata: WorkbookMetadata, selection: NonNullable<WorkbookMetadata["selection"]>): string | undefined {
+  const selectedRow = selection.startCell.row;
+  const selectedColumn = selection.startCell.column;
+  const sheet = metadata.sheets.find((candidate) => candidate.name === selection.sheetName);
+  if (!sheet) {
+    return undefined;
+  }
+  const headers = sheet.headers
+    .filter((header) => header.row < selectedRow && header.columns.length >= 2)
+    .sort((left, right) => right.row - left.row || right.confidence - left.confidence);
+  for (const header of headers) {
+    const firstColumn = Math.min(...header.columns.map((column) => column.index + 1));
+    const headerLastColumn = Math.max(...header.columns.map((column) => column.index + 1));
+    const used = sheet.usedRange ? tryParseA1Address(stripSheetName(sheet.usedRange)) : undefined;
+    const usedLastColumn = used?.endColumn ?? sheet.columnCount;
+    const lastColumn = Math.max(headerLastColumn, usedLastColumn ?? headerLastColumn);
+    if (selectedColumn < firstColumn || selectedColumn > lastColumn) {
+      continue;
+    }
+    if (used && (selectedRow < used.startRow || selectedRow > used.endRow)) {
+      continue;
+    }
+    return `${numberToColumn(firstColumn)}${selectedRow}:${numberToColumn(lastColumn)}${selectedRow}`;
+  }
+  return undefined;
+}
+
+function selectedCellNeighborhoodRange(metadata: WorkbookMetadata, selection: NonNullable<WorkbookMetadata["selection"]>): string {
+  const sheet = metadata.sheets.find((candidate) => candidate.name === selection.sheetName);
+  const used = sheet?.usedRange ? tryParseA1Address(stripSheetName(sheet.usedRange)) : undefined;
+  const startRow = Math.max(used?.startRow ?? 1, selection.startCell.row - 1);
+  const endRow = Math.min(used?.endRow ?? selection.startCell.row, selection.startCell.row + 1);
+  const startColumn = Math.max(used?.startColumn ?? 1, selection.startCell.column - 1);
+  const endColumn = Math.min(used?.endColumn ?? selection.startCell.column, selection.startCell.column + 1);
+  return `${numberToColumn(startColumn)}${startRow}:${numberToColumn(endColumn)}${endRow}`;
 }
 
 function requestMentionsSelection(request: string): boolean {

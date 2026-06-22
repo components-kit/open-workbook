@@ -16,6 +16,7 @@ describe("excel.agent.run MCP schema", () => {
     expect(AGENT_INTENT_ACTIONS).toContain("replace_range_with_styled_table");
     expect(AGENT_INTENT_ACTIONS).toContain("read_style_summary");
     expect(AGENT_INTENT_ACTIONS).toContain("format_diagnostics");
+    expect(AGENT_INTENT_ACTIONS).toContain("find_similar_rows");
     expect(AGENT_DETAIL_LEVELS).toContain("full_table");
     expect(AGENT_DETAIL_LEVELS).toContain("semantic_index");
   });
@@ -30,6 +31,24 @@ describe("excel.agent.run MCP schema", () => {
     expect(source).toContain("readPolicy");
   });
 
+  it("exposes task outcome fields that tell agents when to stop looping", () => {
+    const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("taskOutcome");
+    expect(source).toContain("finalAnswer");
+    expect(source).toContain("agentInstruction");
+    expect(source).toContain("maxRecommendedFollowupCalls");
+    expect(source).toContain("requiredFollowup");
+  });
+
+  it("advertises live Excel selection handling in the public tool description", () => {
+    const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("current live Excel selection");
+    expect(source).toContain("this row/cell/range/column");
+    expect(source).toContain("before asking for row or column numbers");
+  });
+
   it("allows cache invalidation fields returned after successful applies", () => {
     const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
 
@@ -42,9 +61,14 @@ describe("excel.agent.run MCP schema", () => {
 
     expect((schema.target as any).parse("{\"sheetName\":\"Booking\",\"range\":\"A1:X7\"}")).toEqual({ sheetName: "Booking", range: "A1:X7" });
     expect((schema.intent as any).parse("{\"action\":\"read_values\",\"targetHints\":[\"Booking\"]}")).toEqual({ action: "read_values", targetHints: ["Booking"] });
-    expect((schema.continuation as any).parse("{\"workbookContextId\":\"wbctx_1\",\"fullResultUri\":\"excel://agent/results/agentres_1?view=full\"}")).toEqual({
+    expect((schema.continuation as any).parse("{\"workbookContextId\":\"wbctx_1\",\"fullResultUri\":\"excel://agent/results/agentres_1?view=full\",\"freshness\":{\"workbookId\":\"workbook_1\",\"workbookContentVersion\":4,\"workbookStructureHash\":\"abc\"}}")).toEqual({
       workbookContextId: "wbctx_1",
-      fullResultUri: "excel://agent/results/agentres_1?view=full"
+      fullResultUri: "excel://agent/results/agentres_1?view=full",
+      freshness: {
+        workbookId: "workbook_1",
+        workbookContentVersion: 4,
+        workbookStructureHash: "abc"
+      }
     });
     expect((schema.values as any).parse({
       patches: [

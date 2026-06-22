@@ -44,6 +44,7 @@ export const BATCH_OPERATION_KINDS = [
   "range.autofit_rows",
   "range.autofit_many",
   "range.apply_autofilter",
+  "range.clear_autofilter",
   "range.merge",
   "range.unmerge",
   "range.restore_snapshot",

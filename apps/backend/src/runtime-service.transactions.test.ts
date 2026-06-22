@@ -179,6 +179,39 @@ describe("RuntimeService plan refresh", () => {
   });
 });
 
+describe("RuntimeService workbook change journal", () => {
+  it("tracks workbook versions and range overlap for freshness checks", () => {
+    const runtime = new RuntimeService({ persistState: false });
+    const workbookId = "workbook_change_journal" as WorkbookId;
+
+    runtime.recordAddinEvent("conn_change" as any, "range.changed", {
+      workbookId,
+      sheetName: "Data",
+      address: "B2:D10"
+    });
+
+    expect(runtime.getWorkbookContentVersion(workbookId)).toBe(1);
+    expect(runtime.getWorkbookChangeJournal({
+      workbookId,
+      sinceVersion: 0,
+      ranges: [{ workbookId, sheetName: "Data", address: "C5:C5" }]
+    })).toMatchObject({
+      currentVersion: 1,
+      overlapStatus: "changed",
+      entries: [{ version: 1, method: "range.changed" }]
+    });
+    expect(runtime.getWorkbookChangeJournal({
+      workbookId,
+      sinceVersion: 0,
+      ranges: [{ workbookId, sheetName: "Other", address: "C5:C5" }]
+    })).toMatchObject({
+      currentVersion: 1,
+      overlapStatus: "no_overlap",
+      entries: []
+    });
+  });
+});
+
 describe("RuntimeService transaction progress", () => {
   it("reports queued transaction metadata and cancels queued work before Excel execution", async () => {
     const workbookId = "workbook_transaction_queue" as WorkbookId;

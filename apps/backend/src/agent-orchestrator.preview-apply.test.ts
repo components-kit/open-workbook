@@ -61,6 +61,14 @@ Data rows:
   
       expect(preview.status).toBe("PREVIEW_READY");
       expect(preview.confirmationToken).toBeTruthy();
+      expect(preview.taskOutcome).toBe("preview_ready");
+      expect(preview.maxRecommendedFollowupCalls).toBe(1);
+      expect(preview.requiredFollowup).toMatchObject({
+        mode: "apply_update",
+        nextAction: "call_apply_update",
+        operationId: preview.operationId
+      });
+      expect(preview.agentInstruction).toContain("Do not rediscover workbook context");
       expect(missingToken.status).toBe("NEEDS_INPUT");
       expect(runtime.writeBatchCount).toBe(0);
     });
@@ -2453,6 +2461,30 @@ Data rows:
     }
   });
 
+  it("resolves active/current sheet phrases for destructive sheet operations", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Delete the current sheet",
+      mode: "preview_update",
+      intent: { action: "delete_sheet" }
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect(preview.summary).toBe("Prepared sheet deletion for Data.");
+
+    const applied = await agent.run({
+      request: "Apply delete current sheet",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(applied.status).toBe("SUCCESS");
+    expect(runtime.lastBatchOperations[0]).toMatchObject({ kind: "sheet.delete", sheetName: "Data" });
+  });
+
   it("routes covered workbook snapshot and backup actions to runtime methods", async () => {
     const cases: Array<{
       capabilityName: string;
@@ -2677,6 +2709,46 @@ Data rows:
       expect(explicitFormat.telemetry.actionHandlerId).toBe("format_range");
     });
 
+  it("clears range autofilters without requiring table filter criteria", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Remove all filters from Booking sheet range A1:X7.",
+        mode: "preview_update",
+        target: { sheetName: "Data", range: "A1:D4" }
+      });
+      const applied = await agent.run({
+        request: "Apply clear filters",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).kind).toBe("filter_clear_preview");
+      expect(preview.telemetry.actionHandlerId).toBe("filter_range");
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations[0]).toMatchObject({ kind: "range.clear_autofilter", target: { sheetName: "Data", address: "A1:D4" } });
+      expect(runtime.tableMethodCalls).toHaveLength(0);
+    });
+
+  it("treats clear_table_filters with a range target as range autofilter clearing", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Clear all applied filters",
+        mode: "preview_update",
+        intent: { action: "clear_table_filters" },
+        target: { sheetName: "Data", range: "A1:D4" }
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).kind).toBe("filter_clear_preview");
+      expect((preview.changes ?? [])[0]).toMatchObject({ sheetName: "Data", range: "A1:D4", after: "filters cleared" });
+    });
+
   it("keeps parse_dates patch targets exact instead of broadening to the whole sheet", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -2784,7 +2856,7 @@ Data rows:
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).rowOffset).toBe(1);
       expect((result.answer as any).rowLimit).toBe(1);
-      expect((result.answer as any).values).toBeUndefined();
+      expect((result.answer as any).values).toEqual([["2026-06-02", "A-101", 456, "Closed"]]);
       const resultId = String((result.answer as any).resultUri).split("/").pop()!;
       expect((agent.getResultResource(resultId) as any).answer.values).toEqual([["2026-06-02", "A-101", 456, "Closed"]]);
     });

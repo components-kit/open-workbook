@@ -94,6 +94,10 @@ export class FakeAgentRuntime {
     return this.workbookContentVersion;
   }
 
+  getWorkbookChangeJournal() {
+    return { ok: true, currentVersion: this.workbookContentVersion, overlapStatus: "changed", entries: [] };
+  }
+
   async getSelection() {
     this.recordRuntimeCall("runtime.get_selection");
     return this.selection ? { workbook: activeWorkbook, selection: this.selection } : { ok: false };
@@ -165,6 +169,22 @@ export class FakeAgentRuntime {
 
   async readRangeMetadata(method: string, request: any) {
     this.recordRuntimeCall(method);
+    if (method === "range.read_data_validation") {
+      return {
+        ok: true,
+        method,
+        request,
+        data: {
+          address: request.address,
+          rules: [{
+            address: request.address,
+            type: "list",
+            source: ["Open", "Closed", "Pending"],
+            allowBlank: true
+          }]
+        }
+      };
+    }
     return { ok: true, method, request, data: { address: request.address, count: method === "range.search" ? 1 : 0 } };
   }
 
@@ -1158,6 +1178,8 @@ function valuesFor(sheetName: string, address: string) {
       ];
     }
     if (address === "B2") return [["A-100"]];
+    if (address === "A2:D3") return [["2026-06-01", "A-100", 123, "Open"], ["2026-06-02", "A-101", 456, "Closed"]];
+    if (address === "A3:D3") return [["2026-06-02", "A-101", 456, "Closed"]];
     if (address === "A2:B2") return [["20/6/26", "20/6/26"]];
     if (address === "B3") return [[""]];
     if (address === "C2") return [[100]];
@@ -1253,6 +1275,12 @@ function monthlySheetValues(sheetName: string, address: string) {
     "INV-001", "204", sheetName.startsWith("Mar") ? "2026-03-01" : "2026-04-01", "ACME", "BK-001", "Customer A", "Job 204", "CONT-1", "20GP", "10000", "1000", "1000", "2000", "0", "12000", "360", "11640"
   ], summaryRows[1]!);
   const rows = [row1, row2, ...summaryRows.slice(2).map((summary) => padToSummary([], summary))];
+  if (address === "A2:AJ2") {
+    return [row2];
+  }
+  if (address === "A1:AJ1") {
+    return [row1];
+  }
   if (address.startsWith("O")) {
     return rows.map((row) => row.slice(14, 31));
   }
@@ -1314,6 +1342,32 @@ function repairReport(repair: string, request: any, ok = true) {
   };
 }
 
+function monthlyColumns() {
+  const names = [
+    "Transaction Date", "Job ID", "Truck ID", "Description", "Transaction Type", "Direction", "Cash Amount", "Actual Amount", "Payment Variance", "Reconciliation Note", "Transfer From/To", "Proof File", "Detail Notes", "",
+    "Invoice No", "Job ID", "Invoice Date", "Billed To", "Booking No", "Customer", "Job", "Container No", "Container Size", "Job Price", "Lifting On", "Lifting Off", "Total Lifting", "Other Fees", "Gross Billed", "W/H Tax", "Net Collect", "",
+    "Metric", "Amount (THB)", "View", "Notes"
+  ];
+  return names.map((name, index) => ({
+    name,
+    normalizedName: name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || `column_${index + 1}`,
+    inferredType: /date/i.test(name) ? "date" as const : /amount|price|tax|collect|lifting|variance/i.test(name) ? "currency" as const : /type|direction|view|status/i.test(name) ? "status" as const : "text" as const,
+    index,
+    letter: columnName(index + 1)
+  }));
+}
+
+function columnName(index: number): string {
+  let value = index;
+  let label = "";
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    label = String.fromCharCode(65 + remainder) + label;
+    value = Math.floor((value - 1) / 26);
+  }
+  return label;
+}
+
 export function createCachedMetadata(workbookContextId: string): WorkbookMetadata {
   const fingerprint = createMetadataFingerprint({ workbookId, workbook: activeWorkbook, sheets });
   return {
@@ -1323,7 +1377,49 @@ export function createCachedMetadata(workbookContextId: string): WorkbookMetadat
     workbook: { workbookId, name: activeWorkbook.name, path: activeWorkbook.path, sheetCount: sheets.length, activeSheet: "Data" },
     sheets: [
       { id: "sheet:0", name: "Data", index: 0, usedRange: "A1:D4", rowCount: 4, columnCount: 4, kind: "transaction", headers: [], tableIds: ["table:Transactions"], sectionIds: [], summaryBlockIds: [], formulaRegionIds: [] },
-      { id: "sheet:1", name: "Report", index: 1, usedRange: "A1:B20", rowCount: 20, columnCount: 2, kind: "summary", headers: [], tableIds: [], sectionIds: [], summaryBlockIds: [], formulaRegionIds: ["formula:manual"] }
+      { id: "sheet:1", name: "Report", index: 1, usedRange: "A1:B20", rowCount: 20, columnCount: 2, kind: "summary", headers: [], tableIds: [], sectionIds: [], summaryBlockIds: [], formulaRegionIds: ["formula:manual"] },
+      {
+        id: "sheet:2",
+        name: "Mar 2026",
+        index: 2,
+        usedRange: "A1:AJ206",
+        rowCount: 206,
+        columnCount: 36,
+        kind: "transaction",
+        headers: [{
+          id: "header:Mar 2026:1",
+          sheetName: "Mar 2026",
+          row: 1,
+          range: "A1:AJ1",
+          confidence: 0.9,
+          columns: monthlyColumns()
+        }],
+        tableIds: [],
+        sectionIds: [],
+        summaryBlockIds: [],
+        formulaRegionIds: []
+      },
+      {
+        id: "sheet:3",
+        name: "Apr 2026",
+        index: 3,
+        usedRange: "A1:AJ244",
+        rowCount: 244,
+        columnCount: 36,
+        kind: "transaction",
+        headers: [{
+          id: "header:Apr 2026:1",
+          sheetName: "Apr 2026",
+          row: 1,
+          range: "A1:AJ1",
+          confidence: 0.9,
+          columns: monthlyColumns()
+        }],
+        tableIds: [],
+        sectionIds: [],
+        summaryBlockIds: [],
+        formulaRegionIds: []
+      }
     ],
     tables: [{
       id: "table:Transactions",
@@ -1332,10 +1428,10 @@ export function createCachedMetadata(workbookContextId: string): WorkbookMetadat
       range: "A1:D4",
       dataRange: "A2:D4",
       columns: [
-        { name: "Date", normalizedName: "date", inferredType: "date", index: 0, letter: "A" },
-        { name: "Account", normalizedName: "account", inferredType: "text", index: 1, letter: "B" },
-        { name: "Amount", normalizedName: "amount", inferredType: "currency", index: 2, letter: "C" },
-        { name: "Status", normalizedName: "status", inferredType: "text", index: 3, letter: "D" }
+        { name: "Date", normalizedName: "date", inferredType: "date", role: "date", importance: 0.97, index: 0, letter: "A" },
+        { name: "Account", normalizedName: "account", inferredType: "text", role: "account", importance: 0.82, index: 1, letter: "B" },
+        { name: "Amount", normalizedName: "amount", inferredType: "currency", role: "amount", importance: 0.99, index: 2, letter: "C" },
+        { name: "Status", normalizedName: "status", inferredType: "text", role: "status", importance: 0.9, index: 3, letter: "D" }
       ]
     }],
     namedRanges: [],

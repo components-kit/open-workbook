@@ -213,6 +213,183 @@ describe("RuntimeService persistence", () => {
     }
   });
 
+  it("migrates legacy inline snapshot backup payloads out of collaboration state", async () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "open-workbook-state-inline-backup-"));
+    const backupDir = path.join(stateDir, "backups");
+    const previousBackupDir = process.env.OPEN_WORKBOOK_BACKUP_DIR;
+    process.env.OPEN_WORKBOOK_BACKUP_DIR = backupDir;
+    const workbookId = "workbook_inline_backup" as WorkbookId;
+    const backupId = "backup_inline_payload" as any;
+    const range = { workbookId, sheetName: "Report", address: "A1:B2" };
+    const payload = {
+      workbookFingerprint: {
+        workbookId,
+        workbookHash: "legacy_inline_workbook",
+        structureHash: "structure",
+        capturedAt: new Date().toISOString()
+      },
+      rangeSnapshots: [{
+        range,
+        values: [["A", "B"], [1, 2]],
+        fingerprint: {
+          range,
+          hash: "legacy_inline_range",
+          cellCount: 4,
+          capturedAt: new Date().toISOString()
+        }
+      }]
+    };
+    mkdirSync(path.join(stateDir), { recursive: true });
+    writeFileSync(
+      path.join(stateDir, "collaboration-state.json"),
+      JSON.stringify({
+        version: 1,
+        savedAt: new Date().toISOString(),
+        agents: [],
+        tasks: [],
+        locks: [],
+        transactions: [],
+        conflicts: [],
+        collaborationEvents: [],
+        backups: [{
+          backupId,
+          workbookId,
+          kind: "workbook-copy",
+          createdAt: new Date().toISOString(),
+          reason: "Legacy inline backup",
+          affectedRanges: [range],
+          retention: "persistent",
+          payload
+        }]
+      }),
+      "utf8"
+    );
+    try {
+      const runtime = new RuntimeService({ stateDir });
+      runtime.setPermissions({ allowDestructiveActions: true, allowWorkbookActions: true });
+      const session = runtime.sessions.createSession();
+      runtime.attachAddinClient(session.connectionId, {
+        request: async (method: string) => {
+          if (method === "workbook.snapshot_ranges") {
+            return payload;
+          }
+          if (method === "operation.execute_batch") {
+            return operationOk();
+          }
+          throw new Error(`Unexpected method ${method}`);
+        }
+      } as any);
+      const backup = runtime.backups.getBackup(backupId);
+      const state = JSON.parse(readFileSync(path.join(stateDir, "collaboration-state.json"), "utf8"));
+      const restored = await runtime.restoreBackup(backupId);
+
+      expect(backup?.payload).toBeUndefined();
+      expect(backup?.payloadRef?.endsWith(`${backupId}.json`)).toBe(true);
+      expect(backup?.payloadRef && existsSync(backup.payloadRef)).toBe(true);
+      expect(state.backups[0].payload).toBeUndefined();
+      expect(state.backups[0].payloadRef).toBe(backup?.payloadRef);
+      expect(restored.ok).toBe(true);
+    } finally {
+      if (previousBackupDir === undefined) {
+        delete process.env.OPEN_WORKBOOK_BACKUP_DIR;
+      } else {
+        process.env.OPEN_WORKBOOK_BACKUP_DIR = previousBackupDir;
+      }
+    }
+  });
+
+  it("keeps persisted snapshot payloads out of collaboration state", async () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "open-workbook-state-compact-backup-"));
+    const previousBackupDir = process.env.OPEN_WORKBOOK_BACKUP_DIR;
+    process.env.OPEN_WORKBOOK_BACKUP_DIR = path.join(stateDir, "backups");
+    const workbookId = "workbook_compact_backup" as WorkbookId;
+    try {
+      const runtime = runtimeWithPersistentAddin(stateDir, workbookId);
+      const backup = await runtime.createWorkbookBackup({
+        workbookId,
+        reason: "Compact persisted backup",
+        ranges: [{ workbookId, sheetName: "Report", address: "A1:D20" }]
+      });
+      if (!("backup" in backup)) {
+        throw new Error("Expected backup creation to succeed");
+      }
+      const state = JSON.parse(readFileSync(path.join(stateDir, "collaboration-state.json"), "utf8"));
+      const stateBackup = state.backups.find((record: any) => record.backupId === backup.backup.backupId);
+
+      expect(stateBackup.payload).toBeUndefined();
+      expect(stateBackup.payloadRef).toBe(backup.backup.payloadRef);
+      expect(backup.backup.payloadRef && existsSync(backup.backup.payloadRef)).toBe(true);
+    } finally {
+      if (previousBackupDir === undefined) {
+        delete process.env.OPEN_WORKBOOK_BACKUP_DIR;
+      } else {
+        process.env.OPEN_WORKBOOK_BACKUP_DIR = previousBackupDir;
+      }
+    }
+  });
+
+  it("bounds collaboration state size when snapshot backups contain many cells", async () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "open-workbook-state-large-backup-"));
+    const backupDir = path.join(stateDir, "backups");
+    const previousBackupDir = process.env.OPEN_WORKBOOK_BACKUP_DIR;
+    process.env.OPEN_WORKBOOK_BACKUP_DIR = backupDir;
+    const workbookId = "workbook_large_backup" as WorkbookId;
+    const values = Array.from({ length: 2_000 }, (_row, rowIndex) =>
+      Array.from({ length: 10 }, (_cell, cellIndex) => `cell-${rowIndex}-${cellIndex}`)
+    );
+    try {
+      const runtime = new RuntimeService({ stateDir });
+      const session = runtime.sessions.createSession();
+      runtime.attachAddinClient(session.connectionId, {
+        request: async (method: string, params: any) => {
+          if (method === "workbook.snapshot_ranges") {
+            const range = params.ranges[0];
+            return {
+              workbookFingerprint: {
+                workbookId,
+                workbookHash: "large_backup_workbook",
+                structureHash: "structure",
+                capturedAt: new Date().toISOString()
+              },
+              rangeSnapshots: [{
+                range,
+                values,
+                fingerprint: {
+                  range,
+                  hash: "large_backup_range",
+                  cellCount: values.length * values[0].length,
+                  capturedAt: new Date().toISOString()
+                }
+              }]
+            };
+          }
+          throw new Error(`Unexpected method ${method}`);
+        }
+      } as any);
+
+      const backup = await runtime.createWorkbookBackup({
+        workbookId,
+        reason: "Large compact backup",
+        ranges: [{ workbookId, sheetName: "Report", address: "A1:J2000" }]
+      });
+      if (!("backup" in backup)) {
+        throw new Error("Expected backup creation to succeed");
+      }
+      const stateText = readFileSync(path.join(stateDir, "collaboration-state.json"), "utf8");
+      const payloadText = readFileSync(backup.backup.payloadRef as string, "utf8");
+
+      expect(stateText).not.toContain("cell-1999-9");
+      expect(payloadText).toContain("cell-1999-9");
+      expect(Buffer.byteLength(stateText, "utf8")).toBeLessThan(20_000);
+    } finally {
+      if (previousBackupDir === undefined) {
+        delete process.env.OPEN_WORKBOOK_BACKUP_DIR;
+      } else {
+        process.env.OPEN_WORKBOOK_BACKUP_DIR = previousBackupDir;
+      }
+    }
+  });
+
   it("exports and imports workbook local config metadata", async () => {
     const stateDir = mkdtempSync(path.join(tmpdir(), "open-workbook-local-config-"));
     const workbookId = "workbook_local_config" as WorkbookId;

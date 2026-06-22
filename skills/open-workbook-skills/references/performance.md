@@ -5,6 +5,7 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 ## Defaults
 
 - On the public surface, use `excel.agent.run`; the backend owns compact reads, summaries, proof, resource handles, and response budgeting.
+- Optimize for cost per completed user task, not cost per individual tool call. A good read-only task usually finishes from one `excel.agent.run` result; a normal mutation should be preview plus apply, with validation only when needed.
 - Prefer bulk Office.js operations over per-cell actions.
 - Use 2D matrices for values, formulas, and number formats.
 - Use table APIs for table-shaped work.
@@ -27,7 +28,16 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 Avoid workbook-wide reads unless the task is search, validation, audit, or discovery.
 
 Compact reads return payload/token telemetry, truncation status, result handles, and continuation metadata. Page only when more rows or columns are needed.
-When a compact response includes `resultUri`, `fullResultUri`, or a resource link, use it only if the user explicitly needs full detail, an audit trail, all rows, or raw values. `excel://...` handles are not HTTP URLs; retrieve them by calling `excel.agent.run` again with the handle in `request` or `continuation`, not with `webfetch`.
+When a compact response includes inline `values`, `encodedValues`, `rows`, or `sparseRows`, use them directly before asking for more data. If `valueEncoding.kind` is `domain_dictionary_by_column`, decode `encodedValues` by replacing integer codes with `valueEncoding.columns[position].domain[code]`; the full raw matrix remains behind `fullResultUri`.
+Wide table/range results may include `inlineColumnProjection`. Treat the selected inline columns as high-signal columns chosen from selection, requested fields, cached column roles, validation/format hints, and cardinality. Ask for full detail only when omitted columns are required for the task.
+When only a preview is inline and the next step requires exact rows, raw values, transformation input, validation evidence, or audit detail, call `excel.agent.run` again with the returned `resultUri` or `fullResultUri` in `request` or `continuation`. `excel://...` handles are not HTTP URLs; do not use `webfetch`.
+
+## Task Completion And Freshness
+
+- If the result has `taskOutcome: "final_answer"` and `maxRecommendedFollowupCalls: 0`, answer the user now. Do not call again to “double check” unless the result says data is stale, unavailable, or incomplete.
+- If the result has `taskOutcome: "preview_ready"`, the next call should normally be only `apply_update` with the returned `operationId` and `confirmationToken` after user approval.
+- Reuse `continuation.workbookContextId`, `resultUri`, and `fullResultUri`. If `continuation.freshness` is present and the workbook content/structure version has not changed, prefer cached context/result handles over rediscovery reads.
+- Treat freshness as a first-pass safety check: unchanged fingerprints or no overlapping journal entries mean the agent can skip rereading latest context. If the backend reports stale context, changed target fingerprints, or overlapping changes, refresh the relevant target only.
 
 ## Writes
 

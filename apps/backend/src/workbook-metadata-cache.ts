@@ -3,6 +3,20 @@ import type { SelectionInfo, WorkbookFingerprint, WorkbookId } from "@components
 
 export type SheetKind = "transaction" | "summary" | "dashboard" | "lookup" | "template" | "unknown";
 export type ColumnType = "text" | "number" | "currency" | "date" | "status" | "formula" | "unknown";
+export type ColumnRole =
+  | "date"
+  | "description"
+  | "vendor"
+  | "account"
+  | "amount"
+  | "status"
+  | "category"
+  | "identifier"
+  | "formula"
+  | "note"
+  | "dimension"
+  | "measure"
+  | "unknown";
 
 export interface ColumnMetadata {
   index: number;
@@ -10,6 +24,8 @@ export interface ColumnMetadata {
   name: string;
   normalizedName: string;
   inferredType: ColumnType;
+  role?: ColumnRole;
+  importance?: number;
 }
 
 export interface HeaderMetadata {

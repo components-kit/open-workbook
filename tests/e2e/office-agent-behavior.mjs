@@ -21,6 +21,8 @@ const backendUrl = `http://127.0.0.1:${backendPort}`;
 const backendWsUrl = `ws://127.0.0.1:${backendPort}/addin`;
 const transcript = [];
 const strictMode = hasArg("--strict") || process.env.OPEN_WORKBOOK_OFFICE_AGENT_BEHAVIOR_STRICT === "1";
+const estimatedUsdPerMillionTokens = Number(process.env.OPEN_WORKBOOK_AGENT_E2E_USD_PER_MILLION_TOKENS ?? "0.06");
+const hardMaxCompletedTaskCalls = Number(process.env.OPEN_WORKBOOK_AGENT_E2E_HARD_MAX_CALLS ?? "5");
 
 async function main() {
   const scenarioCatalog = loadScenarioCatalog();
@@ -346,6 +348,8 @@ async function callTool(client, name, args, outputSchema) {
     telemetry: parsed?.telemetry,
     status: parsed?.status,
     nextAction: parsed?.nextAction,
+    taskOutcome: parsed?.taskOutcome,
+    maxRecommendedFollowupCalls: parsed?.maxRecommendedFollowupCalls,
     summary: parsed?.summary
   };
   if (outputSchema?.properties?.telemetry?.properties) {
@@ -410,6 +414,8 @@ function observeScenario({ scenario, result, error, before, after, hostCalls, wo
       wallMs: call.wallMs,
       status: call.status,
       nextAction: call.nextAction,
+      taskOutcome: call.taskOutcome,
+      maxRecommendedFollowupCalls: call.maxRecommendedFollowupCalls,
       summary: call.summary,
       telemetry: call.telemetry
     })),
@@ -427,20 +433,32 @@ function observeScenario({ scenario, result, error, before, after, hostCalls, wo
 function summarizeToolChainUsage(toolChain, elapsedMs) {
   const telemetryItems = toolChain.map((call) => call.telemetry ?? {});
   const sum = (field) => telemetryItems.reduce((total, telemetry) => total + (Number(telemetry[field]) || 0), 0);
+  const estimatedTokens = sum("estimatedTokens");
   const metadataCacheStatuses = countBy(telemetryItems, (telemetry) => telemetry.metadataCacheStatus ?? "unknown");
+  const followupCounts = toolChain
+    .map((call) => Number(call.maxRecommendedFollowupCalls))
+    .filter((value) => Number.isFinite(value));
   return {
     toolCallCount: toolChain.length,
+    modelCallCount: toolChain.length,
     scenarioElapsedMs: elapsedMs,
     toolWallMs: toolChain.reduce((total, call) => total + (Number(call.wallMs) || 0), 0),
     backendElapsedMs: sum("elapsedMs"),
     payloadBytes: sum("payloadBytes"),
-    estimatedTokens: sum("estimatedTokens"),
+    estimatedTokens,
+    estimatedCostUsd: Number(((estimatedTokens / 1_000_000) * estimatedUsdPerMillionTokens).toFixed(8)),
+    costModel: {
+      source: "estimated_tokens_proxy",
+      usdPerMillionTokens: estimatedUsdPerMillionTokens
+    },
     estimatedTokensSaved: sum("estimatedTokensSaved"),
     internalCallCount: sum("internalCallCount"),
     internalReadCount: sum("internalReadCount"),
     fullReadCellCount: sum("fullReadCellCount"),
     cacheHits: telemetryItems.filter((telemetry) => telemetry.cacheHit === true).length,
     autoAppliedCount: telemetryItems.filter((telemetry) => telemetry.autoApplied === true).length,
+    taskOutcomes: countBy(toolChain, (call) => call.taskOutcome ?? "unknown"),
+    maxRecommendedFollowupCalls: followupCounts.length > 0 ? Math.max(...followupCounts) : undefined,
     metadataCacheStatuses
   };
 }
@@ -858,16 +876,24 @@ function summarizeScenarioUsage(results) {
       category: result.category,
       elapsedMs: result.usage?.scenarioElapsedMs ?? 0,
       toolCallCount: result.usage?.toolCallCount ?? 0,
+      modelCallCount: result.usage?.modelCallCount ?? 0,
       estimatedTokens: result.usage?.estimatedTokens ?? 0,
+      estimatedCostUsd: result.usage?.estimatedCostUsd ?? 0,
       payloadBytes: result.usage?.payloadBytes ?? 0
     }));
   return {
     toolCallCount: sum("toolCallCount"),
+    modelCallCount: sum("modelCallCount"),
     scenarioElapsedMs: sum("scenarioElapsedMs"),
     toolWallMs: sum("toolWallMs"),
     backendElapsedMs: sum("backendElapsedMs"),
     payloadBytes: sum("payloadBytes"),
     estimatedTokens: sum("estimatedTokens"),
+    estimatedCostUsd: Number(sum("estimatedCostUsd").toFixed(8)),
+    costModel: {
+      source: "estimated_tokens_proxy",
+      usdPerMillionTokens: estimatedUsdPerMillionTokens
+    },
     estimatedTokensSaved: sum("estimatedTokensSaved"),
     internalCallCount: sum("internalCallCount"),
     internalReadCount: sum("internalReadCount"),
@@ -1060,8 +1086,20 @@ function evaluateScenarioExpectations({ scenario, result, effective, workbookCha
   if (budgets.maxToolCalls !== undefined && usage.toolCallCount > budgets.maxToolCalls) {
     issues.push(`tool calls ${usage.toolCallCount} exceeded budget ${budgets.maxToolCalls}`);
   }
+  if (Number.isFinite(hardMaxCompletedTaskCalls) && usage.toolCallCount > hardMaxCompletedTaskCalls) {
+    issues.push(`completed-task tool calls ${usage.toolCallCount} exceeded hard regression ceiling ${hardMaxCompletedTaskCalls}`);
+  }
+  if (budgets.maxModelCalls !== undefined && usage.modelCallCount > budgets.maxModelCalls) {
+    issues.push(`model calls ${usage.modelCallCount} exceeded budget ${budgets.maxModelCalls}`);
+  }
   if (budgets.maxPayloadBytes !== undefined && usage.payloadBytes > budgets.maxPayloadBytes) {
     issues.push(`payload bytes ${usage.payloadBytes} exceeded budget ${budgets.maxPayloadBytes}`);
+  }
+  if (budgets.maxEstimatedTokens !== undefined && usage.estimatedTokens > budgets.maxEstimatedTokens) {
+    issues.push(`estimated tokens ${usage.estimatedTokens} exceeded budget ${budgets.maxEstimatedTokens}`);
+  }
+  if (budgets.maxEstimatedCostUsd !== undefined && usage.estimatedCostUsd > budgets.maxEstimatedCostUsd) {
+    issues.push(`estimated cost $${usage.estimatedCostUsd} exceeded budget $${budgets.maxEstimatedCostUsd}`);
   }
   if (budgets.maxLatencyMs !== undefined && usage.scenarioElapsedMs > budgets.maxLatencyMs) {
     issues.push(`elapsed ${usage.scenarioElapsedMs}ms exceeded budget ${budgets.maxLatencyMs}ms`);
@@ -1108,11 +1146,13 @@ function renderReport(report) {
     "",
     "## Usage Summary",
     `- Tool calls: ${report.usageTotals.toolCallCount}`,
+    `- Model calls: ${report.usageTotals.modelCallCount}`,
     `- Scenario elapsed: ${report.usageTotals.scenarioElapsedMs} ms`,
     `- Tool wall time: ${report.usageTotals.toolWallMs} ms`,
     `- Backend elapsed: ${report.usageTotals.backendElapsedMs} ms`,
     `- Payload bytes: ${report.usageTotals.payloadBytes}`,
     `- Estimated tokens: ${report.usageTotals.estimatedTokens}`,
+    `- Estimated cost: $${report.usageTotals.estimatedCostUsd} (${report.usageTotals.costModel.usdPerMillionTokens}/1M token proxy)`,
     `- Estimated tokens saved: ${report.usageTotals.estimatedTokensSaved}`,
     `- Internal calls: ${report.usageTotals.internalCallCount}`,
     `- Internal reads: ${report.usageTotals.internalReadCount}`,
@@ -1123,7 +1163,7 @@ function renderReport(report) {
     "",
     "## Slowest Scenarios",
     ...(report.usageTotals.slowest.length > 0
-      ? report.usageTotals.slowest.map((item) => `- ${item.scenarioId}: ${item.elapsedMs} ms, ${item.toolCallCount} calls, ${item.estimatedTokens} estimated tokens, ${item.payloadBytes} bytes`)
+      ? report.usageTotals.slowest.map((item) => `- ${item.scenarioId}: ${item.elapsedMs} ms, ${item.toolCallCount} tool calls, ${item.modelCallCount} model calls, ${item.estimatedTokens} estimated tokens, $${item.estimatedCostUsd}, ${item.payloadBytes} bytes`)
       : ["- none"]),
     "",
     "## Behavior Themes",
@@ -1141,12 +1181,16 @@ function renderReport(report) {
     lines.push(`- Next action: ${result.nextAction ?? "none"}`);
     lines.push(`- Workbook changed: ${result.workbookChanged ? "yes" : "no"}`);
     lines.push(`- Tool calls: ${result.usage.toolCallCount}`);
+    lines.push(`- Model calls: ${result.usage.modelCallCount}`);
     lines.push(`- Scenario elapsed: ${result.usage.scenarioElapsedMs} ms`);
     lines.push(`- Tool wall time: ${result.usage.toolWallMs} ms`);
     lines.push(`- Backend elapsed: ${result.usage.backendElapsedMs} ms`);
     lines.push(`- Payload bytes: ${result.usage.payloadBytes}`);
     lines.push(`- Estimated tokens: ${result.usage.estimatedTokens}`);
+    lines.push(`- Estimated cost: $${result.usage.estimatedCostUsd}`);
     lines.push(`- Estimated tokens saved: ${result.usage.estimatedTokensSaved}`);
+    lines.push(`- Task outcomes: ${Object.entries(result.usage.taskOutcomes ?? {}).map(([key, count]) => `${key}=${count}`).join(", ") || "none"}`);
+    lines.push(`- Max recommended follow-up calls: ${result.usage.maxRecommendedFollowupCalls ?? "none"}`);
     lines.push(`- Internal calls: ${result.usage.internalCallCount}`);
     lines.push(`- Internal reads: ${result.usage.internalReadCount}`);
     lines.push(`- Full-read cells: ${result.usage.fullReadCellCount}`);
@@ -1185,10 +1229,14 @@ function renderObservation(observation) {
     `Workbook changed: ${observation.workbookChanged ? "yes" : "no"}`,
     `Elapsed: ${observation.elapsedMs} ms`,
     `Tool calls: ${observation.usage.toolCallCount}`,
+    `Model calls: ${observation.usage.modelCallCount}`,
     `Tool wall time: ${observation.usage.toolWallMs} ms`,
     `Backend elapsed: ${observation.usage.backendElapsedMs} ms`,
     `Payload bytes: ${observation.usage.payloadBytes}`,
     `Estimated tokens: ${observation.usage.estimatedTokens}`,
+    `Estimated cost: $${observation.usage.estimatedCostUsd}`,
+    `Task outcomes: ${Object.entries(observation.usage.taskOutcomes ?? {}).map(([key, count]) => `${key}=${count}`).join(", ") || "none"}`,
+    `Max recommended follow-up calls: ${observation.usage.maxRecommendedFollowupCalls ?? "none"}`,
     `Internal reads: ${observation.usage.internalReadCount}`,
     `Full-read cells: ${observation.usage.fullReadCellCount}`,
     "",

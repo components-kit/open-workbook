@@ -32,26 +32,41 @@ describe("MCP result rendering", () => {
         responseMode: "brief"
       },
       nextAction: "answer_now",
+      taskOutcome: "final_answer",
+      finalAnswer: "Answered range profile from cached metadata.",
+      agentInstruction: "Answer the user now from finalAnswer, proof, and inline structuredContent; do not call workbook tools again for this task.",
+      maxRecommendedFollowupCalls: 0,
       warnings: [],
       telemetry: {
         internalCallCount: 1,
         payloadBytes: 1234,
         estimatedTokens: 309,
         elapsedMs: 2,
-        cacheHit: true
+        cacheHit: true,
+        routeReasons: ["debug reason that should not be in brief MCP structuredContent"],
+        workflowReasons: ["workflow debug reason that should not be in brief MCP structuredContent"],
+        semanticIndexStatus: "built"
       }
     };
 
     const result = agentJsonResult(output);
     const text = result.content[0]?.text ?? "";
 
-    expect(text.length).toBeLessThan(500);
+    expect(text.length).toBeLessThan(700);
     expect(text).toContain("SUCCESS answer");
+    expect(text).toContain("taskOutcome: final_answer");
+    expect(text).toContain("maxRecommendedFollowupCalls: 0");
+    expect(text).toContain("do not call workbook tools again");
+    expect(text).toContain("data: compact summary inline; fullResultUri available");
     expect(text).toContain("resultUri: excel://agent/results/agentres_1");
     expect(text).toContain("call excel.agent.run with fullResultUri");
     expect(text).toContain("do not use webfetch");
     expect(text).not.toContain("sparseRows");
-    expect(result.structuredContent.answer).toEqual(output.answer);
+    expect((result.structuredContent.answer as any).sparseRows).toBeUndefined();
+    expect((result.structuredContent.answer as any).fullResultUri).toBe("excel://agent/results/agentres_1?view=full");
+    expect((result.structuredContent.telemetry as any).routeReasons).toBeUndefined();
+    expect((result.structuredContent.telemetry as any).workflowReasons).toBeUndefined();
+    expect((result.structuredContent.telemetry as any).semanticIndexStatus).toBeUndefined();
     expect(result.resources).toEqual([
       {
         uri: "excel://agent/results/agentres_1",

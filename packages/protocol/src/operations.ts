@@ -261,6 +261,11 @@ export interface ApplyAutoFilterOperation extends OperationBase {
   target: A1Range;
 }
 
+export interface ClearAutoFilterOperation extends OperationBase {
+  kind: "range.clear_autofilter";
+  target: A1Range;
+}
+
 export interface MergeRangeOperation extends OperationBase {
   kind: "range.merge";
   target: A1Range;
@@ -420,6 +425,7 @@ export type ExcelOperation =
   | AutofitRowsOperation
   | AutofitManyOperation
   | ApplyAutoFilterOperation
+  | ClearAutoFilterOperation
   | MergeRangeOperation
   | UnmergeRangeOperation
   | RestoreRangeSnapshotOperation

@@ -53,7 +53,10 @@ function validateCommonScenarioContract(scenarios, label) {
     assert(scenario.expected && typeof scenario.expected === "object", `${scenario.id}: expected contract is required`);
 
     assertPositiveNumber(scenario.budgets?.maxToolCalls, `${scenario.id}: budgets.maxToolCalls must be positive`);
+    assertOptionalPositiveNumber(scenario.budgets?.maxModelCalls, `${scenario.id}: budgets.maxModelCalls must be positive when present`);
     assertPositiveNumber(scenario.budgets?.maxPayloadBytes, `${scenario.id}: budgets.maxPayloadBytes must be positive`);
+    assertOptionalPositiveNumber(scenario.budgets?.maxEstimatedTokens, `${scenario.id}: budgets.maxEstimatedTokens must be positive when present`);
+    assertOptionalPositiveNumber(scenario.budgets?.maxEstimatedCostUsd, `${scenario.id}: budgets.maxEstimatedCostUsd must be positive when present`);
     assertPositiveNumber(scenario.budgets?.maxLatencyMs, `${scenario.id}: budgets.maxLatencyMs must be positive`);
     assert(scenario.expected.mustNotReadFullWorkbook === true, `${scenario.id}: mustNotReadFullWorkbook must be explicit`);
     assert(typeof scenario.expected.shouldMutateWorkbook === "boolean", `${scenario.id}: shouldMutateWorkbook must be explicit`);
@@ -203,6 +206,13 @@ function assertNonEmptyString(value, message) {
 
 function assertPositiveNumber(value, message) {
   assert(typeof value === "number" && Number.isFinite(value) && value > 0, message);
+}
+
+function assertOptionalPositiveNumber(value, message) {
+  if (value === undefined) {
+    return;
+  }
+  assertPositiveNumber(value, message);
 }
 
 function assert(condition, message) {

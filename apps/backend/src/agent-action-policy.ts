@@ -49,6 +49,7 @@ export const AGENT_ACTION_REGISTRY: AgentActionDefinition[] = [
   { kind: "range.move", risk: "destructive", previewRequired: true, confirmationRequired: true },
   { kind: "range.reorder_columns", risk: "structure_change", previewRequired: true, confirmationRequired: true },
   { kind: "range.apply_autofilter", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "range.clear_autofilter", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "sheet.copy", risk: "structure_change", previewRequired: true, confirmationRequired: true },
   { kind: "sheet.copy_clean_data_regions", risk: "structure_change", previewRequired: true, confirmationRequired: true },
   { kind: "sheet.create", risk: "structure_change", previewRequired: true, confirmationRequired: true },

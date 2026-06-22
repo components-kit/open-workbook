@@ -45,6 +45,21 @@ export type AgentNextAction =
   | "retry_after_refresh"
   | "manual_review";
 
+export type AgentTaskOutcome =
+  | "final_answer"
+  | "preview_ready"
+  | "apply_complete"
+  | "needs_user_input"
+  | "cannot_complete";
+
+export interface AgentRequiredFollowup {
+  mode?: AgentRunMode;
+  nextAction?: AgentNextAction;
+  operationId?: AgentOperationId | string;
+  confirmationToken?: string;
+  instruction: string;
+}
+
 export const AGENT_DETAIL_LEVELS = [
   "workbook_summary",
   "semantic_index",
@@ -113,6 +128,7 @@ export const AGENT_INTENT_ACTIONS = [
   "write_region_values",
   "fill_region",
   "find_target",
+  "find_similar_rows",
   "write_values",
   "write_formulas",
   "write_number_formats",
@@ -326,6 +342,7 @@ export interface AgentSemanticIndexEntry {
   confidence: number;
   evidence: string[];
   supportedActions: AgentIntentAction[];
+  nextRequestHints?: string[];
 }
 
 export interface AgentSemanticWorkbookIndex {
@@ -362,6 +379,12 @@ export interface AgentContinuation {
   transactionId?: TransactionId | string;
   resultUri?: string;
   fullResultUri?: string;
+  freshness?: {
+    workbookId?: WorkbookId | string;
+    workbookContentVersion?: number;
+    workbookStructureHash?: string;
+    contextUpdatedAt?: number;
+  };
   nextRequest?: string;
   responseMode?: "brief" | "standard" | "verbose";
 }
@@ -393,6 +416,11 @@ export interface AgentRunOutput {
   invalidatedResourceUris?: string[];
   continuation?: AgentContinuation;
   nextAction: AgentNextAction;
+  taskOutcome?: AgentTaskOutcome;
+  finalAnswer?: string;
+  agentInstruction?: string;
+  maxRecommendedFollowupCalls?: number;
+  requiredFollowup?: AgentRequiredFollowup;
   warnings: string[];
   telemetry: {
     internalCallCount: number;

@@ -48,6 +48,9 @@ describe("AgentOrchestrator Target Resolution", () => {
       expect((result.answer as any).kind).toBe("range_profile");
       expect((result.answer as any).source).toBe("live_read");
       expect(result.telemetry.internalReadCount).toBe(1);
+      expect(result.taskOutcome).toBe("final_answer");
+      expect(result.maxRecommendedFollowupCalls).toBe(0);
+      expect(result.agentInstruction).toContain("do not call workbook tools again");
     });
 
   it("returns coordinate-aware sparse rows for mostly empty ranges", async () => {
@@ -314,7 +317,7 @@ describe("AgentOrchestrator Target Resolution", () => {
 
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "B2", label: "selected cell" });
-      expect((result.answer as any).rows).toBeUndefined();
+      expect((result.answer as any).rows).toEqual([["A-100"]]);
       const resultId = String((result.answer as any).resultUri).split("/").pop()!;
       expect((agent.getResultResource(resultId) as any).answer.rows).toEqual([["A-100"]]);
       expect(result.telemetry.internalReadCount).toBe(1);
@@ -327,7 +330,8 @@ describe("AgentOrchestrator Target Resolution", () => {
       const result = await agent.run({ request: "Analyze the selected cell.", mode: "answer" });
 
       expect(result.status).toBe("NEEDS_INPUT");
-      expect(result.summary).toContain("selection is unavailable");
+      expect(result.summary).toContain("tried to read the current live Excel selection");
+      expect(result.warnings[0]).toContain("Reload or reopen the OpenWorkbook Local taskpane");
       expect(result.telemetry.internalReadCount).toBe(0);
     });
 

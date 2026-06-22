@@ -87,6 +87,7 @@ interface StoredAgentResult {
   resourceUri: string;
   fullResourceUri: string;
   workbookContextId?: string | undefined;
+  freshness?: AgentResultFreshness | undefined;
   kind?: string | undefined;
   summary: string;
   hash: string;
@@ -95,10 +96,17 @@ interface StoredAgentResult {
   expiresAt: number;
 }
 
+interface AgentResultFreshness {
+  workbookId?: WorkbookId | string;
+  workbookContentVersion?: number;
+  workbookStructureHash?: string;
+  contextUpdatedAt?: number;
+}
+
 class AgentResultStore {
   private readonly results = new Map<string, StoredAgentResult>();
 
-  create(input: { workbookContextId?: string | undefined; summary: string; answer: unknown }): StoredAgentResult {
+  create(input: { workbookContextId?: string | undefined; freshness?: AgentResultFreshness | undefined; summary: string; answer: unknown }): StoredAgentResult {
     this.clearExpired();
     const resultId = makeId("agentres");
     const now = Date.now();
@@ -110,6 +118,7 @@ class AgentResultStore {
       resourceUri: resultResource(resultId).uri,
       fullResourceUri: resultResource(resultId, "full").uri,
       ...(input.workbookContextId !== undefined ? { workbookContextId: input.workbookContextId } : {}),
+      ...(input.freshness !== undefined ? { freshness: input.freshness } : {}),
       ...(kind !== undefined ? { kind } : {}),
       summary: input.summary,
       hash: hashStable(input.answer),
@@ -206,7 +215,7 @@ export class AgentOrchestrator {
       const targetFingerprintStatus = isTargetFingerprintStatus(outputMetrics?.targetFingerprintStatus) ? outputMetrics.targetFingerprintStatus : runMetrics.targetFingerprintStatus;
       const safetyFingerprintOnly = typeof outputMetrics?.safetyFingerprintOnly === "boolean" ? outputMetrics.safetyFingerprintOnly : runMetrics.safetyFingerprintOnly;
       const preBudgetPayloadBytes = Buffer.byteLength(JSON.stringify(output));
-      const budgeted = applyOutputBudget(output, input, this.results);
+      const budgeted = withTaskOutcomeContract(applyOutputBudget(output, input, this.results, this.metadataCache));
       const targetHintCount = runMetrics.intent.targetHints?.length ?? 0;
       const targetHintUsed = targetHintCount > 0 && outputUsedCallerTargetHint(output);
       const payloadBytes = Buffer.byteLength(JSON.stringify(budgeted));
@@ -333,11 +342,13 @@ export class AgentOrchestrator {
           warnings: connectionReadinessWarnings(readiness.connectionState)
         });
       }
+      const targetFreshnessRanges = targetFreshnessRangesFromInput(input, readiness.activeWorkbook?.workbookId);
       const { metadata, cacheHit, freshnessReason } = await this.metadataBuilder.getOrBuild({
         ...(input.workbookContextId ? { workbookContextId: String(input.workbookContextId) } : {}),
         ...(input.target?.workbookId !== undefined ? { workbookId: input.target.workbookId } : {}),
         ...(input.target?.workbookName !== undefined ? { workbookName: input.target.workbookName } : {}),
-        includeSamples
+        includeSamples,
+        ...(targetFreshnessRanges !== undefined ? { targetFreshnessRanges } : {})
       });
       runMetrics.metadataFreshnessReason = freshnessReason;
       runMetrics.metadataDetailLevel = metadata.detailLevel;
@@ -506,7 +517,7 @@ export class AgentOrchestrator {
         headers: sheet.headers.map((header) => ({
           range: header.range,
           confidence: header.confidence,
-          columns: header.columns.map((column) => ({ name: column.name, normalizedName: column.normalizedName, inferredType: column.inferredType }))
+          columns: header.columns.map((column) => ({ name: column.name, normalizedName: column.normalizedName, inferredType: column.inferredType, role: column.role, importance: column.importance }))
         }))
       })),
       sections: metadata.sections.map((section) => ({
@@ -517,7 +528,7 @@ export class AgentOrchestrator {
         range: section.range,
         headerRange: section.headerRange,
         headerRow: section.headerRow,
-        columns: section.columns.map((column) => ({ name: column.name, normalizedName: column.normalizedName, inferredType: column.inferredType })),
+        columns: section.columns.map((column) => ({ name: column.name, normalizedName: column.normalizedName, inferredType: column.inferredType, role: column.role, importance: column.importance })),
         labels: section.labels,
         confidence: section.confidence
       })),
@@ -525,12 +536,18 @@ export class AgentOrchestrator {
         name: table.name,
         sheetName: table.sheetName,
         range: table.range,
-        columns: table.columns.map((column) => ({ name: column.name, normalizedName: column.normalizedName, inferredType: column.inferredType }))
+        columns: table.columns.map((column) => ({ name: column.name, normalizedName: column.normalizedName, inferredType: column.inferredType, role: column.role, importance: column.importance }))
       })),
       namedRanges: metadata.namedRanges,
       summaryBlocks: metadata.summaryBlocks,
       formulaRegions: metadata.formulaRegions,
+      contentVersion: metadata.contentVersion,
       fingerprint: metadata.fingerprint,
+      freshness: {
+        workbookContentVersion: metadata.contentVersion,
+        workbookStructureHash: metadata.fingerprint.structureHash,
+        contextUpdatedAt: metadata.updatedAt
+      },
       updatedAt: metadata.updatedAt,
       expiresAt: metadata.expiresAt
     };
@@ -625,7 +642,7 @@ export class AgentOrchestrator {
         proof: [],
         resourceLinks: [resource],
         nextAction: "answer_now",
-        warnings: view === "summary" ? ["Full result detail remains behind fullResultUri; call excel.agent.run with that handle when full detail is explicitly needed. Do not use webfetch for excel:// handles."] : []
+        warnings: view === "summary" ? ["Full result detail remains behind fullResultUri; call excel.agent.run with that handle when exact rows, raw values, audit detail, or transformation input is needed. Do not use webfetch for excel:// handles."] : []
       };
     }
     if (handle.kind === "semantic_index") {
@@ -743,6 +760,10 @@ export class AgentOrchestrator {
     if (styleAnswer) {
       return styleAnswer;
     }
+    const similarRowsAnswer = await this.similarRowsAnswerOutput(metadata, input, requestedMode, runMetrics);
+    if (similarRowsAnswer) {
+      return similarRowsAnswer;
+    }
     const cleaningAnswer = await this.cleaningAnswerOutput(metadata, input, requestedMode, runMetrics);
     if (cleaningAnswer) {
       return cleaningAnswer;
@@ -803,7 +824,7 @@ export class AgentOrchestrator {
         answer: aggregate,
         metrics: { ...profile.metrics, uniqueCount: aggregate.uniqueCount },
         candidates: candidates.slice(0, 5),
-        proof: [{ sheetName: resolved.sheetName, range: normalizedRange, label: adjustedTarget.column?.name ?? resolved.candidate.label }],
+        proof: selectionAwareProof(metadata, resolved, normalizedRange, adjustedTarget.column?.name ?? resolved.candidate.label),
         resourceLinks: [contextResource(metadata.workbookContextId)],
         nextAction: "answer_now",
         warnings: [...adjustedTarget.warnings, ...(profile.warning ? [profile.warning] : [])]
@@ -817,7 +838,7 @@ export class AgentOrchestrator {
       answer: { ...profile, ...inlinePreview },
       metrics: profile.metrics,
       candidates: candidates.slice(0, 5),
-      proof: [{ sheetName: resolved.sheetName, range: normalizedRange, label: adjustedTarget.column?.name ?? resolved.candidate.label }],
+      proof: selectionAwareProof(metadata, resolved, normalizedRange, adjustedTarget.column?.name ?? resolved.candidate.label),
       resourceLinks: [contextResource(metadata.workbookContextId)],
       nextAction: "answer_now",
       warnings: [...adjustedTarget.warnings, ...(profile.warning ? [profile.warning] : [])]
@@ -988,7 +1009,8 @@ export class AgentOrchestrator {
             inferredType: column.inferredType,
             index: column.index,
             letter: column.letter
-          }))
+          })),
+          contextHints: compactWorkbookContextHints(metadata, table.sheetName, table)
         },
         metrics: {
           columnCount: table.columns.length,
@@ -1013,7 +1035,8 @@ export class AgentOrchestrator {
         source: "cached_metadata",
         sheetName: resolved.sheetName,
         range: resolved.range,
-        headers: headers.map(headerAnswer)
+        headers: headers.map(headerAnswer),
+        contextHints: compactWorkbookContextHints(metadata, resolved.sheetName)
       },
       metrics: {
         headerCount: headers.length,
@@ -1169,9 +1192,18 @@ export class AgentOrchestrator {
     const profile = profileValues(matrix as CellMatrix, table.dataRange ?? table.range);
     const inlinePreview = inlinePreviewForMatrix(input, matrix as CellMatrix, table.dataRange ?? table.range);
     const totalRows = dimensionsFromAddress(table.dataRange ?? table.range)?.rows ?? profile.shape.rows;
+    const rowMetadata = tableReadRowMetadata(table.dataRange ?? table.range, rowOffset, matrix as CellMatrix);
+    const compactColumn = (column: TableMetadata["columns"][number]) => ({
+      name: column.name,
+      index: column.index,
+      letter: column.letter,
+      inferredType: column.inferredType,
+      role: column.role,
+      importance: column.importance
+    });
     const projectedColumns = columns.length > 0
-      ? table.columns.filter((column) => columns.includes(column.name) || columns.includes(column.index)).map((column) => ({ name: column.name, index: column.index, letter: column.letter }))
-      : table.columns.map((column) => ({ name: column.name, index: column.index, letter: column.letter }));
+      ? table.columns.filter((column) => columns.includes(column.name) || columns.includes(column.index)).map(compactColumn)
+      : table.columns.map(compactColumn);
     const truncated = rowOffset + rowLimit < totalRows;
     return {
       status: "SUCCESS",
@@ -1190,8 +1222,16 @@ export class AgentOrchestrator {
         projectedColumns,
         truncated,
         ...(truncated ? { nextPage: { rowOffset: rowOffset + rowLimit } } : {}),
-        schema: table.columns.map((column) => ({ name: column.name, index: column.index, letter: column.letter, inferredType: column.inferredType })),
+        schema: table.columns.map((column) => ({
+          name: column.name,
+          index: column.index,
+          letter: column.letter,
+          inferredType: column.inferredType,
+          role: column.role,
+          importance: column.importance
+        })),
         profile,
+        ...(rowMetadata.length > 0 ? { rowMetadata } : {}),
         ...inlinePreview,
         ...(payload.headers ? { headers: payload.headers } : {}),
         ...(payload.values ? { values: payload.values } : {}),
@@ -1494,6 +1534,72 @@ export class AgentOrchestrator {
       };
     }
     return undefined;
+  }
+
+  private async similarRowsAnswerOutput(
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode,
+    runMetrics: AgentRunMetrics
+  ): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
+    if (intentAction(input) !== "find_similar_rows") {
+      return undefined;
+    }
+    const resolved = resolveAgentReadTarget(metadata, input);
+    if (!resolved.ok) {
+      return {
+        status: resolved.status,
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: resolved.summary,
+        ...(resolved.candidates !== undefined ? { candidates: resolved.candidates } : {}),
+        proof: [],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: resolved.nextAction,
+        warnings: resolved.warnings
+      };
+    }
+
+    const workbookId = metadata.workbook.workbookId as WorkbookId;
+    const sourceRange = normalizeOperationRange(metadata, resolved.sheetName, resolved.range);
+    const sourceValues = await this.readRangeValues(workbookId, resolved.sheetName, sourceRange, runMetrics);
+    const sourceSignals = similarRowSignals(input, sourceValues);
+    const candidates = similarRowCandidateRanges(metadata, resolved.sheetName, sourceRange, input);
+    const rowMatches: SimilarRowMatch[] = [];
+
+    for (const candidate of candidates.slice(0, 6)) {
+      const rows = await this.readRangeValues(workbookId, candidate.sheetName, candidate.range, runMetrics);
+      rowMatches.push(...rankSimilarRows(candidate, rows, sourceSignals));
+      if (rowMatches.length >= 25) {
+        break;
+      }
+    }
+
+    const maxRows = Math.max(1, Math.min(input.budget?.maxExamples ?? 5, 10));
+    const examples = rowMatches
+      .sort((left, right) => right.score - left.score || left.sheetName.localeCompare(right.sheetName) || left.sheetRowNumber - right.sheetRowNumber)
+      .slice(0, maxRows);
+    return {
+      status: examples.length > 0 ? "SUCCESS" : "NOT_FOUND",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      summary: examples.length > 0
+        ? `Found ${examples.length} similar historical row(s) across related workbook sheets.`
+        : "No similar rows were found in bounded related-sheet samples.",
+      answer: {
+        kind: "similar_rows",
+        source: { sheetName: resolved.sheetName, range: sourceRange },
+        signals: sourceSignals.tokens.slice(0, 12),
+        comparedRanges: candidates.slice(0, 6),
+        rows: examples
+      },
+      metrics: { source: "runtime_similar_rows", comparedRangeCount: candidates.slice(0, 6).length, matchedRowCount: examples.length },
+      candidates: findAgentCandidates(metadata, input).slice(0, 5),
+      proof: examples.map((example) => ({ sheetName: example.sheetName, range: example.range, label: "similar row" })).slice(0, 5),
+      resourceLinks: [contextResource(metadata.workbookContextId)],
+      nextAction: examples.length > 0 ? "answer_now" : "call_with_target",
+      warnings: candidates.length > 6 ? ["Similar-row search sampled the most relevant related sheets/ranges first."] : []
+    };
   }
 
   private async rangeMetadataAnswerOutput(
@@ -2320,11 +2426,15 @@ export class AgentOrchestrator {
       case "clear_table_data":
         return resolved ? this.previewTableSelectorMutation(metadata, input, requestedMode, resolved, "clear_data_keep_formulas") : undefined;
       case "clear_table_filters":
-        return resolved ? this.previewTableSelectorMutation(metadata, input, requestedMode, resolved, "clear_filters") : undefined;
+        return resolved
+          ? resolved.candidate.kind === "table"
+            ? this.previewTableSelectorMutation(metadata, input, requestedMode, resolved, "clear_filters")
+            : this.previewClearAutoFilter(metadata, input, requestedMode, resolved)
+          : undefined;
       case "filter_range":
         return resolved?.candidate.kind === "table"
           ? this.previewTableApplyFilters(metadata, input, requestedMode, resolved)
-          : resolved ? this.previewAutoFilter(metadata, input, requestedMode, resolved) : undefined;
+          : resolved ? this.previewAutoFilterMutation(metadata, input, requestedMode, resolved) : undefined;
       case "set_table_total_row":
         return resolved ? this.previewTableTotalRow(metadata, input, requestedMode, resolved) : undefined;
       case "set_table_style":
@@ -2957,7 +3067,14 @@ export class AgentOrchestrator {
     return this.previewBatchOperation(metadata, requestedMode, [operation], [{ sheetName: resolved.sheetName, range: resolved.range, after: `autofit ${dimension}` }], `Prepared autofit ${dimension} on ${resolved.sheetName}!${resolved.range}.`, { kind: "autofit_preview", dimension, sheetName: resolved.sheetName, range: resolved.range });
   }
 
-  private previewAutoFilter(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode, resolved: Extract<AgentTargetResolution, { ok: true }>): Omit<AgentRunOutput, "telemetry"> {
+  private previewAutoFilterMutation(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode, resolved: Extract<AgentTargetResolution, { ok: true }>): Omit<AgentRunOutput, "telemetry"> {
+    if (isClearFilterRequest(input.request)) {
+      return this.previewClearAutoFilter(metadata, input, requestedMode, resolved);
+    }
+    return this.previewApplyAutoFilter(metadata, input, requestedMode, resolved);
+  }
+
+  private previewApplyAutoFilter(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode, resolved: Extract<AgentTargetResolution, { ok: true }>): Omit<AgentRunOutput, "telemetry"> {
     const operation: ExcelOperation = {
       kind: "range.apply_autofilter",
       operationId: makeId<OperationId>("op"),
@@ -2967,6 +3084,18 @@ export class AgentOrchestrator {
       target: { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: resolved.sheetName, address: resolved.range }
     };
     return this.previewBatchOperation(metadata, requestedMode, [operation], [{ sheetName: resolved.sheetName, range: resolved.range, after: "filters enabled" }], `Prepared filter preview on ${resolved.sheetName}!${resolved.range}.`, { kind: "filter_preview", sheetName: resolved.sheetName, range: resolved.range });
+  }
+
+  private previewClearAutoFilter(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode, resolved: Extract<AgentTargetResolution, { ok: true }>): Omit<AgentRunOutput, "telemetry"> {
+    const operation: ExcelOperation = {
+      kind: "range.clear_autofilter",
+      operationId: makeId<OperationId>("op"),
+      workbookId: metadata.workbook.workbookId as WorkbookId,
+      destructiveLevel: "format",
+      reason: input.request,
+      target: { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: resolved.sheetName, address: resolved.range }
+    };
+    return this.previewBatchOperation(metadata, requestedMode, [operation], [{ sheetName: resolved.sheetName, range: resolved.range, after: "filters cleared" }], `Prepared clear filter preview on ${resolved.sheetName}!${resolved.range}.`, { kind: "filter_clear_preview", sheetName: resolved.sheetName, range: resolved.range });
   }
 
   private previewNumberFormatUpdate(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode, resolved: Extract<AgentTargetResolution, { ok: true }>): Omit<AgentRunOutput, "telemetry"> {
@@ -5130,6 +5259,9 @@ function workbookOverviewAnswer(metadata: WorkbookMetadata, input: AgentRunInput
   if (!hasWorkbookOverviewIntent(intent)) {
     return undefined;
   }
+  if (shouldDeferWorkbookOverviewToSelection(metadata, input)) {
+    return undefined;
+  }
   const blankSheets = metadata.sheets.filter((sheet) => !sheet.usedRange || (sheet.rowCount ?? 0) <= 1 || (sheet.columnCount ?? 0) <= 1);
   const answer = {
     kind: "workbook_overview",
@@ -5166,6 +5298,22 @@ function workbookOverviewAnswer(metadata: WorkbookMetadata, input: AgentRunInput
     nextAction: "answer_now",
     warnings: []
   };
+}
+
+function shouldDeferWorkbookOverviewToSelection(metadata: WorkbookMetadata, input: AgentRunInput): boolean {
+  if (!metadata.selection?.sheetName || !metadata.selection.address) {
+    return false;
+  }
+  if (input.detailLevel === "workbook_summary" || input.detailLevel === "semantic_index" || input.detailLevel === "sheet_summary") {
+    return false;
+  }
+  if (input.target?.candidateId || input.target?.tableName || input.target?.sheetName || input.target?.range) {
+    return false;
+  }
+  if (/\b(all|every|entire|whole|full)\s+(?:table|sheet|rows?|data|values?|workbook)\b/i.test(input.request)) {
+    return false;
+  }
+  return /\b(?:look(?:\s+into)?|check|inspect|read|show|what|why|which|where|current|analy[sz]e)\b/i.test(input.request);
 }
 
 function detailLevelAnswerOutput(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> | undefined {
@@ -5241,7 +5389,10 @@ function workbookSummaryDetailOutput(metadata: WorkbookMetadata, requestedMode: 
       tableCount: metadata.tables.length,
       namedRangeCount: metadata.namedRanges.length,
       semanticIndex: buildSemanticWorkbookIndex(metadata, { maxEntries: 12 }),
-      sheets: summary.sheets
+      sheets: summary.sheets.map((sheet) => ({
+        ...sheet,
+        contextHints: compactWorkbookContextHints(metadata, String(sheet.name ?? ""))
+      }))
     },
     metrics: { source: "cached_metadata", detailLevel: "workbook_summary", fullReadCellCount: 0 },
     proof: metadata.sheets.slice(0, 5).flatMap((sheet) => sheet.usedRange ? [{ sheetName: sheet.name, range: sheet.usedRange, label: "used range" }] : []),
@@ -5289,6 +5440,7 @@ function sheetSummaryDetailOutput(metadata: WorkbookMetadata, input: AgentRunInp
       kind: "sheet_summary",
       source: "cached_metadata",
       sheet,
+      contextHints: compactWorkbookContextHints(metadata, sheet.name),
       tables: metadata.tables.filter((table) => tableIds.has(table.id)),
       namedRanges: metadata.namedRanges.filter((name) => name.sheetName === sheet.name),
       sections: metadata.sections.filter((section) => section.sheetName === sheet.name),
@@ -5378,6 +5530,25 @@ function largeRangeGuardOutput(
     nextAction: "answer_now",
     warnings: ["Large range read was summarized from cached metadata without reading cell values."]
   };
+}
+
+function selectionAwareProof(
+  metadata: WorkbookMetadata,
+  resolved: AgentTargetResolution & { ok: true },
+  range: string,
+  label: string
+): AgentProofReference[] {
+  const proof: AgentProofReference[] = [{ sheetName: resolved.sheetName, range, label }];
+  const selection = metadata.selection;
+  if (
+    resolved.candidate.id === "selection:implicit" &&
+    selection?.sheetName === resolved.sheetName &&
+    selection.address &&
+    selection.address !== range
+  ) {
+    proof.push({ sheetName: selection.sheetName, range: selection.address, label: "current Excel selection" });
+  }
+  return proof;
 }
 
 function workbookCompactSummary(metadata: WorkbookMetadata): { sheets: Array<Record<string, unknown>> } {
@@ -6012,6 +6183,7 @@ function profileValues(values: CellMatrix, address?: string) {
     ? sparseValueRows(values, address)
     : undefined;
   const sample = firstNonEmptyRows(values, 5).map((row) => compactSampleRow(row, 8));
+  const rowMetadata = rangeRowMetadata(address, values, nonEmptyRows.map((entry) => entry.rowIndex));
   return {
     kind: "range_profile" as const,
     source: "live_read" as const,
@@ -6024,6 +6196,7 @@ function profileValues(values: CellMatrix, address?: string) {
     },
     sample,
     ...(emptySummary.emptyCells > 0 ? { emptySummary } : {}),
+    ...(rowMetadata.length > 0 ? { rowMetadata } : {}),
     ...(sparseRows ? { sparseRows } : {}),
     ...(includeRows && !sparseRows && nonEmptyRows.length > 0 ? { rows: nonEmptyRows.map((entry) => trimTrailingEmptyCells(entry.row)) } : {}),
     warning: flattened.length === 0 ? "No non-empty cells were found in the targeted range." : undefined
@@ -6850,6 +7023,9 @@ function explicitSheetName(metadata: WorkbookMetadata, input: AgentRunInput): st
     const normalized = normalizeComparableText(rawName);
     return metadata.sheets.find((sheet) => normalizeComparableText(sheet.name) === normalized)?.name ?? rawName;
   }
+  if (requestMentionsActiveSheet(input.request)) {
+    return metadata.workbook.activeSheet;
+  }
   return findMentionedSheet(metadata, input)?.name;
 }
 
@@ -7043,6 +7219,10 @@ function findMentionedSheet(metadata: WorkbookMetadata, input: AgentRunInput): W
   return metadata.sheets.find((sheet) => request.includes(normalizeComparableText(sheet.name)));
 }
 
+function requestMentionsActiveSheet(request: string): boolean {
+  return /\b(active|current|this)\s+sheet\b/i.test(request) || /\bthis\s+sheet\b/i.test(request);
+}
+
 function normalizeOperationRange(metadata: WorkbookMetadata, sheetName: string, range: string): string {
   const sheet = metadata.sheets.find((candidate) => candidate.name === sheetName);
   const rowCount = Math.max(1, sheet?.rowCount ?? 1);
@@ -7051,6 +7231,180 @@ function normalizeOperationRange(metadata: WorkbookMetadata, sheetName: string, 
     return `${columnOnly[1].toUpperCase()}1:${columnOnly[2].toUpperCase()}${rowCount}`;
   }
   return range;
+}
+
+interface SimilarRowRange {
+  sheetName: string;
+  range: string;
+  reason: string;
+}
+
+interface SimilarRowSignals {
+  tokens: string[];
+  numbers: number[];
+}
+
+interface SimilarRowMatch {
+  sheetName: string;
+  range: string;
+  sheetRowNumber: number;
+  rowIndex: number;
+  values: unknown[];
+  score: number;
+  matchedSignals: string[];
+}
+
+function compactWorkbookContextHints(metadata: WorkbookMetadata, sheetName: string, table?: TableMetadata): string[] {
+  const sheet = metadata.sheets.find((candidate) => candidate.name === sheetName);
+  const columns = table?.columns ?? sheet?.headers.flatMap((header) => header.columns) ?? [];
+  const labelColumns = columns
+    .filter((column) => column.inferredType === "status" || /status|label|category|type|class|tag|allowed|approval|state/i.test(column.name))
+    .map((column) => `${column.letter}:${column.name}`)
+    .slice(0, 6);
+  const hints = [
+    labelColumns.length > 0 ? `label/status columns: ${labelColumns.join(", ")}` : undefined,
+    labelColumns.length > 0 ? "dropdown rules: call read_data_validation on the exact label/status column before guessing allowed values" : undefined,
+    sheet?.usedRange ? `style context: call read_style_summary/read_style_fingerprint on ${sheet.name}!${table?.range ?? sheet.usedRange}` : undefined,
+    likelyHistoricalSheets(metadata, sheetName).length > 0 ? `related sheets: ${likelyHistoricalSheets(metadata, sheetName).slice(0, 4).join(", ")}` : undefined,
+    sheet?.kind === "transaction" || table ? "historical labels: call find_similar_rows from the current row/range for prior examples" : undefined
+  ];
+  return hints.filter((hint): hint is string => typeof hint === "string").slice(0, 6);
+}
+
+function likelyHistoricalSheets(metadata: WorkbookMetadata, sheetName: string): string[] {
+  const source = metadata.sheets.find((sheet) => sheet.name === sheetName);
+  if (!source) {
+    return [];
+  }
+  const sourceHeaders = new Set(source.headers.flatMap((header) => header.columns.map((column) => normalizeHeaderName(column.name))));
+  const sourcePeriod = periodScore(source.name);
+  return metadata.sheets
+    .filter((sheet) => sheet.name !== sheetName)
+    .map((sheet) => {
+      const headerOverlap = sheet.headers
+        .flatMap((header) => header.columns)
+        .filter((column) => sourceHeaders.has(normalizeHeaderName(column.name))).length;
+      const kindScore = sheet.kind === source.kind ? 3 : sheet.kind === "transaction" || source.kind === "transaction" ? 1 : 0;
+      const period = periodScore(sheet.name);
+      const periodDistance = sourcePeriod !== undefined && period !== undefined ? Math.abs(sourcePeriod - period) : 12;
+      const periodBonus = periodDistance > 0 && periodDistance <= 2 ? 4 - periodDistance : 0;
+      return { sheet, score: headerOverlap + kindScore + periodBonus };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score || left.sheet.name.localeCompare(right.sheet.name))
+    .map((entry) => entry.sheet.name);
+}
+
+function similarRowSignals(input: AgentRunInput, values: CellMatrix): SimilarRowSignals {
+  const rawValues = values.flat().filter((value) => value !== null && value !== undefined && String(value).trim().length > 0);
+  const rawText = [input.request, ...rawValues.map((value) => String(value))].join(" ");
+  const tokens = Array.from(new Set((rawText.match(/[A-Za-z0-9][A-Za-z0-9_-]{2,}/g) ?? [])
+    .map((token) => token.toLowerCase())
+    .filter((token) => !/^\d{4}$/.test(token) && !COMMON_SIMILAR_ROW_TOKENS.has(token))))
+    .slice(0, 24);
+  const numbers = rawValues
+    .map((value) => typeof value === "number" ? value : Number(String(value).replace(/,/g, "")))
+    .filter((value) => Number.isFinite(value))
+    .slice(0, 12);
+  return { tokens, numbers };
+}
+
+const COMMON_SIMILAR_ROW_TOKENS = new Set(["find", "similar", "rows", "row", "current", "this", "that", "with", "from", "last", "month", "sheet", "transaction", "transactions"]);
+
+function similarRowCandidateRanges(metadata: WorkbookMetadata, sourceSheetName: string, sourceRange: string, input: AgentRunInput): SimilarRowRange[] {
+  const ranges: SimilarRowRange[] = [];
+  const sourceParsed = tryParseA1Address(stripSheetName(sourceRange));
+  const relatedSheets = new Set(likelyHistoricalSheets(metadata, sourceSheetName));
+  const targetHints = [
+    input.request,
+    ...(Array.isArray(input.intent?.targetHints) ? input.intent.targetHints : [])
+  ].map(normalizeComparableText);
+  for (const table of metadata.tables) {
+    if (table.sheetName === sourceSheetName && table.range === sourceRange) {
+      continue;
+    }
+    if (table.dataRange) {
+      ranges.push({
+        sheetName: table.sheetName,
+        range: clampRangeForSimilarRows(table.dataRange),
+        reason: relatedSheets.has(table.sheetName) ? "related table" : "table"
+      });
+    }
+  }
+  for (const section of metadata.sections) {
+    if (section.sheetName === sourceSheetName && section.range === sourceRange) {
+      continue;
+    }
+    if (section.kind === "table-like" || section.columns.length > 0 || relatedSheets.has(section.sheetName)) {
+      ranges.push({
+        sheetName: section.sheetName,
+        range: clampRangeForSimilarRows(section.range),
+        reason: relatedSheets.has(section.sheetName) ? "related section" : "table-like section"
+      });
+    }
+  }
+  for (const sheet of metadata.sheets) {
+    if (!sheet.usedRange || sheet.name === sourceSheetName) {
+      continue;
+    }
+    const mentioned = targetHints.some((hint) => hint.includes(normalizeComparableText(sheet.name)));
+    if (relatedSheets.has(sheet.name) || mentioned || sheet.kind === "transaction") {
+      const sameShape = sourceParsed ? clampRangeForSimilarRows(sheet.usedRange, sourceParsed.endColumn - sourceParsed.startColumn + 1) : clampRangeForSimilarRows(sheet.usedRange);
+      ranges.push({ sheetName: sheet.name, range: sameShape, reason: relatedSheets.has(sheet.name) ? "related sheet" : "candidate sheet" });
+    }
+  }
+  const seen = new Set<string>();
+  return ranges.filter((range) => {
+    const key = `${range.sheetName}!${range.range}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function clampRangeForSimilarRows(range: string, maxColumns = 20): string {
+  const parsed = tryParseA1Address(stripSheetName(range));
+  if (!parsed) {
+    return range;
+  }
+  const endRow = Math.min(parsed.endRow, parsed.startRow + 199);
+  const endColumn = Math.min(parsed.endColumn, parsed.startColumn + maxColumns - 1);
+  return `${numberToColumn(parsed.startColumn)}${parsed.startRow}:${numberToColumn(endColumn)}${endRow}`;
+}
+
+function rankSimilarRows(candidate: SimilarRowRange, values: CellMatrix, signals: SimilarRowSignals): SimilarRowMatch[] {
+  const parsed = tryParseA1Address(stripSheetName(candidate.range));
+  const startRow = parsed?.startRow ?? 1;
+  return values
+    .map((row, rowIndex) => {
+      const rowText = row.map((value) => String(value ?? "").toLowerCase()).join(" ");
+      const tokenMatches = signals.tokens.filter((token) => rowText.includes(token));
+      const numberMatches = signals.numbers.filter((number) => row.some((value) => Number(String(value).replace(/,/g, "")) === number));
+      const score = tokenMatches.length * 3 + numberMatches.length * 2 + (candidate.reason.includes("related") ? 2 : 0);
+      const sheetRowNumber = startRow + rowIndex;
+      return {
+        sheetName: candidate.sheetName,
+        range: parsed ? `${numberToColumn(parsed.startColumn)}${sheetRowNumber}:${numberToColumn(parsed.endColumn)}${sheetRowNumber}` : candidate.range,
+        sheetRowNumber,
+        rowIndex,
+        values: row,
+        score,
+        matchedSignals: [...tokenMatches, ...numberMatches.map((number) => String(number))].slice(0, 10)
+      };
+    })
+    .filter((match) => match.score > 0 && match.values.some((value) => value !== null && value !== undefined && String(value).trim().length > 0));
+}
+
+function periodScore(value: string): number | undefined {
+  const monthMatch = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{4})\b/i.exec(value);
+  if (!monthMatch?.[1] || !monthMatch[2]) {
+    return undefined;
+  }
+  const month = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(monthMatch[1].toLowerCase().slice(0, 3));
+  const year = Number(monthMatch[2]);
+  return Number.isFinite(year) && month >= 0 ? year * 12 + month : undefined;
 }
 
 function resolveAgentTable(metadata: WorkbookMetadata, input: AgentRunInput): TableMetadata | undefined {
@@ -7120,6 +7474,10 @@ function tableFiltersFromInput(input: AgentRunInput): { ok: true; filters: Table
     return { ok: false, summary: "Table filter previews need each filter to include column plus criteria, criterion, or value." };
   }
   return { ok: true, filters };
+}
+
+function isClearFilterRequest(request: string): boolean {
+  return /\b(clear|remove|reset)\b/i.test(request) && /\b(filters?|autofilter|auto\s*filter)\b/i.test(request);
 }
 
 function normalizeTableFilterSpec(filter: unknown): TableApplyFiltersRequest["filters"][number] | undefined {
@@ -7320,7 +7678,7 @@ function dedupeBy<T>(values: T[], keyFor: (value: T) => string): T[] {
   });
 }
 
-function applyOutputBudget(output: Omit<AgentRunOutput, "telemetry">, input: AgentRunInput, results: AgentResultStore): Omit<AgentRunOutput, "telemetry"> {
+function applyOutputBudget(output: Omit<AgentRunOutput, "telemetry">, input: AgentRunInput, results: AgentResultStore, metadataCache: WorkbookMetadataCache): Omit<AgentRunOutput, "telemetry"> {
   const responseMode = responseModeFromInput(input);
   const defaults = defaultResponseBudget(responseMode);
   const maxExamples = Math.max(0, input.budget?.maxExamples ?? defaults.maxExamples);
@@ -7328,9 +7686,14 @@ function applyOutputBudget(output: Omit<AgentRunOutput, "telemetry">, input: Age
   const maxEstimatedTokens = input.budget?.maxEstimatedTokens ?? defaults.maxEstimatedTokens;
   const stored = responseMode === "verbose" || !answerNeedsResultResource(output.answer)
     ? undefined
-    : results.create({ workbookContextId: output.workbookContextId === undefined ? undefined : String(output.workbookContextId), summary: output.summary, answer: output.answer });
+    : results.create({
+      workbookContextId: output.workbookContextId === undefined ? undefined : String(output.workbookContextId),
+      freshness: resultFreshnessForOutput(output, metadataCache),
+      summary: output.summary,
+      answer: output.answer
+    });
   const resourceLinks = stored ? appendUniqueResource(output.resourceLinks, resultResource(stored.resultId)) : output.resourceLinks;
-  const answer = responseMode === "verbose" ? output.answer : compactAnswerForResponseMode(output.answer, responseMode, stored?.resourceUri, stored?.fullResourceUri);
+  const answer = responseMode === "verbose" ? output.answer : compactAnswerForResponseMode(output.answer, responseMode, input, stored?.resourceUri, stored?.fullResourceUri, output.proof);
   const continuation = continuationForOutput(output, responseMode, stored);
   const budgeted = stripUndefinedOptionals({
     ...output,
@@ -7355,7 +7718,7 @@ function applyOutputBudget(output: Omit<AgentRunOutput, "telemetry">, input: Age
     const { continuation: _continuation, ...compactWithoutContinuation } = compact;
     compact = stripUndefinedOptionals({
       ...compactWithoutContinuation,
-      ...(compact.answer && compact.workbookContextId ? { answer: { resource: contextResource(String(compact.workbookContextId)).uri } } : {}),
+      ...(compact.answer ? { answer: minimalAnswerForBudget(compact.answer, compact.continuation, compact.workbookContextId) } : {}),
       ...(compact.candidates ? { candidates: compact.candidates.slice(0, Math.min(compact.candidates.length, 3)).map(compactCandidate) } : {}),
       proof: compact.proof.slice(0, Math.min(compact.proof.length, 3)),
       ...(compact.changes ? { changes: compact.changes.slice(0, Math.min(compact.changes.length, 3)) } : {}),
@@ -7374,6 +7737,58 @@ function applyOutputBudget(output: Omit<AgentRunOutput, "telemetry">, input: Age
     });
   }
   return stripUndefinedOptionals(compact);
+}
+
+function resultFreshnessForOutput(output: Omit<AgentRunOutput, "telemetry">, metadataCache: WorkbookMetadataCache): AgentResultFreshness | undefined {
+  const workbookContextId = output.workbookContextId === undefined ? undefined : String(output.workbookContextId);
+  if (!workbookContextId) {
+    return undefined;
+  }
+  const metadata = metadataCache.getByContextId(workbookContextId);
+  if (!metadata) {
+    return undefined;
+  }
+  return stripUndefinedRecord({
+    workbookId: metadata.workbook.workbookId,
+    workbookContentVersion: metadata.contentVersion,
+    workbookStructureHash: metadata.fingerprint.structureHash,
+    contextUpdatedAt: metadata.updatedAt
+  }) as AgentResultFreshness;
+}
+
+function minimalAnswerForBudget(answer: unknown, continuation: AgentRunOutput["continuation"] | undefined, workbookContextId: AgentRunOutput["workbookContextId"] | undefined): Record<string, unknown> {
+  const typed = answer && typeof answer === "object" ? answer as Record<string, unknown> : {};
+  if (typed.kind === "workbook_summary") {
+    return stripUndefinedRecord({
+      kind: typed.kind,
+      source: typed.source,
+      sheetCount: typed.sheetCount,
+      tableCount: typed.tableCount,
+      sheets: Array.isArray(typed.sheets) ? typed.sheets.slice(0, 8).map((sheet) => {
+        const record = sheet as Record<string, unknown>;
+        return stripUndefinedRecord({
+          name: record.name,
+          kind: record.kind,
+          usedRange: record.usedRange,
+          contextHints: Array.isArray(record.contextHints) ? record.contextHints.slice(0, 3) : undefined
+        });
+      }) : undefined,
+      resultUri: typed.resultUri ?? continuation?.resultUri,
+      fullResultUri: typed.fullResultUri ?? continuation?.fullResultUri,
+      resource: continuation?.resultUri ?? (workbookContextId ? contextResource(String(workbookContextId)).uri : undefined)
+    });
+  }
+  return stripUndefinedRecord({
+    kind: typed.kind ?? "compacted_answer",
+    source: typed.source,
+    sheetName: typed.sheetName,
+    tableName: typed.tableName,
+    range: typed.range,
+    dataRange: typed.dataRange,
+    resultUri: typed.resultUri ?? continuation?.resultUri,
+    fullResultUri: typed.fullResultUri ?? continuation?.fullResultUri,
+    resource: continuation?.resultUri ?? (workbookContextId ? contextResource(String(workbookContextId)).uri : undefined)
+  });
 }
 
 function inlinePreviewForProfile(input: AgentRunInput, profile: ReturnType<typeof profileValues>, range: string): Record<string, unknown> | undefined {
@@ -7427,8 +7842,65 @@ function shouldIncludeInlineValuesPreview(input: AgentRunInput, cellCount: numbe
     || /\b(?:actual|raw|all|full|every|show|read|print)\b.{0,40}\b(?:values?|rows?|data|headers?)\b/i.test(input.request);
 }
 
+function shouldPreserveExactInlineData(input: AgentRunInput, responseMode: AgentResponseMode, cellCount: number, proof?: AgentProofReference[]): boolean {
+  const maxCells = exactInlineCellLimit(input, responseMode);
+  if (cellCount <= 0 || cellCount > maxCells) {
+    return false;
+  }
+  const action = intentAction(input);
+  return action === "read_values"
+    || action === "read_range_compact"
+    || input.detailLevel === "table_sample"
+    || input.detailLevel === "full_table"
+    || requestNeedsExactWorkbookData(input.request)
+    || proofImpliesSelectedData(proof);
+}
+
+function exactInlineCellLimit(input: AgentRunInput, responseMode: AgentResponseMode): number {
+  const modeLimit = responseMode === "standard" ? 500 : 300;
+  if (input.budget?.maxPayloadBytes === undefined) {
+    return modeLimit;
+  }
+  return Math.max(25, Math.min(modeLimit, Math.floor(input.budget.maxPayloadBytes / 100)));
+}
+
+function requestNeedsExactWorkbookData(request: string): boolean {
+  return /\b(?:actual|raw|exact|show|read|print|list|analy[sz]e|inspect|look(?:\s+at| into)?|validate|transform|clean|fix|update|summari[sz]e)\b.{0,60}\b(?:values?|rows?|cells?|range|data|headers?|selection|selected|this|here|current)\b/i.test(request)
+    || /\b(?:selected|selection|this|here|current)\b.{0,60}\b(?:values?|rows?|cells?|range|data)\b/i.test(request)
+    || /\b(?:read|show|inspect|look(?:\s+at| into)?|analy[sz]e)\b.{0,80}\b[A-Z]{1,3}\d+(?::[A-Z]{1,3}\d+)?\b/i.test(request);
+}
+
+function proofImpliesSelectedData(proof: AgentProofReference[] | undefined): boolean {
+  return (proof ?? []).some((entry) => /\b(?:selected|selection|active cell|active table row)\b/i.test(entry.label ?? ""));
+}
+
+function sparseRowsCellCount(rows: unknown[] | undefined): number {
+  if (!rows) {
+    return 0;
+  }
+  return rows.reduce<number>((total, row) => {
+    const cells = row && typeof row === "object" && Array.isArray((row as { cells?: unknown }).cells)
+      ? (row as { cells: unknown[] }).cells
+      : [];
+    return total + cells.length;
+  }, 0);
+}
+
 function responseModeFromInput(input: AgentRunInput): AgentResponseMode {
   return input.responseMode ?? "brief";
+}
+
+function targetFreshnessRangesFromInput(input: AgentRunInput, activeWorkbookId: WorkbookId | string | undefined): A1Range[] | undefined {
+  const target = input.target;
+  const workbookId = target?.workbookId ?? activeWorkbookId;
+  if (!workbookId || !target?.sheetName || !target.range) {
+    return undefined;
+  }
+  return [{
+    workbookId: workbookId as WorkbookId,
+    sheetName: target.sheetName,
+    address: stripSheetName(target.range)
+  }];
 }
 
 type AgentDetectedResourceHandle =
@@ -7566,7 +8038,7 @@ function answerNeedsResultResource(answer: unknown): boolean {
     || Object.values(typed).some((value) => value && typeof value === "object" && ["headers", "values", "sample", "sparseRows", "rows", "valueCounts"].some((key) => (value as Record<string, unknown>)[key] !== undefined));
 }
 
-function compactAnswerForResponseMode(answer: unknown, responseMode: AgentResponseMode, resultUri?: string, fullResultUri?: string): unknown {
+function compactAnswerForResponseMode(answer: unknown, responseMode: AgentResponseMode, input: AgentRunInput, resultUri?: string, fullResultUri?: string, proof?: AgentProofReference[]): unknown {
   if (!answer || typeof answer !== "object") {
     return answer;
   }
@@ -7582,13 +8054,13 @@ function compactAnswerForResponseMode(answer: unknown, responseMode: AgentRespon
     return compactTableSchemaAnswer(typed, responseMode, resultUri, fullResultUri);
   }
   if (kind === "range_profile") {
-    return compactRangeProfileAnswer(typed, resultUri, fullResultUri);
+    return compactRangeProfileAnswer(typed, responseMode, input, resultUri, fullResultUri, proof);
   }
   if (kind === "range_value_counts") {
     return compactRangeValueCountsAnswer(typed, resultUri, fullResultUri);
   }
   if (kind === "table_compact_read") {
-    return compactTableReadAnswer(typed, responseMode, resultUri, fullResultUri);
+    return compactTableReadAnswer(typed, responseMode, input, resultUri, fullResultUri, proof);
   }
   if (kind === "comparison_profile") {
     return compactComparisonAnswer(typed, resultUri, fullResultUri);
@@ -7599,8 +8071,17 @@ function compactAnswerForResponseMode(answer: unknown, responseMode: AgentRespon
   if (kind === "workbook_overview") {
     return compactWorkbookOverviewAnswer(typed, resultUri, fullResultUri);
   }
+  if (kind === "workbook_summary") {
+    return compactWorkbookSummaryAnswer(typed, resultUri, fullResultUri);
+  }
+  if (kind === "sheet_summary") {
+    return compactSheetSummaryAnswer(typed, resultUri, fullResultUri);
+  }
   if (kind === "style_summary") {
     return compactStyleSummaryAnswer(typed, resultUri, fullResultUri);
+  }
+  if (kind === "similar_rows") {
+    return compactSimilarRowsAnswer(typed, resultUri, fullResultUri);
   }
   return compactGenericAnswer(typed, resultUri, fullResultUri);
 }
@@ -7637,7 +8118,11 @@ function compactTableSchemaAnswer(answer: Record<string, unknown>, responseMode:
   });
 }
 
-function compactRangeProfileAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+function compactRangeProfileAnswer(answer: Record<string, unknown>, responseMode: AgentResponseMode, input: AgentRunInput, resultUri?: string, fullResultUri?: string, proof?: AgentProofReference[]): Record<string, unknown> {
+  const rows = Array.isArray(answer.rows) ? answer.rows as CellMatrix : undefined;
+  const sparseRows = Array.isArray(answer.sparseRows) ? answer.sparseRows : undefined;
+  const exactCellCount = rows ? matrixCellCount(rows) : sparseRowsCellCount(sparseRows);
+  const preserveExact = shouldPreserveExactInlineData(input, responseMode, exactCellCount, proof);
   return stripUndefinedRecord({
     kind: answer.kind,
     source: answer.source,
@@ -7645,6 +8130,10 @@ function compactRangeProfileAnswer(answer: Record<string, unknown>, resultUri?: 
     range: answer.range,
     shape: answer.shape,
     metrics: compactProfileMetrics(answer.metrics),
+    rowMetadata: answer.rowMetadata,
+    ...(preserveExact && rows ? { rows } : {}),
+    ...(preserveExact && !rows && sparseRows ? { sparseRows } : {}),
+    ...(preserveExact ? { emptySummary: answer.emptySummary } : {}),
     valuesPreview: answer.valuesPreview,
     previewRange: answer.previewRange,
     previewTruncated: answer.previewTruncated,
@@ -7666,10 +8155,32 @@ function compactRangeValueCountsAnswer(answer: Record<string, unknown>, resultUr
   });
 }
 
-function compactTableReadAnswer(answer: Record<string, unknown>, responseMode: AgentResponseMode, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+function compactTableReadAnswer(answer: Record<string, unknown>, responseMode: AgentResponseMode, input: AgentRunInput, resultUri?: string, fullResultUri?: string, proof?: AgentProofReference[]): Record<string, unknown> {
   const schema = Array.isArray(answer.schema) ? answer.schema : [];
   const projectedColumns = Array.isArray(answer.projectedColumns) ? answer.projectedColumns : [];
   const profile = answer.profile && typeof answer.profile === "object" ? answer.profile as Record<string, unknown> : undefined;
+  const values = Array.isArray(answer.values) ? answer.values as CellMatrix : undefined;
+  const formulas = Array.isArray(answer.formulas) ? answer.formulas as CellMatrix : undefined;
+  const text = Array.isArray(answer.text) ? answer.text as CellMatrix : undefined;
+  const numberFormat = Array.isArray(answer.numberFormat) ? answer.numberFormat as CellMatrix : undefined;
+  const exactMatrix = values ?? text ?? formulas;
+  const preserveExact = shouldPreserveExactInlineData(input, responseMode, exactMatrix ? matrixCellCount(exactMatrix) : 0, proof);
+  const roleProjected = preserveExact && exactMatrix
+    ? roleAwareMatrixProjection(exactMatrix, schema, input, responseMode)
+    : undefined;
+  const inlineColumns = roleProjected?.columns ?? projectedColumns;
+  const projectedHeaders = preserveExact ? (Array.isArray(answer.headers) && roleProjected ? projectVector(answer.headers, roleProjected.indexes) : answer.headers) : undefined;
+  const projectedValues = preserveExact ? (values && roleProjected ? projectMatrixColumns(values, roleProjected.indexes) : values) : undefined;
+  const projectedFormulas = preserveExact ? (formulas && roleProjected ? projectMatrixColumns(formulas, roleProjected.indexes) : formulas) : undefined;
+  const projectedText = preserveExact ? (text && roleProjected ? projectMatrixColumns(text, roleProjected.indexes) : text) : undefined;
+  const projectedNumberFormat = preserveExact ? (numberFormat && roleProjected ? projectMatrixColumns(numberFormat, roleProjected.indexes) : numberFormat) : undefined;
+  const domainEncoding = projectedValues
+    ? domainEncodeMatrix(projectedValues, inlineColumns, {
+      formulas: projectedFormulas,
+      numberFormat: projectedNumberFormat,
+      responseMode
+    })
+    : undefined;
   return stripUndefinedRecord({
     kind: answer.kind,
     source: answer.source,
@@ -7685,12 +8196,234 @@ function compactTableReadAnswer(answer: Record<string, unknown>, responseMode: A
     schemaSummary: schemaSummary(schema, responseMode === "standard" ? 16 : 10),
     shape: profile?.shape,
     metrics: compactProfileMetrics(profile?.metrics),
+    rowMetadata: answer.rowMetadata,
+    headers: projectedHeaders,
+    values: domainEncoding ? undefined : projectedValues,
+    encodedValues: domainEncoding?.encodedValues,
+    valueEncoding: domainEncoding?.encoding,
+    formulas: projectedFormulas,
+    text: projectedText,
+    numberFormat: projectedNumberFormat,
+    inlineColumnProjection: roleProjected ? {
+      reason: "role_aware_wide_row_projection",
+      selectedColumnIndexes: roleProjected.indexes,
+      selectedColumns: roleProjected.columns,
+      omittedColumnCount: roleProjected.omittedColumnCount
+    } : undefined,
     valuesPreview: answer.valuesPreview,
     previewRange: answer.previewRange,
     previewTruncated: answer.previewTruncated,
     resultUri,
     fullResultUri
   });
+}
+
+function roleAwareMatrixProjection(
+  matrix: CellMatrix,
+  schema: unknown[],
+  input: AgentRunInput,
+  responseMode: AgentResponseMode
+): { indexes: number[]; columns: unknown[]; omittedColumnCount: number } | undefined {
+  const width = maxMatrixColumns(matrix);
+  const limit = responseMode === "standard" ? 16 : 12;
+  if (width <= limit || schema.length === 0) {
+    return undefined;
+  }
+  const requested = new Set(tableReadColumnsFromInput(input).map((column) => typeof column === "number" ? column : normalizeHeaderName(column)));
+  const scored = schema
+    .filter((column): column is Record<string, unknown> => Boolean(column && typeof column === "object"))
+    .map((column, fallbackIndex) => {
+      const index = typeof column.index === "number" ? column.index : fallbackIndex;
+      const normalized = typeof column.normalizedName === "string"
+        ? column.normalizedName
+        : typeof column.name === "string" ? normalizeHeaderName(column.name) : "";
+      const role = typeof column.role === "string" ? column.role : "";
+      const importance = typeof column.importance === "number" ? column.importance : roleImportance(role);
+      const requestedBoost = requested.has(index) || requested.has(normalized) ? 1 : 0;
+      const proximityBoost = index <= 2 ? 0.08 : 0;
+      return { column, index, requested: requestedBoost > 0, score: importance + requestedBoost + proximityBoost };
+    })
+    .filter((entry) => entry.index >= 0 && entry.index < width)
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+  const selectedSet = new Set<number>();
+  for (const entry of scored.filter((candidate) => candidate.requested)) {
+    selectedSet.add(entry.index);
+  }
+  for (const entry of scored) {
+    if (selectedSet.size >= limit) {
+      break;
+    }
+    selectedSet.add(entry.index);
+  }
+  const selected = [...selectedSet].sort((left, right) => left - right);
+  if (selected.length === 0 || selected.length >= width) {
+    return undefined;
+  }
+  const schemaByIndex = new Map(scored.map((entry) => [entry.index, entry.column]));
+  return {
+    indexes: selected,
+    columns: selected.map((index) => schemaByIndex.get(index) ?? { index }),
+    omittedColumnCount: Math.max(0, width - selected.length)
+  };
+}
+
+function projectMatrixColumns<T>(matrix: T[][], indexes: number[]): T[][] {
+  return matrix.map((row) => indexes.map((index) => row[index] as T));
+}
+
+function projectVector<T>(values: T[], indexes: number[]): T[] {
+  return indexes.map((index) => values[index] as T);
+}
+
+function domainEncodeMatrix(
+  matrix: CellMatrix,
+  columns: unknown[],
+  options: { formulas?: CellMatrix | undefined; numberFormat?: CellMatrix | undefined; responseMode: AgentResponseMode }
+): { encodedValues: CellMatrix; encoding: Record<string, unknown> } | undefined {
+  if (options.responseMode === "verbose" || matrix.length < 6) {
+    return undefined;
+  }
+  const width = maxMatrixColumns(matrix);
+  const encodableColumns: Array<{
+    position: number;
+    name?: unknown;
+    role?: unknown;
+    inferredType?: unknown;
+    domain: unknown[];
+    byKey: Map<string, number>;
+  }> = [];
+  for (let position = 0; position < width; position += 1) {
+    const column = columns[position] && typeof columns[position] === "object" ? columns[position] as Record<string, unknown> : {};
+    if (!isDomainEncodingCandidate(column, matrix, position, options)) {
+      continue;
+    }
+    const domain = orderedColumnDomain(matrix, position);
+    if (!shouldEncodeDomain(matrix, position, domain)) {
+      continue;
+    }
+    encodableColumns.push({
+      position,
+      name: column.name,
+      role: column.role,
+      inferredType: column.inferredType,
+      domain,
+      byKey: new Map(domain.map((value, index) => [domainKey(value), index]))
+    });
+  }
+  if (encodableColumns.length === 0) {
+    return undefined;
+  }
+  const byPosition = new Map(encodableColumns.map((column) => [column.position, column]));
+  const encodedValues = matrix.map((row) => row.map((value, position) => {
+    const encoding = byPosition.get(position);
+    return encoding ? encoding.byKey.get(domainKey(value)) ?? value : value;
+  }));
+  const rawBytes = Buffer.byteLength(JSON.stringify(matrix));
+  const encodedBytes = Buffer.byteLength(JSON.stringify(encodedValues)) + Buffer.byteLength(JSON.stringify(encodableColumns.map((column) => column.domain)));
+  if (rawBytes - encodedBytes < 80 || encodedBytes >= rawBytes * 0.9) {
+    return undefined;
+  }
+  return {
+    encodedValues,
+    encoding: {
+      kind: "domain_dictionary_by_column",
+      basis: "column_role_cardinality_value_pattern",
+      decodeInstruction: "For encodedValues, replace integer codes using valueEncoding.columns[position].domain[code]. Full raw values remain available through fullResultUri.",
+      columns: encodableColumns.map((column) => stripUndefinedRecord({
+        position: column.position,
+        name: column.name,
+        role: column.role,
+        inferredType: column.inferredType,
+        domain: column.domain
+      }))
+    }
+  };
+}
+
+function isDomainEncodingCandidate(
+  column: Record<string, unknown>,
+  matrix: CellMatrix,
+  position: number,
+  options: { formulas?: CellMatrix | undefined; numberFormat?: CellMatrix | undefined }
+): boolean {
+  const role = typeof column.role === "string" ? column.role : "";
+  const inferredType = typeof column.inferredType === "string" ? column.inferredType : "";
+  if (["amount", "measure", "formula"].includes(role) || ["currency", "number", "formula"].includes(inferredType)) {
+    return false;
+  }
+  if (columnHasFormula(options.formulas, position)) {
+    return false;
+  }
+  const values = matrix.map((row) => row[position]).filter((value) => value !== undefined && value !== null && value !== "");
+  if (values.length < 6 || values.some((value) => typeof value !== "string" && typeof value !== "boolean")) {
+    return false;
+  }
+  if (["date", "status", "category", "vendor", "account", "description", "dimension", "identifier", "note"].includes(role)) {
+    return true;
+  }
+  if (["date", "status", "text", "unknown"].includes(inferredType)) {
+    return true;
+  }
+  const formats = options.numberFormat ? orderedColumnDomain(options.numberFormat, position).map(String).join(" ") : "";
+  return /date|text|general|@/i.test(formats);
+}
+
+function columnHasFormula(formulas: CellMatrix | undefined, position: number): boolean {
+  return Boolean(formulas?.some((row) => typeof row[position] === "string" && String(row[position]).startsWith("=")));
+}
+
+function orderedColumnDomain(matrix: CellMatrix, position: number): unknown[] {
+  const seen = new Map<string, unknown>();
+  for (const row of matrix) {
+    const value = row[position];
+    if (value === undefined || value === null || value === "") {
+      continue;
+    }
+    const key = domainKey(value);
+    if (!seen.has(key)) {
+      seen.set(key, value);
+    }
+  }
+  return [...seen.values()];
+}
+
+function shouldEncodeDomain(matrix: CellMatrix, position: number, domain: unknown[]): boolean {
+  const nonEmptyCount = matrix.reduce((count, row) => {
+    const value = row[position];
+    return value === undefined || value === null || value === "" ? count : count + 1;
+  }, 0);
+  if (domain.length < 2 || domain.length > 32 || nonEmptyCount < 6) {
+    return false;
+  }
+  if (domain.length / nonEmptyCount > 0.7) {
+    return false;
+  }
+  return domain.some((value) => typeof value === "string" && value.length >= 4);
+}
+
+function domainKey(value: unknown): string {
+  return `${typeof value}:${String(value)}`;
+}
+
+function roleImportance(role: string): number {
+  switch (role) {
+    case "description":
+    case "amount":
+    case "date":
+    case "category":
+    case "status":
+    case "vendor":
+      return 0.9;
+    case "account":
+    case "measure":
+    case "formula":
+      return 0.78;
+    case "identifier":
+    case "note":
+      return 0.68;
+    default:
+      return 0.45;
+  }
 }
 
 function compactComparisonAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
@@ -7728,7 +8461,9 @@ function compactSemanticIndexAnswer(answer: Record<string, unknown>, resultUri?:
           sheetName: typed.sheetName,
           tableName: typed.tableName,
           range: typed.range,
-          confidence: typed.confidence
+          confidence: typed.confidence,
+          evidence: Array.isArray(typed.evidence) ? typed.evidence.slice(0, 4) : undefined,
+          nextRequestHints: Array.isArray(typed.nextRequestHints) ? typed.nextRequestHints.slice(0, 3) : undefined
         });
       })
     : undefined;
@@ -7739,6 +8474,62 @@ function compactSemanticIndexAnswer(answer: Record<string, unknown>, resultUri?:
     detailLevel: answer.detailLevel,
     entryCount: answer.entryCount,
     entries,
+    resultUri,
+    fullResultUri
+  });
+}
+
+function compactSimilarRowsAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  const rows = Array.isArray(answer.rows)
+    ? answer.rows.slice(0, 10).map((row) => {
+        const typed = row as Record<string, unknown>;
+        return stripUndefinedRecord({
+          sheetName: typed.sheetName,
+          range: typed.range,
+          sheetRowNumber: typed.sheetRowNumber,
+          values: typed.values,
+          score: typed.score,
+          matchedSignals: typed.matchedSignals
+        });
+      })
+    : undefined;
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    source: answer.source,
+    signals: Array.isArray(answer.signals) ? answer.signals.slice(0, 12) : undefined,
+    comparedRanges: Array.isArray(answer.comparedRanges) ? answer.comparedRanges.slice(0, 6) : undefined,
+    rows,
+    resultUri,
+    fullResultUri
+  });
+}
+
+function compactWorkbookSummaryAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    source: answer.source,
+    workbook: answer.workbook,
+    sheetCount: answer.sheetCount,
+    tableCount: answer.tableCount,
+    namedRangeCount: answer.namedRangeCount,
+    semanticIndex: answer.semanticIndex && typeof answer.semanticIndex === "object" ? compactSemanticIndexAnswer(answer.semanticIndex as Record<string, unknown>) : undefined,
+    sheets: Array.isArray(answer.sheets) ? answer.sheets.slice(0, 20) : undefined,
+    resultUri,
+    fullResultUri
+  });
+}
+
+function compactSheetSummaryAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    source: answer.source,
+    sheet: answer.sheet,
+    contextHints: answer.contextHints,
+    tables: Array.isArray(answer.tables) ? answer.tables.slice(0, 8) : undefined,
+    namedRanges: Array.isArray(answer.namedRanges) ? answer.namedRanges.slice(0, 8) : undefined,
+    sections: Array.isArray(answer.sections) ? answer.sections.slice(0, 8) : undefined,
+    summaryBlocks: Array.isArray(answer.summaryBlocks) ? answer.summaryBlocks.slice(0, 8) : undefined,
+    formulaRegions: Array.isArray(answer.formulaRegions) ? answer.formulaRegions.slice(0, 8) : undefined,
     resultUri,
     fullResultUri
   });
@@ -7849,6 +8640,7 @@ function continuationForOutput(
     ...(output.transactionId !== undefined ? { transactionId: output.transactionId } : {}),
     ...(stored?.resourceUri !== undefined ? { resultUri: stored.resourceUri } : {}),
     ...(stored?.fullResourceUri !== undefined ? { fullResultUri: stored.fullResourceUri } : {}),
+    ...(stored?.freshness !== undefined ? { freshness: stored.freshness } : {}),
     responseMode: responseMode === "verbose" ? "brief" : responseMode,
     ...(nextRequest !== undefined ? { nextRequest } : {})
   });
@@ -7860,7 +8652,7 @@ function nextContinuationRequest(output: Omit<AgentRunOutput, "telemetry">, stor
     return "Continue with mode apply_update, operationId, and confirmationToken after user confirmation.";
   }
   if (stored?.resourceUri) {
-    return "Reuse workbookContextId. For full detail, call excel.agent.run again with fullResultUri in request or continuation; do not use webfetch.";
+    return "Reuse workbookContextId. For exact rows, raw values, audit detail, or transformation input, call excel.agent.run again with fullResultUri in request or continuation; do not use webfetch.";
   }
   if (output.workbookContextId) {
     return "Reuse workbookContextId on the next excel.agent.run call.";
@@ -7893,7 +8685,9 @@ function schemaSummary(columns: unknown[], maxColumns: number): Record<string, u
     .map((column) => stripUndefinedRecord({
       name: column.name,
       letter: column.letter,
-      inferredType: column.inferredType
+      inferredType: column.inferredType,
+      role: column.role,
+      importance: column.importance
     }));
   return {
     columnCount: columns.length,
@@ -7980,7 +8774,103 @@ function stripUndefinedOptionals(output: Omit<AgentRunOutput, "telemetry">): Omi
   if (next.confirmationToken === undefined) delete next.confirmationToken;
   if (next.operationId === undefined) delete next.operationId;
   if (next.workbookContextId === undefined) delete next.workbookContextId;
+  if (next.finalAnswer === undefined) delete next.finalAnswer;
+  if (next.agentInstruction === undefined) delete next.agentInstruction;
+  if (next.maxRecommendedFollowupCalls === undefined) delete next.maxRecommendedFollowupCalls;
+  if (next.requiredFollowup === undefined) delete next.requiredFollowup;
   return next;
+}
+
+function withTaskOutcomeContract(output: Omit<AgentRunOutput, "telemetry">): Omit<AgentRunOutput, "telemetry"> {
+  const existing = output.taskOutcome;
+  const taskOutcome = existing ?? deriveTaskOutcome(output);
+  const finalAnswer = output.finalAnswer ?? deriveFinalAnswer(output, taskOutcome);
+  const agentInstruction = output.agentInstruction ?? deriveAgentInstruction(output, taskOutcome);
+  const maxRecommendedFollowupCalls = output.maxRecommendedFollowupCalls ?? recommendedFollowupCount(output, taskOutcome);
+  const requiredFollowup = output.requiredFollowup ?? deriveRequiredFollowup(output, taskOutcome);
+  return stripUndefinedOptionals({
+    ...output,
+    taskOutcome,
+    agentInstruction,
+    maxRecommendedFollowupCalls,
+    ...(finalAnswer !== undefined ? { finalAnswer } : {}),
+    ...(requiredFollowup !== undefined ? { requiredFollowup } : {})
+  });
+}
+
+function deriveTaskOutcome(output: Omit<AgentRunOutput, "telemetry">): NonNullable<AgentRunOutput["taskOutcome"]> {
+  if (output.status === "PREVIEW_READY" || output.nextAction === "call_apply_update") {
+    return "preview_ready";
+  }
+  if (output.status === "SUCCESS" && output.mode === "apply_update") {
+    return "apply_complete";
+  }
+  if (output.nextAction === "ask_user" || output.nextAction === "call_with_target") {
+    return "needs_user_input";
+  }
+  if (output.status === "SUCCESS" && output.nextAction === "answer_now") {
+    return "final_answer";
+  }
+  return "cannot_complete";
+}
+
+function deriveFinalAnswer(output: Omit<AgentRunOutput, "telemetry">, taskOutcome: NonNullable<AgentRunOutput["taskOutcome"]>): string | undefined {
+  if (taskOutcome === "preview_ready") {
+    return `${output.summary} Review the preview, then call apply_update with the returned operationId and confirmationToken if the user confirms.`;
+  }
+  if (taskOutcome === "needs_user_input" || taskOutcome === "cannot_complete" || taskOutcome === "apply_complete" || taskOutcome === "final_answer") {
+    return output.summary;
+  }
+  return undefined;
+}
+
+function deriveAgentInstruction(output: Omit<AgentRunOutput, "telemetry">, taskOutcome: NonNullable<AgentRunOutput["taskOutcome"]>): string {
+  if (taskOutcome === "preview_ready") {
+    return "Do not rediscover workbook context. Ask for user confirmation if needed, then call excel.agent.run with mode apply_update, operationId, and confirmationToken.";
+  }
+  if (taskOutcome === "needs_user_input") {
+    return "Ask the user for the missing information from finalAnswer; do not call workbook tools again until the user responds.";
+  }
+  if (taskOutcome === "cannot_complete") {
+    return "Report finalAnswer and warnings to the user; do not loop through more workbook discovery unless the user changes the request.";
+  }
+  if (taskOutcome === "apply_complete") {
+    return "Answer the user now from finalAnswer, proof, compactProof, and warnings; do not call workbook tools again for this task.";
+  }
+  return "Answer the user now from finalAnswer, proof, and inline structuredContent; do not call workbook tools again for this task.";
+}
+
+function recommendedFollowupCount(output: Omit<AgentRunOutput, "telemetry">, taskOutcome: NonNullable<AgentRunOutput["taskOutcome"]>): number {
+  if (taskOutcome === "preview_ready") {
+    return 1;
+  }
+  if (output.nextAction === "fetch_resource" || output.nextAction === "retry_after_refresh" || output.nextAction === "call_preview_update") {
+    return 1;
+  }
+  return 0;
+}
+
+function deriveRequiredFollowup(
+  output: Omit<AgentRunOutput, "telemetry">,
+  taskOutcome: NonNullable<AgentRunOutput["taskOutcome"]>
+): AgentRunOutput["requiredFollowup"] | undefined {
+  if (taskOutcome === "preview_ready" && output.operationId && output.confirmationToken) {
+    return {
+      mode: "apply_update",
+      nextAction: "call_apply_update",
+      operationId: output.operationId,
+      confirmationToken: output.confirmationToken,
+      instruction: "Call excel.agent.run once with mode apply_update, operationId, and confirmationToken after user confirmation."
+    };
+  }
+  if (output.nextAction === "call_preview_update") {
+    return {
+      mode: "preview_update",
+      nextAction: "call_preview_update",
+      instruction: "Call excel.agent.run with mode preview_update using the grouped workflow suggested in finalAnswer."
+    };
+  }
+  return undefined;
 }
 
 function resolveUpdateTarget(metadata: WorkbookMetadata, input: AgentRunInput):
@@ -8438,6 +9328,8 @@ function headerAnswer(header: HeaderMetadata) {
       name: column.name,
       normalizedName: column.normalizedName,
       inferredType: column.inferredType,
+      role: column.role,
+      importance: column.importance,
       index: column.index,
       letter: column.letter
     }))
@@ -9178,6 +10070,38 @@ function dimensionsFromAddress(address: string): { rows: number; columns: number
   };
 }
 
+function tableReadRowMetadata(address: string | undefined, rowOffset: number, values: CellMatrix): Array<{ rowIndex: number; sheetRowNumber: number; address: string }> {
+  const parsed = address ? tryParseA1Address(stripSheetName(address)) : undefined;
+  if (!parsed) {
+    return [];
+  }
+  return values.map((_row, rowIndex) => {
+    const sheetRowNumber = parsed.startRow + rowOffset + rowIndex;
+    return {
+      rowIndex,
+      sheetRowNumber,
+      address: `${numberToColumn(parsed.startColumn)}${sheetRowNumber}:${numberToColumn(parsed.endColumn)}${sheetRowNumber}`
+    };
+  });
+}
+
+function rangeRowMetadata(address: string | undefined, values: CellMatrix, rowIndexes: number[]): Array<{ rowIndex: number; sheetRowNumber: number; address: string }> {
+  const parsed = address ? tryParseA1Address(stripSheetName(address)) : undefined;
+  if (!parsed || rowIndexes.length === 0) {
+    return [];
+  }
+  return rowIndexes
+    .filter((rowIndex) => rowIndex >= 0 && rowIndex < values.length)
+    .map((rowIndex) => {
+      const sheetRowNumber = parsed.startRow + rowIndex;
+      return {
+        rowIndex,
+        sheetRowNumber,
+        address: `${numberToColumn(parsed.startColumn)}${sheetRowNumber}:${numberToColumn(parsed.endColumn)}${sheetRowNumber}`
+      };
+    });
+}
+
 function valuePatchesFromInput(input: AgentRunInput): AgentValuePatch[] {
   const patches = input.values?.patches;
   if (!Array.isArray(patches)) {
@@ -9307,12 +10231,13 @@ function compactStoredResult(result: StoredAgentResult): Record<string, unknown>
     resourceUri: result.resourceUri,
     fullResourceUri: result.fullResourceUri,
     workbookContextId: result.workbookContextId,
+    freshness: result.freshness,
     kind: result.kind,
     summary: result.summary,
     hash: result.hash,
     createdAt: result.createdAt,
     expiresAt: result.expiresAt,
-    answer: compactAnswerForResponseMode(result.answer, "brief", result.resourceUri, result.fullResourceUri)
+    answer: compactAnswerForResponseMode(result.answer, "brief", { request: "stored result summary", mode: "answer" }, result.resourceUri, result.fullResourceUri)
   });
 }
 

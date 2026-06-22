@@ -1432,6 +1432,11 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
             range.worksheet.autoFilter.apply(range);
             break;
           }
+          case "range.clear_autofilter": {
+            const range = getRange(context, operation.target);
+            range.worksheet.autoFilter.clearCriteria();
+            break;
+          }
           case "range.merge": {
             getRange(context, operation.target).merge(operation.across ?? false);
             break;
@@ -1531,7 +1536,12 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
           }
           case "sheet.clear": {
             const usedRange = context.workbook.worksheets.getItem(operation.sheetName).getUsedRangeOrNullObject();
-            usedRange.clear(toClearApplyTo(operation.applyTo ?? "all"));
+            usedRange.load("isNullObject");
+            await context.sync();
+            counters.syncCount += 1;
+            if (!usedRange.isNullObject) {
+              usedRange.clear(toClearApplyTo(operation.applyTo ?? "all"));
+            }
             sheetsChanged += 1;
             break;
           }

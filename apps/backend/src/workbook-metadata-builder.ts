@@ -1,4 +1,4 @@
-import { makeId, type BatchRequest, type CellMatrix, type ExcelOperation, type NameInfo, type OperationId, type RuntimeSelectionResponse, type SelectionInfo, type WorkbookId, type WorkbookRef } from "@components-kit/open-workbook-protocol";
+import { makeId, type A1Range, type BatchRequest, type CellMatrix, type ExcelOperation, type NameInfo, type OperationId, type RuntimeSelectionResponse, type SelectionInfo, type WorkbookId, type WorkbookRef } from "@components-kit/open-workbook-protocol";
 import { stripSheetName } from "@components-kit/open-workbook-excel-core";
 import {
   checkMetadataFreshness,
@@ -7,6 +7,7 @@ import {
   DEFAULT_METADATA_CACHE_TTL_MS,
   normalizeHeaderName,
   type ColumnMetadata,
+  type ColumnRole,
   type ColumnType,
   type FormulaRegionMetadata,
   type HeaderMetadata,
@@ -34,7 +35,7 @@ export class WorkbookMetadataBuilder {
     private readonly cache: WorkbookMetadataCache
   ) {}
 
-  async getOrBuild(input: { workbookContextId?: string; workbookId?: WorkbookId | string; workbookName?: string; includeSamples?: boolean }): Promise<MetadataBuildResult> {
+  async getOrBuild(input: { workbookContextId?: string; workbookId?: WorkbookId | string; workbookName?: string; includeSamples?: boolean; targetFreshnessRanges?: A1Range[] }): Promise<MetadataBuildResult> {
     const includeSamples = input.includeSamples === true;
     const existingByContext = input.workbookContextId ? this.cache.getByContextId(input.workbookContextId) : undefined;
     const reusableContextId = existingByContext?.workbookContextId;
@@ -59,9 +60,16 @@ export class WorkbookMetadataBuilder {
       sheets
     });
     if (existingByContext) {
-      const freshness = checkMetadataFreshness(existingByContext, fingerprint, { requireSampled: includeSamples, contentVersion });
+      const freshnessContentVersion = this.contentVersionForFreshness(existingByContext, activeWorkbook.workbookId, includeSamples, contentVersion, input.targetFreshnessRanges);
+      const freshness = checkMetadataFreshness(existingByContext, fingerprint, { requireSampled: includeSamples, contentVersion: freshnessContentVersion });
       if (freshness.status === "FRESH") {
-        return { metadata: this.cache.set(withFreshSelection(existingByContext, selection)), cacheHit: true, freshnessReason: "cached metadata is fresh" };
+        return {
+          metadata: this.cache.set(withFreshSelection(existingByContext, selection)),
+          cacheHit: true,
+          freshnessReason: freshnessContentVersion === existingByContext.contentVersion && contentVersion !== existingByContext.contentVersion
+            ? "cached metadata is fresh for target; no overlapping changes since context"
+            : "cached metadata is fresh"
+        };
       }
       this.cache.delete(existingByContext.workbookKey);
     }
@@ -73,9 +81,16 @@ export class WorkbookMetadataBuilder {
     });
     const existing = this.cache.get(key);
     if (existing) {
-      const freshness = checkMetadataFreshness(existing, fingerprint, { requireSampled: includeSamples, contentVersion });
+      const freshnessContentVersion = this.contentVersionForFreshness(existing, activeWorkbook.workbookId, includeSamples, contentVersion, input.targetFreshnessRanges);
+      const freshness = checkMetadataFreshness(existing, fingerprint, { requireSampled: includeSamples, contentVersion: freshnessContentVersion });
       if (freshness.status === "FRESH") {
-        return { metadata: this.cache.set(withFreshSelection(existing, selection)), cacheHit: true, freshnessReason: "cached metadata is fresh" };
+        return {
+          metadata: this.cache.set(withFreshSelection(existing, selection)),
+          cacheHit: true,
+          freshnessReason: freshnessContentVersion === existing.contentVersion && contentVersion !== existing.contentVersion
+            ? "cached metadata is fresh for target; no overlapping changes since context"
+            : "cached metadata is fresh"
+        };
       }
     }
 
@@ -139,6 +154,33 @@ export class WorkbookMetadataBuilder {
       expiresAt: now + DEFAULT_METADATA_CACHE_TTL_MS
     };
     return { metadata: this.cache.set(metadata), cacheHit: false, freshnessReason: includeSamples ? "built sampled metadata" : "built structure metadata" };
+  }
+
+  private contentVersionForFreshness(
+    metadata: WorkbookMetadata,
+    workbookId: WorkbookId | string,
+    includeSamples: boolean,
+    currentContentVersion: number,
+    targetFreshnessRanges: A1Range[] | undefined
+  ): number {
+    if (!includeSamples || metadata.contentVersion === undefined || metadata.contentVersion === currentContentVersion || !targetFreshnessRanges?.length) {
+      return currentContentVersion;
+    }
+    const journalReader = (this.runtime as unknown as {
+      getWorkbookChangeJournal?: (input: { workbookId: WorkbookId | string; sinceVersion?: number; ranges?: A1Range[]; limit?: number }) => { ok?: boolean; overlapStatus?: string };
+    }).getWorkbookChangeJournal;
+    if (typeof journalReader !== "function") {
+      return currentContentVersion;
+    }
+    const journal = journalReader.call(this.runtime, {
+      workbookId,
+      sinceVersion: metadata.contentVersion,
+      ranges: targetFreshnessRanges,
+      limit: 1
+    });
+    return journal?.ok === true && journal.overlapStatus === "no_overlap"
+      ? metadata.contentVersion
+      : currentContentVersion;
   }
 
   invalidateWorkbook(workbookId: WorkbookId | string): void {
@@ -534,12 +576,16 @@ function detectFormulaRegions(sheet: any, sample: CellMatrix, index: number): Fo
 }
 
 export function columnMetadata(index: number, name: string): ColumnMetadata {
+  const inferredType = inferColumnType(name);
+  const role = inferColumnRole(name, inferredType);
   return {
     index,
     letter: columnLetter(index),
     name,
     normalizedName: normalizeHeaderName(name),
-    inferredType: inferColumnType(name)
+    inferredType,
+    role,
+    importance: columnImportance(name, inferredType, role)
   };
 }
 
@@ -551,6 +597,46 @@ export function inferColumnType(name: string): ColumnType {
   if (/count|qty|quantity|number|rate/.test(normalized)) return "number";
   if (/formula/.test(normalized)) return "formula";
   return "unknown";
+}
+
+export function inferColumnRole(name: string, inferredType = inferColumnType(name)): ColumnRole {
+  const normalized = normalizeHeaderName(name);
+  if (/date|month|year|period|posted|created|paid_at|invoice_date/.test(normalized)) return "date";
+  if (/description|desc|memo|detail|details|narration|particular|purpose|remark/.test(normalized)) return "description";
+  if (/vendor|merchant|supplier|payee|customer|client|company|counterparty/.test(normalized)) return "vendor";
+  if (/account|bank|wallet|card/.test(normalized)) return "account";
+  if (/amount|total|revenue|expense|balance|price|cost|fee|gross|net|tax|collect|paid|payment/.test(normalized)) return "amount";
+  if (/status|state|stage|approval|closed|open/.test(normalized)) return "status";
+  if (/category|label|class|tag|type|group|kind/.test(normalized)) return "category";
+  if (/\bid\b|no|number|ref|reference|invoice|booking|job|container|filename|receipt/.test(normalized)) return "identifier";
+  if (/note|comment|remark|reason/.test(normalized)) return "note";
+  if (inferredType === "formula" || /formula|calc|variance|delta/.test(normalized)) return "formula";
+  if (inferredType === "currency" || inferredType === "number") return "measure";
+  if (inferredType === "date") return "date";
+  if (inferredType === "status") return "status";
+  return "dimension";
+}
+
+function columnImportance(name: string, inferredType: ColumnType, role: ColumnRole): number {
+  const baseByRole: Record<ColumnRole, number> = {
+    date: 0.94,
+    description: 0.98,
+    vendor: 0.9,
+    account: 0.82,
+    amount: 0.96,
+    status: 0.9,
+    category: 0.92,
+    identifier: 0.72,
+    formula: 0.78,
+    note: 0.7,
+    dimension: 0.55,
+    measure: 0.82,
+    unknown: 0.4
+  };
+  const normalized = normalizeHeaderName(name);
+  const typeBonus = inferredType === "currency" || inferredType === "date" || inferredType === "status" ? 0.03 : 0;
+  const labelBonus = /label|category|status|amount|date|description|vendor|customer|company/.test(normalized) ? 0.03 : 0;
+  return Number(Math.min(1, baseByRole[role] + typeBonus + labelBonus).toFixed(2));
 }
 
 export function inferSheetKind(sheetName: string, columns: ColumnMetadata[], tableCount: number, summaryBlockCount = 0): SheetKind {

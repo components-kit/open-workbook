@@ -5,7 +5,7 @@ This map groups backend-owned action concepts for `excel.agent.run`. It is for r
 ## Discovery And Reads
 
 - Workbook/session: `list_open_workbooks`, `get_workbook_info`, `prepare_session`, `refresh_workbook_snapshot`, `get_workbook_snapshot`, `detect_external_changes`.
-- Target discovery: `find_target`, `read_schema`, `get_range_summary`, `read_range_compact`.
+- Target discovery: `find_target`, `find_similar_rows`, `read_schema`, `get_range_summary`, `read_range_compact`.
 - Range metadata: `read_hyperlinks`, `read_comments`, `read_notes`, `read_merged_cells`, `read_data_validation`, `read_conditional_formatting`, `search_range`, `find_blank_cells`, `find_range_errors`.
 - Names/regions/templates: `read_named_item`, `read_region`, `list_templates`, `read_template`, `detect_templates`, `infer_template_regions`.
 

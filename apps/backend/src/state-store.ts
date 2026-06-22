@@ -75,9 +75,24 @@ export class RuntimeStateStore {
   save(snapshot: RuntimeStateSnapshot): void {
     mkdirSync(path.dirname(this.filePath), { recursive: true });
     const tmpPath = `${this.filePath}.${process.pid}.tmp`;
-    writeFileSync(tmpPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+    writeFileSync(tmpPath, `${JSON.stringify(compactStateSnapshot(snapshot))}\n`, "utf8");
     renameSync(tmpPath, this.filePath);
   }
+}
+
+function compactStateSnapshot(snapshot: RuntimeStateSnapshot): RuntimeStateSnapshot {
+  return {
+    ...snapshot,
+    backups: snapshot.backups?.map(compactBackupRecordForState)
+  };
+}
+
+function compactBackupRecordForState(backup: BackupRecord): BackupRecord {
+  if (backup.kind === "file-copy") {
+    return { ...backup };
+  }
+  const { payload: _payload, ...metadata } = backup;
+  return metadata;
 }
 
 function defaultStateDir(): string {

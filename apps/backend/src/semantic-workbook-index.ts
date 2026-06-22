@@ -48,13 +48,21 @@ export function semanticIndexEntries(metadata: WorkbookMetadata): AgentSemanticI
       evidence: compactEvidence([
         sheet.usedRange ? `used range ${sheet.usedRange}` : undefined,
         sheet.headers.length > 0 ? `${sheet.headers.length} detected header row(s)` : undefined,
-        sheet.tableIds.length > 0 ? `${sheet.tableIds.length} table(s)` : undefined
+        sheet.tableIds.length > 0 ? `${sheet.tableIds.length} table(s)` : undefined,
+        periodHintForText(sheet.name),
+        labelColumnNames(sheet.headers.flatMap((header) => header.columns)).length > 0 ? `label/status columns: ${labelColumnNames(sheet.headers.flatMap((header) => header.columns)).join(", ")}` : undefined
       ]),
-      supportedActions: actionsForRole(role)
+      supportedActions: uniqueActions([...actionsForRole(role), "find_similar_rows", "read_data_validation", "read_conditional_formatting"]),
+      nextRequestHints: compactEvidence([
+        sheet.usedRange ? `For dropdowns or allowed values, call read_data_validation on the exact column/range in ${sheet.name}.` : undefined,
+        sheet.usedRange ? `For style context, call read_style_summary or read_style_fingerprint on ${sheet.name}!${sheet.usedRange}.` : undefined,
+        role === "transaction_sheet" ? `For prior labels, call find_similar_rows with the current row/range and compare likely transaction sheets.` : undefined
+      ])
     });
   }
 
   for (const table of metadata.tables) {
+    const tableLabelColumns = labelColumnNames(table.columns);
     entries.push({
       id: table.id,
       label: table.name ?? table.id,
@@ -65,8 +73,16 @@ export function semanticIndexEntries(metadata: WorkbookMetadata): AgentSemanticI
       range: table.range,
       aliases: compactAliases([table.name ?? table.id, table.sheetName, "table", "data table", ...table.columns.map((column) => column.name)]),
       confidence: table.columns.length > 0 ? 0.9 : 0.75,
-      evidence: compactEvidence([table.range ? `table range ${table.range}` : undefined, `${table.columns.length} column(s)`]),
-      supportedActions: ["read_schema", "read_values", "append_table_rows", "update_table_rows", "sort_table", "filter_range", "validate_tables"]
+      evidence: compactEvidence([
+        table.range ? `table range ${table.range}` : undefined,
+        `${table.columns.length} column(s)`,
+        tableLabelColumns.length > 0 ? `label/status columns: ${tableLabelColumns.join(", ")}` : undefined
+      ]),
+      supportedActions: ["read_schema", "read_values", "find_similar_rows", "read_data_validation", "append_table_rows", "update_table_rows", "sort_table", "filter_range", "validate_tables"],
+      nextRequestHints: compactEvidence([
+        table.dataRange ? `For exact examples, call find_similar_rows on ${table.sheetName}!${table.dataRange}.` : undefined,
+        tableLabelColumns.length > 0 ? `For allowed label/status values, call read_data_validation on the relevant ${table.sheetName} column.` : undefined
+      ])
     });
   }
 
@@ -82,7 +98,11 @@ export function semanticIndexEntries(metadata: WorkbookMetadata): AgentSemanticI
       aliases: compactAliases([section.label, section.kind, section.sheetName, ...section.labels, ...section.columns.map((column) => column.name)]),
       confidence: Math.max(section.confidence, role === "unknown" ? 0.45 : 0.7),
       evidence: compactEvidence([`section ${section.range}`, section.headerRange ? `header ${section.headerRange}` : undefined, `${section.nonEmptyCellCount} non-empty cell(s)`]),
-      supportedActions: actionsForRole(role)
+      supportedActions: uniqueActions([...actionsForRole(role), "find_similar_rows", "read_data_validation"]),
+      nextRequestHints: compactEvidence([
+        role === "transaction_sheet" ? `For historical labels, call find_similar_rows on ${section.sheetName}!${section.range}.` : undefined,
+        section.headerRange ? `For dropdown rules, call read_data_validation on the relevant column under ${section.headerRange}.` : undefined
+      ])
     });
   }
 
@@ -142,7 +162,11 @@ export function semanticIndexEntries(metadata: WorkbookMetadata): AgentSemanticI
       aliases: compactAliases(["current selection", "active selection", "selected range", metadata.selection.sheetName]),
       confidence: 0.95,
       evidence: [`selection ${metadata.selection.sheetName}!${metadata.selection.address}`],
-      supportedActions: ["read_values", "read_style_summary", "format_diagnostics", "write_values", "format_range", "clear_style_dimensions"]
+      supportedActions: ["read_values", "find_similar_rows", "read_style_summary", "format_diagnostics", "read_data_validation", "write_values", "format_range", "clear_style_dimensions"],
+      nextRequestHints: [
+        "For allowed dropdown values, call read_data_validation on the selected cell, row, or column.",
+        "For historical labels, call find_similar_rows from the current selection."
+      ]
     });
   }
 
@@ -186,6 +210,22 @@ function actionsForRole(role: AgentSemanticRole): AgentIntentAction[] {
     return ["read_values", "write_values", "replace_range_with_styled_table", "read_style_summary", "format_diagnostics"];
   }
   return ["read_schema", "read_values", "write_values", "read_style_summary", "format_diagnostics", "find_target"];
+}
+
+function uniqueActions(actions: AgentIntentAction[]): AgentIntentAction[] {
+  return [...new Set(actions)];
+}
+
+function periodHintForText(value: string): string | undefined {
+  const match = /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{4}\b/i.exec(value);
+  return match ? `period clue ${match[0]}` : undefined;
+}
+
+function labelColumnNames(columns: Array<{ name: string; inferredType?: string }>): string[] {
+  return columns
+    .filter((column) => column.inferredType === "status" || /status|label|category|type|class|tag|allowed|approval|state/i.test(column.name))
+    .map((column) => column.name)
+    .slice(0, 6);
 }
 
 function roleLabel(role: AgentSemanticRole): string {

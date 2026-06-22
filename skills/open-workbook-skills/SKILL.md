@@ -44,11 +44,25 @@ When the caller LLM can infer routing, pass structured fields alongside the natu
 
 For mutations, do not put the write payload only in `request`. Send structured data: `write_values` needs `target.sheetName`, `target.range`, and `values.values` as a 2D matrix; table appends use `values.rows`; multi-range edits use `values.patches`.
 
-Use `detailLevel` conservatively: `workbook_summary` for metadata-only workbook context, `semantic_index` for role-aware workbook targets/candidates, `sheet_summary` for “look at/check/how is this sheet” overview requests without live cell reads, `table_sample` for a bounded live table sample, and `full_table` only when the user explicitly asks for all rows, every value, or full table contents.
+Use `detailLevel` conservatively: `workbook_summary` for metadata-only workbook context, `semantic_index` for role-aware workbook targets/candidates, `sheet_summary` for “look at/check/how is this sheet” overview requests without live cell reads, `table_sample` for a bounded live table sample, and `full_table` only when the task requires all rows, every value, or full table contents.
 
 For multilingual requests, preserve the original language in `request`, normalize routing fields to canonical English when clear, keep target hints in the workbook/user language, and answer the user in their language unless asked otherwise. Do not translate the whole task into English and discard the original wording.
 
 Read `references/agent-run.md` for mode contracts, preview/apply behavior, multilingual routing, and result handling. Read `references/capability-map.md` when you need exact internal action groups.
+
+## Selection-First Targeting
+
+When the user request is ambiguous and Excel has an active selection, prefer the current selection as the first target. This includes one cell, whole rows, whole columns, and rectangular ranges.
+
+Never tell the user you cannot detect the selected row/cell/range before calling `excel.agent.run`. The model cannot see Excel selection by itself, but Open Workbook can read it through the connected add-in. If the user says "what do you think about this?", "check this", "does this look right?", or similar vague wording, call `excel.agent.run` with `mode: "answer"` and no explicit `target`; let the backend resolve the live selection. Ask the user to select a cell/range or reload the taskpane only after `excel.agent.run` returns selection unavailable or stale.
+
+Target priority:
+
+1. Explicit user target in the prompt or structured `target`.
+2. Current Excel selection when the user says "this", "here", "selected", "current", "look at this", "fix this", or gives no broader target.
+3. Sheet, table, or workbook discovery only when no usable selection exists or the prompt clearly asks for broader context.
+
+For reads, start with a bounded `answer` call on the selected range. For mutations, preview only the selected scope unless the user explicitly asks to expand to a table, sheet, or workbook. If a single selected cell is inside a table or header-shaped region and the request is vague ("this", "check this", "what do you think"), let the backend include the active record row as context while preserving proof of the exact selected cell.
 
 ## Workflow Semantics
 
@@ -58,6 +72,8 @@ Read `references/agent-run.md` for mode contracts, preview/apply behavior, multi
 - Replace styled table: use `replace_range_with_styled_table` to clear stale layout, write headers/rows, copy header/body style samples, and autofit in one preview/apply workflow.
 - Inspect current styling: call `excel.agent.run` with `mode: "answer"`, `intent.action: "read_style_summary"`, and an exact range or current selection. Use `read_style_fingerprint` for template comparison, not normal user-facing style inspection.
 - Formatting errors: use `format_diagnostics` before mutating. It returns raw value, displayed text, formulas, number formats, style summary, likely issues, and suggested fix actions.
+- Historical labels and similar rows: when the user asks how something was labeled/classified before, start with `semantic_index` or `sheet_summary`, then call `intent.action: "find_similar_rows"` on the current row/range/table before reading whole prior sheets.
+- Dropdowns and allowed values: call `intent.action: "read_data_validation"` on the selected/current column or exact target before guessing from visible values. Use `write_data_validation` only when the user wants to change the dropdown rule.
 - Filters, borders, dropdowns, and conditional formatting: send canonical intent early. Use `intent.action: "filter_range"` for autofilters, `clear_table_filters` for table filter removal, `format_range` for borders/fills/fonts/alignment, `write_data_validation` for dropdown/list cells, and `write_conditional_formatting` for formula-based formatting. Do not retry as sheet creation or value writes when the target sheet already exists.
 - Column changes: use `insert_columns`/`delete_columns` for sheet structure and `reorder_range_columns` for plain range swaps/reorders; use `reorder_table_columns` only for real Excel tables.
 - Date text cleanup: diagnose first, then use `parse_dates` only on exact date columns/ranges. If conversion needs explicit known dates, use one grouped `write_values` preview with per-range `numberFormat`.

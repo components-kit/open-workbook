@@ -101,6 +101,7 @@ function getOperationTargets(operation: ExcelOperation): A1Range[] {
     case "range.autofit_columns":
     case "range.autofit_rows":
     case "range.apply_autofilter":
+    case "range.clear_autofilter":
     case "range.merge":
     case "range.unmerge":
     case "range.restore_snapshot":

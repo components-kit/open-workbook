@@ -64,6 +64,39 @@ describe("AgentOrchestrator Prepare Cache", () => {
       expect(runtime.readBatchCount).toBeGreaterThan(readsAfterFirst);
     });
 
+  it("reuses sampled metadata after unrelated changes when target range has no journal overlap", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.getWorkbookChangeJournal = (input: any) => ({
+        ok: true,
+        workbookId: input.workbookId,
+        currentVersion: runtime.workbookContentVersion,
+        sinceVersion: input.sinceVersion,
+        overlapStatus: "no_overlap",
+        entries: []
+      });
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const first = await agent.run({
+        request: "Find sections and blocks",
+        mode: "find",
+        target: { sheetName: "Data", range: "A1:D4" }
+      });
+      const readsAfterFirst = runtime.readBatchCount;
+      runtime.workbookContentVersion += 1;
+      const second = await agent.run({
+        request: "Find sections and blocks again",
+        mode: "find",
+        workbookContextId: first.workbookContextId,
+        target: { sheetName: "Data", range: "A1:D4" }
+      });
+
+      expect(first.telemetry.metadataDetailLevel).toBe("sampled");
+      expect(second.telemetry.cacheHit).toBe(true);
+      expect(second.telemetry.metadataCacheStatus).toBe("hit");
+      expect(second.telemetry.metadataFreshnessReason).toBe("cached metadata is fresh for target; no overlapping changes since context");
+      expect(runtime.readBatchCount).toBe(readsAfterFirst);
+    });
+
   it("reuses workbook context from continuation metadata", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -91,7 +124,8 @@ describe("AgentOrchestrator Prepare Cache", () => {
       const callsAfterPrepare = { ...runtime.runtimeMethodCalls };
       const handled = await agent.run({
         request: `continue using excel://agent/contexts/${prepared.workbookContextId}`,
-        mode: "answer"
+        mode: "answer",
+        responseMode: "verbose"
       });
 
       expect(handled.status).toBe("SUCCESS");
@@ -151,6 +185,7 @@ describe("AgentOrchestrator Prepare Cache", () => {
         request: "Create workbook index",
         mode: "answer",
         detailLevel: "semantic_index",
+        responseMode: "verbose",
         budget: { maxExamples: 20 }
       });
 
@@ -182,7 +217,7 @@ describe("AgentOrchestrator Prepare Cache", () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
   
-      const result = await agent.run({ request: "Can you look into transactions.xlsx?" });
+      const result = await agent.run({ request: "Can you look into transactions.xlsx?", responseMode: "verbose" });
   
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).kind).toBe("workbook_overview");
@@ -308,7 +343,7 @@ describe("AgentOrchestrator Prepare Cache", () => {
       expect(result.candidates?.length).toBeLessThanOrEqual(2);
       expect(result.proof.length).toBeLessThanOrEqual(2);
       expect(result.telemetry.candidateCount).toBe(result.candidates?.length ?? 0);
-      expect(result.telemetry.payloadBytes).toBeLessThanOrEqual(1000);
+      expect(result.telemetry.payloadBytes).toBeLessThanOrEqual(1200);
       expect(result.telemetry.estimatedTokensSaved).toBeGreaterThanOrEqual(0);
     });
 });

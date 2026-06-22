@@ -642,7 +642,11 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "clear_table_filters",
     requiresResolvedTarget: true,
     riskKind: "safe_format",
-    matches: (_input, request) => /\b(clear|remove)\b/.test(request) && /\b(filters?|table filters?|autofilter|auto\s*filter)\b/.test(request)
+    matches: (input, request) =>
+      /\b(clear|remove)\b/.test(request) &&
+      /\b(filters?|table filters?|autofilter|auto\s*filter)\b/.test(request) &&
+      (Boolean(input.target?.tableName) || /\btable\b/.test(request)) &&
+      !input.target?.range
   },
   {
     id: "filter_range",

@@ -154,6 +154,7 @@ describe("Office.js batch executor production operations", () => {
       op({ kind: "range.autofit_rows", target: range("Ops", "A1:A2") }),
       op({ kind: "range.autofit_many", entries: [{ target: range("Ops", "A1:B10"), dimension: "both" }] }),
       op({ kind: "range.apply_autofilter", target: range("Ops", "A1:B10") }),
+      op({ kind: "range.clear_autofilter", target: range("Ops", "A1:B10") }),
       op({ kind: "range.merge", target: range("Ops", "M1:N1"), across: false }),
       op({ kind: "range.unmerge", target: range("Ops", "M1:N1") }),
       op({
@@ -202,6 +203,7 @@ describe("Office.js batch executor production operations", () => {
       { type: "autofitColumns", address: "A1:B10" },
       { type: "autofitRows", address: "A1:A2" },
       { type: "autoFilter.apply", address: "A1:B10", range: "A1:B10" },
+      { type: "autoFilter.clearCriteria", address: "A1:B10" },
       { type: "merge", address: "M1:N1", across: false },
       { type: "unmerge", address: "M1:N1" },
       { type: "application.calculate", calculationType: "full" },
@@ -217,6 +219,27 @@ describe("Office.js batch executor production operations", () => {
       { type: "getUsedRangeOrNullObject", sheetName: "Ops" },
       { type: "worksheet.tabColor", sheetName: "Ops", value: "#00B050" },
       { type: "worksheet.delete", sheetName: "Ops Clean" }
+    ]));
+  });
+
+  it("treats sheet clear on an empty sheet as a no-op", async () => {
+    const fixture = installExcelFixture({ emptyUsedRangeSheets: ["Blank"] });
+    const operations: ExcelOperation[] = [
+      op({ kind: "sheet.clear", sheetName: "Blank", applyTo: "all" })
+    ];
+    const request: BatchRequest = { workbookId, mode: "apply", operations };
+    const compiled = new BatchCompiler({ now: () => "2026-06-21T00:00:00.000Z" }).compile(request);
+
+    const result = await executeBatch({ request, compiled });
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([]);
+    expect(fixture.calls).toEqual(expect.arrayContaining([
+      { type: "getUsedRangeOrNullObject", sheetName: "Blank" },
+      { type: "load", address: "Blank:used", propertyPath: "isNullObject" }
+    ]));
+    expect(fixture.calls).not.toEqual(expect.arrayContaining([
+      { type: "clear", address: "Blank:used", applyTo: "all" }
     ]));
   });
 
@@ -275,6 +298,7 @@ const BEHAVIOR_COVERED_OPERATION_KINDS = new Set([
   "range.autofit_rows",
   "range.autofit_many",
   "range.apply_autofilter",
+  "range.clear_autofilter",
   "range.merge",
   "range.unmerge",
   "range.restore_snapshot",
@@ -299,8 +323,8 @@ function operationKinds(source: string): Set<string> {
   return new Set([...operationDefinitions.matchAll(/kind:\s*"([^"]+)"/g)].map((match) => match[1]!));
 }
 
-function installExcelFixture() {
-  const fixture = new ExcelFixture();
+function installExcelFixture(options: { emptyUsedRangeSheets?: string[] } = {}) {
+  const fixture = new ExcelFixture(options);
   (globalThis as { Excel?: unknown }).Excel = {
     run: async (callback: (context: FakeContext) => Promise<unknown>) => callback(fixture.context),
     ClearApplyTo: { all: "all", contents: "contents", formats: "formats" },
@@ -326,6 +350,11 @@ class ExcelFixture {
   readonly calls: Array<Record<string, unknown>> = [];
   syncCount = 0;
   readonly context = new FakeContext(this);
+  readonly emptyUsedRangeSheets: Set<string>;
+
+  constructor(options: { emptyUsedRangeSheets?: string[] } = {}) {
+    this.emptyUsedRangeSheets = new Set(options.emptyUsedRangeSheets ?? []);
+  }
 }
 
 class FakeContext {
@@ -428,7 +457,7 @@ class FakeWorksheet {
 
   getUsedRangeOrNullObject() {
     this.fixture.calls.push({ type: "getUsedRangeOrNullObject", sheetName: this.name });
-    return new FakeRange(this.fixture, `${this.name}:used`);
+    return new FakeRange(this.fixture, `${this.name}:used`, undefined, undefined, this.fixture.emptyUsedRangeSheets.has(this.name));
   }
 }
 
@@ -436,13 +465,19 @@ class FakeRange {
   readonly format: FakeRangeFormat;
   readonly dataValidation: FakeDataValidation;
   readonly conditionalFormats: FakeConditionalFormats;
-  readonly worksheet = { autoFilter: { apply: (range: FakeRange) => this.fixture.calls.push({ type: "autoFilter.apply", address: this.address, range: range.address }) } };
+  readonly worksheet = {
+    autoFilter: {
+      apply: (range: FakeRange) => this.fixture.calls.push({ type: "autoFilter.apply", address: this.address, range: range.address }),
+      clearCriteria: () => this.fixture.calls.push({ type: "autoFilter.clearCriteria", address: this.address })
+    }
+  };
 
   constructor(
     private readonly fixture: ExcelFixture,
     readonly address: string,
     readonly rowCount = rangeShape(address).rowCount,
-    readonly columnCount = rangeShape(address).columnCount
+    readonly columnCount = rangeShape(address).columnCount,
+    readonly isNullObject = false
   ) {
     this.format = new FakeRangeFormat(fixture, address);
     this.dataValidation = new FakeDataValidation(fixture, address);
