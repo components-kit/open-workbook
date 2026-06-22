@@ -140,7 +140,7 @@ function enforceStructuredContentBudget(value: AgentRunOutput, responseMode: "br
     resourceLinks: value.resourceLinks.slice(0, 3),
     ...(value.candidates ? { candidates: value.candidates.slice(0, 3) } : {}),
     ...(value.changes ? { changes: value.changes.slice(0, 3) } : {}),
-    warnings: [...value.warnings.slice(0, 3), "MCP structuredContent was compacted to stay within response budget; use fullResultUri for hidden detail."],
+    warnings: [...value.warnings.slice(0, 3), "Compacted for budget; pass continuation.fullResultUri to excel.agent.run for hidden detail."],
     telemetry: compactTelemetry(value.telemetry, "brief")
   }) as unknown as AgentRunOutput;
   if (Buffer.byteLength(JSON.stringify(compact)) <= maxBytes) {
@@ -148,7 +148,7 @@ function enforceStructuredContentBudget(value: AgentRunOutput, responseMode: "br
   }
   return stripUndefinedObject({
     ...compact,
-    warnings: [...compact.warnings.slice(0, 3), "MCP structuredContent answer details were omitted; use resourceLinks/fullResultUri for detail."]
+    warnings: [...compact.warnings.slice(0, 3), "Answer details omitted; use excel.agent.run with continuation.fullResultUri."]
   }, ["answer", "candidates", "changes"]) as unknown as AgentRunOutput;
 }
 
@@ -212,7 +212,7 @@ function compactAgentResultText(value: AgentRunOutput): string {
   }
   if (value.continuation?.fullResultUri) {
     lines.push(`fullResultUri: ${value.continuation.fullResultUri}`);
-    lines.push("full detail: call excel.agent.run with fullResultUri in request/continuation; do not use webfetch for excel:// handles");
+    lines.push("full detail: excel:// not web; never Webfetch/browser. Read via excel.agent.run continuation.fullResultUri.");
   }
   if (value.resourceLinks.length > 0) {
     lines.push(`resources: ${value.resourceLinks.map((resource) => resource.uri).join(", ")}`);
@@ -252,11 +252,11 @@ function compactDataAvailabilityText(value: AgentRunOutput): string | undefined 
   const previewRows = countMatrixRows(typed.valuesPreview) ?? countMatrixRows(typed.sample);
   if (previewRows !== undefined) {
     const truncated = typed.previewTruncated === true || typed.truncated === true ? "; truncated" : "";
-    const handle = value.continuation?.fullResultUri ? "; fullResultUri available" : "";
+    const handle = value.continuation?.fullResultUri ? "; stored detail handle available through excel.agent.run" : "";
     return `data: ${previewRows} preview row${previewRows === 1 ? "" : "s"} inline in structuredContent${truncated}${handle}`;
   }
   if (value.continuation?.fullResultUri) {
-    return "data: compact summary inline; fullResultUri available for exact rows/raw values";
+    return "data: compact summary inline; exact rows/raw values need excel.agent.run continuation.fullResultUri";
   }
   return undefined;
 }

@@ -55,7 +55,7 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "A2:D3", label: "selected range" });
       expect(runtime.runtimeMethodCalls["table.read"]).toBeUndefined();
-      expect(runtime.lastBatchOperations[0]).toMatchObject({ kind: "range.read_full", target: { sheetName: "Data", address: "A2:D3" } });
+      expect(runtime.lastSnapshotRanges[0]).toMatchObject({ sheetName: "Data", address: "A2:D3" });
       expect((result.answer as any).rowMetadata[0]).toMatchObject({ rowIndex: 0, sheetRowNumber: 2, address: "A2:D2" });
       expect((result.answer as any).rows).toEqual([
         ["2026-06-01", "A-100", 123, "Open"],
@@ -68,14 +68,66 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       runtime.selection = selectionInfo("Data", "C3", { row: 3, column: 3 });
       const agent = new AgentOrchestrator(runtime as any);
 
-      const result = await agent.run({ request: "Look into transactions.xlsx", mode: "answer" });
+      const result = await agent.run({ request: "What do you think about this?", mode: "answer" });
 
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]).toMatchObject({ sheetName: "Data", range: "A3:D3", label: "active table row" });
       expect(runtime.runtimeMethodCalls["table.read"]).toBeUndefined();
-      expect(runtime.lastBatchOperations[0]).toMatchObject({ kind: "range.read_full", target: { sheetName: "Data", address: "A3:D3" } });
+      expect(runtime.lastSnapshotRanges[0]).toMatchObject({ sheetName: "Data", address: "A3:D3" });
       expect((result.answer as any).rowMetadata[0]).toMatchObject({ rowIndex: 0, sheetRowNumber: 3, address: "A3:D3" });
       expect((result.answer as any).rows).toEqual([["2026-06-02", "A-101", 456, "Closed"]]);
+    });
+
+  it("does not let an incidental selected cell hijack workbook overview requests", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.selection = selectionInfo("Data", "C3", { row: 3, column: 3 });
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({ request: "What is this workbook about?", mode: "answer" });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("workbook_overview");
+      expect(result.telemetry.internalReadCount).toBe(0);
+      expect(runtime.readBatchCount).toBe(0);
+    });
+
+  it("does not let an incidental selected cell hijack worksheet overview requests", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.selection = selectionInfo("Data", "C3", { row: 3, column: 3 });
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({ request: "Look at the Data worksheet", mode: "answer" });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("sheet_summary");
+      expect((result.answer as any).sheet.name).toBe("Data");
+      expect(result.taskOutcome).toBe("final_answer");
+      expect(result.finalAnswer).toContain("Data");
+      expect(result.finalAnswer).toContain("Transactions");
+      expect(result.telemetry.internalReadCount).toBe(0);
+      expect(runtime.readBatchCount).toBe(0);
+    });
+
+  it("keeps sheet overview useful under a tight payload budget", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Look at the Data worksheet",
+        mode: "answer",
+        budget: { maxPayloadBytes: 1800, maxExamples: 2 }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("sheet_summary");
+      expect((result.answer as any).sheet.name).toBe("Data");
+      expect((result.answer as any).tables[0]).toMatchObject({
+        name: "Transactions",
+        range: "A1:D4"
+      });
+      expect(result.finalAnswer).toContain("Transactions");
+      expect(result.maxRecommendedFollowupCalls).toBe(0);
+      expect(runtime.readBatchCount).toBe(0);
     });
 
   it("uses an inferred record row for vague prompts from a single selected cell in a header-shaped sheet", async () => {
@@ -88,21 +140,21 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]).toMatchObject({ sheetName: "Apr 2026", range: "A2:AJ2", label: "active record row" });
       expect(result.proof[1]).toMatchObject({ sheetName: "Apr 2026", range: "D2", label: "current Excel selection" });
-      expect(runtime.lastBatchOperations[0]).toMatchObject({ kind: "range.read_full", target: { sheetName: "Apr 2026", address: "A2:AJ2" } });
+      expect(runtime.lastSnapshotRanges[0]).toMatchObject({ sheetName: "Apr 2026", address: "A2:AJ2" });
       expect((result.answer as any).rowMetadata[0]).toMatchObject({ rowIndex: 0, sheetRowNumber: 2, address: "A2:AJ2" });
       expect((result.answer as any).rows[0][3]).toBe("Company gas top-up");
     });
 
-  it("uses a small active-cell neighborhood outside tables for generic reads", async () => {
+  it("uses a small active-cell neighborhood outside tables for here-context reads", async () => {
       const runtime = new FakeAgentRuntime();
       runtime.selection = selectionInfo("Report", "B5", { row: 5, column: 2 });
       const agent = new AgentOrchestrator(runtime as any);
 
-      const result = await agent.run({ request: "Look into this workbook", mode: "answer" });
+      const result = await agent.run({ request: "Can you check here?", mode: "answer" });
 
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]).toMatchObject({ sheetName: "Report", range: "A4:B6", label: "active cell neighborhood" });
-      expect(runtime.lastBatchOperations[0]).toMatchObject({ kind: "range.read_full", target: { sheetName: "Report", address: "A4:B6" } });
+      expect(runtime.lastSnapshotRanges[0]).toMatchObject({ sheetName: "Report", address: "A4:B6" });
     });
 
   it("keeps explicit table reads broad instead of overriding with selection", async () => {
@@ -120,6 +172,72 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect((result.answer as any).kind).toBe("table_compact_read");
       expect(runtime.runtimeMethodCalls["table.read"]).toBe(1);
       expect((result.answer as any).rowMetadata[0]).toMatchObject({ rowIndex: 0, sheetRowNumber: 2, address: "A2:D2" });
+    });
+
+  it("includes a tiny exact table preview so overview reads can answer without a follow-up", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Read the Transactions table data",
+        mode: "answer",
+        target: { tableName: "Transactions" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("table_compact_read");
+      expect((result.answer as any).valuesPreview).toEqual([
+        ["2026-06-01", "A-100", 123, "Open"],
+        ["2026-06-02", "A-101", 456, "Closed"],
+        ["2026-06-03", "A-102", 789, "Open"]
+      ]);
+      expect(result.finalAnswer).toContain("3 exact preview rows are inline");
+      expect(result.maxRecommendedFollowupCalls).toBe(0);
+    });
+
+  it("routes explicit targeted value reads through workbook snapshots", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.selection = selectionInfo("Report", "B5", { row: 5, column: 2 });
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_snapshot_read_route");
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Read Data!A1:D4",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "read_values" },
+        target: { sheetName: "Data", range: "A1:D4" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(runtime.runtimeMethodCalls["workbook.snapshot_ranges"]).toBe(1);
+      expect(runtime.lastSnapshotRanges[0]).toMatchObject({ sheetName: "Data", address: "A1:D4" });
+      expect(runtime.readBatchCount).toBe(0);
+      expect((result.answer as any).rows[0]).toEqual(["Date", "Account", "Amount", "Status"]);
+    });
+
+  it("returns a diagnostic instead of empty success when metadata proves a live range should contain data", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.snapshotRangesOverride = {
+        ok: true,
+        workbookId: "workbook_agent_unit",
+        rangeSnapshots: [{ workbookId: "workbook_agent_unit", sheetName: "Data", address: "A1:D4", values: [] }]
+      };
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Read Data!A1:D4",
+        mode: "answer",
+        intent: { action: "read_values" },
+        target: { sheetName: "Data", range: "A1:D4" }
+      });
+
+      expect(result.status).toBe("ERROR");
+      expect(result.taskOutcome).toBe("cannot_complete");
+      expect(result.finalAnswer).toContain("Open Workbook tried to read");
+      expect(result.agentInstruction).toContain("Do not use Python/openpyxl");
+      expect(result.warnings.join(" ")).toContain("live Excel read returned empty data");
     });
 
   it("summarizes large range requests without reading cell values", async () => {
@@ -447,6 +565,7 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect((continued.answer as any).kind).toBe("agent_result_resource");
       expect((continued.answer as any).view).toBe("summary");
       expect((continued.answer as any).result.answer.values).toBeUndefined();
+      expect(continued.warnings.join(" ")).toContain("never use Webfetch/browser");
       expect(runtime.runtimeMethodCalls["table.read"]).toBe(callsAfterRead);
       const pastedFull = await agent.run({
         request: `Show full details from ${(result.answer as any).fullResultUri}`,

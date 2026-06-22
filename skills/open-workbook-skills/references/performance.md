@@ -30,7 +30,7 @@ Avoid workbook-wide reads unless the task is search, validation, audit, or disco
 Compact reads return payload/token telemetry, truncation status, result handles, and continuation metadata. Page only when more rows or columns are needed.
 When a compact response includes inline `values`, `encodedValues`, `rows`, or `sparseRows`, use them directly before asking for more data. If `valueEncoding.kind` is `domain_dictionary_by_column`, decode `encodedValues` by replacing integer codes with `valueEncoding.columns[position].domain[code]`; the full raw matrix remains behind `fullResultUri`.
 Wide table/range results may include `inlineColumnProjection`. Treat the selected inline columns as high-signal columns chosen from selection, requested fields, cached column roles, validation/format hints, and cardinality. Ask for full detail only when omitted columns are required for the task.
-When only a preview is inline and the next step requires exact rows, raw values, transformation input, validation evidence, or audit detail, call `excel.agent.run` again with the returned `resultUri` or `fullResultUri` in `request` or `continuation`. `excel://...` handles are not HTTP URLs; do not use `webfetch`.
+When only a preview is inline and the next step requires exact rows, raw values, transformation input, validation evidence, or audit detail, call `excel.agent.run` once with `continuation.fullResultUri` or paste the returned `resultUri`/`fullResultUri` in `request`. `excel://...` handles are not HTTP URLs; never use Webfetch, browser fetch, curl, or HTTP tooling for them.
 
 ## Task Completion And Freshness
 

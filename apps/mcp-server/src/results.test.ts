@@ -57,10 +57,11 @@ describe("MCP result rendering", () => {
     expect(text).toContain("taskOutcome: final_answer");
     expect(text).toContain("maxRecommendedFollowupCalls: 0");
     expect(text).toContain("do not call workbook tools again");
-    expect(text).toContain("data: compact summary inline; fullResultUri available");
+    expect(text).toContain("data: compact summary inline; exact rows/raw values need excel.agent.run");
     expect(text).toContain("resultUri: excel://agent/results/agentres_1");
-    expect(text).toContain("call excel.agent.run with fullResultUri");
-    expect(text).toContain("do not use webfetch");
+    expect(text).toContain("excel.agent.run continuation.fullResultUri");
+    expect(text).toContain("not web");
+    expect(text).toContain("never Webfetch/browser");
     expect(text).not.toContain("sparseRows");
     expect((result.structuredContent.answer as any).sparseRows).toBeUndefined();
     expect((result.structuredContent.answer as any).fullResultUri).toBe("excel://agent/results/agentres_1?view=full");

@@ -22,9 +22,11 @@ export class FakeAgentRuntime {
   returnDataOnly = false;
   omitOkOnWrite = false;
   batchResultOverride: unknown | undefined;
+  snapshotRangesOverride: unknown | undefined;
   validationResult: any;
   lastBatchOperations: BatchRequest["operations"] = [];
   lastBatchRequest: BatchRequest | undefined;
+  lastSnapshotRanges: Array<{ workbookId?: WorkbookId; sheetName: string; address: string }> = [];
   lastWriteOperations: Array<Extract<BatchRequest["operations"][number], { target: any }>> = [];
   selection: any;
   readiness: any;
@@ -318,6 +320,32 @@ export class FakeAgentRuntime {
       backups: [],
       warnings: [],
       telemetry: { cellsWritten: 1 }
+    };
+  }
+
+  async snapshotRanges(requestWorkbookId: WorkbookId, ranges: Array<{ workbookId?: WorkbookId; sheetName: string; address: string }>) {
+    this.recordRuntimeCall("workbook.snapshot_ranges");
+    this.lastSnapshotRanges = ranges;
+    if (this.snapshotRangesOverride !== undefined) {
+      return this.snapshotRangesOverride;
+    }
+    return {
+      ok: true,
+      workbookId: requestWorkbookId,
+      rangeSnapshots: ranges.map((range) => {
+        const values = valuesFor(range.sheetName, range.address);
+        return {
+          workbookId: range.workbookId ?? requestWorkbookId,
+          sheetName: range.sheetName,
+          address: range.address,
+          rowCount: values.length,
+          columnCount: values.reduce((max, row) => Math.max(max, row.length), 0),
+          values,
+          formulas: formulasFor(range.sheetName, range.address),
+          text: values.map((row) => row.map((value) => value === null || value === undefined ? "" : String(value))),
+          numberFormat: numberFormatsFor(range.sheetName, range.address)
+        };
+      })
     };
   }
 

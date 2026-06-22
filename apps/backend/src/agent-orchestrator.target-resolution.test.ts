@@ -304,8 +304,10 @@ describe("AgentOrchestrator Target Resolution", () => {
       const result = await agent.run({ request: "Analyze the active sheet." });
 
       expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("sheet_summary");
       expect(result.proof[0]?.sheetName).toBe("Data");
-      expect(result.telemetry.internalReadCount).toBe(1);
+      expect(result.telemetry.internalReadCount).toBe(0);
+      expect(runtime.readBatchCount).toBe(0);
     });
 
   it("reads the active Excel selection without an extra outer tool call", async () => {

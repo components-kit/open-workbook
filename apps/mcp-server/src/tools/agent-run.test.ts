@@ -54,8 +54,36 @@ describe("excel.agent.run MCP schema", () => {
     const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
 
     expect(source).toContain("current live Excel selection");
-    expect(source).toContain("this row/cell/range/column");
+    expect(source).toContain("current cell/range/row/column");
+    expect(source).toContain("selected area");
     expect(source).toContain("before asking for row or column numbers");
+    expect(source).toContain("incidental for broad workbook/worksheet overview requests");
+  });
+
+  it("tells agents to read stored excel result handles through excel.agent.run, not web fetch", () => {
+    const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("resultUri/fullResultUri values are internal Open Workbook handles");
+    expect(source).toContain("not web URLs");
+    expect(source).toContain("never use Webfetch/browser");
+    expect(source).toContain("continuation.fullResultUri");
+  });
+
+  it("forbids Python/openpyxl fallback when the live add-in is connected", () => {
+    const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("report that Open Workbook failure");
+    expect(source).toContain("do not fall back to Python/openpyxl");
+    expect(source).toContain("offline file analysis");
+  });
+
+  it("accepts continuation-only stored result fetches", () => {
+    const schema = agentRunInputSchema();
+
+    expect((schema.request as any).safeParse(undefined).success).toBe(true);
+    expect((schema.continuation as any).parse({
+      fullResultUri: "excel://agent/results/agentres_1?view=full"
+    })).toEqual({ fullResultUri: "excel://agent/results/agentres_1?view=full" });
   });
 
   it("allows cache invalidation fields returned after successful applies", () => {

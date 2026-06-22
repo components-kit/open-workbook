@@ -7,7 +7,7 @@ description: "Use when an agent needs to automate live Microsoft Excel workbooks
 
 Use Open Workbook MCP for live desktop Excel work. It is the required first path when the workbook is open in Excel and the user expects current cell values, unsaved edits, formatting, formulas, filters, tables, pivots, charts, snapshots, backups, transaction history, and rollback safety to survive.
 
-Do not inspect or modify a connected live workbook with shell scripts, Python, openpyxl, pandas, manual UI automation, or offline `.xlsx` parsing unless the user explicitly asks for offline file analysis or the MCP path is unavailable and the user approves the fallback.
+Do not inspect or modify a connected live workbook with shell scripts, Python, openpyxl, pandas, manual UI automation, or offline `.xlsx` parsing unless the user explicitly asks for offline file analysis or the MCP path is unavailable and the user approves the fallback. For workbook/worksheet "look at", "inspect", "review", or "what is this" requests, do not run `ls`, `stat`, Python, or offline file checks as a preflight; call `excel.agent.run` first. If Open Workbook is connected but returns an empty live-read diagnostic or `cannot_complete`, report that Open Workbook live-read failure instead of switching to saved-file parsing.
 
 ## Public Surface
 
@@ -33,6 +33,8 @@ Use modes deliberately:
 
 The backend owns primitive Excel capabilities, compact reads, batches, plans, validation, snapshots, backups, locks, jobs, transactions, resources, and collaboration records. Do not ask for or assume a separate primitive MCP surface in user workflows.
 
+`excel://...` result handles returned by Open Workbook are internal MCP/Open Workbook handles, not web URLs. Never use Webfetch, browser fetch, curl, or HTTP tooling for `resultUri`, `fullResultUri`, or `resourceLinks`. If hidden detail is genuinely required, call `excel.agent.run` once with `continuation.fullResultUri` or paste the `excel://...` handle in the `request`.
+
 ## Structured Intent
 
 When the caller LLM can infer routing, pass structured fields alongside the natural request:
@@ -52,14 +54,14 @@ Read `references/agent-run.md` for mode contracts, preview/apply behavior, multi
 
 ## Selection-First Targeting
 
-When the user request is ambiguous and Excel has an active selection, prefer the current selection as the first target. This includes one cell, whole rows, whole columns, and rectangular ranges.
+When the user request points at the current place in Excel, prefer the current selection as the first target. This includes one cell, whole rows, whole columns, and rectangular ranges. A selected cell is normal while someone works in Excel; do not treat it as the target for broad workbook/worksheet overview requests unless the wording says "this", "here", "selected", "current cell/range/row/column", or asks for values/rows from the selected area.
 
 Never tell the user you cannot detect the selected row/cell/range before calling `excel.agent.run`. The model cannot see Excel selection by itself, but Open Workbook can read it through the connected add-in. If the user says "what do you think about this?", "check this", "does this look right?", or similar vague wording, call `excel.agent.run` with `mode: "answer"` and no explicit `target`; let the backend resolve the live selection. Ask the user to select a cell/range or reload the taskpane only after `excel.agent.run` returns selection unavailable or stale.
 
 Target priority:
 
 1. Explicit user target in the prompt or structured `target`.
-2. Current Excel selection when the user says "this", "here", "selected", "current", "look at this", "fix this", or gives no broader target.
+2. Current Excel selection when the user says "this", "here", "selected", "current cell/range/row/column", "look at this", "fix this", or asks for values/rows from the selected area.
 3. Sheet, table, or workbook discovery only when no usable selection exists or the prompt clearly asks for broader context.
 
 For reads, start with a bounded `answer` call on the selected range. For mutations, preview only the selected scope unless the user explicitly asks to expand to a table, sheet, or workbook. If a single selected cell is inside a table or header-shaped region and the request is vague ("this", "check this", "what do you think"), let the backend include the active record row as context while preserving proof of the exact selected cell.

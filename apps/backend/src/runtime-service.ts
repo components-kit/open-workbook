@@ -4315,6 +4315,17 @@ export class RuntimeService {
     return client.request("table.read", request);
   }
 
+  async snapshotRanges(workbookId: WorkbookId, ranges: A1Range[]): Promise<WorkbookSnapshotResponse | { ok: false; error: ReturnType<typeof runtimeError> }> {
+    const client = this.getActiveAddinClient();
+    if (!client) {
+      return {
+        ok: false,
+        error: runtimeError("ADDIN_DISCONNECTED", "No Excel add-in session is connected.", { retryable: true })
+      };
+    }
+    return client.request<WorkbookSnapshotResponse>("workbook.snapshot_ranges", { workbookId, ranges });
+  }
+
   async createTable(request: TableCreateRequest) {
     return this.mutateTable("table.create", request, `Before creating table ${request.tableName ?? request.address}`, [
       { workbookId: request.workbookId, sheetName: request.sheetName, address: request.address }

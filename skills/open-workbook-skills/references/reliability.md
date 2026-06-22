@@ -2,7 +2,7 @@
 
 Open Workbook treats Excel as a transaction target. Preserve that contract.
 
-For live workbook tasks, Open Workbook MCP is the source of truth. Do not switch to shell scripts, Python, openpyxl, pandas, manual UI automation, or offline `.xlsx` parsing unless the user explicitly asked for offline file analysis, or MCP is unavailable and the user approves a non-live fallback. Saved-file parsing can be stale because it does not include unsaved Excel state.
+For live workbook tasks, Open Workbook MCP is the source of truth. Do not switch to shell scripts, Python, openpyxl, pandas, manual UI automation, or offline `.xlsx` parsing unless the user explicitly asked for offline file analysis, or MCP is unavailable and the user approves a non-live fallback. Saved-file parsing can be stale because it does not include unsaved Excel state. If Open Workbook is connected but returns an empty live-read diagnostic or `cannot_complete`, report that Open Workbook failure and stop; do not silently fall back to saved-file parsing.
 
 ## Mutation Contract
 

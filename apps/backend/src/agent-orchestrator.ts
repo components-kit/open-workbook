@@ -643,7 +643,7 @@ export class AgentOrchestrator {
         proof: [],
         resourceLinks: [resource],
         nextAction: "answer_now",
-        warnings: view === "summary" ? ["Full result detail remains behind fullResultUri; call excel.agent.run with that handle when exact rows, raw values, audit detail, or transformation input is needed. Do not use webfetch for excel:// handles."] : []
+        warnings: view === "summary" ? ["Full result detail remains behind fullResultUri. excel:// handles are internal Open Workbook handles, not web URLs; never use Webfetch/browser. Call excel.agent.run with continuation.fullResultUri when exact rows, raw values, audit detail, or transformation input is needed."] : []
       };
     }
     if (handle.kind === "semantic_index") {
@@ -743,6 +743,10 @@ export class AgentOrchestrator {
     if (workbookAnswer) {
       return workbookAnswer;
     }
+    const sheetOverviewAnswer = sheetOverviewAnswerOutput(metadata, input, requestedMode);
+    if (sheetOverviewAnswer) {
+      return sheetOverviewAnswer;
+    }
     const sectionAnswer = sectionAnswerOutput(metadata, input, requestedMode);
     if (sectionAnswer) {
       return sectionAnswer;
@@ -814,6 +818,10 @@ export class AgentOrchestrator {
       return this.tableCompactAnswerOutput(metadata, input, requestedMode, resolved, table, runMetrics);
     }
     const profile = await this.readAndProfileRange(metadata.workbook.workbookId as WorkbookId, resolved.sheetName, normalizedRange, runMetrics);
+    const emptyLiveReadDiagnostic = emptyLiveReadDiagnosticOutput(metadata, input, requestedMode, resolved.sheetName, normalizedRange, resolved.candidate.label, profile);
+    if (emptyLiveReadDiagnostic) {
+      return emptyLiveReadDiagnostic;
+    }
     const inlinePreview = inlinePreviewForProfile(input, profile, normalizedRange);
     const aggregate = aggregateProfileForRequest(input, profile, adjustedTarget.column);
     if (aggregate) {
@@ -1191,7 +1199,8 @@ export class AgentOrchestrator {
     const payload = compactTablePayloadFromResult(result);
     const matrix = payload.values ?? payload.text ?? payload.formulas ?? [];
     const profile = profileValues(matrix as CellMatrix, table.dataRange ?? table.range);
-    const inlinePreview = inlinePreviewForMatrix(input, matrix as CellMatrix, table.dataRange ?? table.range);
+    const inlinePreview = inlinePreviewForMatrix(input, matrix as CellMatrix, table.dataRange ?? table.range)
+      ?? tinyInlinePreviewForMatrix(matrix as CellMatrix, table.dataRange ?? table.range);
     const totalRows = dimensionsFromAddress(table.dataRange ?? table.range)?.rows ?? profile.shape.rows;
     const rowMetadata = tableReadRowMetadata(table.dataRange ?? table.range, rowOffset, matrix as CellMatrix);
     const compactColumn = (column: TableMetadata["columns"][number]) => ({
@@ -4841,18 +4850,8 @@ export class AgentOrchestrator {
       }
       return [];
     }
-    const operation: ExcelOperation = {
-      kind: "range.read_full",
-      operationId: makeId<OperationId>("op"),
-      workbookId,
-      destructiveLevel: "none",
-      reason: "Agent targeted read",
-      target: { workbookId, sheetName, address },
-      facets: ["values", "text"]
-    };
-    const request: BatchRequest = { workbookId, mode: "apply", operations: [operation] };
-    const result = await this.runtime.applyBatch(request);
-    const values = operationReadSnapshots(result)[0]?.snapshot?.values ?? [];
+    const snapshot = await this.runtime.snapshotRanges(workbookId, [{ workbookId, sheetName, address }]);
+    const values = (snapshot as { rangeSnapshots?: Array<{ values?: CellMatrix }> }).rangeSnapshots?.[0]?.values ?? [];
     if (runMetrics) {
       runMetrics.internalReadCount += 1;
       runMetrics.fullReadCellCount += matrixCellCount(values);
@@ -5235,6 +5234,9 @@ function shouldBuildSampledMetadata(input: AgentRunInput, effectiveMode: AgentRu
   if (route.metadataPolicy === "sampled_required") {
     return true;
   }
+  if (isSheetOverviewRequest(input.request)) {
+    return false;
+  }
   if (isWorkbookDumpRequest(input.request) || isLargeTargetRangeRequest(input)) {
     return false;
   }
@@ -5315,7 +5317,30 @@ function shouldDeferWorkbookOverviewToSelection(metadata: WorkbookMetadata, inpu
   if (/\b(all|every|entire|whole|full)\s+(?:table|sheet|rows?|data|values?|workbook)\b/i.test(input.request)) {
     return false;
   }
-  return /\b(?:look(?:\s+into)?|check|inspect|read|show|what|why|which|where|current|analy[sz]e)\b/i.test(input.request);
+  return requestExplicitlyAsksSelectionContext(input.request);
+}
+
+function isSheetOverviewRequest(requestText: string): boolean {
+  if (isExplicitFullDataRequest(requestText)) {
+    return false;
+  }
+  if (/\b(actual\s+values?|raw\s+values?|rows?|records?|cells?|sample\s+data|first\s+\d+|last\s+\d+)\b/i.test(requestText)) {
+    return false;
+  }
+  if (/\b(style|styling|format|formats|font|fonts|color|colors|border|borders|alignment|fills?|number formats?|formula|formulas?)\b/i.test(requestText)) {
+    return false;
+  }
+  return /\b(?:look(?:\s+at|\s+into)?|inspect|review|summari[sz]e|analy[sz]e|check|show|describe)\b.{0,60}\b(?:worksheet|sheet|active sheet|current sheet)\b/i.test(requestText)
+    || /\b(?:worksheet|sheet|active sheet|current sheet)\b.{0,60}\b(?:look|inspect|review|summary|summari[sz]e|overview|structure|about)\b/i.test(requestText);
+}
+
+function requestExplicitlyAsksSelectionContext(requestText: string): boolean {
+  if (/\bthis\s+(?:workbook|worksheet|sheet|file|xlsx|excel file)\b/i.test(requestText)) {
+    return false;
+  }
+  return /\b(selection|selected|highlighted|active cell|current cell|this cell|this row|this range|this column|here)\b/i.test(requestText)
+    || /\bwhat\b.{0,30}\b(?:this|here)\b/i.test(requestText)
+    || /\b(?:check|inspect|look(?:\s+at)?|analy[sz]e|review)\b.{0,30}\b(?:this|here)\b/i.test(requestText);
 }
 
 function detailLevelAnswerOutput(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> | undefined {
@@ -5337,6 +5362,13 @@ function detailLevelAnswerOutput(metadata: WorkbookMetadata, input: AgentRunInpu
     };
   }
   return undefined;
+}
+
+function sheetOverviewAnswerOutput(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> | undefined {
+  if (!isSheetOverviewRequest(input.request)) {
+    return undefined;
+  }
+  return sheetSummaryDetailOutput(metadata, input, requestedMode);
 }
 
 function semanticIndexDetailOutput(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> {
@@ -5459,7 +5491,80 @@ function sheetSummaryDetailOutput(metadata: WorkbookMetadata, input: AgentRunInp
 
 function sheetNameFromRequest(metadata: WorkbookMetadata, request: string): string | undefined {
   const normalizedRequest = normalizeComparableText(request);
-  return metadata.sheets.find((sheet) => normalizedRequest.includes(normalizeComparableText(sheet.name)))?.name;
+  const exact = metadata.sheets.find((sheet) => normalizedRequest.includes(normalizeComparableText(sheet.name)))?.name;
+  if (exact) {
+    return exact;
+  }
+  return findAgentCandidates(metadata, { request, mode: "answer" })
+    .find((candidate) => candidate.kind === "sheet" && candidate.sheetName)?.sheetName;
+}
+
+function emptyLiveReadDiagnosticOutput(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput,
+  requestedMode: AgentRunMode,
+  sheetName: string,
+  range: string,
+  label: string,
+  profile: ReturnType<typeof profileValues>
+): Omit<AgentRunOutput, "telemetry"> | undefined {
+  const requestedCells = cellCountFromAddress(range);
+  if ((requestedCells !== undefined && requestedCells <= 1) || profile.metrics.nonEmptyCount !== 0 || !metadataSuggestsRangeHasData(metadata, sheetName, range)) {
+    return undefined;
+  }
+  return {
+    status: "ERROR",
+    mode: requestedMode,
+    workbookContextId: metadata.workbookContextId,
+    summary: `OpenWorkbook tried to read ${sheetName}!${range}, but the live read returned no values even though workbook metadata indicates this range should contain data.`,
+    answer: {
+      kind: "live_read_diagnostic",
+      sheetName,
+      range,
+      label,
+      expectedDataFromMetadata: true,
+      recommendation: "Reload the OpenWorkbook Local taskpane, then retry the same excel.agent.run request. Do not fall back to offline .xlsx parsing unless the user explicitly asks for saved-file analysis."
+    },
+    metrics: profile.metrics,
+    proof: [{ sheetName, range, label }],
+    resourceLinks: [contextResource(metadata.workbookContextId)],
+    nextAction: "manual_review",
+    taskOutcome: "cannot_complete",
+    agentInstruction: "Report this Open Workbook live-read failure to the user. Do not use Python/openpyxl/offline parsing while the live Excel add-in is connected unless the user explicitly requests offline file analysis.",
+    maxRecommendedFollowupCalls: 0,
+    finalAnswer: `Open Workbook tried to read live values from ${sheetName}!${range}, but the returned payload was empty while workbook metadata says the range should contain data. Treat this as an Open Workbook live-read failure, not an empty sheet.`,
+    warnings: [
+      "Open Workbook live Excel read returned empty data for a metadata-backed non-empty range.",
+      "Do not use Python/openpyxl/offline parsing as a fallback for live Excel state unless the user explicitly asks."
+    ]
+  };
+}
+
+function metadataSuggestsRangeHasData(metadata: WorkbookMetadata, sheetName: string, range: string): boolean {
+  const normalizedSheet = normalizeComparableText(sheetName);
+  const normalizedRange = normalizeAddressForCompare(range);
+  const parsed = tryParseA1Address(normalizedRange);
+  if (!parsed) {
+    return false;
+  }
+  const overlaps = (candidateRange: string | undefined) => {
+    if (!candidateRange) return false;
+    return rangesOverlapAddresses(normalizedRange, normalizeAddressForCompare(candidateRange));
+  };
+  if (metadata.tables.some((table) => normalizeComparableText(table.sheetName) === normalizedSheet && overlaps(table.range))) {
+    return true;
+  }
+  const sheet = metadata.sheets.find((candidate) => normalizeComparableText(candidate.name) === normalizedSheet);
+  if (!sheet) {
+    return false;
+  }
+  if (sheet.headers.some((header) => overlaps(header.range))) {
+    return true;
+  }
+  if (sheet.usedRange && overlaps(sheet.usedRange) && parsed.startRow <= 2) {
+    return true;
+  }
+  return false;
 }
 
 function workbookDumpGuardOutput(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> | undefined {
@@ -7733,12 +7838,20 @@ function applyOutputBudget(output: Omit<AgentRunOutput, "telemetry">, input: Age
     const { continuation: _continuation, ...compactWithoutContinuation } = compact;
     compact = stripUndefinedOptionals({
       ...compactWithoutContinuation,
-      answer: undefined,
+      answer: minimalAnswerForBudget(compact.answer, compact.continuation, compact.workbookContextId),
+      proof: compact.proof.slice(0, 1),
+      ...(compact.candidates ? { candidates: compact.candidates.slice(0, 1).map(compactCandidate) } : {}),
+      ...(compact.finalAnswer ? { finalAnswer: truncateForBudget(compact.finalAnswer, 360) } : {}),
       ...(compactContinuation !== undefined ? { continuation: compactContinuation } : {}),
-      warnings: [...compact.warnings, "Answer details were omitted from the inline response; use resourceLinks as MCP/Open Workbook handles, not HTTP URLs."]
+      warnings: [...compact.warnings, "Answer details were reduced to a minimal inline summary; use resourceLinks as MCP/Open Workbook handles, not HTTP URLs."]
     });
   }
   return stripUndefinedOptionals(compact);
+}
+
+function truncateForBudget(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length <= maxLength ? normalized : `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
 function resultFreshnessForOutput(output: Omit<AgentRunOutput, "telemetry">, metadataCache: WorkbookMetadataCache): AgentResultFreshness | undefined {
@@ -7760,12 +7873,13 @@ function resultFreshnessForOutput(output: Omit<AgentRunOutput, "telemetry">, met
 
 function minimalAnswerForBudget(answer: unknown, continuation: AgentRunOutput["continuation"] | undefined, workbookContextId: AgentRunOutput["workbookContextId"] | undefined): Record<string, unknown> {
   const typed = answer && typeof answer === "object" ? answer as Record<string, unknown> : {};
-  if (typed.kind === "workbook_summary") {
+  if (typed.kind === "workbook_summary" || typed.kind === "workbook_overview") {
     return stripUndefinedRecord({
       kind: typed.kind,
       source: typed.source,
       sheetCount: typed.sheetCount,
       tableCount: typed.tableCount,
+      namedRangeCount: typed.namedRangeCount,
       sheets: Array.isArray(typed.sheets) ? typed.sheets.slice(0, 8).map((sheet) => {
         const record = sheet as Record<string, unknown>;
         return stripUndefinedRecord({
@@ -7775,6 +7889,47 @@ function minimalAnswerForBudget(answer: unknown, continuation: AgentRunOutput["c
           contextHints: Array.isArray(record.contextHints) ? record.contextHints.slice(0, 3) : undefined
         });
       }) : undefined,
+      tables: Array.isArray(typed.tables) ? typed.tables.slice(0, 12) : undefined,
+      resultUri: typed.resultUri ?? continuation?.resultUri,
+      fullResultUri: typed.fullResultUri ?? continuation?.fullResultUri,
+      resource: continuation?.resultUri ?? (workbookContextId ? contextResource(String(workbookContextId)).uri : undefined)
+    });
+  }
+  if (typed.kind === "sheet_summary") {
+    const sheet = typed.sheet && typeof typed.sheet === "object" ? typed.sheet as Record<string, unknown> : undefined;
+    return stripUndefinedRecord({
+      kind: typed.kind,
+      source: typed.source,
+      sheet: sheet ? compactSheetForBudget(sheet) : undefined,
+      contextHints: Array.isArray(typed.contextHints) ? typed.contextHints.slice(0, 4) : undefined,
+      tables: Array.isArray(typed.tables) ? typed.tables.slice(0, 6).flatMap((table) => compactTableForBudget(table) ?? []) : undefined,
+      namedRangeCount: Array.isArray(typed.namedRanges) ? typed.namedRanges.length : undefined,
+      sectionCount: Array.isArray(typed.sections) ? typed.sections.length : undefined,
+      formulaRegionCount: Array.isArray(typed.formulaRegions) ? typed.formulaRegions.length : undefined,
+      resultUri: typed.resultUri ?? continuation?.resultUri,
+      fullResultUri: typed.fullResultUri ?? continuation?.fullResultUri,
+      resource: continuation?.resultUri ?? (workbookContextId ? contextResource(String(workbookContextId)).uri : undefined)
+    });
+  }
+  if (typed.kind === "table_compact_read") {
+    return stripUndefinedRecord({
+      kind: typed.kind,
+      source: typed.source,
+      sheetName: typed.sheetName,
+      tableName: typed.tableName,
+      range: typed.range,
+      dataRange: typed.dataRange,
+      rowOffset: typed.rowOffset,
+      rowLimit: typed.rowLimit,
+      projectedColumns: Array.isArray(typed.projectedColumns) ? typed.projectedColumns.slice(0, 16) : undefined,
+      schemaSummary: typed.schemaSummary,
+      shape: typed.shape,
+      metrics: typed.metrics,
+      headers: compactMatrixLike(typed.headers, 1, 16),
+      valuesPreview: compactMatrixLike(typed.valuesPreview, 5, 16),
+      previewRange: typed.previewRange,
+      previewTruncated: typed.previewTruncated,
+      truncated: typed.truncated,
       resultUri: typed.resultUri ?? continuation?.resultUri,
       fullResultUri: typed.fullResultUri ?? continuation?.fullResultUri,
       resource: continuation?.resultUri ?? (workbookContextId ? contextResource(String(workbookContextId)).uri : undefined)
@@ -7790,6 +7945,52 @@ function minimalAnswerForBudget(answer: unknown, continuation: AgentRunOutput["c
     resultUri: typed.resultUri ?? continuation?.resultUri,
     fullResultUri: typed.fullResultUri ?? continuation?.fullResultUri,
     resource: continuation?.resultUri ?? (workbookContextId ? contextResource(String(workbookContextId)).uri : undefined)
+  });
+}
+
+function compactMatrixLike(value: unknown, maxRows: number, maxColumns: number): unknown {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  if (value.length > 0 && Array.isArray(value[0])) {
+    return (value as unknown[][]).slice(0, maxRows).map((row) => row.slice(0, maxColumns));
+  }
+  return maxRows > 0 ? value.slice(0, maxColumns) : undefined;
+}
+
+function compactSheetForBudget(sheet: Record<string, unknown>): Record<string, unknown> {
+  return stripUndefinedRecord({
+    name: sheet.name,
+    kind: sheet.kind,
+    usedRange: sheet.usedRange,
+    rowCount: sheet.rowCount,
+    columnCount: sheet.columnCount
+  });
+}
+
+function compactTableForBudget(table: unknown): Record<string, unknown> | undefined {
+  if (!table || typeof table !== "object") {
+    return undefined;
+  }
+  const typed = table as Record<string, unknown>;
+  const columns = Array.isArray(typed.columns)
+    ? typed.columns.slice(0, 16).map((column) => {
+        const record = column && typeof column === "object" ? column as Record<string, unknown> : {};
+        return stripUndefinedRecord({
+          name: record.name,
+          letter: record.letter,
+          role: record.role,
+          inferredType: record.inferredType
+        });
+      })
+    : undefined;
+  return stripUndefinedRecord({
+    name: typed.name,
+    sheetName: typed.sheetName,
+    range: typed.range,
+    dataRange: typed.dataRange,
+    columnCount: typed.columnCount ?? columns?.length,
+    columns
   });
 }
 
@@ -7830,6 +8031,20 @@ function inlinePreviewForMatrix(input: AgentRunInput, matrix: CellMatrix, range?
     valuesPreview: preview,
     previewRange: range,
     previewTruncated: truncated || preview.length < matrix.length
+  });
+}
+
+function tinyInlinePreviewForMatrix(matrix: CellMatrix, range?: string): Record<string, unknown> | undefined {
+  if (matrix.length === 0 || matrixCellCount(matrix) === 0) {
+    return undefined;
+  }
+  const maxRows = 3;
+  const maxColumns = 12;
+  return stripUndefinedRecord({
+    valuesPreview: matrix.slice(0, maxRows).map((row) => row.slice(0, maxColumns)),
+    previewRange: range,
+    previewTruncated: matrix.length > maxRows || maxMatrixColumns(matrix) > maxColumns,
+    previewPurpose: "tiny_exact_sample_to_answer_without_followup"
   });
 }
 
@@ -8171,7 +8386,10 @@ function compactTableReadAnswer(answer: Record<string, unknown>, responseMode: A
     ? roleAwareMatrixProjection(exactMatrix, schema, input, responseMode)
     : undefined;
   const inlineColumns = roleProjected?.columns ?? projectedColumns;
-  const projectedHeaders = preserveExact ? (Array.isArray(answer.headers) && roleProjected ? projectVector(answer.headers, roleProjected.indexes) : answer.headers) : undefined;
+  const exactHeaders = Array.isArray(answer.headers)
+    ? roleProjected ? projectVector(answer.headers, roleProjected.indexes) : answer.headers
+    : undefined;
+  const compactHeaders = exactHeaders ?? (Array.isArray(answer.headers) ? (answer.headers as unknown[]).slice(0, responseMode === "standard" ? 16 : 12) : undefined);
   const projectedValues = preserveExact ? (values && roleProjected ? projectMatrixColumns(values, roleProjected.indexes) : values) : undefined;
   const projectedFormulas = preserveExact ? (formulas && roleProjected ? projectMatrixColumns(formulas, roleProjected.indexes) : formulas) : undefined;
   const projectedText = preserveExact ? (text && roleProjected ? projectMatrixColumns(text, roleProjected.indexes) : text) : undefined;
@@ -8199,7 +8417,7 @@ function compactTableReadAnswer(answer: Record<string, unknown>, responseMode: A
     shape: profile?.shape,
     metrics: compactProfileMetrics(profile?.metrics),
     rowMetadata: answer.rowMetadata,
-    headers: projectedHeaders,
+    headers: compactHeaders,
     values: domainEncoding ? undefined : projectedValues,
     encodedValues: domainEncoding?.encodedValues,
     valueEncoding: domainEncoding?.encoding,
@@ -8654,7 +8872,7 @@ function nextContinuationRequest(output: Omit<AgentRunOutput, "telemetry">, stor
     return "Continue with mode apply_update, operationId, and confirmationToken after user confirmation.";
   }
   if (stored?.resourceUri) {
-    return "Reuse workbookContextId. For exact rows, raw values, audit detail, or transformation input, call excel.agent.run again with fullResultUri in request or continuation; do not use webfetch.";
+    return "Reuse workbookContextId. For exact rows, raw values, audit detail, or transformation input, call excel.agent.run once with continuation.fullResultUri. excel:// handles are not web URLs; never use Webfetch/browser.";
   }
   if (output.workbookContextId) {
     return "Reuse workbookContextId on the next excel.agent.run call.";
@@ -8821,7 +9039,71 @@ function deriveFinalAnswer(output: Omit<AgentRunOutput, "telemetry">, taskOutcom
     return `${output.summary} Review the preview, then call apply_update with the returned operationId and confirmationToken if the user confirms.`;
   }
   if (taskOutcome === "needs_user_input" || taskOutcome === "cannot_complete" || taskOutcome === "apply_complete" || taskOutcome === "final_answer") {
-    return output.summary;
+    return conciseFinalAnswer(output) ?? output.summary;
+  }
+  return undefined;
+}
+
+function conciseFinalAnswer(output: Omit<AgentRunOutput, "telemetry">): string | undefined {
+  const answer = output.answer && typeof output.answer === "object" ? output.answer as Record<string, unknown> : undefined;
+  if (!answer) {
+    return undefined;
+  }
+  if (answer.kind === "sheet_summary") {
+    const sheet = answer.sheet && typeof answer.sheet === "object" ? answer.sheet as Record<string, unknown> : undefined;
+    const sheetName = typeof sheet?.name === "string" ? sheet.name : "the requested sheet";
+    const usedRange = typeof sheet?.usedRange === "string" ? ` used range ${sheet.usedRange}` : "";
+    const tables = Array.isArray(answer.tables) ? answer.tables : [];
+    const tableSummary = tables.length > 0
+      ? ` Tables: ${tables.slice(0, 4).map((table) => {
+          const typed = table && typeof table === "object" ? table as Record<string, unknown> : {};
+          const name = typeof typed.name === "string" ? typed.name : "unnamed";
+          const range = typeof typed.range === "string" ? ` ${typed.range}` : "";
+          const columns = Array.isArray(typed.columns)
+            ? ` (${typed.columns.slice(0, 6).map((column) => {
+                const record = column && typeof column === "object" ? column as Record<string, unknown> : {};
+                return String(record.name ?? "").trim();
+              }).filter(Boolean).join(", ")}${typed.columns.length > 6 ? ", ..." : ""})`
+            : "";
+          return `${name}${range}${columns}`;
+        }).join("; ")}.`
+      : " No Excel tables were found on this sheet.";
+    return `${sheetName}${usedRange}.${tableSummary}`;
+  }
+  if (answer.kind === "table_compact_read") {
+    const tableName = stringValue(answer.tableName) ?? "the requested table";
+    const range = stringValue(answer.range);
+    const shape = answer.shape && typeof answer.shape === "object" ? answer.shape as Record<string, unknown> : undefined;
+    const rows = typeof shape?.rows === "number" ? shape.rows : undefined;
+    const columns = typeof shape?.columns === "number" ? shape.columns : undefined;
+    const schemaSummaryAnswer = answer.schemaSummary && typeof answer.schemaSummary === "object" ? answer.schemaSummary as Record<string, unknown> : undefined;
+    const schemaColumns = Array.isArray(schemaSummaryAnswer?.columns) ? schemaSummaryAnswer.columns : [];
+    const headers = schemaColumns.length > 0
+      ? schemaColumns.slice(0, 8).map((column) => {
+          const record = column && typeof column === "object" ? column as Record<string, unknown> : {};
+          return String(record.name ?? "").trim();
+        }).filter(Boolean)
+      : Array.isArray(answer.projectedColumns)
+        ? answer.projectedColumns.slice(0, 8).map((column) => {
+            const record = column && typeof column === "object" ? column as Record<string, unknown> : {};
+            return String(record.name ?? "").trim();
+          }).filter(Boolean)
+        : [];
+    const previewRows = Array.isArray(answer.valuesPreview) ? answer.valuesPreview.length : undefined;
+    return `Read ${tableName}${range ? ` at ${range}` : ""}${rows && columns ? ` (${rows} rows x ${columns} columns in this page)` : ""}.${headers.length > 0 ? ` Columns include: ${headers.join(", ")}.` : ""}${previewRows ? ` ${previewRows} exact preview rows are inline; answer now unless the user asked for more rows.` : ""}`;
+  }
+  if (answer.kind === "workbook_summary" || answer.kind === "workbook_overview") {
+    const sheetCount = typeof answer.sheetCount === "number" ? answer.sheetCount : undefined;
+    const tableCount = typeof answer.tableCount === "number" ? answer.tableCount : undefined;
+    const sheets = Array.isArray(answer.sheets)
+      ? answer.sheets.slice(0, 6).map((sheet) => {
+          const record = sheet && typeof sheet === "object" ? sheet as Record<string, unknown> : {};
+          const name = String(record.name ?? "").trim();
+          const usedRange = typeof record.usedRange === "string" ? ` ${record.usedRange}` : "";
+          return `${name}${usedRange}`.trim();
+        }).filter(Boolean)
+      : [];
+    return `Workbook summary: ${sheetCount ?? "multiple"} sheets, ${tableCount ?? 0} tables.${sheets.length > 0 ? ` Sheets include: ${sheets.join("; ")}.` : ""}`;
   }
   return undefined;
 }
@@ -8834,6 +9116,9 @@ function deriveAgentInstruction(output: Omit<AgentRunOutput, "telemetry">, taskO
     return "Ask the user for the missing information from finalAnswer; do not call workbook tools again until the user responds.";
   }
   if (taskOutcome === "cannot_complete") {
+    if (output.nextAction === "fetch_resource") {
+      return "Call excel.agent.run once with the returned resultUri/fullResultUri in request or continuation. Do not use Webfetch/browser for excel:// handles.";
+    }
     return "Report finalAnswer and warnings to the user; do not loop through more workbook discovery unless the user changes the request.";
   }
   if (taskOutcome === "apply_complete") {
@@ -8870,6 +9155,13 @@ function deriveRequiredFollowup(
       mode: "preview_update",
       nextAction: "call_preview_update",
       instruction: "Call excel.agent.run with mode preview_update using the grouped workflow suggested in finalAnswer."
+    };
+  }
+  if (output.nextAction === "fetch_resource") {
+    return {
+      mode: "answer",
+      nextAction: "fetch_resource",
+      instruction: "Call excel.agent.run once with continuation.fullResultUri or the returned excel:// handle in request. Never use Webfetch/browser for excel:// handles."
     };
   }
   return undefined;

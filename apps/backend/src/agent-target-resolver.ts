@@ -484,6 +484,9 @@ function shouldPreferImplicitSelectionForRead(input: AgentRunInput): boolean {
   if (requestMentionsSelection(input.request)) {
     return false;
   }
+  if (requestMentionsWorkbookOrSheetOverview(input.request)) {
+    return false;
+  }
   if (input.target?.candidateId || input.target?.tableName || input.target?.sheetName || input.target?.range) {
     return false;
   }
@@ -497,6 +500,14 @@ function shouldPreferImplicitSelectionForRead(input: AgentRunInput): boolean {
     return true;
   }
   return input.mode === "answer";
+}
+
+function requestMentionsWorkbookOrSheetOverview(request: string): boolean {
+  if (/\b(actual\s+values?|raw\s+values?|rows?|records?|cells?|sample\s+data|first\s+\d+|last\s+\d+)\b/i.test(request)) {
+    return false;
+  }
+  return /\b(?:workbook|xlsx|excel file|file|worksheet|sheet|active sheet|current sheet)\b/i.test(request)
+    && /\b(?:look|inspect|review|summari[sz]e|summary|overview|structure|about|check|analy[sz]e|show|describe)\b/i.test(request);
 }
 
 function implicitSelectionReadRange(metadata: WorkbookMetadata, selection: NonNullable<WorkbookMetadata["selection"]>): string {
