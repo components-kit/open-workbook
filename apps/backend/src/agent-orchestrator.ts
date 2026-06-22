@@ -4535,8 +4535,9 @@ export class AgentOrchestrator {
     const validation = !applyFailed ? await this.runtime.validateWorkbook({ workbookId: pending.workbookId }) : undefined;
     const issueCount = validation?.issues?.length ?? 0;
     const validationFailed = validation?.ok === false;
-    const resultRecord = result as { transactionId?: string; backups?: string[]; rollbackAvailable?: boolean; telemetry?: unknown; warnings?: unknown[]; results?: unknown[] };
-    const resultWarnings = Array.isArray(resultRecord.warnings) ? resultRecord.warnings.map(String) : [];
+    const resultRecord = result as { transactionId?: string; backups?: string[]; rollbackAvailable?: boolean; telemetry?: unknown; warnings?: unknown[]; results?: unknown[]; error?: unknown };
+    const resultWarnings = Array.isArray(resultRecord.warnings) ? resultRecord.warnings.map(operationWarningMessage) : [];
+    const errorWarning = applyErrorMessage(resultRecord.error);
     const invalidated = applyFailed ? { invalidatedContextIds: [] as string[], invalidatedResourceUris: [] as string[] } : this.invalidateWorkbookContext(pending.workbookContextId);
     const output: Omit<AgentRunOutput, "telemetry"> = {
       status: applyFailed || validationFailed ? "VALIDATION_FAILED" : "SUCCESS",
@@ -4569,7 +4570,7 @@ export class AgentOrchestrator {
       invalidatedContextIds: invalidated.invalidatedContextIds,
       invalidatedResourceUris: invalidated.invalidatedResourceUris,
       nextAction: applyFailed || validationFailed ? "manual_review" : "answer_now",
-      warnings: [...resultWarnings, ...(validation?.issues?.slice(0, 5).map((issue) => issue.message) ?? [])]
+      warnings: [...resultWarnings, ...(errorWarning && !resultWarnings.includes(errorWarning) ? [errorWarning] : []), ...(validation?.issues?.slice(0, 5).map((issue) => issue.message) ?? [])]
     };
     this.operations.markCompleted(operationId, output);
     return output;
@@ -9776,7 +9777,12 @@ function combineApplyResults(results: unknown[]) {
       ?? (result.backup as { backup?: { backupId?: unknown } } | undefined)?.backup?.backupId;
     return backupId ? [String(backupId)] : [];
   });
-  const warnings = objects.flatMap((result) => Array.isArray(result.warnings) ? result.warnings.map(String) : []);
+  const warnings = objects.flatMap((result) => Array.isArray(result.warnings) ? result.warnings.map(operationWarningMessage) : []);
+  const error = failed?.error;
+  const errorWarning = applyErrorMessage(error);
+  if (errorWarning && !warnings.includes(errorWarning)) {
+    warnings.push(errorWarning);
+  }
   const telemetry = {
     stepCount: objects.length,
     cellsWritten: objects.reduce((total, result) => total + (numberValue((result.telemetry as Record<string, unknown> | undefined)?.cellsWritten) ?? 0), 0),
@@ -9787,9 +9793,47 @@ function combineApplyResults(results: unknown[]) {
     backups,
     rollbackAvailable: objects.some((result) => Boolean(result.rollbackAvailable)) || backups.length > 0,
     warnings,
+    ...(error !== undefined ? { error } : {}),
     telemetry,
     results: objects
   };
+}
+
+function operationWarningMessage(warning: unknown): string {
+  if (typeof warning === "string") {
+    return warning;
+  }
+  if (warning && typeof warning === "object") {
+    const record = warning as Record<string, unknown>;
+    const code = typeof record.code === "string" ? record.code : undefined;
+    const message = typeof record.message === "string" ? record.message : undefined;
+    const target = record.target && typeof record.target === "object" ? record.target as Record<string, unknown> : undefined;
+    const targetText = target && typeof target.sheetName === "string" && typeof target.address === "string"
+      ? ` (${target.sheetName}!${target.address})`
+      : "";
+    if (code && message) {
+      return `${code}: ${message}${targetText}`;
+    }
+    if (message) {
+      return `${message}${targetText}`;
+    }
+    if (code) {
+      return `${code}${targetText}`;
+    }
+    try {
+      return JSON.stringify(warning);
+    } catch {
+      return Object.prototype.toString.call(warning);
+    }
+  }
+  return String(warning);
+}
+
+function applyErrorMessage(error: unknown): string | undefined {
+  if (!error) {
+    return undefined;
+  }
+  return operationWarningMessage(error);
 }
 
 function cleanRequestFromInput(metadata: WorkbookMetadata, input: AgentRunInput, resolved?: Extract<AgentTargetResolution, { ok: true }>): AgentCleanRequest | undefined {

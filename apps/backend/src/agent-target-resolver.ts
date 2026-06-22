@@ -99,6 +99,10 @@ export function findAgentCandidates(metadata: WorkbookMetadata, input: AgentRunI
 }
 
 export function resolveAgentReadTarget(metadata: WorkbookMetadata, input: AgentRunInput): AgentTargetResolution {
+  const explicitRange = resolveExplicitSheetRangeTarget(metadata, input);
+  if (explicitRange) {
+    return explicitRange;
+  }
   if (input.target?.sheetName && input.target.range) {
     const exact = metadata.sheets.find((sheet) => normalizeNatural(sheet.name) === normalizeNatural(input.target!.sheetName!));
     if (exact) {
@@ -138,6 +142,10 @@ export function resolveAgentReadTarget(metadata: WorkbookMetadata, input: AgentR
 }
 
 export function resolveAgentUpdateTarget(metadata: WorkbookMetadata, input: AgentRunInput): AgentTargetResolution {
+  const explicitRange = resolveExplicitSheetRangeTarget(metadata, input);
+  if (explicitRange) {
+    return explicitRange;
+  }
   if (input.target?.sheetName && input.target.range) {
     const exact = metadata.sheets.find((sheet) => normalizeNatural(sheet.name) === normalizeNatural(input.target!.sheetName!));
     if (exact) {
@@ -223,6 +231,56 @@ function canonicalSheetFromExplicitTarget(candidates: AgentCandidate[] | undefin
   }
   const gap = best.confidence - (second?.confidence ?? 0);
   return best.confidence >= 0.65 && gap >= 0.03 ? best : undefined;
+}
+
+function resolveExplicitSheetRangeTarget(metadata: WorkbookMetadata, input: AgentRunInput): Extract<AgentTargetResolution, { ok: true }> | undefined {
+  const range = input.target?.range;
+  if (!range) {
+    return undefined;
+  }
+  const parsed = tryParseA1Address(range);
+  const split = splitSheetQualifiedAddress(range);
+  const sheetNameHint = input.target?.sheetName ?? parsed?.sheetName ?? split?.sheetName;
+  if (!sheetNameHint) {
+    return undefined;
+  }
+  const exact = metadata.sheets.find((sheet) => normalizeNatural(sheet.name) === normalizeNatural(sheetNameHint));
+  const canonical = exact
+    ? toCandidate({
+      kind: "range",
+      id: `range:${exact.name}:${stripSheetName(range)}`,
+      label: `${exact.name}!${stripSheetName(range)}`,
+      sheetName: exact.name,
+      range: stripSheetName(range),
+      searchValues: [exact.name, stripSheetName(range)]
+    }, 1)
+    : bestExplicitSheetCandidate(metadata, sheetNameHint);
+  if (!canonical?.sheetName) {
+    return undefined;
+  }
+  const address = stripSheetName(range);
+  return {
+    ok: true,
+    candidate: { ...canonical, kind: "range", range: address },
+    sheetName: canonical.sheetName,
+    range: address
+  };
+}
+
+function splitSheetQualifiedAddress(address: string): { sheetName: string; range: string } | undefined {
+  const bang = address.lastIndexOf("!");
+  if (bang < 0) {
+    return undefined;
+  }
+  const rawSheetName = address.slice(0, bang).trim();
+  const range = address.slice(bang + 1).trim();
+  if (!rawSheetName || !range) {
+    return undefined;
+  }
+  const quoted = rawSheetName.startsWith("'") && rawSheetName.endsWith("'")
+    ? rawSheetName.slice(1, -1).replace(/''/g, "'")
+    : rawSheetName;
+  return { sheetName: quoted, range };
 }
 
 function resolveAgentTarget(

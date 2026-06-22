@@ -129,6 +129,21 @@ describe("Office.js batch executor production operations", () => {
     expect(result.telemetry?.warningCount).toBe(1);
   });
 
+  it("returns expected and received matrix dimensions for grouped value write failures", async () => {
+    installExcelFixture();
+    const operations: ExcelOperation[] = [
+      op({ kind: "range.write_values_many", entries: [{ target: range("Sales", "'Sales'!B2:C2"), values: [["Only one value"]], preserveFormats: true }] })
+    ];
+    const request: BatchRequest = { workbookId, mode: "apply", operations };
+    const compiled = new BatchCompiler({ now: () => "2026-06-21T00:00:00.000Z" }).compile(request);
+
+    const result = await executeBatch({ request, compiled });
+
+    expect(result.ok).toBe(false);
+    expect((result.error as any)?.message).toContain("Matrix dimensions do not match Sales!B2:C2");
+    expect((result.error as any)?.message).toContain("expected 1 row(s) x 2 column(s), received 1 row(s) x 1 column(s)");
+  });
+
   it("executes the remaining supported batch operations through Office.js APIs", async () => {
     const fixture = installExcelFixture();
     const operations: ExcelOperation[] = [

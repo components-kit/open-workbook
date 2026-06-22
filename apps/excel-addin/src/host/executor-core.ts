@@ -3331,12 +3331,17 @@ function maybeSuspendExcel(context: Excel.RequestContext, estimatedCellsTouched:
 }
 
 function assertMatrixShape(target: A1Range, matrix: unknown[][]): void {
+  const targetLabel = `${target.sheetName}!${stripSheetName(target.address)}`;
   if (matrix.length === 0 || matrix.some((row) => row.length !== matrix[0]!.length)) {
-    throw new Error(`Invalid matrix shape for ${target.sheetName}!${target.address}`);
+    throw new Error(`Invalid matrix shape for ${targetLabel}: rows must be non-empty and rectangular.`);
   }
   const parsed = parseA1Address(stripSheetName(target.address));
-  if (parsed.endRow - parsed.startRow + 1 !== matrix.length || parsed.endColumn - parsed.startColumn + 1 !== matrix[0]!.length) {
-    throw new Error(`Matrix dimensions do not match ${target.sheetName}!${target.address}`);
+  const expectedRows = parsed.endRow - parsed.startRow + 1;
+  const expectedColumns = parsed.endColumn - parsed.startColumn + 1;
+  const actualRows = matrix.length;
+  const actualColumns = matrix[0]!.length;
+  if (expectedRows !== actualRows || expectedColumns !== actualColumns) {
+    throw new Error(`Matrix dimensions do not match ${targetLabel}: expected ${expectedRows} row(s) x ${expectedColumns} column(s), received ${actualRows} row(s) x ${actualColumns} column(s).`);
   }
 }
 

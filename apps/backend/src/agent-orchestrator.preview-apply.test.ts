@@ -238,6 +238,68 @@ Data rows:
       expect((runtime.lastBatchOperations[0] as any).entries.map((entry: any) => entry.target.address)).toEqual(["B2:C2", "B3:C3"]);
     });
 
+  it("prefers sheet-qualified patch ranges over stale table hints", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Update the transaction cells",
+        mode: "preview_update",
+        values: {
+          patches: [
+            { target: { tableName: "Transactions", range: "'Data'!B2:C2" }, values: [["Checking", 9000]], reason: "Correct row values" }
+          ]
+        }
+      });
+      const applied = await agent.run({
+        request: "Apply transaction cells",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations[0]?.kind).toBe("range.write_values_many");
+      const entries = (runtime.lastBatchOperations[0] as any).entries;
+      expect(entries).toHaveLength(1);
+      expect(entries[0].target).toMatchObject({ sheetName: "Data", address: "B2:C2" });
+    });
+
+  it("serializes structured apply failure warnings instead of object placeholders", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.batchResultOverride = {
+        ok: false,
+        warnings: [{
+          code: "OPERATION_FAILED",
+          message: "Matrix dimensions do not match Data!B2:C2: expected 1 row(s) x 2 column(s), received 1 row(s) x 1 column(s).",
+          target: { sheetName: "Data", address: "B2:C2" }
+        }],
+        error: {
+          code: "OPERATION_FAILED",
+          message: "Matrix dimensions do not match Data!B2:C2: expected 1 row(s) x 2 column(s), received 1 row(s) x 1 column(s)."
+        }
+      };
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Update Data B2:C2",
+        mode: "preview_update",
+        target: { sheetName: "Data", range: "B2:C2" },
+        values: { values: [["Checking", 9000]] }
+      });
+      const applied = await agent.run({
+        request: "Apply Data B2:C2",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(applied.status).toBe("VALIDATION_FAILED");
+      expect(applied.warnings?.join("\n")).toContain("OPERATION_FAILED: Matrix dimensions do not match Data!B2:C2");
+      expect(applied.warnings?.join("\n")).not.toContain("[object Object]");
+    });
+
   it("summarizes large value previews without reading every before-cell", async () => {
     const runtime = new FakeAgentRuntime();
     const agent = new AgentOrchestrator(runtime as any);

@@ -21,6 +21,7 @@ export class FakeAgentRuntime {
   tableMethodCalls: Array<{ method: string; request: any }> = [];
   returnDataOnly = false;
   omitOkOnWrite = false;
+  batchResultOverride: unknown | undefined;
   validationResult: any;
   lastBatchOperations: BatchRequest["operations"] = [];
   lastBatchRequest: BatchRequest | undefined;
@@ -309,6 +310,9 @@ export class FakeAgentRuntime {
     }
     this.writeBatchCount += 1;
     this.lastWriteOperations = effectiveRequest.operations.filter((operation): operation is Extract<BatchRequest["operations"][number], { target: any }> => "target" in operation);
+    if (this.batchResultOverride !== undefined) {
+      return this.batchResultOverride;
+    }
     return {
       ...(this.omitOkOnWrite ? {} : { ok: true }),
       backups: [],
