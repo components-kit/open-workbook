@@ -311,6 +311,23 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+## [0.1.20] - 2026-06-22
+
+### Added
+
+- Added stricter worksheet operation regression coverage for styles, inserted columns, column reorder, dropdown validation, formula conditional formatting, closed-workbook recovery, and repeated-call budgets across operation, MCP scenario, `.xlsx`, and live Excel lanes.
+- Added department workflow scenario coverage for finance, sales/ops, logistics, HR, executive reporting, and data cleanup, including workbook artifact reload assertions for mutating scenarios.
+- Added opt-in live Excel regression groups for worksheet operation fixes, template-backed formula repair, PivotTable/chart creation, PivotTable template repair, and chart template copy.
+
+### Fixed
+
+- Fixed agent mutation routing for worksheet styling, formulas, validation, conditional formatting, inserted columns, and column reorder so `excel.agent.run` can preview/apply the correct operation payloads.
+- Fixed batch compiler and Office.js executor handling for whole-row/whole-column structural targets, unsupported operation reporting, PivotTable validation casing, synthetic `Values` hierarchy compatibility, and readonly conditional-formatting rules.
+
+### Changed
+
+- Replaced misleading registry-only coverage scaffolding with behavior-focused test lanes and documented the current release gates for deterministic, workbook-file, scenario, and live Excel claims.
+
 ## [0.1.19] - 2026-06-21
 
 ### Fixed
