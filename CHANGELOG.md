@@ -6,6 +6,26 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+## [0.1.22] - 2026-06-23
+
+### Added
+
+- Added first-class `read_formulas` support through `excel.agent.run`, including exact formula proof, displayed values, R1C1/pattern evidence when available, and formula/hardcoded/blank status.
+- Added formula-safe response shaping so formula reads and formula-pattern answers preserve bounded inline proof in brief and standard MCP responses.
+- Added row-aware `formula_like` derivations and a `settle_reconciliation` workflow for Payment Variance, Reconciliation Note, and Detail Notes updates without reading whole columns into model context.
+
+### Fixed
+
+- Fixed exact formula questions that were routed through generic find/read paths or compacted into value-only answers.
+- Fixed formula/reference workflows that could infer formula existence from displayed numbers instead of live formula proof.
+- Fixed semantic-index budget compaction so role-aware entries and next-step hints remain available after compacting large workbook maps.
+
+### Changed
+
+- Improved formula, reconciliation, and search guidance in the MCP description and Open Workbook skills so agents use `read_formulas`, `derive_values`, `settle_reconciliation`, `search_range`, or `find_similar_rows` instead of broad reads or Python/openpyxl fallback.
+- Improved formula/reconciliation semantic hints so formula regions advertise formula reads, validation, repair, and settlement workflows.
+- Refreshed the local development launcher so the file bridge URL is exported before the daemon starts.
+
 ## [0.1.21] - 2026-06-22
 
 ### Added
