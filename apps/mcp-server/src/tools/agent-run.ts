@@ -10,7 +10,7 @@ export function registerAgentTools(mcp: McpServer, runtime: RuntimeFacade, conte
     {
       title: "Run Open Workbook agent workflow",
       description:
-        "Single default Open Workbook interface. Send workbook intent; the backend handles discovery, cached metadata, target resolution, session-scoped write permission, preview/apply, validation, rollback, and compact proof without exposing low-level Excel tools. In default auto mode, safe exact small edits may auto-apply after workbook write access is allowed for the session and return taskOutcome apply_complete with maxRecommendedFollowupCalls 0; set autoApply false when you need preview-only behavior. Do not ask the user to confirm every small exact edit once session write access exists. This tool can read the current live Excel selection; when the user says this, here, selected, current cell/range/row/column, or asks for values from the selected area, call excel.agent.run before asking for row or column numbers. A normal selected cell is incidental for broad workbook/worksheet overview requests. For dropdown values, read data validation/source-list proof before guessing from visible samples; exact source-list value corrections should use auto as bounded value writes. If Open Workbook is connected but a live read fails or returns a diagnostic, report that Open Workbook failure; do not fall back to Python/openpyxl/offline `.xlsx` parsing unless the user explicitly asks for offline file analysis. excel:// resultUri/fullResultUri values are internal Open Workbook handles, not web URLs; never use Webfetch/browser for them. To read stored detail, call excel.agent.run again with continuation.fullResultUri or paste the excel:// handle in request.",
+        "Single default Open Workbook interface. Send workbook intent; the backend handles discovery, cached metadata, target resolution, session-scoped write permission, preview/apply, validation, rollback, and compact proof without exposing low-level Excel tools. In default auto mode, safe exact small edits may auto-apply after workbook write access is allowed for the session and return taskOutcome apply_complete with maxRecommendedFollowupCalls 0; set autoApply false when you need preview-only behavior. Do not ask the user to confirm every small exact edit once session write access exists. This tool can read the current live Excel selection; when the user says this, here, selected, current cell/range/row/column, or asks for values from the selected area, call excel.agent.run before asking for row or column numbers. A normal selected cell is incidental for broad workbook/worksheet overview requests. For sheet sections, use sheet_summary/semantic_index anchors; when editing by row label and column header, send values.semanticPatches with sectionId, rowMatch, columnMatch, and value instead of reading whole sections or guessing coordinates. For dropdown values, read data validation/source-list proof before guessing from visible samples; exact source-list value corrections should use auto as bounded value writes. If Open Workbook is connected but a live read fails or returns a diagnostic, report that Open Workbook failure; do not fall back to Python/openpyxl/offline `.xlsx` parsing unless the user explicitly asks for offline file analysis. excel:// resultUri/fullResultUri values are internal Open Workbook handles, not web URLs; never use Webfetch/browser for them. To read stored detail, call excel.agent.run again with continuation.fullResultUri or paste the excel:// handle in request.",
       inputSchema: agentRunInputSchema(),
       outputSchema: agentRunOutputSchema(),
       annotations: {
@@ -140,7 +140,7 @@ export function agentRunInputSchema() {
     values: valuesSchema.optional(),
     autoApply: z.boolean().optional(),
     detailLevel: z.enum(AGENT_DETAIL_LEVELS).optional(),
-    responseMode: z.enum(["brief", "standard", "verbose"]).optional(),
+    responseMode: z.union([z.enum(["brief", "standard", "verbose"]), z.literal("apply_update")]).optional(),
     budget: z.object({
       maxPayloadBytes: z.number().int().positive().optional(),
       maxEstimatedTokens: z.number().int().positive().optional(),
@@ -149,8 +149,16 @@ export function agentRunInputSchema() {
   };
 }
 
-function normalizeAgentRunArgs(args: AgentRunInput): AgentRunInput {
+export function normalizeAgentRunArgs(args: AgentRunInput): AgentRunInput {
   const current = args as AgentRunInput & { request?: string };
+  const rawResponseMode = (args as { responseMode?: unknown }).responseMode;
+  if (current.mode === undefined && current.operationId && current.confirmationToken) {
+    if (rawResponseMode === "apply_update") {
+      const { responseMode: _responseMode, ...rest } = current;
+      return normalizeAgentRunArgs({ ...rest, mode: "apply_update" } as AgentRunInput);
+    }
+    return normalizeAgentRunArgs({ ...current, mode: "apply_update" } as AgentRunInput);
+  }
   if (typeof current.request === "string" && current.request.trim()) {
     return args;
   }

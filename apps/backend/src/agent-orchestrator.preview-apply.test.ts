@@ -261,6 +261,201 @@ Data rows:
       expect((runtime.lastBatchOperations[0] as any).entries.map((entry: any) => entry.target.address)).toEqual(["B2:C2", "B3:C3"]);
     });
 
+  it("auto-applies semantic section row and column patches after resolving exact cells", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_semantic_patch");
+      metadata.sheets.push({
+        id: "sheet:Vendor Propose",
+        name: "Vendor Propose",
+        index: 99,
+        usedRange: "A1:P6",
+        rowCount: 6,
+        columnCount: 16,
+        kind: "unknown",
+        headers: [],
+        tableIds: [],
+        sectionIds: ["section:quote:main"],
+        summaryBlockIds: [],
+        formulaRegionIds: []
+      });
+      metadata.sections.push({
+        id: "section:quote:main",
+        sheetName: "Vendor Propose",
+        label: "YLTH_CTG_Zone BKK TT _Y2026",
+        kind: "table-like",
+        range: "A1:P6",
+        headerRange: "B3:P3",
+        headerRow: 3,
+        columns: [
+          { name: "Item No.", normalizedName: "item_no", inferredType: "number", role: "identifier", importance: 0.7, index: 1, letter: "B" },
+          { name: "Transport Mode", normalizedName: "transport_mode", inferredType: "text", role: "dimension", importance: 0.7, index: 2, letter: "C" },
+          { name: "Route", normalizedName: "route", inferredType: "text", role: "description", importance: 0.95, index: 3, letter: "D" },
+          { name: "Truck Available (Truck/day)", normalizedName: "truck_available_truckday", inferredType: "number", role: "measure", importance: 0.9, index: 14, letter: "O" },
+          { name: "Vendor Propose (THB/trip)", normalizedName: "vendor_propose_thbtrip", inferredType: "currency", role: "amount", importance: 0.9, index: 15, letter: "P" }
+        ],
+        labels: ["YLTH_CTG_Zone BKK TT _Y2026"],
+        rowCount: 6,
+        columnCount: 16,
+        nonEmptyCellCount: 45,
+        confidence: 0.9
+      });
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Set the Klongtoey route truck available to 10 and vendor propose to 7500.",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "write_values" },
+        values: {
+          semanticPatches: [
+            {
+              sectionId: "section:quote:main",
+              rowMatch: { column: "Route", value: "Klongtoey" },
+              columnMatch: "Truck Available",
+              value: 10
+            },
+            {
+              sectionId: "section:quote:main",
+              rowMatch: { column: "Route", value: "Klongtoey" },
+              columnMatch: "Vendor Propose",
+              value: 7500
+            }
+          ]
+        }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.taskOutcome).toBe("apply_complete");
+      expect(result.maxRecommendedFollowupCalls).toBe(0);
+      expect(result.telemetry.autoApplied).toBe(true);
+      expect(result.telemetry.safetyDecision).toBe("auto_apply:scoped_value_edit");
+      expect(result.telemetry.internalCallCount).toBeLessThanOrEqual(5);
+      expect(runtime.writeBatchCount).toBe(1);
+      expect(runtime.lastBatchOperations[0]?.kind).toBe("range.write_values_many");
+      expect((runtime.lastBatchOperations[0] as any).entries.map((entry: any) => entry.target.address)).toEqual(["O4", "P4"]);
+      const snapshotReads = runtime.snapshotRangesHistory.flat().map((range) => `${range.sheetName}!${range.address}`);
+      expect(snapshotReads).toContain("Vendor Propose!A4:P6");
+      expect(snapshotReads.filter((range) => range === "Vendor Propose!A4:P6")).toHaveLength(1);
+    });
+
+  it("asks for a better row anchor when semantic section patches match no row", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_semantic_patch_missing_row");
+      metadata.sheets.push({
+        id: "sheet:Vendor Propose",
+        name: "Vendor Propose",
+        index: 99,
+        usedRange: "A1:P6",
+        rowCount: 6,
+        columnCount: 16,
+        kind: "unknown",
+        headers: [],
+        tableIds: [],
+        sectionIds: ["section:quote:main"],
+        summaryBlockIds: [],
+        formulaRegionIds: []
+      });
+      metadata.sections.push({
+        id: "section:quote:main",
+        sheetName: "Vendor Propose",
+        label: "YLTH_CTG_Zone BKK TT _Y2026",
+        kind: "table-like",
+        range: "A1:P6",
+        headerRange: "B3:P3",
+        headerRow: 3,
+        columns: [
+          { name: "Route", normalizedName: "route", inferredType: "text", role: "description", importance: 0.95, index: 3, letter: "D" },
+          { name: "Vendor Propose (THB/trip)", normalizedName: "vendor_propose_thbtrip", inferredType: "currency", role: "amount", importance: 0.9, index: 15, letter: "P" }
+        ],
+        labels: ["YLTH_CTG_Zone BKK TT _Y2026"],
+        rowCount: 6,
+        columnCount: 16,
+        nonEmptyCellCount: 45,
+        confidence: 0.9
+      });
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Set the Bangna route vendor propose to 7500.",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "write_values" },
+        values: {
+          semanticPatches: [{
+            sectionId: "section:quote:main",
+            rowMatch: { column: "Route", value: "Bangna" },
+            columnMatch: "Vendor Propose",
+            value: 7500
+          }]
+        }
+      });
+
+      expect(result.status).toBe("NEEDS_INPUT");
+      expect(result.summary).toContain("could not match row");
+      expect(result.nextAction).toBe("ask_user");
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
+  it("does not auto-apply small writes that would overwrite detected header-like labels", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_header_overwrite_guard");
+      metadata.sheets.push({
+        id: "sheet:Vendor Propose",
+        name: "Vendor Propose",
+        index: 99,
+        usedRange: "A1:P6",
+        rowCount: 6,
+        columnCount: 16,
+        kind: "unknown",
+        headers: [],
+        tableIds: [],
+        sectionIds: [],
+        summaryBlockIds: [],
+        formulaRegionIds: []
+      });
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Set O3=10, P3=7500, O4=10, P4=7500, O5=10, P5=8000 for the quotation routes",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "write_values" },
+        target: { sheetName: "Vendor Propose", range: "O3:P5" },
+        values: { values: [[10, 7500], [10, 7500], [10, 8000]] }
+      });
+
+      expect(result.status).toBe("PREVIEW_READY");
+      expect(result.taskOutcome).toBe("preview_ready");
+      expect(result.telemetry.autoApplied).toBeUndefined();
+      expect(result.telemetry.safetyDecision).toBe("manual_review:target_looks_like_header_or_clear");
+      expect(result.warnings.join(" ")).toContain("header/title/reference");
+      expect(result.changes?.[0]).toMatchObject({
+        sheetName: "Vendor Propose",
+        cell: "O3",
+        before: "Truck Available\n(Truck/day)",
+        after: 10
+      });
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
+  it("does not auto-apply null or blank writes unless the request explicitly clears cells", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Update Data B2:C2 with the corrected values",
+        intent: { action: "write_values" },
+        target: { sheetName: "Data", range: "B2:C2" },
+        values: { values: [[null, 7500]] }
+      });
+
+      expect(result.status).toBe("PREVIEW_READY");
+      expect(result.taskOutcome).toBe("preview_ready");
+      expect(result.telemetry.safetyDecision).toBe("manual_review:target_looks_like_header_or_clear");
+      expect(result.warnings.join(" ")).toContain("blank/null writes require an explicit clear request");
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
   it("prefers sheet-qualified patch ranges over stale table hints", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);

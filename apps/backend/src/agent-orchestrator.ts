@@ -2018,6 +2018,13 @@ export class AgentOrchestrator {
     if (patches.length > 0) {
       return this.previewPatchUpdate(metadata, input, requestedMode, patches);
     }
+    const semanticPatches = await this.resolveSemanticValuePatches(metadata, input, requestedMode);
+    if (!semanticPatches.ok) {
+      return semanticPatches.output;
+    }
+    if (semanticPatches.patches.length > 0) {
+      return this.previewPatchUpdate(metadata, input, requestedMode, semanticPatches.patches);
+    }
     const operationPreview = await this.previewOperationIntent(metadata, input, requestedMode);
     if (operationPreview) {
       return operationPreview;
@@ -2139,6 +2146,68 @@ export class AgentOrchestrator {
       nextAction: "call_apply_update",
       warnings: formulaWarnings
     };
+  }
+
+  private async resolveSemanticValuePatches(
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode
+  ): Promise<{ ok: true; patches: AgentValuePatch[] } | { ok: false; output: Omit<AgentRunOutput, "telemetry"> }> {
+    const requests = semanticValuePatchesFromInput(input);
+    if (requests.length === 0) {
+      return { ok: true, patches: [] };
+    }
+
+    const patches: AgentValuePatch[] = [];
+    const dataRangeCache = new Map<string, CellMatrix>();
+    for (const [index, request] of requests.entries()) {
+      const section = findSectionForSemanticPatch(metadata, input, request);
+      if (!section.ok) {
+        return {
+          ok: false,
+          output: semanticPatchNeedsInput(metadata, requestedMode, `Semantic patch ${index + 1} could not resolve a workbook section. ${section.summary}`, section.warnings)
+        };
+      }
+      const dataRange = dataRangeForSection(section.section);
+      if (!dataRange) {
+        return {
+          ok: false,
+          output: semanticPatchNeedsInput(metadata, requestedMode, `Semantic patch ${index + 1} resolved section ${section.section.id}, but that section has no data range below its header.`, [
+            "Use an explicit target range or choose a section with header/data anchors."
+          ])
+        };
+      }
+      const targetColumn = findSectionColumn(section.section, request.columnMatch);
+      if (!targetColumn) {
+        return {
+          ok: false,
+          output: semanticPatchNeedsInput(metadata, requestedMode, `Semantic patch ${index + 1} could not match target column "${String(request.columnMatch)}" in section ${section.section.id}.`, [
+            `Available columns: ${section.section.columns.map((column) => column.name || column.letter).filter(Boolean).join(", ")}`
+          ])
+        };
+      }
+      const dataRangeCacheKey = `${section.section.sheetName}!${dataRange}`;
+      let dataValues = dataRangeCache.get(dataRangeCacheKey);
+      if (!dataValues) {
+        dataValues = await this.readRangeValues(metadata.workbook.workbookId as WorkbookId, section.section.sheetName, dataRange);
+        dataRangeCache.set(dataRangeCacheKey, dataValues);
+      }
+      const rowMatch = findSemanticPatchRow(section.section, dataRange, dataValues, request.rowMatch);
+      if (!rowMatch.ok) {
+        return {
+          ok: false,
+          output: semanticPatchNeedsInput(metadata, requestedMode, `Semantic patch ${index + 1} could not match row "${String(request.rowMatch.value)}" in section ${section.section.id}.`, rowMatch.warnings)
+        };
+      }
+      const targetAddress = `${columnLetter(targetColumn.index)}${rowMatch.sheetRow}`;
+      const values: CellMatrix = [[request.value as CellMatrix[number][number]]];
+      patches.push({
+        target: { sheetName: section.section.sheetName, range: targetAddress },
+        values,
+        reason: request.reason ?? `Resolved ${section.section.id} row "${String(request.rowMatch.value)}" column "${targetColumn.name || targetColumn.letter}".`
+      });
+    }
+    return { ok: true, patches };
   }
 
   private async previewPatchUpdate(
@@ -4985,6 +5054,20 @@ interface AgentValuePatch {
   reason?: string;
 }
 
+interface AgentSemanticValuePatch {
+  sectionId?: string;
+  sectionLabel?: string;
+  sheetName?: string;
+  rowMatch: {
+    column?: string;
+    value: unknown;
+    contains?: boolean;
+  };
+  columnMatch: string;
+  value: unknown;
+  reason?: string;
+}
+
 type AgentPreviewFragmentFamily =
   | "style_copy"
   | "clear_values"
@@ -5482,7 +5565,7 @@ function sheetSummaryDetailOutput(metadata: WorkbookMetadata, input: AgentRunInp
       contextHints: compactWorkbookContextHints(metadata, sheet.name),
       tables: metadata.tables.filter((table) => tableIds.has(table.id)),
       namedRanges: metadata.namedRanges.filter((name) => name.sheetName === sheet.name),
-      sections: metadata.sections.filter((section) => section.sheetName === sheet.name),
+      sections: metadata.sections.filter((section) => section.sheetName === sheet.name).map(compactSectionMapForAgent),
       summaryBlocks: metadata.summaryBlocks.filter((block) => block.sheetName === sheet.name),
       formulaRegions: metadata.formulaRegions.filter((region) => region.sheetName === sheet.name)
     },
@@ -5492,6 +5575,82 @@ function sheetSummaryDetailOutput(metadata: WorkbookMetadata, input: AgentRunInp
     nextAction: "answer_now",
     warnings: metadata.detailLevel === "sampled" ? [] : ["Sheet sections and formula regions are richer after sampled metadata is available."]
   };
+}
+
+function compactSectionMapForAgent(section: WorkbookMetadata["sections"][number]): Record<string, unknown> {
+  const dataRange = dataRangeForSection(section);
+  const keyColumns = section.columns
+    .filter((column) => ["description", "dimension", "identifier", "vendor", "account", "category", "status"].includes(column.role ?? ""))
+    .slice(0, 6);
+  const editableColumns = section.columns
+    .filter((column) => ["measure", "amount", "status", "category", "note", "unknown"].includes(column.role ?? "") || /price|rate|available|propose|amount|cost|note|status/i.test(column.name))
+    .slice(0, 8);
+  return stripUndefinedRecord({
+    id: section.id,
+    fingerprint: sectionMapFingerprint(section, dataRange),
+    label: section.label,
+    kind: section.kind,
+    sheetName: section.sheetName,
+    range: section.range,
+    headerRange: section.headerRange,
+    headerRow: section.headerRow,
+    dataRange,
+    rowCount: section.rowCount,
+    columnCount: section.columnCount,
+    nonEmptyCellCount: section.nonEmptyCellCount,
+    confidence: section.confidence,
+    labels: section.labels.slice(0, 8),
+    columns: section.columns.slice(0, 16).map(compactColumnAnchor),
+    keyColumns: keyColumns.map(compactColumnAnchor),
+    editableColumns: editableColumns.map(compactColumnAnchor),
+    nextRequestHints: [
+      section.headerRange ? `Resolve edits by section ${section.id}, row label, and column header before using raw coordinates.` : undefined,
+      dataRange ? `Read exact examples from ${section.sheetName}!${dataRange} only when row values are needed.` : undefined
+    ].filter(Boolean)
+  });
+}
+
+function sectionMapFingerprint(section: WorkbookMetadata["sections"][number], dataRange: string | undefined): string {
+  return hashStable({
+    id: section.id,
+    sheetName: section.sheetName,
+    range: section.range,
+    headerRange: section.headerRange,
+    headerRow: section.headerRow,
+    dataRange,
+    columns: section.columns.map((column) => ({
+      index: column.index,
+      letter: column.letter,
+      normalizedName: column.normalizedName,
+      role: column.role,
+      inferredType: column.inferredType
+    })),
+    labels: section.labels.slice(0, 12)
+  });
+}
+
+function compactColumnAnchor(column: ColumnMetadata): Record<string, unknown> {
+  return stripUndefinedRecord({
+    name: column.name,
+    normalizedName: column.normalizedName,
+    index: column.index,
+    letter: column.letter,
+    role: column.role,
+    inferredType: column.inferredType,
+    importance: column.importance
+  });
+}
+
+function dataRangeForSection(section: WorkbookMetadata["sections"][number]): string | undefined {
+  const parsed = tryParseA1Address(stripSheetName(section.range));
+  if (!parsed) {
+    return undefined;
+  }
+  const startRow = Math.max(parsed.startRow, (section.headerRow ?? parsed.startRow - 1) + 1);
+  if (startRow > parsed.endRow) {
+    return undefined;
+  }
+  return `${numberToColumn(parsed.startColumn)}${startRow}:${numberToColumn(parsed.endColumn)}${parsed.endRow}`;
 }
 
 function sheetNameFromRequest(metadata: WorkbookMetadata, request: string): string | undefined {
@@ -7861,6 +8020,10 @@ function applyOutputBudget(output: Omit<AgentRunOutput, "telemetry">, input: Age
   let compact = stripUndefinedOptionals(budgeted);
   const byteBudget = maxPayloadBytes ?? (maxEstimatedTokens ? maxEstimatedTokens * 4 : undefined);
   if (byteBudget && Buffer.byteLength(JSON.stringify(compact)) > byteBudget) {
+    const exactReadCompact = compactExactReadForBudget(compact, byteBudget);
+    if (exactReadCompact) {
+      return exactReadCompact;
+    }
     const compactContinuation = compactContinuationForBudget(compact.continuation);
     const { continuation: _continuation, ...compactWithoutContinuation } = compact;
     compact = stripUndefinedOptionals({
@@ -7887,6 +8050,69 @@ function applyOutputBudget(output: Omit<AgentRunOutput, "telemetry">, input: Age
     });
   }
   return stripUndefinedOptionals(compact);
+}
+
+function compactExactReadForBudget(output: Omit<AgentRunOutput, "telemetry">, byteBudget: number): Omit<AgentRunOutput, "telemetry"> | undefined {
+  const answer = output.answer;
+  if (!answer || typeof answer !== "object" || Array.isArray(answer)) {
+    return undefined;
+  }
+  const typed = answer as Record<string, unknown>;
+  const rows = Array.isArray(typed.rows) ? typed.rows : undefined;
+  const valuesPreview = Array.isArray(typed.valuesPreview) ? typed.valuesPreview : undefined;
+  if (!rows && !valuesPreview) {
+    return undefined;
+  }
+  const exactRows = rows ?? valuesPreview;
+  const exactCellCount = matrixCellCount(exactRows as CellMatrix);
+  if (exactCellCount <= 0 || exactCellCount > 300) {
+    return undefined;
+  }
+  const slimAnswer = stripUndefinedRecord({
+    kind: typed.kind,
+    source: typed.source,
+    sheetName: typed.sheetName,
+    range: typed.range,
+    shape: typed.shape,
+    metrics: typed.metrics,
+    ...(rows ? { rows } : {}),
+    ...(valuesPreview ? { valuesPreview } : {}),
+    previewRange: typed.previewRange,
+    previewTruncated: typed.previewTruncated,
+    resultUri: typed.resultUri,
+    fullResultUri: typed.fullResultUri,
+    inlineRowsReason: "narrow_exact_read"
+  });
+  const { candidates: _candidates, changes: _changes, ...outputWithoutHeavyLists } = output;
+  const compact = stripUndefinedOptionals({
+    ...outputWithoutHeavyLists,
+    answer: slimAnswer,
+    proof: output.proof.slice(0, 2),
+    resourceLinks: output.resourceLinks.slice(0, 2),
+    warnings: output.warnings.filter((warning) => !/compacted|fullResultUri/i.test(warning)).slice(0, 3)
+  });
+  if (Buffer.byteLength(JSON.stringify(compact)) <= byteBudget) {
+    return compact;
+  }
+  const tighter = stripUndefinedOptionals({
+    ...compact,
+    answer: stripUndefinedRecord({
+      kind: slimAnswer.kind,
+      source: slimAnswer.source,
+      sheetName: slimAnswer.sheetName,
+      range: slimAnswer.range,
+      ...(rows ? { rows } : {}),
+      ...(valuesPreview && !rows ? { valuesPreview } : {}),
+      previewRange: slimAnswer.previewRange,
+      previewTruncated: slimAnswer.previewTruncated,
+      resultUri: slimAnswer.resultUri,
+      fullResultUri: slimAnswer.fullResultUri,
+      inlineRowsReason: "narrow_exact_read"
+    }),
+    proof: compact.proof.slice(0, 1),
+    resourceLinks: compact.resourceLinks.slice(0, 1)
+  });
+  return Buffer.byteLength(JSON.stringify(tighter)) <= byteBudget ? tighter : undefined;
 }
 
 function truncateForBudget(value: string, maxLength: number): string {
@@ -9094,6 +9320,7 @@ function conciseFinalAnswer(output: Omit<AgentRunOutput, "telemetry">): string |
     const sheetName = typeof sheet?.name === "string" ? sheet.name : "the requested sheet";
     const usedRange = typeof sheet?.usedRange === "string" ? ` used range ${sheet.usedRange}` : "";
     const tables = Array.isArray(answer.tables) ? answer.tables : [];
+    const sections = Array.isArray(answer.sections) ? answer.sections : [];
     const tableSummary = tables.length > 0
       ? ` Tables: ${tables.slice(0, 4).map((table) => {
           const typed = table && typeof table === "object" ? table as Record<string, unknown> : {};
@@ -9108,7 +9335,17 @@ function conciseFinalAnswer(output: Omit<AgentRunOutput, "telemetry">): string |
           return `${name}${range}${columns}`;
         }).join("; ")}.`
       : " No Excel tables were found on this sheet.";
-    return `${sheetName}${usedRange}.${tableSummary}`;
+    const sectionSummary = sections.length > 0
+      ? ` Sections: ${sections.slice(0, 4).map((section) => {
+          const typed = section && typeof section === "object" ? section as Record<string, unknown> : {};
+          const label = String(typed.label ?? typed.id ?? "section").trim();
+          const range = typeof typed.range === "string" ? ` ${typed.range}` : "";
+          const headerRange = typeof typed.headerRange === "string" ? ` header ${typed.headerRange}` : "";
+          const dataRange = typeof typed.dataRange === "string" ? ` data ${typed.dataRange}` : "";
+          return `${label}${range}${headerRange}${dataRange}`.trim();
+        }).join("; ")}. Use section/header/row anchors for edits before raw coordinates.`
+      : "";
+    return `${sheetName}${usedRange}.${tableSummary}${sectionSummary}`;
   }
   if (answer.kind === "table_compact_read") {
     const tableName = stringValue(answer.tableName) ?? "the requested table";
@@ -9729,6 +9966,10 @@ function autoApplyDecision(input: AgentRunInput, preview: Omit<AgentRunOutput, "
   if ((preview.changes?.length ?? 0) === 0 || (preview.changes?.length ?? 0) > 16) {
     return { allow: false, safetyDecision: "manual_review:change_count", reason: "the previewed change count is not safe for auto-apply" };
   }
+  const unsafeChange = unsafeAutoApplyChangeReason(input, preview.changes ?? []);
+  if (unsafeChange) {
+    return { allow: false, safetyDecision: "manual_review:target_looks_like_header_or_clear", reason: unsafeChange };
+  }
   return { allow: true, safetyDecision: "auto_apply:scoped_value_edit" };
 }
 
@@ -9745,12 +9986,19 @@ function hasExplicitAutoApplyTarget(input: AgentRunInput): boolean {
     return true;
   }
   const patches = input.values?.patches;
-  return Array.isArray(patches) && patches.length > 0 && patches.every((patch) => Boolean(patch?.target?.range));
+  if (Array.isArray(patches) && patches.length > 0 && patches.every((patch) => Boolean(patch?.target?.range))) {
+    return true;
+  }
+  return semanticValuePatchesFromInput(input).length > 0;
 }
 
 function autoApplyValueCellCount(values: AgentRunInput["values"]): number {
   if (!values) {
     return 0;
+  }
+  const semanticPatches = semanticValuePatchesFromInput({ request: "", values });
+  if (semanticPatches.length > 0) {
+    return semanticPatches.length;
   }
   if (Array.isArray(values.patches)) {
     return values.patches.reduce((total, patch) => {
@@ -9768,6 +10016,10 @@ function autoApplyValueCellCount(values: AgentRunInput["values"]): number {
 function containsFormulaLikeAutoApplyValue(values: AgentRunInput["values"]): boolean {
   if (!values) {
     return false;
+  }
+  const semanticPatches = semanticValuePatchesFromInput({ request: "", values });
+  if (semanticPatches.some((patch) => typeof patch.value === "string" && patch.value.trim().startsWith("="))) {
+    return true;
   }
   if (Array.isArray(values.patches)) {
     return values.patches.some((patch) => {
@@ -9788,6 +10040,52 @@ function isRiskyMutationRequest(request: string): boolean {
 
 function containsFormulaLikeValue(values: CellMatrix): boolean {
   return values.flat().some((value) => typeof value === "string" && value.trim().startsWith("="));
+}
+
+function unsafeAutoApplyChangeReason(input: AgentRunInput, changes: NonNullable<AgentRunOutput["changes"]>): string | undefined {
+  const request = input.request.toLowerCase();
+  const explicitlyHeaderEdit = /\b(header|heading|title|label|reference|caption)\b/i.test(input.request);
+  const explicitlyClearing = /\b(clear|remove|blank|empty|delete|wipe)\b/i.test(input.request);
+  for (const change of changes) {
+    const before = (change as { before?: unknown }).before;
+    const after = (change as { after?: unknown }).after;
+    if (isBlankishAutoApplyValue(after) && !explicitlyClearing) {
+      return "blank/null writes require an explicit clear request";
+    }
+    if (!explicitlyHeaderEdit && looksLikeProtectedLabelValue(before) && looksLikeHeaderOverwriteValue(after)) {
+      const cell = typeof (change as { cell?: unknown }).cell === "string" ? ` ${(change as { cell: string }).cell}` : "";
+      return `target${cell} appears to contain a header/title/reference label`;
+    }
+    if (!explicitlyHeaderEdit && looksLikeProtectedLabelValue(before) && typeof after === "string" && request.includes(String(before).toLowerCase())) {
+      return "target appears to overwrite a referenced label/header";
+    }
+  }
+  return undefined;
+}
+
+function isBlankishAutoApplyValue(value: unknown): boolean {
+  return value === null || value === undefined || value === "";
+}
+
+function looksLikeHeaderOverwriteValue(value: unknown): boolean {
+  return value === null || value === undefined || value === "" || typeof value === "number" || typeof value === "boolean";
+}
+
+function looksLikeProtectedLabelValue(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const text = value.replace(/\s+/g, " ").trim();
+  if (text.length < 3) {
+    return false;
+  }
+  if (/\b(header|title|reference|diesel|rate|vendor\s+propose|truck\s+available|available|thb\/trip|trip|route|origin|destination|item\s+no|transport\s+mode)\b/i.test(text)) {
+    return true;
+  }
+  if (text.includes("\n") && /[A-Za-z]/.test(text)) {
+    return true;
+  }
+  return false;
 }
 
 function isFormulaMutationRequest(request: string): boolean {
@@ -10559,6 +10857,201 @@ function valuePatchesFromInput(input: AgentRunInput): AgentValuePatch[] {
     }
     return [{ target, values: values as CellMatrix, ...(patch.reason ? { reason: patch.reason } : {}) }];
   });
+}
+
+function semanticValuePatchesFromInput(input: AgentRunInput): AgentSemanticValuePatch[] {
+  const values = input.values as Record<string, unknown> | undefined;
+  const raw = values?.semanticPatches ?? values?.anchorPatches;
+  const entries = Array.isArray(raw) ? raw : raw && typeof raw === "object" ? [raw] : [];
+  return entries.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+    const patch = entry as Record<string, unknown>;
+    const rowMatch = normalizeSemanticRowMatch(patch.rowMatch ?? patch.row ?? patch.match);
+    const columnMatch = typeof patch.columnMatch === "string"
+      ? patch.columnMatch
+      : typeof patch.columnHeader === "string"
+        ? patch.columnHeader
+        : typeof patch.column === "string"
+          ? patch.column
+          : undefined;
+    const value = patch.value ?? patch.after;
+    if (!rowMatch || !columnMatch || value === undefined) {
+      return [];
+    }
+    return [{
+      ...(typeof patch.sectionId === "string" ? { sectionId: patch.sectionId } : {}),
+      ...(typeof patch.sectionLabel === "string" ? { sectionLabel: patch.sectionLabel } : {}),
+      ...(typeof patch.sheetName === "string" ? { sheetName: patch.sheetName } : {}),
+      rowMatch,
+      columnMatch,
+      value,
+      ...(typeof patch.reason === "string" ? { reason: patch.reason } : {})
+    }];
+  });
+}
+
+function normalizeSemanticRowMatch(value: unknown): AgentSemanticValuePatch["rowMatch"] | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  const matchValue = raw.value ?? raw.label ?? raw.text;
+  if (matchValue === undefined || matchValue === null || String(matchValue).trim() === "") {
+    return undefined;
+  }
+  return {
+    ...(typeof raw.column === "string" ? { column: raw.column } : {}),
+    value: matchValue,
+    ...(typeof raw.contains === "boolean" ? { contains: raw.contains } : {})
+  };
+}
+
+function findSectionForSemanticPatch(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput,
+  patch: AgentSemanticValuePatch
+): { ok: true; section: WorkbookMetadata["sections"][number] } | { ok: false; summary: string; warnings: string[] } {
+  const sections = metadata.sections.filter((section) => {
+    if (patch.sheetName && normalizeSemanticText(section.sheetName) !== normalizeSemanticText(patch.sheetName)) {
+      return false;
+    }
+    if (input.target?.sheetName && normalizeSemanticText(section.sheetName) !== normalizeSemanticText(input.target.sheetName)) {
+      return false;
+    }
+    return true;
+  });
+  const exact = sections.find((section) => patch.sectionId && section.id === patch.sectionId);
+  if (exact) {
+    return { ok: true, section: exact };
+  }
+  const labelMatch = patch.sectionLabel
+    ? sections.filter((section) => semanticTextMatches(section.label, patch.sectionLabel!, true) || section.labels.some((label) => semanticTextMatches(label, patch.sectionLabel!, true)))
+    : [];
+  if (labelMatch.length === 1) {
+    return { ok: true, section: labelMatch[0]! };
+  }
+  const targetRange = input.target?.range ? stripSheetName(input.target.range) : undefined;
+  const rangeMatch = targetRange
+    ? sections.filter((section) => section.range === targetRange || section.headerRange === targetRange || dataRangeForSection(section) === targetRange)
+    : [];
+  if (rangeMatch.length === 1) {
+    return { ok: true, section: rangeMatch[0]! };
+  }
+  if (sections.length === 1) {
+    return { ok: true, section: sections[0]! };
+  }
+  const scored = sections
+    .map((section) => ({ section, score: semanticPatchSectionScore(section, input, patch) }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score);
+  if (scored.length > 0 && scored[0]!.score > (scored[1]?.score ?? 0)) {
+    return { ok: true, section: scored[0]!.section };
+  }
+  return {
+    ok: false,
+    summary: sections.length === 0 ? "No section metadata is available for the requested sheet." : "Multiple sections are plausible.",
+    warnings: [
+      sections.length === 0
+        ? "Ask for a sheet summary first or provide an explicit range target."
+        : `Provide sectionId or sectionLabel. Candidate sections: ${sections.slice(0, 6).map((section) => `${section.id} (${section.range})`).join(", ")}`
+    ]
+  };
+}
+
+function semanticPatchSectionScore(section: WorkbookMetadata["sections"][number], input: AgentRunInput, patch: AgentSemanticValuePatch): number {
+  let score = 0;
+  const request = normalizeSemanticText(input.request);
+  if (request.includes(normalizeSemanticText(section.sheetName))) score += 2;
+  if (request.includes(normalizeSemanticText(section.label))) score += 2;
+  if (section.columns.some((column) => findSectionColumn({ ...section, columns: [column] }, patch.columnMatch))) score += 3;
+  if (patch.rowMatch.column && findSectionColumn(section, patch.rowMatch.column)) score += 2;
+  return score;
+}
+
+function findSectionColumn(section: WorkbookMetadata["sections"][number], anchor: string): ColumnMetadata | undefined {
+  const normalized = normalizeSemanticText(anchor);
+  if (!normalized) {
+    return undefined;
+  }
+  return section.columns.find((column) => column.letter.toLowerCase() === anchor.trim().toLowerCase())
+    ?? section.columns.find((column) => normalizeSemanticText(column.name) === normalized || normalizeSemanticText(column.normalizedName) === normalized)
+    ?? section.columns.find((column) => semanticTextMatches(column.name, anchor, true) || semanticTextMatches(column.normalizedName, anchor, true));
+}
+
+function findSemanticPatchRow(
+  section: WorkbookMetadata["sections"][number],
+  dataRange: string,
+  values: CellMatrix,
+  rowMatch: AgentSemanticValuePatch["rowMatch"]
+): { ok: true; sheetRow: number } | { ok: false; warnings: string[] } {
+  const parsed = tryParseA1Address(stripSheetName(dataRange));
+  if (!parsed) {
+    return { ok: false, warnings: [`Could not parse section data range ${dataRange}.`] };
+  }
+  const matchColumn = rowMatch.column ? findSectionColumn(section, rowMatch.column) : undefined;
+  if (rowMatch.column && !matchColumn) {
+    return { ok: false, warnings: [`Could not match row anchor column "${rowMatch.column}" in section ${section.id}.`] };
+  }
+  const startColumnIndex = parsed.startColumn - 1;
+  const candidateColumnIndexes = matchColumn
+    ? [matchColumn.index - startColumnIndex]
+    : section.columns
+      .filter((column) => ["description", "dimension", "identifier", "vendor", "account", "category", "status"].includes(column.role ?? "") || column.importance !== undefined && column.importance >= 0.5)
+      .map((column) => column.index - startColumnIndex);
+  const boundedCandidateIndexes = candidateColumnIndexes.filter((index) => index >= 0 && index <= parsed.endColumn - parsed.startColumn);
+  const indexes = boundedCandidateIndexes.length > 0 ? boundedCandidateIndexes : undefined;
+  const rowIndexes = values.flatMap((row, rowIndex) => {
+    const cells = indexes ? indexes.map((index) => row[index]) : row;
+    return cells.some((cell) => semanticTextMatches(cell, rowMatch.value, rowMatch.contains ?? true)) ? [rowIndex] : [];
+  });
+  if (rowIndexes.length === 1) {
+    return { ok: true, sheetRow: parsed.startRow + rowIndexes[0]! };
+  }
+  if (rowIndexes.length > 1) {
+    return { ok: false, warnings: [`Row anchor matched ${rowIndexes.length} rows. Add another row discriminator or use an explicit range.`] };
+  }
+  return { ok: false, warnings: [`No data row matched "${String(rowMatch.value)}" in ${section.sheetName}!${dataRange}.`] };
+}
+
+function semanticPatchNeedsInput(
+  metadata: WorkbookMetadata,
+  requestedMode: AgentRunMode,
+  summary: string,
+  warnings: string[]
+): Omit<AgentRunOutput, "telemetry"> {
+  return {
+    status: "NEEDS_INPUT",
+    mode: requestedMode,
+    workbookContextId: metadata.workbookContextId,
+    summary,
+    proof: [],
+    resourceLinks: [contextResource(metadata.workbookContextId)],
+    nextAction: "ask_user",
+    warnings
+  };
+}
+
+function semanticTextMatches(candidate: unknown, needle: unknown, contains: boolean): boolean {
+  const left = normalizeSemanticText(candidate);
+  const right = normalizeSemanticText(needle);
+  if (!left || !right) {
+    return false;
+  }
+  if (contains) {
+    return left.includes(right) || right.includes(left);
+  }
+  return left === right;
+}
+
+function normalizeSemanticText(value: unknown): string {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[^\p{L}\p{N} ]/gu, "");
 }
 
 function matrixShapeIssue(address: string, values: CellMatrix): string | undefined {

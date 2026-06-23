@@ -27,6 +27,7 @@ export class FakeAgentRuntime {
   lastBatchOperations: BatchRequest["operations"] = [];
   lastBatchRequest: BatchRequest | undefined;
   lastSnapshotRanges: Array<{ workbookId?: WorkbookId; sheetName: string; address: string }> = [];
+  snapshotRangesHistory: Array<Array<{ workbookId?: WorkbookId; sheetName: string; address: string }>> = [];
   lastWriteOperations: Array<Extract<BatchRequest["operations"][number], { target: any }>> = [];
   selection: any;
   readiness: any;
@@ -326,6 +327,7 @@ export class FakeAgentRuntime {
   async snapshotRanges(requestWorkbookId: WorkbookId, ranges: Array<{ workbookId?: WorkbookId; sheetName: string; address: string }>) {
     this.recordRuntimeCall("workbook.snapshot_ranges");
     this.lastSnapshotRanges = ranges;
+    this.snapshotRangesHistory.push(ranges);
     if (this.snapshotRangesOverride !== undefined) {
       return this.snapshotRangesOverride;
     }
@@ -1194,6 +1196,32 @@ export function selectionInfo(sheetName: string, address: string, position = { r
 }
 
 function valuesFor(sheetName: string, address: string) {
+  if (sheetName === "Vendor Propose") {
+    const rows = [
+      ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Reference Diesel Rate : 37.50 THB/liter"],
+      ["", "YLTH_CTG_Zone BKK TT _Y2026", "", "", "", "", "", "", "", "", "", "", "", "", "", ""],
+      ["", "Item No.", "Transport Mode", "Route", "Orgin Name", "Orgin Area", "Destination Name", "Destination Area", "Truck Type", "Distance", "Est 20'ft vol", "Est 40'ft vol", "vol/month", "Est vol per year", "Truck Available\n(Truck/day)", "Vendor Propose\n(THB/trip)"],
+      ["", 1, "Export", "Nongkhae - Klongtoey Port", "TOTO (Thai land)", "Nong Khae District, Saraburi", "Klongtoey Port", "Khlong Toei, Bangkok", "Trailer '20'40 HC", 194, 43, 5, 4, 48, "", ""],
+      ["", 2, "Export", "Nongkhae - Ladkrabang Port", "TOTO (Thai land)", "Nong Khae District, Saraburi", "Ladkrabang Port", "Lat Krabang, Bangkok", "Trailer '20'40 HC", 196, 200, 30, 21, 230, "", ""],
+      ["", 3, "Export", "Nongkhae - Sahathai Port", "TOTO (Thai land)", "Nong Khae District, Saraburi", "Sahathai Port", "Phra Pradaeng District, Samut Prakan", "Trailer '20'40 HC", 210, 43, 5, 4, 48, "", ""]
+    ];
+    if (address === "B3:D28") {
+      return rows.slice(2).map((row) => row.slice(1, 4));
+    }
+    if (address === "O3:P5") {
+      return rows.slice(2, 5).map((row) => row.slice(14, 16));
+    }
+    if (address === "O4:P6") {
+      return rows.slice(3, 6).map((row) => row.slice(14, 16));
+    }
+    if (address === "A4:P6") {
+      return rows.slice(3, 6);
+    }
+    if (address === "A1:P6") {
+      return rows;
+    }
+    return rows;
+  }
   if (sheetName === "Data") {
     if (address === "A1:J10") {
       return [

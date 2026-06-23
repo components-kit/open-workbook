@@ -46,6 +46,8 @@ When the caller LLM can infer routing, pass structured fields alongside the natu
 
 For mutations, do not put the write payload only in `request`. Send structured data: `write_values` needs `target.sheetName`, `target.range`, and `values.values` as a 2D matrix; table appends use `values.rows`; multi-range edits use `values.patches`.
 
+When a sheet summary or semantic index identifies a section with header/data anchors, prefer anchor writes over raw coordinates. For “set/update the Klongtoey row Vendor Propose value” style tasks, send `values.semanticPatches` with `sectionId` or `sectionLabel`, `rowMatch` (`column` plus `value`), `columnMatch`, and `value`. This lets Open Workbook resolve the exact cell from the row label and column header, avoids reading whole sections, and keeps safe small edits eligible for one-call `mode: "auto"` after session write access exists.
+
 Use `detailLevel` conservatively: `workbook_summary` for metadata-only workbook context, `semantic_index` for role-aware workbook targets/candidates, `sheet_summary` for “look at/check/how is this sheet” overview requests without live cell reads, `table_sample` for a bounded live table sample, and `full_table` only when the task requires all rows, every value, or full table contents.
 
 For multilingual requests, preserve the original language in `request`, normalize routing fields to canonical English when clear, keep target hints in the workbook/user language, and answer the user in their language unless asked otherwise. Do not translate the whole task into English and discard the original wording.

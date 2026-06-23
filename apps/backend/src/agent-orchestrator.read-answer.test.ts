@@ -272,6 +272,48 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect((result.answer as any).rows[0]).toEqual(["Date", "Account", "Amount", "Status"]);
     });
 
+  it("keeps exact narrow route lookup rows inline under brief budget", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_quotation_narrow_rows");
+      metadata.sheets.push({
+        id: "sheet:Vendor Propose",
+        name: "Vendor Propose",
+        index: 99,
+        usedRange: "A1:P6",
+        rowCount: 6,
+        columnCount: 16,
+        kind: "unknown",
+        headers: [],
+        tableIds: [],
+        sectionIds: [],
+        summaryBlockIds: [],
+        formulaRegionIds: []
+      });
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Show me ALL rows with Item No, Transport Mode, and Route name columns B C D from rows 3 to 28",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "read_values" },
+        target: { sheetName: "Vendor Propose", range: "B3:D28" },
+        budget: { maxPayloadBytes: 2600, maxExamples: 2 }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).inlineRowsReason).toBe("narrow_exact_read");
+      expect((result.answer as any).rows).toEqual([
+        ["Item No.", "Transport Mode", "Route"],
+        [1, "Export", "Nongkhae - Klongtoey Port"],
+        [2, "Export", "Nongkhae - Ladkrabang Port"],
+        [3, "Export", "Nongkhae - Sahathai Port"]
+      ]);
+      expect(result.warnings.join(" ")).not.toContain("fullResultUri");
+      expect(result.maxRecommendedFollowupCalls).toBe(0);
+      expect(runtime.runtimeMethodCalls["workbook.snapshot_ranges"]).toBe(1);
+    });
+
   it("returns a diagnostic instead of empty success when metadata proves a live range should contain data", async () => {
       const runtime = new FakeAgentRuntime();
       runtime.snapshotRangesOverride = {
@@ -355,6 +397,68 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(JSON.stringify(workbookSummary.answer)).toContain("dropdown rules");
       expect(JSON.stringify(workbookSummary.answer)).not.toContain("Company gas top-up");
       expect(JSON.stringify(workbookSummary.answer).length).toBeLessThan(20000);
+    });
+
+  it("includes section header and data anchors in sheet summaries", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_sheet_section_anchors");
+      metadata.sheets.push({
+        id: "sheet:Vendor Propose",
+        name: "Vendor Propose",
+        index: 99,
+        usedRange: "A1:P6",
+        rowCount: 6,
+        columnCount: 16,
+        kind: "unknown",
+        headers: [],
+        tableIds: [],
+        sectionIds: ["section:quote:main"],
+        summaryBlockIds: [],
+        formulaRegionIds: []
+      });
+      metadata.sections.push({
+        id: "section:quote:main",
+        sheetName: "Vendor Propose",
+        label: "quotation section",
+        kind: "table-like",
+        range: "A1:P6",
+        headerRange: "B3:P3",
+        headerRow: 3,
+        columns: [
+          { name: "Route", normalizedName: "route", inferredType: "text", role: "dimension", importance: 0.95, index: 3, letter: "D" },
+          { name: "Truck Available", normalizedName: "truck_available", inferredType: "number", role: "measure", importance: 0.8, index: 14, letter: "O" },
+          { name: "Vendor Propose", normalizedName: "vendor_propose", inferredType: "currency", role: "amount", importance: 0.9, index: 15, letter: "P" }
+        ],
+        labels: ["YLTH_CTG_Zone BKK TT _Y2026"],
+        rowCount: 6,
+        columnCount: 16,
+        nonEmptyCellCount: 42,
+        confidence: 0.91
+      });
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Look at the Vendor Propose worksheet",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        detailLevel: "sheet_summary",
+        target: { sheetName: "Vendor Propose" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("sheet_summary");
+      expect((result.answer as any).sections[0]).toMatchObject({
+        id: "section:quote:main",
+        headerRange: "B3:P3",
+        dataRange: "A4:P6"
+      });
+      expect((result.answer as any).sections[0].fingerprint).toMatch(/^[a-f0-9]{16}$/);
+      expect((result.answer as any).sections[0].editableColumns.map((column: any) => column.letter)).toEqual(["O", "P"]);
+      expect(result.finalAnswer).toContain("quotation section");
+      expect(result.finalAnswer).toContain("header B3:P3");
+      expect(result.finalAnswer).toContain("data A4:P6");
+      expect(runtime.readBatchCount).toBe(0);
     });
 
   it("returns semantic index context hints for dropdowns, styles, and historical labels without row payloads", async () => {

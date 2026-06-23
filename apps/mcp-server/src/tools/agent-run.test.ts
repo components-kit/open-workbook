@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { AGENT_DETAIL_LEVELS, AGENT_INTENT_ACTIONS } from "@components-kit/open-workbook-protocol";
-import { agentRunInputSchema } from "./agent-run.js";
+import { agentRunInputSchema, normalizeAgentRunArgs } from "./agent-run.js";
 
 describe("excel.agent.run MCP schema", () => {
   it("accepts operation lifecycle statuses returned by the backend", () => {
@@ -59,6 +59,15 @@ describe("excel.agent.run MCP schema", () => {
     expect(source).toContain("exact source-list value corrections should use auto");
   });
 
+  it("advertises section-anchor semantic patches for row-label and column-header edits", () => {
+    const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("sheet_summary/semantic_index anchors");
+    expect(source).toContain("row label and column header");
+    expect(source).toContain("values.semanticPatches");
+    expect(source).toContain("instead of reading whole sections or guessing coordinates");
+  });
+
   it("advertises live Excel selection handling in the public tool description", () => {
     const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
 
@@ -99,6 +108,8 @@ describe("excel.agent.run MCP schema", () => {
     expect(combined).toContain("do not ask the user to confirm every small exact edit");
     expect(combined).toContain("dropdown options are wrong");
     expect(combined).toContain("source-list proof");
+    expect(combined).toContain("values.semanticPatches");
+    expect(combined).toContain("row label and column header");
     expect(combined).not.toContain("use `excel.agent.run` with `mode: \"preview_update\"` and then `mode: \"apply_update\"` for scoped value edits");
     expect(combined).not.toContain("group related range value edits with `values.patches` in one `preview_update`");
   });
@@ -110,6 +121,24 @@ describe("excel.agent.run MCP schema", () => {
     expect((schema.continuation as any).parse({
       fullResultUri: "excel://agent/results/agentres_1?view=full"
     })).toEqual({ fullResultUri: "excel://agent/results/agentres_1?view=full" });
+  });
+
+  it("normalizes confirmation-token calls that put apply_update in responseMode", () => {
+    const schema = agentRunInputSchema();
+    const parsed = {
+      operationId: "agentop_1",
+      confirmationToken: "confirm_1",
+      responseMode: "apply_update",
+      request: "Apply the update"
+    };
+
+    expect((schema.responseMode as any).parse("apply_update")).toBe("apply_update");
+    expect(normalizeAgentRunArgs(parsed as any)).toEqual({
+      operationId: "agentop_1",
+      confirmationToken: "confirm_1",
+      mode: "apply_update",
+      request: "Apply the update"
+    });
   });
 
   it("allows cache invalidation fields returned after successful applies", () => {
