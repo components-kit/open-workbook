@@ -117,17 +117,31 @@ function routeAgentWorkflow(
   if (action === "read_style_summary" || action === "read_style_fingerprint" || action === "compare_style_fingerprint") {
     return workflow("style.inspect", intent?.confidence ?? 0.9, "Structured style inspection action.", "sampled_allowed", "targeted_read");
   }
+  if (action === "find_style_references") {
+    return workflow("style.inspect", intent?.confidence ?? 0.9, "Structured style reference search action.", "sampled_allowed", "targeted_read");
+  }
   if (action === "format_diagnostics") {
     return workflow("format.diagnostics", intent?.confidence ?? 0.9, "Structured formatting diagnostics action.", "sampled_allowed", "targeted_read");
   }
   if (action === "read_schema") return workflow("schema.inspect", intent?.confidence ?? 0.9, "Structured schema inspection action.", "structure_only", "metadata_only");
   if (action === "find_target") return workflow("semantic_index.find", intent?.confidence ?? 0.9, "Structured target finding action.", "sampled_allowed", "metadata_only");
   if (action === "read_values") return workflow("range.read", intent?.confidence ?? 0.85, "Structured value read action.", "sampled_allowed", "targeted_read");
+  if (action === "read_formulas" || action === "read_formula_patterns" || action === "explain_formula") return workflow("range.read", intent?.confidence ?? 0.9, "Structured formula inspection action.", "sampled_allowed", "targeted_read");
+  if (action === "find_similar_rows") return workflow("range.read", intent?.confidence ?? 0.88, "Structured similar-row reference search action.", "sampled_allowed", "targeted_read");
   if (action && modeForIntentAction(action) === "preview_update") return workflow("mutation.preview", intent?.confidence ?? 0.9, "Structured mutation action.", "sampled_allowed", "preview_only");
 
   const lower = request.toLowerCase();
+  if (/\b(formula|formulas|raw formula|r1c1|calculation)\b/.test(lower) && /\b(read|check|verify|inspect|show|explain|is|has|look)\b/.test(lower)) {
+    return workflow("range.read", 0.86, "Request asks to inspect existing formulas.", "sampled_allowed", "targeted_read");
+  }
   if (/\b(style|styling|formatting|border|fill|font|alignment|number format)\b/.test(lower) && /\b(current|inspect|what|show|read|look|existing|summary)\b/.test(lower)) {
     return workflow("style.inspect", 0.82, "Request asks for current styling.", "sampled_allowed", "targeted_read");
+  }
+  if (/\b(style|styling|format|template|look like|same as)\b/.test(lower) && /\b(reference|example|before|previous|last month|prior|source|copy from)\b/.test(lower)) {
+    return workflow("style.inspect", 0.84, "Request asks for styling reference candidates.", "sampled_allowed", "targeted_read");
+  }
+  if (/\b(reference|similar|look back|label(?:ed)?|classif(?:y|ied|ication)|before|previous|last month|prior|how did we|how we)\b/.test(lower)) {
+    return workflow("range.read", 0.84, "Request asks for cross-sheet reference examples.", "sampled_allowed", "targeted_read");
   }
   if (/\b(formatting error|wrong format|date format|number format|diagnos(e|is)|why.*format)\b/.test(lower)) {
     return workflow("format.diagnostics", 0.84, "Request asks for formatting diagnostics.", "sampled_allowed", "targeted_read");
@@ -156,7 +170,7 @@ function routeAgentWorkflow(
 function isReadVerificationRequest(request: string): boolean {
   const lower = request.toLowerCase();
   return /\b(read|check|verify|inspect|show|confirm)\b/.test(lower)
-    && /\b(values?|columns?|cells?|dates?|serials?|display(?:ed)?|formats?)\b/.test(lower)
+    && /\b(values?|columns?|cells?|dates?|serials?|display(?:ed)?|formats?|formulas?|raw formula|r1c1)\b/.test(lower)
     && !/\b(apply|set|write|replace|convert|parse|change|update|fix|repair|clear|remove|delete|create|add|insert)\b/.test(lower);
 }
 

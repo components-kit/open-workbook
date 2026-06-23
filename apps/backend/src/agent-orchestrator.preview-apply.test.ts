@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AgentOrchestrator } from "./agent-orchestrator.js";
-import { FakeAgentRuntime, createCachedMetadata, selectionInfo, sheets } from "./agent-orchestrator.test-support.js";
+import { FakeAgentRuntime, createCachedMetadata, selectionInfo, sheets, workbookId } from "./agent-orchestrator.test-support.js";
 
 describe("AgentOrchestrator Preview Apply Safety", () => {
   it("requires structured values for write previews even when request text includes rows", async () => {
@@ -259,6 +259,31 @@ Data rows:
       expect(runtime.writeBatchCount).toBe(1);
       expect(runtime.lastBatchOperations[0]?.kind).toBe("range.write_values_many");
       expect((runtime.lastBatchOperations[0] as any).entries.map((entry: any) => entry.target.address)).toEqual(["B2:C2", "B3:C3"]);
+    });
+
+  it("auto-applies non-adjacent row updates from one prompt as one grouped patch batch", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Update row 19 maintenance fields and row 20 owner funding fields",
+        mode: "auto",
+        values: {
+          patches: [
+            { target: { sheetName: "Data", range: "C19:E19" }, values: [["700-5229", "maintenance note", "maintenance"]], reason: "row 19 maintenance update" },
+            { target: { sheetName: "Data", range: "D20:E20" }, values: [["Owner cash top-up", "owner_cash_topup"]], reason: "row 20 owner funding label" },
+            { target: { sheetName: "Data", range: "H20:J20" }, values: [[10000, 0, "Owner fund top-up"]], reason: "row 20 owner funding amounts" }
+          ]
+        }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.taskOutcome).toBe("apply_complete");
+      expect(result.telemetry.autoApplied).toBe(true);
+      expect(runtime.writeBatchCount).toBe(1);
+      expect(runtime.lastBatchOperations).toHaveLength(1);
+      expect(runtime.lastBatchOperations[0]?.kind).toBe("range.write_values_many");
+      expect((runtime.lastBatchOperations[0] as any).entries.map((entry: any) => entry.target.address)).toEqual(["C19:E19", "D20:E20", "H20:J20"]);
     });
 
   it("auto-applies semantic section row and column patches after resolving exact cells", async () => {
@@ -2226,6 +2251,260 @@ Data rows:
       expect(applied.status).toBe("SUCCESS");
       expect(runtime.runtimeMethodCalls[testCase.expectedRuntimeCall]).toBe(1);
     }
+  });
+
+  it("previews and applies backend-compiled column value transforms without model-sized matrices", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Add acct- prefix to all Account values",
+      mode: "preview_update",
+      intent: { action: "transform_values" },
+      target: { sheetName: "Data", tableName: "Transactions", column: "Account" },
+      values: { operation: "add_prefix", prefix: "acct-" }
+    });
+    const applied = await agent.run({
+      request: "Apply account prefix transform",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect((preview.answer as any).kind).toBe("transform_values_preview");
+    expect((preview.answer as any).changedCount).toBe(3);
+    expect((preview.answer as any).target.range).toBe("B2:B4");
+    expect((preview.answer as any).examples).toHaveLength(3);
+    expect(applied.status).toBe("SUCCESS");
+    expect(runtime.lastBatchOperations[0]?.kind).toBe("range.write_values_many");
+    expect((runtime.lastBatchOperations[0] as any).entries).toEqual([{
+      target: { workbookId, sheetName: "Data", address: "B2:B4" },
+      values: [["acct-A-100"], ["acct-A-200"], ["acct-A-300"]],
+      preserveFormats: true
+    }]);
+  });
+
+  it("keeps backend-compiled broad transforms preview-first in auto mode", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Add acct- prefix to all Account values",
+      mode: "auto",
+      intent: { action: "transform_values" },
+      target: { sheetName: "Data", tableName: "Transactions", column: "Account" },
+      values: { operation: "add_prefix", prefix: "acct-" }
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect(preview.taskOutcome).toBe("preview_ready");
+    expect(preview.telemetry.autoApplied).not.toBe(true);
+    expect(preview.telemetry.safetyDecision).toBe("manual_review:broad_compiled_transform");
+    expect(runtime.writeBatchCount).toBe(0);
+  });
+
+  it("previews and applies row-aware copy-if-blank derivations from source columns", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Fill blank Account from Amount for this row",
+      mode: "preview_update",
+      intent: { action: "derive_values" },
+      target: { sheetName: "Data", range: "B3" },
+      values: { operation: "copy_if_blank", sourceRange: "C3" }
+    });
+    const applied = await agent.run({
+      request: "Apply blank account derivation",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect((preview.answer as any).kind).toBe("derive_values_preview");
+    expect((preview.answer as any).changedCount).toBe(1);
+    expect((preview.answer as any).rowAlignment).toEqual({ type: "same_row", rows: 1 });
+    expect((preview.answer as any).examples[0]).toMatchObject({ row: 3, source: { C: 200 } });
+    expect(applied.status).toBe("SUCCESS");
+    expect(runtime.lastBatchOperations[0]?.kind).toBe("range.write_values_many");
+    expect((runtime.lastBatchOperations[0] as any).entries).toEqual([{
+      target: { workbookId, sheetName: "Data", address: "B3:B3" },
+      values: [[200]],
+      preserveFormats: true
+    }]);
+  });
+
+  it("previews and applies lookup-map derivations from another sheet", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Update Status from Account using Customer Master lookup",
+      mode: "preview_update",
+      intent: { action: "derive_values" },
+      target: { sheetName: "Data", tableName: "Transactions", column: "Status" },
+      values: {
+        operation: "lookup_map",
+        sourceColumn: "Account",
+        lookupSheetName: "Customer Master",
+        lookupKeyColumn: "Account",
+        lookupValueColumn: "Tier"
+      }
+    });
+    const applied = await agent.run({
+      request: "Apply lookup derivation",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect((preview.answer as any).kind).toBe("derive_values_preview");
+    expect((preview.answer as any).rowAlignment).toEqual({ type: "lookup_map", rows: 3, lookupRows: 3 });
+    expect((preview.answer as any).changedCount).toBe(3);
+    expect((preview.answer as any).examples[0]).toMatchObject({
+      row: 2,
+      source: { Account: "A-100" },
+      after: { Status: "Gold" }
+    });
+    expect(applied.status).toBe("SUCCESS");
+    expect(runtime.lastBatchOperations[0]?.kind).toBe("range.write_values_many");
+    expect((runtime.lastBatchOperations[0] as any).entries).toEqual([{
+      target: { workbookId, sheetName: "Data", address: "D2:D4" },
+      values: [["Gold"], ["Silver"], ["Bronze"]],
+      preserveFormats: true
+    }]);
+  });
+
+  it("previews row-aware formula-like payment variance derivations from cash and actual columns", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Preview Payment Variance as Actual Amount minus Cash Amount for May 2026",
+      mode: "preview_update",
+      intent: { action: "derive_values" },
+      target: { sheetName: "May 2026", tableName: "May2026_Transaction_Filter", column: "Payment Variance" },
+      values: {
+        operation: "formula_like",
+        formula: "actual_minus_cash",
+        sourceColumns: ["Cash Amount", "Actual Amount"]
+      }
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect((preview.answer as any).kind).toBe("derive_values_preview");
+    expect((preview.answer as any).target.range).toBe("I2:I244");
+    expect((preview.answer as any).target.header).toBe("Payment Variance");
+    expect((preview.answer as any).sources.map((source: any) => source.header)).toEqual(["Cash Amount", "Actual Amount"]);
+    expect((preview.answer as any).rowAlignment).toEqual({ type: "same_row", rows: 243 });
+    expect((preview.answer as any).examples[0]).toMatchObject({
+      row: 2,
+      source: { "Cash Amount": "2211.21", "Actual Amount": "2211.21" },
+      after: { "Payment Variance": 0 }
+    });
+    expect(runtime.writeBatchCount).toBe(0);
+  });
+
+  it("previews settlement bundles with payment variance formulas and separate reconciliation/detail notes", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Make May 2026 settlement consistent with Apr 2026 for row 2",
+      mode: "preview_update",
+      intent: { action: "settle_reconciliation" },
+      target: { sheetName: "May 2026" },
+      values: {
+        referenceSheetName: "Apr 2026",
+        rowUpdates: [{
+          row: 2,
+          reconciliationNote: "Settled against owner top-up",
+          detailNotes: "Owner fund top-up matched to bank transfer"
+        }]
+      }
+    });
+    const applied = await agent.run({
+      request: "Apply settlement bundle",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect(preview.taskOutcome).toBe("preview_ready");
+    expect((preview.answer as any).kind).toBe("settlement_bundle_preview");
+    expect((preview.answer as any).target.header).toBe("Payment Variance");
+    expect((preview.answer as any).sources.map((source: any) => source.header)).toEqual(["Cash Amount", "Actual Amount"]);
+    expect((preview.answer as any).noteTargets.map((target: any) => target.header)).toEqual(["Reconciliation Note", "Detail Notes"]);
+    expect((preview.answer as any).reference.paymentVariance).toMatchObject({
+      range: "I2:I244",
+      formulaExample: "=H2-G2",
+      formulaCell: "I2"
+    });
+    expect((preview.answer as any).examples[0]).toMatchObject({
+      row: 2,
+      source: { "Cash Amount": "2211.21", "Actual Amount": "2211.21" },
+      after: {
+        "Payment Variance": "=H2-G2",
+        "Reconciliation Note": "Settled against owner top-up",
+        "Detail Notes": "Owner fund top-up matched to bank transfer"
+      }
+    });
+    expect(applied.status).toBe("SUCCESS");
+    expect(runtime.lastBatchOperations.map((operation) => operation.kind)).toEqual(["range.write_formulas", "range.write_values_many"]);
+    expect((runtime.lastBatchOperations[0] as any).target).toEqual({ workbookId, sheetName: "May 2026", address: "I2:I2" });
+    expect((runtime.lastBatchOperations[0] as any).formulas).toEqual([["=H2-G2"]]);
+    expect((runtime.lastBatchOperations[1] as any).entries).toEqual([
+      {
+        target: { workbookId, sheetName: "May 2026", address: "J2:J2" },
+        values: [["Settled against owner top-up"]],
+        preserveFormats: true
+      },
+      {
+        target: { workbookId, sheetName: "May 2026", address: "M2:M2" },
+        values: [["Owner fund top-up matched to bank transfer"]],
+        preserveFormats: true
+      }
+    ]);
+  });
+
+  it("previews workbook structure sheet prefix transforms as one batch plan", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Add FY26 - prefix to Data and Report sheets",
+      mode: "preview_update",
+      intent: { action: "transform_sheets" },
+      values: {
+        operation: "add_prefix",
+        prefix: "FY26 - ",
+        sheets: ["Data", "Report"]
+      }
+    });
+    const applied = await agent.run({
+      request: "Apply sheet prefix plan",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect((preview.answer as any).kind).toBe("transform_sheets_preview");
+    expect((preview.answer as any).changedCount).toBe(2);
+    expect((preview.answer as any).examples).toEqual([
+      { from: "Data", to: "FY26 - Data" },
+      { from: "Report", to: "FY26 - Report" }
+    ]);
+    expect(applied.status).toBe("SUCCESS");
+    expect(runtime.lastBatchOperations.map((operation) => operation.kind)).toEqual(["sheet.rename", "sheet.rename"]);
+    expect(runtime.lastBatchOperations.map((operation: any) => [operation.sheetName, operation.newSheetName])).toEqual([
+      ["Data", "FY26 - Data"],
+      ["Report", "FY26 - Report"]
+    ]);
   });
 
   it("previews formula recalculation as a workbook calculate operation", async () => {

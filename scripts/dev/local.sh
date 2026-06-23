@@ -81,12 +81,12 @@ echo "Open Workbook development runtime"
 echo "Repo: $ROOT_DIR"
 echo ""
 
-start_process "daemon" node "$CLI" daemon start
-
 if [[ "$START_FILE_BRIDGE" -eq 1 ]]; then
+  export OPEN_WORKBOOK_FILE_BRIDGE_URL="${OPEN_WORKBOOK_FILE_BRIDGE_URL:-http://127.0.0.1:37847}"
   start_process "file bridge" node "$CLI" file-bridge start
 fi
 
+start_process "daemon" node "$CLI" daemon start
 start_process "add-in server" node "$CLI" addin serve
 
 echo ""

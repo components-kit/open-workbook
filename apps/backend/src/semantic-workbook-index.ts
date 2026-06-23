@@ -147,7 +147,7 @@ export function semanticIndexEntries(metadata: WorkbookMetadata): AgentSemanticI
       aliases: compactAliases([region.sheetName, "formula", "calculation", "formula region"]),
       confidence: Math.min(0.9, 0.65 + region.formulaCount * 0.01),
       evidence: [`${region.formulaCount} formula cell(s)`],
-      supportedActions: ["read_formula_patterns", "validate_formula_range", "find_formula_errors", "repair_formula_patterns"]
+      supportedActions: ["read_formulas", "read_formula_patterns", "validate_formula_range", "find_formula_errors", "repair_formula_patterns", "settle_reconciliation"]
     });
   }
 
@@ -204,7 +204,7 @@ function actionsForRole(role: AgentSemanticRole): AgentIntentAction[] {
     return ["read_schema", "read_values", "validate_workbook", "create_pivot_chart_summary", "find_target"];
   }
   if (role === "formula_region") {
-    return ["read_formula_patterns", "validate_formula_range", "find_formula_errors", "repair_formula_patterns"];
+    return ["read_formulas", "read_formula_patterns", "validate_formula_range", "find_formula_errors", "repair_formula_patterns", "settle_reconciliation"];
   }
   if (role === "form_region") {
     return ["read_values", "write_values", "replace_range_with_styled_table", "read_style_summary", "format_diagnostics"];

@@ -19,7 +19,7 @@ Fast Excel automation is part of correctness. Slow workflows push agents toward 
 
 - For user-visible reporting, read display text.
 - For computation, read raw values.
-- For formula review, read formulas or formula patterns.
+- For formula review, use `read_formulas` for exact formula/status proof or `read_formula_patterns` for repeated layouts. Never infer formula existence from displayed values or numbers alone.
 - For formatting review, read number formats or styles only for the relevant range.
 - For table analysis, read the table instead of a sheet-sized range.
 - On the public surface, use `excel.agent.run` `mode: "find"` or `mode: "answer"` for unknown targets and exploratory reads.
@@ -44,7 +44,12 @@ When only a preview is inline and the next step requires exact rows, raw values,
 
 - Use one batch or plan for related edits.
 - On the public agent surface, group related small exact range value edits with `values.patches` in one `auto` call. Use `preview_update` plus one `apply_update` when the grouped edit is large, broad, ambiguous, formula/style/template/table-related, or user-reviewable.
+- For multiple explicit value edits in the same user instruction, group all known target/value pairs in one `values.patches` call, even when rows describe different business topics. Do not split independent exact edits into separate calls unless the grouped call fails with actionable details.
 - For repeated values, number formats, styles, clears, or autofit across related ranges, use one grouped preview; the backend compiles it to internal `*_many` range operations so stale checks, backups, telemetry, and rollback stay single-operation.
+- For broad deterministic value transforms, use `transform_values` so Open Workbook scans the target internally and returns bounded examples instead of full-column payloads.
+- For row-aware derivations, use `derive_values` so Open Workbook reads source/target columns internally, verifies row alignment, and compiles only changed target cells. Use `formula_like` for calculations such as Payment Variance = Actual Amount - Cash Amount instead of reading full source/target columns into the model.
+- For transaction settlement bundles, use `settle_reconciliation` so Payment Variance, Reconciliation Note, and Detail Notes are previewed as one grouped plan instead of separate formula/note calls.
+- For batch sheet renames from one deterministic rule, use `transform_sheets` so Open Workbook previews one bounded workbook-structure plan instead of looping through individual sheet calls.
 - Ask for preview before applying large generated changes.
 - Keep matrix shapes exact: rows and columns must match the target range.
 - Let Open Workbook chunk large values/formulas/number formats through safe row-based chunk plans.
@@ -57,8 +62,9 @@ Automatic timeout retry is limited to style-only batches because repeating the s
 
 ## Formulas
 
-- Ask `agent.run` for formula-pattern repair when repeated formula layouts are involved.
+- Ask `agent.run` for `read_formulas` on exact formula questions and formula-pattern repair when repeated formula layouts are involved.
 - Ask for dependency-aware preview before editing source ranges used by reports, charts, pivots, or formulas.
+- Keep formula writes, formula repairs, and broad formula-like derivations preview-first with validation.
 - Use `intent.action: "calculate"` when the workflow requires fresh computed values.
 
 ## Telemetry

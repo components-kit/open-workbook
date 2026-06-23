@@ -420,6 +420,15 @@ export class AgentOrchestrator {
       if (effectiveMode === "prepare") {
         return finish(this.prepareOutput(metadata, mode), cacheHit);
       }
+      if (effectiveMode === "find" && shouldInspectFormulaInline(input)) {
+        internalCallCount += 1;
+        const answerInput: AgentRunInput = {
+          ...input,
+          mode: "answer",
+          intent: { ...(input.intent ?? {}), action: "read_formulas", reason: "Exact formula inspection request was routed from find to answer." }
+        };
+        return finish(await this.answerOutput(metadata, answerInput, "answer", runMetrics), cacheHit);
+      }
       if (effectiveMode === "find") {
         const sectionAnswer = sectionAnswerOutput(metadata, input, mode);
         return finish(sectionAnswer ?? this.findOutput(metadata, input, mode), cacheHit);
@@ -807,7 +816,7 @@ export class AgentOrchestrator {
     }
     const adjustedTarget = adjustReadRangeForSemanticColumn(metadata, input, resolved.sheetName, resolved.range);
     const normalizedRange = normalizeOperationRange(metadata, resolved.sheetName, adjustedTarget.range);
-    if (isFormulaReadIntentAction(intentAction(input))) {
+    if (isFormulaReadIntentAction(intentAction(input)) || shouldInspectFormulaInline(input)) {
       return this.formulaAnswerOutput(metadata, input, requestedMode, normalizedRange, resolved, runMetrics);
     }
     const largeRangeGuard = largeRangeGuardOutput(metadata, input, requestedMode, resolved.sheetName, normalizedRange, resolved.candidate.label);
@@ -1080,6 +1089,24 @@ export class AgentOrchestrator {
     };
     const action = intentAction(input);
     runMetrics.internalReadCount += 1;
+    if (action === "read_formulas" || shouldInspectFormulaInline(input)) {
+      const snapshot = await this.readRangeSnapshot(metadata.workbook.workbookId as WorkbookId, resolved.sheetName, range, ["values", "text", "formulas", "numberFormat"], runMetrics);
+      const patternsResult = await this.runtime.readFormulaPatterns(request);
+      const patterns = (patternsResult as { ok?: boolean; patterns?: unknown }).ok === false ? undefined : (patternsResult as { patterns?: unknown }).patterns;
+      const answer = formulaReadAnswerFromSnapshot(snapshot, patterns, resolved.sheetName, range);
+      return {
+        status: "SUCCESS",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: formulaReadSummary(answer, resolved.sheetName, range),
+        answer,
+        metrics: { source: "runtime_formula_read", formulaCount: answer.formulaCount, hardcodedCount: answer.hardcodedCount, blankCount: answer.blankCount },
+        proof: [{ sheetName: resolved.sheetName, range, label: "formula read" }],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "answer_now",
+        warnings: answer.formulaCount === 0 ? ["No formulas were found in the requested range; returned displayed values and hardcoded/blank status."] : []
+      };
+    }
     if (action === "get_formula_dependency_graph") {
       const result = await this.runtime.getFormulaDependencyGraph(request);
       if ((result as { ok?: boolean }).ok === false) {
@@ -1411,6 +1438,42 @@ export class AgentOrchestrator {
   ): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
     const action = intentAction(input) ?? (runMetrics.route.workflowRoute === "style.inspect" ? "read_style_summary" : undefined);
     const workbookId = metadata.workbook.workbookId as WorkbookId;
+    if (action === "find_style_references" || shouldRunStyleReferenceSearch(input)) {
+      const candidates = styleReferenceCandidates(metadata, input).slice(0, Math.max(1, Math.min(input.budget?.maxExamples ?? 5, 8)));
+      const enriched = [];
+      for (const candidate of candidates.slice(0, 3)) {
+        runMetrics.internalReadCount += 1;
+        const result = await this.runtime.getStyleFingerprint({
+          workbookId,
+          sheetName: candidate.sheetName,
+          address: candidate.range,
+          maxCellSamples: 60
+        });
+        enriched.push({
+          ...candidate,
+          styleSummary: compactStyleReferenceFingerprint(result)
+        });
+      }
+      enriched.push(...candidates.slice(enriched.length));
+      return {
+        status: enriched.length > 0 ? "SUCCESS" : "NOT_FOUND",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: enriched.length > 0
+          ? `Found ${enriched.length} style reference candidate(s).`
+          : "No style reference candidates were found in workbook metadata.",
+        answer: {
+          kind: "style_reference_candidates",
+          source: "cached_metadata_and_style_fingerprint",
+          candidates: enriched
+        },
+        metrics: { source: "runtime_style_reference_search", candidateCount: enriched.length },
+        proof: enriched.slice(0, 5).map((candidate) => ({ sheetName: candidate.sheetName, range: candidate.range, label: candidate.label })),
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: enriched.length > 0 ? "answer_now" : "call_with_target",
+        warnings: []
+      };
+    }
     if (action === "read_style_summary") {
       const resolved = resolveAgentReadTarget(metadata, input);
       if (!resolved.ok) {
@@ -1557,7 +1620,7 @@ export class AgentOrchestrator {
     requestedMode: AgentRunMode,
     runMetrics: AgentRunMetrics
   ): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
-    if (intentAction(input) !== "find_similar_rows") {
+    if (intentAction(input) !== "find_similar_rows" && !shouldRunReferenceRowSearch(input)) {
       return undefined;
     }
     const resolved = resolveAgentReadTarget(metadata, input);
@@ -1577,14 +1640,21 @@ export class AgentOrchestrator {
 
     const workbookId = metadata.workbook.workbookId as WorkbookId;
     const sourceRange = normalizeOperationRange(metadata, resolved.sheetName, resolved.range);
-    const sourceValues = await this.readRangeValues(workbookId, resolved.sheetName, sourceRange, runMetrics);
+    const sourceParsed = tryParseA1Address(stripSheetName(sourceRange));
+    const sourceRowCount = sourceParsed ? sourceParsed.endRow - sourceParsed.startRow + 1 : undefined;
+    const sourceValues = sourceRowCount !== undefined && sourceRowCount <= 3
+      ? await this.readRangeValues(workbookId, resolved.sheetName, sourceRange, runMetrics)
+      : [];
     const sourceSignals = similarRowSignals(input, sourceValues);
     const candidates = similarRowCandidateRanges(metadata, resolved.sheetName, sourceRange, input);
+    const searchedRanges = shouldSearchResolvedRange(input, metadata, resolved.sheetName, sourceRange)
+      ? dedupeSimilarRanges([{ sheetName: resolved.sheetName, range: clampRangeForSimilarRows(sourceRange), reason: "requested reference range" }, ...candidates])
+      : candidates;
     const rowMatches: SimilarRowMatch[] = [];
 
-    for (const candidate of candidates.slice(0, 6)) {
+    for (const candidate of searchedRanges.slice(0, 8)) {
       const rows = await this.readRangeValues(workbookId, candidate.sheetName, candidate.range, runMetrics);
-      rowMatches.push(...rankSimilarRows(candidate, rows, sourceSignals));
+      rowMatches.push(...rankSimilarRows(metadata, candidate, rows, sourceSignals));
       if (rowMatches.length >= 25) {
         break;
       }
@@ -1604,16 +1674,18 @@ export class AgentOrchestrator {
       answer: {
         kind: "similar_rows",
         source: { sheetName: resolved.sheetName, range: sourceRange },
+        sourceMode: sourceValues.length > 0 ? "exact_source_row" : "request_predicates",
         signals: sourceSignals.tokens.slice(0, 12),
-        comparedRanges: candidates.slice(0, 6),
+        predicates: sourceSignals.predicates.map((predicate) => ({ label: predicate.label, value: predicate.value })),
+        comparedRanges: searchedRanges.slice(0, 8),
         rows: examples
       },
-      metrics: { source: "runtime_similar_rows", comparedRangeCount: candidates.slice(0, 6).length, matchedRowCount: examples.length },
+      metrics: { source: "runtime_similar_rows", comparedRangeCount: searchedRanges.slice(0, 8).length, matchedRowCount: examples.length },
       candidates: findAgentCandidates(metadata, input).slice(0, 5),
       proof: examples.map((example) => ({ sheetName: example.sheetName, range: example.range, label: "similar row" })).slice(0, 5),
       resourceLinks: [contextResource(metadata.workbookContextId)],
       nextAction: examples.length > 0 ? "answer_now" : "call_with_target",
-      warnings: candidates.length > 6 ? ["Similar-row search sampled the most relevant related sheets/ranges first."] : []
+      warnings: searchedRanges.length > 8 ? ["Similar-row search sampled the most relevant requested and related sheets/ranges first."] : []
     };
   }
 
@@ -2352,6 +2424,18 @@ export class AgentOrchestrator {
 
   private async previewOperationIntent(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
     const action = intentAction(input);
+    if (action === "transform_values") {
+      return this.previewTransformValues(metadata, input, requestedMode);
+    }
+    if (action === "derive_values") {
+      return this.previewDeriveValues(metadata, input, requestedMode);
+    }
+    if (action === "settle_reconciliation" || shouldPreviewSettlementBundle(input)) {
+      return this.previewSettlementBundle(metadata, input, requestedMode);
+    }
+    if (action === "transform_sheets") {
+      return this.previewTransformSheets(metadata, input, requestedMode);
+    }
     if (action === "replace_range_with_styled_table" || shouldPreviewReplaceStyledTable(input)) {
       return this.previewReplaceStyledTable(metadata, input, requestedMode);
     }
@@ -2370,6 +2454,303 @@ export class AgentOrchestrator {
       return this.previewActionHandler(metadata, input, requestedMode, targetLevelHandler, normalizedResolved);
     }
     return undefined;
+  }
+
+  private async previewTransformValues(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Promise<Omit<AgentRunOutput, "telemetry">> {
+    const values = input.values ?? {};
+    const operation = transformOperationFromInput(input);
+    if (!operation.ok) {
+      return transformNeedsInput(metadata, requestedMode, operation.summary, operation.warnings);
+    }
+    const target = resolveValueColumnScope(metadata, input, "target");
+    if (!target.ok) {
+      return transformNeedsInput(metadata, requestedMode, target.summary, target.warnings, target.candidates);
+    }
+    const snapshot = await this.readColumnSnapshot(metadata.workbook.workbookId as WorkbookId, target.scope.sheetName, target.scope.address);
+    const plan = compileTransformPlan(target.scope, snapshot, operation.operation, values);
+    if (!plan.ok) {
+      return transformNeedsInput(metadata, requestedMode, plan.summary, plan.warnings);
+    }
+    return this.previewCompiledColumnPlan(metadata, input, requestedMode, {
+      kind: "transform_values_preview",
+      summary: `Prepared ${operation.operation} transform for ${target.scope.sheetName}!${target.scope.address}.`,
+      target: target.scope,
+      sources: [],
+      rowAlignment: { type: "single_column", rows: target.scope.rowCount },
+      plan
+    });
+  }
+
+  private async previewDeriveValues(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Promise<Omit<AgentRunOutput, "telemetry">> {
+    const values = input.values ?? {};
+    const derivation = derivationOperationFromInput(input);
+    if (!derivation.ok) {
+      return transformNeedsInput(metadata, requestedMode, derivation.summary, derivation.warnings);
+    }
+    const target = resolveValueColumnScope(metadata, input, "target");
+    if (!target.ok) {
+      return transformNeedsInput(metadata, requestedMode, target.summary, target.warnings, target.candidates);
+    }
+    const sourceScopes = resolveDeriveSourceScopes(metadata, input);
+    if (!sourceScopes.ok) {
+      return transformNeedsInput(metadata, requestedMode, sourceScopes.summary, sourceScopes.warnings, sourceScopes.candidates);
+    }
+    if (derivation.operation === "lookup_map") {
+      const lookup = resolveLookupMapScope(metadata, input);
+      if (!lookup.ok) {
+        return transformNeedsInput(metadata, requestedMode, lookup.summary, lookup.warnings, lookup.candidates);
+      }
+      const targetSnapshot = await this.readColumnSnapshot(metadata.workbook.workbookId as WorkbookId, target.scope.sheetName, target.scope.address);
+      const sourceSnapshots = await Promise.all(sourceScopes.scopes.map((source) =>
+        this.readColumnSnapshot(metadata.workbook.workbookId as WorkbookId, source.sheetName, source.address)
+      ));
+      const lookupKeySnapshot = await this.readColumnSnapshot(metadata.workbook.workbookId as WorkbookId, lookup.keyScope.sheetName, lookup.keyScope.address);
+      const lookupValueSnapshot = await this.readColumnSnapshot(metadata.workbook.workbookId as WorkbookId, lookup.valueScope.sheetName, lookup.valueScope.address);
+      const plan = compileLookupDerivePlan(target.scope, targetSnapshot, sourceScopes.scopes, sourceSnapshots, lookup, lookupKeySnapshot, lookupValueSnapshot);
+      if (!plan.ok) {
+        return transformNeedsInput(metadata, requestedMode, plan.summary, plan.warnings);
+      }
+      return this.previewCompiledColumnPlan(metadata, input, requestedMode, {
+        kind: "derive_values_preview",
+        summary: `Prepared lookup_map derivation for ${target.scope.sheetName}!${target.scope.address}.`,
+        target: target.scope,
+        sources: [...sourceScopes.scopes, lookup.keyScope, lookup.valueScope],
+        rowAlignment: { type: "lookup_map", rows: target.scope.rowCount, lookupRows: lookup.keyScope.rowCount },
+        plan
+      });
+    }
+    const misaligned = sourceScopes.scopes.find((source) => source.rowCount !== target.scope.rowCount);
+    if (misaligned) {
+      return transformNeedsInput(metadata, requestedMode, `Source ${misaligned.headerName ?? misaligned.address} does not align with target ${target.scope.headerName ?? target.scope.address}.`, [
+        `Target rows: ${target.scope.rowCount}; source rows: ${misaligned.rowCount}.`
+      ]);
+    }
+    const targetSnapshot = await this.readColumnSnapshot(metadata.workbook.workbookId as WorkbookId, target.scope.sheetName, target.scope.address);
+    const sourceSnapshots = await Promise.all(sourceScopes.scopes.map((source) =>
+      this.readColumnSnapshot(metadata.workbook.workbookId as WorkbookId, source.sheetName, source.address)
+    ));
+    const plan = compileDerivePlan(target.scope, targetSnapshot, sourceScopes.scopes, sourceSnapshots, derivation.operation, values);
+    if (!plan.ok) {
+      return transformNeedsInput(metadata, requestedMode, plan.summary, plan.warnings);
+    }
+    return this.previewCompiledColumnPlan(metadata, input, requestedMode, {
+      kind: "derive_values_preview",
+      summary: `Prepared ${derivation.operation} derivation for ${target.scope.sheetName}!${target.scope.address}.`,
+      target: target.scope,
+      sources: sourceScopes.scopes,
+      rowAlignment: { type: "same_row", rows: target.scope.rowCount },
+      plan
+    });
+  }
+
+  private async previewSettlementBundle(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Promise<Omit<AgentRunOutput, "telemetry">> {
+    const bundle = await compileSettlementBundle(metadata, input, async (scope) =>
+      this.readColumnSnapshot(metadata.workbook.workbookId as WorkbookId, scope.sheetName, scope.address)
+    );
+    if (!bundle.ok) {
+      return transformNeedsInput(metadata, requestedMode, bundle.summary, bundle.warnings, bundle.candidates);
+    }
+    if (bundle.operations.length === 0) {
+      return {
+        status: "SUCCESS",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: "Settlement convention preview found no changes to apply.",
+        answer: {
+          kind: "settlement_bundle_preview",
+          target: compactValueColumnScope(bundle.scopes.paymentVariance),
+          sources: [bundle.scopes.cashAmount, bundle.scopes.actualAmount].map(compactValueColumnScope),
+          noteTargets: [bundle.scopes.reconciliationNote, bundle.scopes.detailNotes].map(compactValueColumnScope),
+          reference: bundle.reference,
+          scannedCount: bundle.scannedCount,
+          changedCount: 0,
+          skipped: bundle.skipped,
+          examples: []
+        },
+        metrics: { operationRisk: "read_only", targetFingerprintStatus: "matched", workflowKind: "settlement_bundle_preview" },
+        proof: bundle.proof,
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "answer_now",
+        warnings: bundle.warnings
+      };
+    }
+    const pending = this.createPendingOperation(metadata, {
+      action: { kind: "batch", operations: bundle.operations },
+      changes: bundle.changes,
+      summary: `Prepared settlement update for ${bundle.sheetName}: ${bundle.changedCount} changed cell(s) across ${bundle.operations.length} grouped operation(s).`
+    });
+    return {
+      status: "PREVIEW_READY",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      operationId: pending.operationId,
+      confirmationToken: pending.confirmationToken,
+      summary: `${pending.summary} Apply once with apply_update; do not split variance and note updates into separate calls.`,
+      answer: {
+        kind: "settlement_bundle_preview",
+        sheetName: bundle.sheetName,
+        tableName: bundle.tableName,
+        target: compactValueColumnScope(bundle.scopes.paymentVariance),
+        sources: [bundle.scopes.cashAmount, bundle.scopes.actualAmount].map(compactValueColumnScope),
+        noteTargets: [bundle.scopes.reconciliationNote, bundle.scopes.detailNotes].map(compactValueColumnScope),
+        reference: bundle.reference,
+        scannedCount: bundle.scannedCount,
+        changedCount: bundle.changedCount,
+        skipped: bundle.skipped,
+        examples: bundle.examples,
+        operationCount: bundle.operations.length,
+        grouped: true
+      },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched", workflowKind: "settlement_bundle_preview", groupedOperationCount: bundle.operations.length },
+      changes: bundle.changes,
+      proof: bundle.proof,
+      resourceLinks: [operationResource(String(pending.operationId))],
+      nextAction: "call_apply_update",
+      warnings: bundle.warnings
+    };
+  }
+
+  private previewTransformSheets(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> {
+    const plan = compileSheetTransformPlan(metadata, input);
+    if (!plan.ok) {
+      return transformNeedsInput(metadata, requestedMode, plan.summary, plan.warnings, plan.candidates);
+    }
+    const operations: ExcelOperation[] = plan.renames.map((rename) => ({
+      kind: "sheet.rename",
+      operationId: makeId<OperationId>("op"),
+      workbookId: metadata.workbook.workbookId as WorkbookId,
+      destructiveLevel: "structure",
+      reason: input.request,
+      sheetName: rename.from,
+      newSheetName: rename.to
+    }));
+    const changes: NonNullable<AgentRunOutput["changes"]> = plan.renames.slice(0, 12).map((rename) => ({
+      sheetName: rename.from,
+      before: rename.from,
+      after: rename.to
+    }));
+    const pending = this.createPendingOperation(metadata, {
+      action: { kind: "batch", operations },
+      changes,
+      summary: `Prepared ${plan.renames.length} sheet rename(s) as one workbook structure plan.`
+    });
+    return {
+      status: "PREVIEW_READY",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      operationId: pending.operationId,
+      confirmationToken: pending.confirmationToken,
+      summary: pending.summary,
+      answer: {
+        kind: "transform_sheets_preview",
+        operation: plan.operation,
+        changedCount: plan.renames.length,
+        skippedCount: plan.skipped.length,
+        examples: plan.renames.slice(0, 10),
+        skipped: plan.skipped.slice(0, 10)
+      },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched", workflowKind: "transform_sheets_preview", groupedOperationCount: operations.length },
+      changes,
+      proof: changes.map((change) => ({ sheetName: change.sheetName, range: usedRangeForSheet(metadata, change.sheetName), label: "sheet rename target" })),
+      resourceLinks: [operationResource(String(pending.operationId))],
+      nextAction: "call_apply_update",
+      warnings: plan.warnings
+    };
+  }
+
+  private previewCompiledColumnPlan(
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode,
+    compiled: {
+      kind: "transform_values_preview" | "derive_values_preview";
+      summary: string;
+      target: ValueColumnScope;
+      sources: ValueColumnScope[];
+      rowAlignment: Record<string, unknown>;
+      plan: CompiledColumnPlan;
+    }
+  ): Omit<AgentRunOutput, "telemetry"> {
+    const entries = changedColumnRuns(compiled.target, compiled.plan.afterValues, compiled.plan.changedRows);
+    if (entries.length === 0) {
+      return {
+        status: "SUCCESS",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: `${compiled.summary} No cell changes are needed.`,
+        answer: {
+          kind: compiled.kind,
+          target: compactValueColumnScope(compiled.target),
+          sources: compiled.sources.map(compactValueColumnScope),
+          rowAlignment: compiled.rowAlignment,
+          scannedCount: compiled.plan.scannedCount,
+          changedCount: 0,
+          skipped: compiled.plan.skipped,
+          examples: []
+        },
+        metrics: { operationRisk: "read_only", targetFingerprintStatus: "matched", workflowKind: compiled.kind },
+        proof: [{ sheetName: compiled.target.sheetName, range: compiled.target.address, label: "target column" }],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "answer_now",
+        warnings: compiled.plan.warnings
+      };
+    }
+
+    const operation: ExcelOperation = {
+      kind: "range.write_values_many",
+      operationId: makeId<OperationId>("op"),
+      workbookId: metadata.workbook.workbookId as WorkbookId,
+      destructiveLevel: "values",
+      reason: input.request,
+      entries: entries.map((entry) => ({
+        target: { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: compiled.target.sheetName, address: entry.address },
+        values: entry.values,
+        preserveFormats: true
+      }))
+    };
+    const changes: NonNullable<AgentRunOutput["changes"]> = [
+      { sheetName: compiled.target.sheetName, range: compiled.target.address, before: `${compiled.plan.scannedCount} scanned`, after: `${compiled.plan.changedCount} changed` },
+      ...compiled.plan.examples.map((example) => ({
+        sheetName: compiled.target.sheetName,
+        range: `${compiled.target.columnLetter}${example.row}`,
+        before: example.before,
+        after: example.after
+      }))
+    ];
+    const pending = this.createPendingOperation(metadata, {
+      action: { kind: "batch", operations: [operation] },
+      changes,
+      summary: `${compiled.summary} Previewed ${compiled.plan.changedCount} changed cell(s) across ${entries.length} run(s).`
+    });
+    return {
+      status: "PREVIEW_READY",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      operationId: pending.operationId,
+      confirmationToken: pending.confirmationToken,
+      summary: pending.summary,
+      answer: {
+        kind: compiled.kind,
+        target: compactValueColumnScope(compiled.target),
+        sources: compiled.sources.map(compactValueColumnScope),
+        rowAlignment: compiled.rowAlignment,
+        scannedCount: compiled.plan.scannedCount,
+        changedCount: compiled.plan.changedCount,
+        skipped: compiled.plan.skipped,
+        unmatchedCount: compiled.plan.unmatchedCount,
+        examples: compiled.plan.examples,
+        runCount: entries.length
+      },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched", workflowKind: compiled.kind, groupedOperationCount: entries.length },
+      changes,
+      proof: [
+        { sheetName: compiled.target.sheetName, range: compiled.target.address, label: "target column" },
+        ...compiled.sources.slice(0, 3).map((source) => ({ sheetName: source.sheetName, range: source.address, label: "source column" }))
+      ],
+      resourceLinks: [operationResource(String(pending.operationId))],
+      nextAction: "call_apply_update",
+      warnings: compiled.plan.warnings
+    };
   }
 
   private async previewActionHandler(
@@ -4933,6 +5314,15 @@ export class AgentOrchestrator {
     return values;
   }
 
+  private async readColumnSnapshot(workbookId: WorkbookId, sheetName: string, address: string): Promise<{ values: CellMatrix; formulas: CellMatrix }> {
+    const snapshot = await this.runtime.snapshotRanges(workbookId, [{ workbookId, sheetName, address }]);
+    const first = (snapshot as { rangeSnapshots?: Array<{ values?: CellMatrix; formulas?: CellMatrix }> }).rangeSnapshots?.[0];
+    return {
+      values: first?.values ?? [],
+      formulas: first?.formulas ?? []
+    };
+  }
+
   private createPendingOperation(
     metadata: WorkbookMetadata,
     input: {
@@ -5777,11 +6167,14 @@ function largeRangeGuardOutput(
     return undefined;
   }
   const sheet = metadata.sheets.find((candidate) => candidate.name === sheetName);
+  const searchLike = /\b(where|contains?|equals?|matching|find|search|rows?\s+where|filter)\b/i.test(input.request);
   return {
     status: "SUCCESS",
     mode: requestedMode,
     workbookContextId: metadata.workbookContextId,
-    summary: `Returned a compact summary for ${sheetName}!${range}; the requested ${requestedCells.toLocaleString()} cells exceed the inline read limit.`,
+    summary: searchLike
+      ? `The requested search over ${sheetName}!${range} is too large for an inline read; use a targeted search intent instead of broad-reading the range.`
+      : `Returned a compact summary for ${sheetName}!${range}; the requested ${requestedCells.toLocaleString()} cells exceed the inline read limit.`,
     answer: {
       kind: "large_range_guard",
       source: "cached_metadata",
@@ -5792,14 +6185,18 @@ function largeRangeGuardOutput(
       usedRange: sheet?.usedRange,
       rowCount: sheet?.rowCount,
       columnCount: sheet?.columnCount,
-      recommendation: "Ask for a smaller range, a table, specific columns, or a compact schema/profile."
+      recommendation: searchLike
+        ? "Retry once with intent.action search_range or find_similar_rows and the specific column/text predicates; do not fetch fullResultUri or broad-read the sheet."
+        : "Ask for a smaller range, a table, specific columns, or a compact schema/profile.",
+      suggestedIntentAction: searchLike ? "search_range" : undefined,
+      suggestedNextRequest: searchLike ? `Search ${sheetName} with exact column/text predicates and return bounded exact matching rows.` : undefined
     },
     metrics: { source: "cached_metadata", requestedCells, inlineCellLimit: AGENT_LARGE_RANGE_CELL_LIMIT, fullReadCellCount: 0 },
     candidates: findAgentCandidates(metadata, input).slice(0, 5),
     proof: [{ sheetName, range: sheet?.usedRange ?? range, label }],
     resourceLinks: [contextResource(metadata.workbookContextId)],
-    nextAction: "answer_now",
-    warnings: ["Large range read was summarized from cached metadata without reading cell values."]
+    nextAction: searchLike ? "manual_review" : "answer_now",
+    warnings: [searchLike ? "Large search-like read was blocked; use a targeted search intent so Open Workbook scans internally." : "Large range read was summarized from cached metadata without reading cell values."]
   };
 }
 
@@ -6729,6 +7126,101 @@ function styleWarnings(result: unknown): string[] {
   return warnings.map((warning) => isRecord(warning) && typeof warning.message === "string" ? warning.message : String(warning)).slice(0, 5);
 }
 
+function formulaReadAnswerFromSnapshot(snapshot: RangeSnapshot | undefined, patterns: unknown, sheetName: string, range: string) {
+  const values = snapshot?.values ?? [];
+  const text = snapshot?.text ?? [];
+  const rawFormulas = snapshot?.formulas ?? [];
+  const formulas = normalizeFormulaOnlyMatrix(rawFormulas);
+  const formulasR1C1 = matrixFromUnknown(isRecord(patterns) ? patterns.formulasR1C1 : undefined) ?? [];
+  const patternMatrix = matrixFromUnknown(isRecord(patterns) ? patterns.patternMatrix : undefined) ?? [];
+  const parsed = tryParseA1Address(stripSheetName(range));
+  const rowCount = Math.max(values.length, text.length, formulas.length, formulasR1C1.length, patternMatrix.length);
+  const columnCount = Math.max(maxMatrixColumns(values), maxMatrixColumns(text), maxMatrixColumns(formulas), maxMatrixColumns(formulasR1C1), maxMatrixColumns(patternMatrix));
+  const formulaColumns = new Set<number>();
+  for (const row of formulas) {
+    row.forEach((formula, index) => {
+      if (formulaLike(formula)) formulaColumns.add(index);
+    });
+  }
+  const cells: Array<Record<string, unknown>> = [];
+  let formulaCount = 0;
+  let hardcodedCount = 0;
+  let blankCount = 0;
+  let hardcodedInFormulaColumnCount = 0;
+  const missingFormulaGaps: Array<Record<string, unknown>> = [];
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+      const value = values[rowIndex]?.[columnIndex];
+      const displayedText = text[rowIndex]?.[columnIndex];
+      const formula = formulas[rowIndex]?.[columnIndex];
+      const formulaR1C1 = formulasR1C1[rowIndex]?.[columnIndex];
+      const patternHash = patternMatrix[rowIndex]?.[columnIndex];
+      const status = formulaLike(formula)
+        ? "formula"
+        : isBlankishAutoApplyValue(value) && isBlankishAutoApplyValue(displayedText)
+          ? "blank"
+          : "hardcoded";
+      if (status === "formula") formulaCount += 1;
+      if (status === "hardcoded") hardcodedCount += 1;
+      if (status === "blank") blankCount += 1;
+      const cell = parsed ? `${numberToColumn(parsed.startColumn + columnIndex)}${parsed.startRow + rowIndex}` : undefined;
+      if (status !== "formula" && formulaColumns.has(columnIndex)) {
+        hardcodedInFormulaColumnCount += 1;
+        if (missingFormulaGaps.length < 10) {
+          missingFormulaGaps.push(stripUndefinedRecord({ cell, formulaStatus: status, value, displayedText }));
+        }
+      }
+      if (cells.length < 25) {
+        cells.push(stripUndefinedRecord({
+          ...(cell ? { cell } : {}),
+          value,
+          displayedText,
+          formula: formulaLike(formula) ? formula : undefined,
+          formulaR1C1: formulaLike(formulaR1C1) ? formulaR1C1 : undefined,
+          patternHash: typeof patternHash === "string" ? patternHash : undefined,
+          formulaStatus: status
+        }));
+      }
+    }
+  }
+  return stripUndefinedRecord({
+    kind: "formula_read",
+    source: "live_read",
+    sheetName,
+    range,
+    shape: { rows: rowCount, columns: columnCount },
+    formulaCount,
+    hardcodedCount,
+    blankCount,
+    hardcodedInFormulaColumnCount,
+    missingFormulaGaps,
+    cells,
+    values,
+    text,
+    formulas,
+    formulasR1C1,
+    patternMatrix
+  }) as {
+    kind: "formula_read";
+    formulaCount: number;
+    hardcodedCount: number;
+    blankCount: number;
+    hardcodedInFormulaColumnCount: number;
+    [key: string]: unknown;
+  };
+}
+
+function formulaReadSummary(answer: { formulaCount: number; hardcodedCount: number; blankCount: number }, sheetName: string, range: string): string {
+  if (answer.formulaCount > 0) {
+    return `Read formula proof for ${sheetName}!${range}: ${answer.formulaCount} formula cell(s), ${answer.hardcodedCount} hardcoded cell(s), ${answer.blankCount} blank cell(s).`;
+  }
+  return `Read formula proof for ${sheetName}!${range}: no formula cells found; ${answer.hardcodedCount} hardcoded cell(s), ${answer.blankCount} blank cell(s).`;
+}
+
+function normalizeFormulaOnlyMatrix(matrix: CellMatrix): CellMatrix {
+  return matrix.map((row) => row.map((value) => formulaLike(value) ? value : null));
+}
+
 function formatDiagnosticsFromSnapshot(snapshot: RangeSnapshot | undefined, sheetName: string, range: string) {
   const values = snapshot?.values ?? [];
   const text = snapshot?.text ?? [];
@@ -7513,6 +8005,7 @@ interface SimilarRowRange {
 interface SimilarRowSignals {
   tokens: string[];
   numbers: number[];
+  predicates: SimilarRowPredicate[];
 }
 
 interface SimilarRowMatch {
@@ -7521,8 +8014,29 @@ interface SimilarRowMatch {
   sheetRowNumber: number;
   rowIndex: number;
   values: unknown[];
+  columns: Array<{ letter: string; name: string; role?: string; value: unknown }>;
   score: number;
   matchedSignals: string[];
+  matchedColumns: Array<{ letter: string; name: string; value: unknown; signals: string[] }>;
+  whyMatched: string;
+}
+
+interface SimilarRowPredicate {
+  label: string;
+  value: string | number;
+  match: "contains" | "equals" | "number_equals";
+  headerPattern?: RegExp;
+  role?: string;
+}
+
+interface StyleReferenceCandidate {
+  sheetName: string;
+  range: string;
+  label: string;
+  sourceKind: "section" | "table" | "sheet" | "header";
+  confidence: number;
+  reason: string;
+  nextAction: string;
 }
 
 function compactWorkbookContextHints(metadata: WorkbookMetadata, sheetName: string, table?: TableMetadata): string[] {
@@ -7569,36 +8083,98 @@ function likelyHistoricalSheets(metadata: WorkbookMetadata, sheetName: string): 
 function similarRowSignals(input: AgentRunInput, values: CellMatrix): SimilarRowSignals {
   const rawValues = values.flat().filter((value) => value !== null && value !== undefined && String(value).trim().length > 0);
   const rawText = [input.request, ...rawValues.map((value) => String(value))].join(" ");
-  const tokens = Array.from(new Set((rawText.match(/[A-Za-z0-9][A-Za-z0-9_-]{2,}/g) ?? [])
-    .map((token) => token.toLowerCase())
+  const tokens = Array.from(new Set(tokenizeReferenceText(rawText)
     .filter((token) => !/^\d{4}$/.test(token) && !COMMON_SIMILAR_ROW_TOKENS.has(token))))
     .slice(0, 24);
   const numbers = rawValues
     .map((value) => typeof value === "number" ? value : Number(String(value).replace(/,/g, "")))
     .filter((value) => Number.isFinite(value))
     .slice(0, 12);
-  return { tokens, numbers };
+  const requestNumbers = Array.from(input.request.matchAll(/(?<![\w-])-?\d[\d,]*(?:\.\d+)?(?![\w-])/g))
+    .map((match) => Number(match[0].replace(/,/g, "")))
+    .filter((value) => Number.isFinite(value));
+  const predicates = referencePredicatesFromRequest(input.request, [...numbers, ...requestNumbers]);
+  return { tokens, numbers: Array.from(new Set([...numbers, ...requestNumbers])).slice(0, 16), predicates };
 }
 
-const COMMON_SIMILAR_ROW_TOKENS = new Set(["find", "similar", "rows", "row", "current", "this", "that", "with", "from", "last", "month", "sheet", "transaction", "transactions"]);
+const COMMON_SIMILAR_ROW_TOKENS = new Set(["find", "similar", "rows", "row", "current", "this", "that", "with", "from", "last", "month", "sheet", "transaction", "transactions", "show", "look", "more", "into", "how", "were", "was", "label", "labeled"]);
+
+function tokenizeReferenceText(value: string): string[] {
+  return (value.match(/[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N}_-]{1,}/gu) ?? [])
+    .map((token) => token.toLowerCase())
+    .filter((token) => token.length > 1);
+}
+
+function referencePredicatesFromRequest(request: string, numbers: number[]): SimilarRowPredicate[] {
+  const lower = request.toLowerCase();
+  const predicates: SimilarRowPredicate[] = [];
+  if (/\binflow\b|\bcash in\b|เงินเข้า|เติมเงิน|เพิ่มเงิน|add(?:ing)? fund|fund(?:ing)?|capital/i.test(request)) {
+    predicates.push({ label: "Direction is Inflow", value: "inflow", match: "equals", headerPattern: /direction|flow|cash\s*in\s*out/i, role: "status" });
+  }
+  if (/\boutflow\b|\bcash out\b|จ่าย|ค่า|ซ่อม/i.test(request)) {
+    predicates.push({ label: "Direction is Outflow", value: "outflow", match: "equals", headerPattern: /direction|flow|cash\s*in\s*out/i, role: "status" });
+  }
+  for (const match of request.matchAll(/\bX\d{3,}\b/gi)) {
+    predicates.push({ label: `Transfer contains ${match[0].toUpperCase()}`, value: match[0].toLowerCase(), match: "contains", headerPattern: /transfer|from|to|payer|payee|vendor|customer|account/i });
+  }
+  if (/\bprach\b|yothapra/i.test(request)) {
+    predicates.push({ label: "Transfer contains PRACH", value: "prach", match: "contains", headerPattern: /transfer|from|to|payer|payee|vendor|customer|account/i });
+  }
+  for (const match of request.matchAll(/\b\d{2,3}-\d{4}\b/g)) {
+    predicates.push({ label: `Identifier contains ${match[0]}`, value: match[0].toLowerCase(), match: "contains", headerPattern: /truck|vehicle|id|job|container/i, role: "identifier" });
+  }
+  for (const number of numbers.filter((value) => Math.abs(value) >= 1)) {
+    predicates.push({ label: `Amount equals ${number}`, value: number, match: "number_equals", headerPattern: /amount|price|variance|total|net|cash|actual|fee|tax|lifting|collect/i, role: "amount" });
+  }
+  return dedupeBy(predicates, (predicate) => `${predicate.match}:${String(predicate.value).toLowerCase()}:${predicate.headerPattern?.source ?? predicate.role ?? ""}`).slice(0, 10);
+}
+
+function shouldRunReferenceRowSearch(input: AgentRunInput): boolean {
+  if (intentAction(input) === "find_style_references") {
+    return false;
+  }
+  const request = input.request.toLowerCase();
+  return /\b(reference|similar|look back|last month|prior|previous|before|how did we|how we|label(?:ed)?|classif(?:y|ied|ication))\b/.test(request)
+    && !shouldRunStyleReferenceSearch(input);
+}
+
+function shouldRunStyleReferenceSearch(input: AgentRunInput): boolean {
+  const request = input.request.toLowerCase();
+  return /\b(style|styling|format|formatting|template|look like|same as|copy.*from)\b/.test(request)
+    && /\b(reference|example|before|previous|last month|prior|source|template|same as|look like)\b/.test(request);
+}
+
+function shouldSearchResolvedRange(input: AgentRunInput, metadata: WorkbookMetadata, sheetName: string, sourceRange: string): boolean {
+  const parsed = tryParseA1Address(stripSheetName(sourceRange));
+  const rowCount = parsed ? parsed.endRow - parsed.startRow + 1 : 1;
+  if (rowCount <= 3) {
+    return false;
+  }
+  const request = normalizeComparableText(input.request);
+  const sheetMentioned = request.includes(normalizeComparableText(sheetName));
+  const targetSheet = input.target?.sheetName && normalizeComparableText(input.target.sheetName) === normalizeComparableText(sheetName);
+  const hasRelated = likelyHistoricalSheets(metadata, sheetName).length > 0;
+  return Boolean(sheetMentioned || targetSheet || !hasRelated);
+}
 
 function similarRowCandidateRanges(metadata: WorkbookMetadata, sourceSheetName: string, sourceRange: string, input: AgentRunInput): SimilarRowRange[] {
   const ranges: SimilarRowRange[] = [];
   const sourceParsed = tryParseA1Address(stripSheetName(sourceRange));
   const relatedSheets = new Set(likelyHistoricalSheets(metadata, sourceSheetName));
-  const targetHints = [
-    input.request,
-    ...(Array.isArray(input.intent?.targetHints) ? input.intent.targetHints : [])
-  ].map(normalizeComparableText);
+  const targetHints = similarRowTargetHints(input);
+  const explicitSheets = explicitSimilarRowReferenceSheets(metadata, sourceSheetName, input);
   for (const table of metadata.tables) {
     if (table.sheetName === sourceSheetName && table.range === sourceRange) {
+      continue;
+    }
+    if (explicitSheets.size > 0 && !explicitSheets.has(table.sheetName)) {
       continue;
     }
     if (table.dataRange) {
       ranges.push({
         sheetName: table.sheetName,
         range: clampRangeForSimilarRows(table.dataRange),
-        reason: relatedSheets.has(table.sheetName) ? "related table" : "table"
+        reason: explicitSheets.has(table.sheetName) ? "requested reference table" : relatedSheets.has(table.sheetName) ? "related table" : "table"
       });
     }
   }
@@ -7606,11 +8182,14 @@ function similarRowCandidateRanges(metadata: WorkbookMetadata, sourceSheetName: 
     if (section.sheetName === sourceSheetName && section.range === sourceRange) {
       continue;
     }
+    if (explicitSheets.size > 0 && !explicitSheets.has(section.sheetName)) {
+      continue;
+    }
     if (section.kind === "table-like" || section.columns.length > 0 || relatedSheets.has(section.sheetName)) {
       ranges.push({
         sheetName: section.sheetName,
         range: clampRangeForSimilarRows(section.range),
-        reason: relatedSheets.has(section.sheetName) ? "related section" : "table-like section"
+        reason: explicitSheets.has(section.sheetName) ? "requested reference section" : relatedSheets.has(section.sheetName) ? "related section" : "table-like section"
       });
     }
   }
@@ -7619,11 +8198,40 @@ function similarRowCandidateRanges(metadata: WorkbookMetadata, sourceSheetName: 
       continue;
     }
     const mentioned = targetHints.some((hint) => hint.includes(normalizeComparableText(sheet.name)));
+    if (explicitSheets.size > 0 && !explicitSheets.has(sheet.name)) {
+      continue;
+    }
     if (relatedSheets.has(sheet.name) || mentioned || sheet.kind === "transaction") {
       const sameShape = sourceParsed ? clampRangeForSimilarRows(sheet.usedRange, sourceParsed.endColumn - sourceParsed.startColumn + 1) : clampRangeForSimilarRows(sheet.usedRange);
-      ranges.push({ sheetName: sheet.name, range: sameShape, reason: relatedSheets.has(sheet.name) ? "related sheet" : "candidate sheet" });
+      ranges.push({ sheetName: sheet.name, range: sameShape, reason: mentioned ? "requested reference sheet" : relatedSheets.has(sheet.name) ? "related sheet" : "candidate sheet" });
     }
   }
+  return dedupeSimilarRanges(ranges);
+}
+
+function similarRowTargetHints(input: AgentRunInput): string[] {
+  return [
+    input.request,
+    ...(Array.isArray(input.intent?.targetHints) ? input.intent.targetHints : [])
+  ].map(normalizeComparableText);
+}
+
+function explicitSimilarRowReferenceSheets(metadata: WorkbookMetadata, sourceSheetName: string, input: AgentRunInput): Set<string> {
+  const hints = similarRowTargetHints(input);
+  const explicitSheets = new Set<string>();
+  for (const sheet of metadata.sheets) {
+    const sheetName = normalizeComparableText(sheet.name);
+    if (sheetName.length > 0 && hints.some((hint) => hint.includes(sheetName))) {
+      explicitSheets.add(sheet.name);
+    }
+  }
+  if (explicitSheets.size > 1 && explicitSheets.has(sourceSheetName)) {
+    explicitSheets.delete(sourceSheetName);
+  }
+  return explicitSheets;
+}
+
+function dedupeSimilarRanges(ranges: SimilarRowRange[]): SimilarRowRange[] {
   const seen = new Set<string>();
   return ranges.filter((range) => {
     const key = `${range.sheetName}!${range.range}`;
@@ -7645,27 +8253,230 @@ function clampRangeForSimilarRows(range: string, maxColumns = 20): string {
   return `${numberToColumn(parsed.startColumn)}${parsed.startRow}:${numberToColumn(endColumn)}${endRow}`;
 }
 
-function rankSimilarRows(candidate: SimilarRowRange, values: CellMatrix, signals: SimilarRowSignals): SimilarRowMatch[] {
+function rankSimilarRows(metadata: WorkbookMetadata, candidate: SimilarRowRange, values: CellMatrix, signals: SimilarRowSignals): SimilarRowMatch[] {
   const parsed = tryParseA1Address(stripSheetName(candidate.range));
   const startRow = parsed?.startRow ?? 1;
+  const columns = columnsForCandidateRange(metadata, candidate.sheetName, candidate.range);
   return values
     .map((row, rowIndex) => {
-      const rowText = row.map((value) => String(value ?? "").toLowerCase()).join(" ");
+      const rowText = normalizeReferenceCellText(row.map((value) => String(value ?? "")).join(" "));
       const tokenMatches = signals.tokens.filter((token) => rowText.includes(token));
       const numberMatches = signals.numbers.filter((number) => row.some((value) => Number(String(value).replace(/,/g, "")) === number));
-      const score = tokenMatches.length * 3 + numberMatches.length * 2 + (candidate.reason.includes("related") ? 2 : 0);
+      const predicateMatches = matchReferencePredicates(row, columns, signals.predicates);
+      const matchedColumns = matchedReferenceColumns(row, columns, [...tokenMatches, ...numberMatches.map((number) => String(number))], predicateMatches);
+      const score = tokenMatches.length * 3
+        + numberMatches.length * 2
+        + predicateMatches.length * 5
+        + (candidate.reason.includes("related") ? 2 : 0)
+        + importantReferenceColumnBonus(columns, row);
       const sheetRowNumber = startRow + rowIndex;
+      const projectedColumns = projectReferenceColumns(row, columns, matchedColumns);
       return {
         sheetName: candidate.sheetName,
         range: parsed ? `${numberToColumn(parsed.startColumn)}${sheetRowNumber}:${numberToColumn(parsed.endColumn)}${sheetRowNumber}` : candidate.range,
         sheetRowNumber,
         rowIndex,
-        values: row,
+        values: projectedColumns.map((column) => column.value),
+        columns: projectedColumns,
         score,
-        matchedSignals: [...tokenMatches, ...numberMatches.map((number) => String(number))].slice(0, 10)
+        matchedSignals: [...predicateMatches.map((match) => match.label), ...tokenMatches, ...numberMatches.map((number) => String(number))].slice(0, 12),
+        matchedColumns,
+        whyMatched: referenceMatchReason(candidate, predicateMatches, tokenMatches, numberMatches)
       };
     })
     .filter((match) => match.score > 0 && match.values.some((value) => value !== null && value !== undefined && String(value).trim().length > 0));
+}
+
+function normalizeReferenceCellText(value: string): string {
+  return value.toLowerCase().normalize("NFKC");
+}
+
+function columnsForCandidateRange(metadata: WorkbookMetadata, sheetName: string, range: string): ColumnMetadata[] {
+  const parsed = tryParseA1Address(stripSheetName(range));
+  const startColumn = parsed?.startColumn ?? 1;
+  const endColumn = parsed?.endColumn ?? startColumn + 25;
+  const table = metadata.tables.find((candidate) => candidate.sheetName === sheetName && rangesOverlap(candidate.range, range));
+  const section = metadata.sections.find((candidate) => candidate.sheetName === sheetName && rangesOverlap(candidate.range, range));
+  const sheet = metadata.sheets.find((candidate) => candidate.name === sheetName);
+  const sourceColumns = table?.columns.length ? table.columns : section?.columns.length ? section.columns : sheet?.headers[0]?.columns ?? [];
+  const filtered = sourceColumns.filter((column) => column.index + 1 >= startColumn && column.index + 1 <= endColumn);
+  if (filtered.length > 0) {
+    return filtered.map((column) => ({ ...column, index: column.index - (startColumn - 1) }));
+  }
+  return Array.from({ length: Math.max(0, endColumn - startColumn + 1) }, (_unused, index) => ({
+    index,
+    letter: numberToColumn(startColumn + index),
+    name: numberToColumn(startColumn + index),
+    normalizedName: normalizeHeaderName(numberToColumn(startColumn + index)),
+    inferredType: "unknown" as const,
+    role: "unknown" as const,
+    importance: 0.2
+  }));
+}
+
+function rangesOverlap(left: string, right: string): boolean {
+  try {
+    return rangesOverlapAddresses(stripSheetName(left), stripSheetName(right));
+  } catch {
+    return false;
+  }
+}
+
+function matchReferencePredicates(row: unknown[], columns: ColumnMetadata[], predicates: SimilarRowPredicate[]): SimilarRowPredicate[] {
+  return predicates.filter((predicate) => columns.some((column) => {
+    const value = row[column.index];
+    if (value === undefined || value === null || value === "") {
+      return false;
+    }
+    const headerMatches = predicate.headerPattern?.test(column.name) || predicate.headerPattern?.test(column.normalizedName) || (predicate.role !== undefined && column.role === predicate.role);
+    if (!headerMatches) {
+      return false;
+    }
+    if (predicate.match === "number_equals") {
+      return Number(String(value).replace(/,/g, "")) === predicate.value;
+    }
+    const comparable = normalizeReferenceCellText(String(value));
+    const expected = normalizeReferenceCellText(String(predicate.value));
+    return predicate.match === "equals" ? comparable === expected : comparable.includes(expected);
+  }));
+}
+
+function matchedReferenceColumns(
+  row: unknown[],
+  columns: ColumnMetadata[],
+  signals: string[],
+  predicateMatches: SimilarRowPredicate[]
+): SimilarRowMatch["matchedColumns"] {
+  const matched = columns.flatMap((column) => {
+    const value = row[column.index];
+    if (value === undefined || value === null || value === "") {
+      return [];
+    }
+    const text = normalizeReferenceCellText(String(value));
+    const valueSignals = signals.filter((signal) => text.includes(normalizeReferenceCellText(signal)));
+    const predicateSignals = predicateMatches
+      .filter((predicate) => predicate.headerPattern?.test(column.name) || predicate.headerPattern?.test(column.normalizedName) || (predicate.role !== undefined && column.role === predicate.role))
+      .map((predicate) => predicate.label);
+    const allSignals = [...valueSignals, ...predicateSignals];
+    return allSignals.length > 0 ? [{ letter: column.letter, name: column.name, value, signals: allSignals.slice(0, 5) }] : [];
+  });
+  return dedupeBy(matched, (entry) => `${entry.letter}:${entry.name}`).slice(0, 8);
+}
+
+function projectReferenceColumns(
+  row: unknown[],
+  columns: ColumnMetadata[],
+  matchedColumns: SimilarRowMatch["matchedColumns"]
+): SimilarRowMatch["columns"] {
+  const matchedLetters = new Set(matchedColumns.map((column) => column.letter));
+  const preferred = columns
+    .filter((column) => matchedLetters.has(column.letter) || isImportantReferenceColumn(column))
+    .sort((left, right) => Number(matchedLetters.has(right.letter)) - Number(matchedLetters.has(left.letter)) || (right.importance ?? roleImportance(right.role ?? "unknown")) - (left.importance ?? roleImportance(left.role ?? "unknown")) || left.index - right.index)
+    .slice(0, 12)
+    .sort((left, right) => left.index - right.index);
+  const selected = preferred.length > 0 ? preferred : columns.slice(0, 12);
+  return selected.map((column) => stripUndefinedRecord({
+    letter: column.letter,
+    name: column.name,
+    ...(column.role !== undefined ? { role: column.role } : {}),
+    value: row[column.index]
+  }) as SimilarRowMatch["columns"][number]);
+}
+
+function isImportantReferenceColumn(column: ColumnMetadata): boolean {
+  const name = `${column.name} ${column.normalizedName}`;
+  return ["date", "description", "vendor", "account", "amount", "status", "category", "identifier"].includes(column.role ?? "")
+    || /date|description|type|direction|amount|actual|variance|transfer|from|to|truck|job|vendor|customer|account|note/i.test(name);
+}
+
+function importantReferenceColumnBonus(columns: ColumnMetadata[], row: unknown[]): number {
+  return columns.some((column) => isImportantReferenceColumn(column) && row[column.index] !== undefined && row[column.index] !== null && row[column.index] !== "") ? 1 : 0;
+}
+
+function referenceMatchReason(candidate: SimilarRowRange, predicates: SimilarRowPredicate[], tokens: string[], numbers: number[]): string {
+  const reasons = [
+    candidate.reason,
+    ...predicates.map((predicate) => predicate.label),
+    ...(tokens.length > 0 ? [`text matched: ${tokens.slice(0, 4).join(", ")}`] : []),
+    ...(numbers.length > 0 ? [`number matched: ${numbers.slice(0, 4).join(", ")}`] : [])
+  ];
+  return reasons.slice(0, 4).join("; ");
+}
+
+function styleReferenceCandidates(metadata: WorkbookMetadata, input: AgentRunInput): StyleReferenceCandidate[] {
+  const request = normalizeComparableText(input.request);
+  const targetSheet = input.target?.sheetName;
+  const related = targetSheet ? new Set(likelyHistoricalSheets(metadata, targetSheet)) : new Set<string>();
+  const requestedSheets = new Set(metadata.sheets
+    .filter((sheet) => request.includes(normalizeComparableText(sheet.name)))
+    .map((sheet) => sheet.name));
+  const candidates: StyleReferenceCandidate[] = [
+    ...metadata.sections.flatMap((section) => {
+      if (!section.range || section.kind === "notes") {
+        return [];
+      }
+      const score = (related.has(section.sheetName) ? 0.3 : 0)
+        + (requestedSheets.has(section.sheetName) ? 0.3 : 0)
+        + (section.kind === "table-like" ? 0.2 : 0)
+        + Math.min(0.2, section.confidence / 5);
+      return [{
+        sheetName: section.sheetName,
+        range: section.headerRange ?? section.range,
+        label: section.label,
+        sourceKind: "section" as const,
+        confidence: Math.min(0.98, 0.45 + score),
+        reason: `${section.kind} section${related.has(section.sheetName) ? " on related sheet" : ""}`,
+        nextAction: "Use copy_style_from_template or read_style_summary on this source range before applying style."
+      }];
+    }),
+    ...metadata.tables.map((table) => ({
+      sheetName: table.sheetName,
+      range: table.headerRange ?? table.range,
+      label: table.name ?? table.id,
+      sourceKind: "table" as const,
+      confidence: Math.min(0.96, 0.62 + (related.has(table.sheetName) ? 0.2 : 0) + (requestedSheets.has(table.sheetName) ? 0.12 : 0)),
+      reason: related.has(table.sheetName) ? "table on related sheet" : "workbook table",
+      nextAction: "Use copy_style_from_template for matching table/header/body dimensions."
+    })),
+    ...metadata.sheets.flatMap<StyleReferenceCandidate>((sheet) => {
+      if (!sheet.usedRange) return [];
+      const headers = sheet.headers.flatMap((header) => ({
+        sheetName: sheet.name,
+        range: header.range,
+        label: `${sheet.name} header row`,
+        sourceKind: "header" as const,
+        confidence: Math.min(0.93, 0.58 + (related.has(sheet.name) ? 0.18 : 0) + (requestedSheets.has(sheet.name) ? 0.12 : 0)),
+        reason: "header style candidate",
+        nextAction: "Use this as a source for header formatting only."
+      }));
+      return headers.length > 0 ? headers : [{
+        sheetName: sheet.name,
+        range: sheet.usedRange,
+        label: `${sheet.name} used range`,
+        sourceKind: "sheet" as const,
+        confidence: Math.min(0.82, 0.38 + (related.has(sheet.name) ? 0.2 : 0) + (requestedSheets.has(sheet.name) ? 0.16 : 0)),
+        reason: related.has(sheet.name) ? "related sheet style candidate" : "sheet style candidate",
+        nextAction: "Read style summary first; avoid copying whole-sheet styles unless user asks broadly."
+      }];
+    })
+  ];
+  return dedupeBy(candidates, (candidate) => `${candidate.sheetName}!${candidate.range}`)
+    .filter((candidate) => candidate.confidence >= 0.5 || requestedSheets.has(candidate.sheetName))
+    .sort((left, right) => right.confidence - left.confidence || left.sheetName.localeCompare(right.sheetName));
+}
+
+function compactStyleReferenceFingerprint(result: unknown): unknown {
+  const fingerprint = result && typeof result === "object" ? (result as { fingerprint?: unknown }).fingerprint : undefined;
+  const typed = fingerprint && typeof fingerprint === "object" ? fingerprint as Record<string, unknown> : undefined;
+  const dimensions = typed?.dimensions && typeof typed.dimensions === "object" ? typed.dimensions as Record<string, unknown> : undefined;
+  return stripUndefinedRecord({
+    address: typed?.address,
+    fills: compactStyleDimension(dimensions?.fills),
+    fonts: compactStyleDimension(dimensions?.fonts),
+    borders: compactStyleDimension(dimensions?.borders),
+    numberFormats: compactStyleDimension(dimensions?.numberFormats),
+    dataValidation: compactStyleDimension(dimensions?.dataValidation)
+  });
 }
 
 function periodScore(value: string): number | undefined {
@@ -7969,7 +8780,7 @@ function tableNeedsInput(
 }
 
 function normalizeComparableText(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ").replace(/[^\w ]/g, "");
+  return value.trim().toLowerCase().normalize("NFKC").replace(/\s+/g, " ").replace(/[^\p{L}\p{M}\p{N}_ ]/gu, "");
 }
 
 function dedupeBy<T>(values: T[], keyFor: (value: T) => string): T[] {
@@ -8177,6 +8988,9 @@ function minimalAnswerForBudget(answer: unknown, continuation: AgentRunOutput["c
       resource: continuation?.resultUri ?? (workbookContextId ? contextResource(String(workbookContextId)).uri : undefined)
     });
   }
+  if (typed.kind === "semantic_workbook_index") {
+    return compactSemanticIndexAnswer(typed, continuation?.resultUri, continuation?.fullResultUri);
+  }
   if (typed.kind === "table_compact_read") {
     return stripUndefinedRecord({
       kind: typed.kind,
@@ -8200,6 +9014,18 @@ function minimalAnswerForBudget(answer: unknown, continuation: AgentRunOutput["c
       fullResultUri: typed.fullResultUri ?? continuation?.fullResultUri,
       resource: continuation?.resultUri ?? (workbookContextId ? contextResource(String(workbookContextId)).uri : undefined)
     });
+  }
+  if (typed.kind === "formula_read") {
+    return compactFormulaReadAnswer(typed, "brief", continuation?.resultUri, continuation?.fullResultUri);
+  }
+  if (typed.kind === "formula_patterns") {
+    return compactFormulaPatternsAnswer(typed, "brief", continuation?.resultUri, continuation?.fullResultUri);
+  }
+  if (typed.kind === "similar_rows") {
+    return compactSimilarRowsAnswer(typed, continuation?.resultUri, continuation?.fullResultUri);
+  }
+  if (typed.kind === "style_reference_candidates") {
+    return compactStyleReferenceCandidatesAnswer(typed, continuation?.resultUri, continuation?.fullResultUri);
   }
   return stripUndefinedRecord({
     kind: typed.kind ?? "compacted_answer",
@@ -8566,7 +9392,57 @@ function compactAnswerForResponseMode(answer: unknown, responseMode: AgentRespon
   if (kind === "similar_rows") {
     return compactSimilarRowsAnswer(typed, resultUri, fullResultUri);
   }
+  if (kind === "style_reference_candidates") {
+    return compactStyleReferenceCandidatesAnswer(typed, resultUri, fullResultUri);
+  }
+  if (kind === "formula_read") {
+    return compactFormulaReadAnswer(typed, responseMode, resultUri, fullResultUri);
+  }
+  if (kind === "formula_patterns") {
+    return compactFormulaPatternsAnswer(typed, responseMode, resultUri, fullResultUri);
+  }
   return compactGenericAnswer(typed, resultUri, fullResultUri);
+}
+
+function compactFormulaReadAnswer(answer: Record<string, unknown>, responseMode: AgentResponseMode, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  const maxCells = responseMode === "standard" ? 12 : 8;
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    source: answer.source,
+    sheetName: answer.sheetName,
+    range: answer.range,
+    shape: answer.shape,
+    formulaCount: answer.formulaCount,
+    hardcodedCount: answer.hardcodedCount,
+    blankCount: answer.blankCount,
+    hardcodedInFormulaColumnCount: answer.hardcodedInFormulaColumnCount,
+    missingFormulaGaps: Array.isArray(answer.missingFormulaGaps) ? answer.missingFormulaGaps.slice(0, 5) : undefined,
+    cells: Array.isArray(answer.cells) ? answer.cells.slice(0, maxCells) : undefined,
+    formulas: compactMatrixLike(answer.formulas, responseMode === "standard" ? 5 : 3, responseMode === "standard" ? 8 : 5),
+    formulasR1C1: compactMatrixLike(answer.formulasR1C1, responseMode === "standard" ? 5 : 3, responseMode === "standard" ? 8 : 5),
+    values: compactMatrixLike(answer.values, responseMode === "standard" ? 5 : 3, responseMode === "standard" ? 8 : 5),
+    text: compactMatrixLike(answer.text, responseMode === "standard" ? 5 : 3, responseMode === "standard" ? 8 : 5),
+    patternMatrix: compactMatrixLike(answer.patternMatrix, responseMode === "standard" ? 5 : 3, responseMode === "standard" ? 8 : 5),
+    resultUri,
+    fullResultUri
+  });
+}
+
+function compactFormulaPatternsAnswer(answer: Record<string, unknown>, responseMode: AgentResponseMode, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  const patterns = isRecord(answer.patterns) ? answer.patterns : {};
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    workbookId: patterns.workbookId,
+    sheetName: patterns.sheetName,
+    address: patterns.address,
+    formulaCount: patterns.formulaCount,
+    patterns: Array.isArray(patterns.patterns) ? patterns.patterns.slice(0, responseMode === "standard" ? 8 : 5) : undefined,
+    cells: Array.isArray(patterns.cells) ? patterns.cells.slice(0, responseMode === "standard" ? 10 : 5) : undefined,
+    formulas: compactMatrixLike(patterns.formulas, responseMode === "standard" ? 5 : 3, responseMode === "standard" ? 8 : 5),
+    formulasR1C1: compactMatrixLike(patterns.formulasR1C1, responseMode === "standard" ? 5 : 3, responseMode === "standard" ? 8 : 5),
+    resultUri,
+    fullResultUri
+  });
 }
 
 function compactRangeSchemaAnswer(answer: Record<string, unknown>, responseMode: AgentResponseMode, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
@@ -8974,17 +9850,47 @@ function compactSimilarRowsAnswer(answer: Record<string, unknown>, resultUri?: s
           range: typed.range,
           sheetRowNumber: typed.sheetRowNumber,
           values: typed.values,
+          columns: Array.isArray(typed.columns) ? typed.columns.slice(0, 12) : undefined,
           score: typed.score,
-          matchedSignals: typed.matchedSignals
+          matchedSignals: typed.matchedSignals,
+          matchedColumns: Array.isArray(typed.matchedColumns) ? typed.matchedColumns.slice(0, 8) : undefined,
+          whyMatched: typed.whyMatched
         });
       })
     : undefined;
   return stripUndefinedRecord({
     kind: answer.kind,
     source: answer.source,
+    sourceMode: answer.sourceMode,
     signals: Array.isArray(answer.signals) ? answer.signals.slice(0, 12) : undefined,
+    predicates: Array.isArray(answer.predicates) ? answer.predicates.slice(0, 10) : undefined,
     comparedRanges: Array.isArray(answer.comparedRanges) ? answer.comparedRanges.slice(0, 6) : undefined,
     rows,
+    resultUri,
+    fullResultUri
+  });
+}
+
+function compactStyleReferenceCandidatesAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  const candidates = Array.isArray(answer.candidates)
+    ? answer.candidates.slice(0, 8).map((candidate) => {
+        const typed = candidate as Record<string, unknown>;
+        return stripUndefinedRecord({
+          sheetName: typed.sheetName,
+          range: typed.range,
+          label: typed.label,
+          sourceKind: typed.sourceKind,
+          confidence: typed.confidence,
+          reason: typed.reason,
+          styleSummary: typed.styleSummary,
+          nextAction: typed.nextAction
+        });
+      })
+    : undefined;
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    source: answer.source,
+    candidates,
     resultUri,
     fullResultUri
   });
@@ -9522,8 +10428,9 @@ function isValidationIntentAction(action: AgentIntentAction | undefined): action
 
 function isFormulaReadIntentAction(
   action: AgentIntentAction | undefined
-): action is "read_formula_patterns" | "get_formula_dependency_graph" | "trace_formula_precedents" | "trace_formula_dependents" | "find_formula_errors" | "explain_formula" {
-  return action === "read_formula_patterns"
+): action is "read_formulas" | "read_formula_patterns" | "get_formula_dependency_graph" | "trace_formula_precedents" | "trace_formula_dependents" | "find_formula_errors" | "explain_formula" {
+  return action === "read_formulas"
+    || action === "read_formula_patterns"
     || action === "get_formula_dependency_graph"
     || action === "trace_formula_precedents"
     || action === "trace_formula_dependents"
@@ -9943,6 +10850,10 @@ function hasAdvancedMutationKeyword(request: string): boolean {
 function autoApplyDecision(input: AgentRunInput, preview: Omit<AgentRunOutput, "telemetry">): { allow: true; safetyDecision: string } | { allow: false; safetyDecision: string; reason: string } {
   if (preview.status !== "PREVIEW_READY") {
     return { allow: false, safetyDecision: "manual_review:preview_not_ready", reason: "preview did not produce an apply-ready operation" };
+  }
+  const action = intentAction(input);
+  if (action === "transform_values" || action === "derive_values") {
+    return { allow: false, safetyDecision: "manual_review:broad_compiled_transform", reason: "backend-compiled broad transforms and derivations require preview before apply" };
   }
   if (!input.values) {
     return { allow: false, safetyDecision: "manual_review:missing_values", reason: "values were not provided explicitly" };
@@ -10455,6 +11366,1152 @@ function addressFromBounds(startRow: number, startColumn: number, rows: number, 
   const endRow = startRow + Math.max(1, rows) - 1;
   const endColumn = startColumn + Math.max(1, columns) - 1;
   return `${numberToColumn(startColumn)}${startRow}:${numberToColumn(endColumn)}${endRow}`;
+}
+
+type TransformValuesOperation = "add_prefix" | "add_suffix" | "replace_text" | "normalize_whitespace" | "case" | "fill_blank" | "map_values" | "conditional_replace";
+type DeriveValuesOperation = "copy_from_source" | "copy_if_blank" | "extract_pattern" | "lookup_map" | "conditional_map" | "normalize_from_source" | "formula_like";
+
+interface ValueColumnScope {
+  sheetName: string;
+  address: string;
+  columnLetter: string;
+  startRow: number;
+  endRow: number;
+  rowCount: number;
+  headerName?: string;
+  tableName?: string;
+  sectionId?: string;
+}
+
+interface CompiledColumnPlan {
+  afterValues: unknown[];
+  changedRows: boolean[];
+  scannedCount: number;
+  changedCount: number;
+  skipped: Record<string, number>;
+  unmatchedCount?: number;
+  examples: Array<Record<string, unknown>>;
+  warnings: string[];
+}
+
+interface LookupMapScope {
+  keyScope: ValueColumnScope;
+  valueScope: ValueColumnScope;
+  duplicateKeys: string[];
+}
+
+interface SettlementBundlePlan {
+  ok: true;
+  sheetName: string;
+  tableName?: string;
+  scopes: {
+    cashAmount: ValueColumnScope;
+    actualAmount: ValueColumnScope;
+    paymentVariance: ValueColumnScope;
+    reconciliationNote: ValueColumnScope;
+    detailNotes: ValueColumnScope;
+  };
+  reference?: Record<string, unknown>;
+  operations: ExcelOperation[];
+  changes: NonNullable<AgentRunOutput["changes"]>;
+  proof: AgentProofReference[];
+  scannedCount: number;
+  changedCount: number;
+  skipped: Record<string, number>;
+  examples: Array<Record<string, unknown>>;
+  warnings: string[];
+}
+
+function transformOperationFromInput(input: AgentRunInput): { ok: true; operation: TransformValuesOperation } | { ok: false; summary: string; warnings: string[] } {
+  const raw = keyedStringValue(input.values, "operation", "transform", "type");
+  const normalized = normalizeOperationName(raw ?? "");
+  if (isTransformValuesOperation(normalized)) {
+    return { ok: true, operation: normalized };
+  }
+  const request = input.request.toLowerCase();
+  if (/\bprefix\b|\bprepend\b|\badd .{0,20}\bfront\b/.test(request)) return { ok: true, operation: "add_prefix" };
+  if (/\bsuffix\b|\bappend\b/.test(request)) return { ok: true, operation: "add_suffix" };
+  if (/\breplace\b|\bchange\b/.test(request)) return { ok: true, operation: "replace_text" };
+  if (/\bfill\b/.test(request) && /\bblank|empty|missing\b/.test(request)) return { ok: true, operation: "fill_blank" };
+  if (/\btrim\b|\bnormalize\s+space|\bwhitespace\b/.test(request)) return { ok: true, operation: "normalize_whitespace" };
+  return {
+    ok: false,
+    summary: "Value transform needs values.operation such as add_prefix, replace_text, fill_blank, map_values, or normalize_whitespace.",
+    warnings: ["Use transform_values for deterministic column transforms; provide operation plus required values like prefix, find/replacement, value, or map."]
+  };
+}
+
+function derivationOperationFromInput(input: AgentRunInput): { ok: true; operation: DeriveValuesOperation } | { ok: false; summary: string; warnings: string[] } {
+  const raw = keyedStringValue(input.values, "derivation", "operation", "type");
+  const normalized = normalizeOperationName(raw ?? "");
+  if (isDeriveValuesOperation(normalized)) {
+    return { ok: true, operation: normalized };
+  }
+  if (normalized === "formula_like") return { ok: true, operation: "formula_like" };
+  const request = input.request.toLowerCase();
+  if (/\bfill\b/.test(request) && /\bblank|empty|missing\b/.test(request)) return { ok: true, operation: "copy_if_blank" };
+  if (/\bextract\b/.test(request)) return { ok: true, operation: "extract_pattern" };
+  if (/\blookup|master|map\b/.test(request)) return { ok: true, operation: "lookup_map" };
+  if (/\b(formula|calculate|calculation|diff|difference|variance|actual\s*-\s*cash|cash\s*-\s*actual)\b/.test(request)) return { ok: true, operation: "formula_like" };
+  if (/\bbased on|conditional|if\b/.test(request)) return { ok: true, operation: "conditional_map" };
+  if (/\bnormalize\b/.test(request)) return { ok: true, operation: "normalize_from_source" };
+  return { ok: true, operation: "copy_from_source" };
+}
+
+async function compileSettlementBundle(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput,
+  readColumn: (scope: ValueColumnScope) => Promise<{ values: CellMatrix; formulas: CellMatrix }>
+): Promise<SettlementBundlePlan | { ok: false; summary: string; warnings: string[]; candidates?: AgentCandidate[] }> {
+  const values = input.values ?? {};
+  const sheetName = input.target?.sheetName ?? keyedStringValue(values, "targetSheetName", "sheetName") ?? metadata.workbook.activeSheet ?? metadata.sheets[0]?.name;
+  if (!sheetName) {
+    return { ok: false, summary: "Settlement workflow needs a target sheet.", warnings: ["Provide target.sheetName for the transaction sheet."] };
+  }
+  const tableName = input.target?.tableName ?? keyedStringValue(values, "tableName");
+  const baseTarget = { ...input.target, sheetName, ...(tableName ? { tableName } : {}) };
+  const resolveColumn = (column: string): { ok: true; scope: ValueColumnScope } | { ok: false; summary: string; warnings: string[]; candidates?: AgentCandidate[] } =>
+    resolveValueColumnScope(metadata, {
+      ...input,
+      target: { ...baseTarget, column },
+      values: { ...values, targetColumn: column }
+    }, "target");
+  const cashAmount = resolveColumn("Cash Amount");
+  if (!cashAmount.ok) return { ...cashAmount, summary: `Settlement workflow could not resolve Cash Amount. ${cashAmount.summary}` };
+  const actualAmount = resolveColumn("Actual Amount");
+  if (!actualAmount.ok) return { ...actualAmount, summary: `Settlement workflow could not resolve Actual Amount. ${actualAmount.summary}` };
+  const paymentVariance = resolveColumn("Payment Variance");
+  if (!paymentVariance.ok) return { ...paymentVariance, summary: `Settlement workflow could not resolve Payment Variance. ${paymentVariance.summary}` };
+  const reconciliationNote = resolveColumn("Reconciliation Note");
+  if (!reconciliationNote.ok) return { ...reconciliationNote, summary: `Settlement workflow could not resolve Reconciliation Note. ${reconciliationNote.summary}` };
+  const detailNotes = resolveColumn("Detail Notes");
+  if (!detailNotes.ok) return { ...detailNotes, summary: `Settlement workflow could not resolve Detail Notes. ${detailNotes.summary}` };
+
+  const scopes = {
+    cashAmount: cashAmount.scope,
+    actualAmount: actualAmount.scope,
+    paymentVariance: paymentVariance.scope,
+    reconciliationNote: reconciliationNote.scope,
+    detailNotes: detailNotes.scope
+  };
+  const rowCount = Math.min(...Object.values(scopes).map((scope) => scope.rowCount));
+  const misaligned = Object.values(scopes).find((scope) => scope.rowCount !== rowCount);
+  if (misaligned) {
+    return {
+      ok: false,
+      summary: "Settlement workflow columns do not align by row.",
+      warnings: [`Expected matching row counts; ${misaligned.headerName ?? misaligned.columnLetter} has ${misaligned.rowCount} row(s), common row count is ${rowCount}.`]
+    };
+  }
+
+  const [cashSnapshot, actualSnapshot, varianceSnapshot, reconciliationSnapshot, detailSnapshot] = await Promise.all([
+    readColumn(scopes.cashAmount),
+    readColumn(scopes.actualAmount),
+    readColumn(scopes.paymentVariance),
+    readColumn(scopes.reconciliationNote),
+    readColumn(scopes.detailNotes)
+  ]);
+  const cashValues = columnVector(cashSnapshot.values);
+  const actualValues = columnVector(actualSnapshot.values);
+  const varianceValues = columnVector(varianceSnapshot.values);
+  const varianceFormulas = columnVector(varianceSnapshot.formulas);
+  const reconciliationValues = columnVector(reconciliationSnapshot.values);
+  const detailValues = columnVector(detailSnapshot.values);
+  const rowUpdates = settlementRowUpdates(values);
+  const explicitRows = settlementExplicitRows(values, rowUpdates);
+  const rowIndexes = explicitRows.length > 0
+    ? explicitRows.map((row) => row - scopes.paymentVariance.startRow).filter((index) => index >= 0 && index < rowCount)
+    : Array.from({ length: rowCount }, (_value, index) => index);
+  const globalReconciliationNote = keyedSettlementString(values, "reconciliationNote", "settlementNote", "note");
+  const globalDetailNotes = keyedSettlementString(values, "detailNotes", "detailNote", "details");
+  const updateVariance = values.updatePaymentVariance !== false && values.variance !== false;
+  const writeFormula = values.paymentVarianceMode !== "value" && values.varianceMode !== "value" && values.writeFormula !== false;
+  const skipped: Record<string, number> = {};
+  const formulaAfter = Array.from({ length: rowCount }, () => "");
+  const formulaChanged = Array.from({ length: rowCount }, () => false);
+  const varianceValueAfter = [...varianceValues];
+  const varianceValueChanged = Array.from({ length: rowCount }, () => false);
+  const reconciliationAfter = [...reconciliationValues];
+  const reconciliationChanged = Array.from({ length: rowCount }, () => false);
+  const detailAfter = [...detailValues];
+  const detailChanged = Array.from({ length: rowCount }, () => false);
+  const examples: Array<Record<string, unknown>> = [];
+  let changedCount = 0;
+
+  const updatesByRow = new Map<number, SettlementRowUpdate>();
+  for (const update of rowUpdates) {
+    if (update.row !== undefined) updatesByRow.set(update.row, update);
+  }
+
+  for (const index of rowIndexes) {
+    const sheetRow = scopes.paymentVariance.startRow + index;
+    const rowUpdate = updatesByRow.get(sheetRow);
+    const cash = cashValues[index];
+    const actual = actualValues[index];
+    const currentVariance = varianceValues[index];
+    let changed = false;
+    const example: Record<string, unknown> = {
+      row: sheetRow,
+      source: {
+        "Cash Amount": cash ?? "",
+        "Actual Amount": actual ?? ""
+      },
+      before: {
+        "Payment Variance": currentVariance ?? "",
+        "Reconciliation Note": reconciliationValues[index] ?? "",
+        "Detail Notes": detailValues[index] ?? ""
+      },
+      after: {}
+    };
+    if (updateVariance) {
+      const cashNumber = numericCellValue(cash);
+      const actualNumber = numericCellValue(actual);
+      if (cashNumber === undefined || actualNumber === undefined) {
+        incrementCount(skipped, "blankAmountSource");
+      } else if (writeFormula) {
+        const expectedFormula = `=${scopes.actualAmount.columnLetter}${sheetRow}-${scopes.cashAmount.columnLetter}${sheetRow}`;
+        if (normalizeFormulaText(varianceFormulas[index]) !== normalizeFormulaText(expectedFormula)) {
+          formulaAfter[index] = expectedFormula;
+          formulaChanged[index] = true;
+          changed = true;
+          changedCount += 1;
+          (example.after as Record<string, unknown>)["Payment Variance"] = expectedFormula;
+        }
+      } else {
+        const expectedValue = actualNumber - cashNumber;
+        if (!Object.is(currentVariance, expectedValue)) {
+          varianceValueAfter[index] = expectedValue;
+          varianceValueChanged[index] = true;
+          changed = true;
+          changedCount += 1;
+          (example.after as Record<string, unknown>)["Payment Variance"] = expectedValue;
+        }
+      }
+    }
+    const nextReconciliation = rowUpdate?.reconciliationNote ?? globalReconciliationNote;
+    if (nextReconciliation !== undefined && !Object.is(reconciliationValues[index], nextReconciliation)) {
+      reconciliationAfter[index] = nextReconciliation;
+      reconciliationChanged[index] = true;
+      changed = true;
+      changedCount += 1;
+      (example.after as Record<string, unknown>)["Reconciliation Note"] = nextReconciliation;
+    }
+    const nextDetail = rowUpdate?.detailNotes ?? globalDetailNotes;
+    if (nextDetail !== undefined && !Object.is(detailValues[index], nextDetail)) {
+      detailAfter[index] = nextDetail;
+      detailChanged[index] = true;
+      changed = true;
+      changedCount += 1;
+      (example.after as Record<string, unknown>)["Detail Notes"] = nextDetail;
+    }
+    if (changed && examples.length < 10) {
+      examples.push(example);
+    }
+  }
+
+  const operations: ExcelOperation[] = [];
+  const changes: NonNullable<AgentRunOutput["changes"]> = [];
+  if (writeFormula) {
+    const formulaRuns = changedColumnRuns(scopes.paymentVariance, formulaAfter, formulaChanged);
+    operations.push(...formulaRuns.map((run) => ({
+      kind: "range.write_formulas" as const,
+      operationId: makeId<OperationId>("op"),
+      workbookId: metadata.workbook.workbookId as WorkbookId,
+      destructiveLevel: "values" as const,
+      reason: input.request,
+      target: { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: scopes.paymentVariance.sheetName, address: run.address },
+      formulas: run.values.map((row) => [typeof row[0] === "string" ? row[0] : null]),
+      preserveFormats: true as const
+    })));
+  } else {
+    const varianceRuns = changedColumnRuns(scopes.paymentVariance, varianceValueAfter, varianceValueChanged);
+    if (varianceRuns.length > 0) {
+      operations.push({
+        kind: "range.write_values_many",
+        operationId: makeId<OperationId>("op"),
+        workbookId: metadata.workbook.workbookId as WorkbookId,
+        destructiveLevel: "values",
+        reason: input.request,
+        entries: varianceRuns.map((run) => ({
+          target: { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: scopes.paymentVariance.sheetName, address: run.address },
+          values: run.values,
+          preserveFormats: true
+        }))
+      });
+    }
+  }
+  const noteEntries = [
+    ...changedColumnRuns(scopes.reconciliationNote, reconciliationAfter, reconciliationChanged).map((run) => ({ scope: scopes.reconciliationNote, run })),
+    ...changedColumnRuns(scopes.detailNotes, detailAfter, detailChanged).map((run) => ({ scope: scopes.detailNotes, run }))
+  ];
+  if (noteEntries.length > 0) {
+    operations.push({
+      kind: "range.write_values_many",
+      operationId: makeId<OperationId>("op"),
+      workbookId: metadata.workbook.workbookId as WorkbookId,
+      destructiveLevel: "values",
+      reason: input.request,
+      entries: noteEntries.map(({ scope, run }) => ({
+        target: { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: scope.sheetName, address: run.address },
+        values: run.values,
+        preserveFormats: true
+      }))
+    });
+  }
+  changes.push(
+    { sheetName, range: scopes.paymentVariance.address, before: `${rowCount} scanned`, after: `${formulaChanged.filter(Boolean).length + varianceValueChanged.filter(Boolean).length} variance update(s)` },
+    { sheetName, range: scopes.reconciliationNote.address, before: "existing reconciliation notes", after: `${reconciliationChanged.filter(Boolean).length} note update(s)` },
+    { sheetName, range: scopes.detailNotes.address, before: "existing detail notes", after: `${detailChanged.filter(Boolean).length} detail note update(s)` },
+    ...examples.map((example) => ({ sheetName, range: `${scopes.paymentVariance.columnLetter}${example.row}`, before: example.before, after: example.after }))
+  );
+  const reference = await settlementReferenceProof(metadata, input, readColumn);
+  return {
+    ok: true,
+    sheetName,
+    ...(tableName ? { tableName } : scopes.paymentVariance.tableName ? { tableName: scopes.paymentVariance.tableName } : {}),
+    scopes,
+    ...(reference ? { reference } : {}),
+    operations,
+    changes,
+    proof: [
+      { sheetName, range: scopes.cashAmount.address, label: "Cash Amount source" },
+      { sheetName, range: scopes.actualAmount.address, label: "Actual Amount source" },
+      { sheetName, range: scopes.paymentVariance.address, label: "Payment Variance target" },
+      { sheetName, range: scopes.reconciliationNote.address, label: "Reconciliation Note target" },
+      { sheetName, range: scopes.detailNotes.address, label: "Detail Notes target" }
+    ],
+    scannedCount: rowIndexes.length,
+    changedCount,
+    skipped,
+    examples,
+    warnings: []
+  };
+}
+
+interface SettlementRowUpdate {
+  row?: number;
+  reconciliationNote?: string;
+  detailNotes?: string;
+}
+
+function settlementRowUpdates(values: AgentRunInput["values"] | undefined): SettlementRowUpdate[] {
+  const raw = values?.rowUpdates ?? values?.settlements ?? values?.updates;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.flatMap((entry): SettlementRowUpdate[] => {
+    if (typeof entry === "number" && Number.isInteger(entry)) {
+      return [{ row: entry }];
+    }
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    const record = entry as Record<string, unknown>;
+    const row = numberFromUnknown(record.row ?? record.rowNumber ?? record.sheetRow);
+    const reconciliationNote = stringFromUnknown(record.reconciliationNote ?? record.settlementNote ?? record.note);
+    const detailNotes = stringFromUnknown(record.detailNotes ?? record.detailNote ?? record.details);
+    return [stripUndefinedRecord({ row, reconciliationNote, detailNotes }) as SettlementRowUpdate];
+  });
+}
+
+function settlementExplicitRows(values: AgentRunInput["values"] | undefined, rowUpdates: SettlementRowUpdate[]): number[] {
+  const rowNumbers = arrayNumbersFromUnknown(values?.rowNumbers ?? values?.sheetRows);
+  const rows = arrayNumbersFromUnknown(values?.rows);
+  const updateRows = rowUpdates.flatMap((update) => update.row !== undefined ? [update.row] : []);
+  return Array.from(new Set([...rowNumbers, ...rows, ...updateRows])).filter((row) => Number.isInteger(row) && row > 0);
+}
+
+function keyedSettlementString(values: AgentRunInput["values"] | undefined, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = values?.[key];
+    if (typeof value === "string") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function numberFromUnknown(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) ? value : undefined;
+}
+
+function stringFromUnknown(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function arrayNumbersFromUnknown(value: unknown): number[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "number" && Number.isInteger(item))
+    ? value
+    : [];
+}
+
+function normalizeFormulaText(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\s+/g, "").toUpperCase() : "";
+}
+
+async function settlementReferenceProof(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput,
+  readColumn: (scope: ValueColumnScope) => Promise<{ values: CellMatrix; formulas: CellMatrix }>
+): Promise<Record<string, unknown> | undefined> {
+  const referenceSheetName = keyedStringValue(input.values, "referenceSheetName", "referenceSheet", "templateSheetName");
+  if (!referenceSheetName) {
+    return undefined;
+  }
+  const referenceTableName = keyedStringValue(input.values, "referenceTableName");
+  const referenceScope = resolveValueColumnScope(metadata, {
+    ...input,
+    target: { sheetName: referenceSheetName, ...(referenceTableName ? { tableName: referenceTableName } : {}), column: "Payment Variance" },
+    values: { ...(input.values ?? {}), targetColumn: "Payment Variance" }
+  }, "target");
+  if (!referenceScope.ok) {
+    return {
+      sheetName: referenceSheetName,
+      warning: referenceScope.summary
+    };
+  }
+  const snapshot = await readColumn(referenceScope.scope);
+  const formulas = columnVector(snapshot.formulas);
+  const firstFormulaIndex = formulas.findIndex((formula) => formulaLike(formula));
+  return stripUndefinedRecord({
+    sheetName: referenceSheetName,
+    paymentVariance: {
+      range: referenceScope.scope.address,
+      header: referenceScope.scope.headerName,
+      formulaExample: firstFormulaIndex >= 0 ? formulas[firstFormulaIndex] : undefined,
+      formulaCell: firstFormulaIndex >= 0 ? `${referenceScope.scope.columnLetter}${referenceScope.scope.startRow + firstFormulaIndex}` : undefined
+    }
+  });
+}
+
+function deriveFormulaLikeValue(current: unknown, sourceValues: unknown[], values: AgentRunInput["values"]): unknown | typeof noChange | typeof skipBecauseBlankSource {
+  const operation = normalizeOperationName(keyedStringValue(values, "formula", "formulaType", "expression") ?? "");
+  const first = numericCellValue(sourceValues[0]);
+  const second = numericCellValue(sourceValues[1]);
+  if (first === undefined || second === undefined) return skipBecauseBlankSource;
+  if (operation === "cash_minus_actual") {
+    return first - second;
+  }
+  if (operation === "actual_minus_cash" || operation === "difference" || operation === "diff" || operation === "variance" || operation === "") {
+    return second - first;
+  }
+  const requestFormula = keyedStringValue(values, "operationFormula", "calculation");
+  if (requestFormula && /cash.*actual/i.test(requestFormula) && !/actual.*cash/i.test(requestFormula)) {
+    return first - second;
+  }
+  if (Object.is(current, second - first)) return noChange;
+  return second - first;
+}
+
+function shouldInspectFormulaInline(input: AgentRunInput): boolean {
+  if (intentAction(input) === "read_formulas") return true;
+  if (intentAction(input) !== undefined) return false;
+  if (!/\b(formula|formulas|raw formula|r1c1|calculation)\b/i.test(input.request)) return false;
+  if (/\b(write|set|apply|fill|copy|repair|replace|update|convert)\b/i.test(input.request) && !/\b(read|check|show|inspect|is|has|whether)\b/i.test(input.request)) {
+    return false;
+  }
+  return Boolean(input.target?.range || input.target?.sheetName || /\b(this|selected|current)\b/i.test(input.request));
+}
+
+function shouldPreviewSettlementBundle(input: AgentRunInput): boolean {
+  if (intentAction(input) !== undefined) return false;
+  return /\b(settle|settlement|reconcile|reconciliation)\b/i.test(input.request)
+    && /\b(payment\s+variance|variance|reconciliation\s+note|detail\s+notes?)\b/i.test(input.request);
+}
+
+function normalizeOperationName(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function isTransformValuesOperation(value: string): value is TransformValuesOperation {
+  return ["add_prefix", "add_suffix", "replace_text", "normalize_whitespace", "case", "fill_blank", "map_values", "conditional_replace"].includes(value);
+}
+
+function isDeriveValuesOperation(value: string): value is DeriveValuesOperation {
+  return ["copy_from_source", "copy_if_blank", "extract_pattern", "lookup_map", "conditional_map", "normalize_from_source"].includes(value);
+}
+
+function resolveLookupMapScope(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput
+): { ok: true } & LookupMapScope | { ok: false; summary: string; warnings: string[]; candidates?: AgentCandidate[] } {
+  const values = input.values ?? {};
+  const lookupSheetName = keyedStringValue(values, "lookupSheetName", "lookupSheet", "referenceSheetName", "referenceSheet", "sourceLookupSheet");
+  const lookupTableName = keyedStringValue(values, "lookupTableName", "lookupTable", "referenceTableName", "referenceTable");
+  const lookupKeyRange = keyedStringValue(values, "lookupKeyRange", "keyRange");
+  const lookupValueRange = keyedStringValue(values, "lookupValueRange", "valueRange");
+  const lookupKeyColumn = keyedStringValue(values, "lookupKeyColumn", "keyColumn", "lookupFromColumn");
+  const lookupValueColumn = keyedStringValue(values, "lookupValueColumn", "valueColumn", "lookupToColumn");
+  const sheetName = lookupSheetName
+    ?? (lookupTableName ? metadata.tables.find((table) => sameText(table.name, lookupTableName) || sameText(table.id, lookupTableName))?.sheetName : undefined)
+    ?? input.target?.sheetName
+    ?? metadata.workbook.activeSheet
+    ?? metadata.sheets[0]?.name;
+  if (!sheetName) {
+    return { ok: false, summary: "Lookup derivation needs a lookup sheet or table.", warnings: ["Provide values.lookupSheetName or values.lookupTableName with lookup key/value columns."] };
+  }
+  const keyInput: AgentRunInput = {
+    ...input,
+    target: { sheetName, ...(lookupTableName ? { tableName: lookupTableName } : {}) },
+    values: {
+      ...values,
+      sourceSheetName: sheetName,
+      ...(lookupKeyRange ? { sourceRange: lookupKeyRange } : {}),
+      ...(lookupKeyColumn ? { sourceColumn: lookupKeyColumn } : {})
+    }
+  };
+  const valueInput: AgentRunInput = {
+    ...input,
+    target: { sheetName, ...(lookupTableName ? { tableName: lookupTableName } : {}) },
+    values: {
+      ...values,
+      sourceSheetName: sheetName,
+      ...(lookupValueRange ? { sourceRange: lookupValueRange } : {}),
+      ...(lookupValueColumn ? { sourceColumn: lookupValueColumn } : {})
+    }
+  };
+  const keyScope = resolveValueColumnScope(metadata, keyInput, "source");
+  if (!keyScope.ok) {
+    return { ...keyScope, summary: `Lookup key could not be resolved. ${keyScope.summary}` };
+  }
+  const valueScope = resolveValueColumnScope(metadata, valueInput, "source");
+  if (!valueScope.ok) {
+    return { ...valueScope, summary: `Lookup value could not be resolved. ${valueScope.summary}` };
+  }
+  if (keyScope.scope.rowCount !== valueScope.scope.rowCount) {
+    return {
+      ok: false,
+      summary: "Lookup key/value ranges do not align.",
+      warnings: [`Lookup key rows: ${keyScope.scope.rowCount}; lookup value rows: ${valueScope.scope.rowCount}.`]
+    };
+  }
+  return { ok: true, keyScope: keyScope.scope, valueScope: valueScope.scope, duplicateKeys: [] };
+}
+
+function resolveDeriveSourceScopes(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput
+): { ok: true; scopes: ValueColumnScope[] } | { ok: false; summary: string; warnings: string[]; candidates?: AgentCandidate[] } {
+  const sourceColumns = keyedArrayStringValue(input.values, "sourceColumns", "sources", "source");
+  const scopes: ValueColumnScope[] = [];
+  if (sourceColumns.length > 0) {
+    for (const column of sourceColumns) {
+      const resolved = resolveValueColumnScope(metadata, {
+        ...input,
+        target: { ...input.target, column },
+        values: { ...(input.values ?? {}), sourceColumn: column }
+      }, "source");
+      if (!resolved.ok) {
+        return resolved;
+      }
+      scopes.push(resolved.scope);
+    }
+    return { ok: true, scopes };
+  }
+  const resolved = resolveValueColumnScope(metadata, input, "source");
+  return resolved.ok ? { ok: true, scopes: [resolved.scope] } : resolved;
+}
+
+function resolveValueColumnScope(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput,
+  purpose: "target" | "source"
+): { ok: true; scope: ValueColumnScope } | { ok: false; summary: string; warnings: string[]; candidates?: AgentCandidate[] } {
+  const values = input.values ?? {};
+  const explicitRange = purpose === "target"
+    ? input.target?.range ?? keyedStringValue(values, "targetRange", "range")
+    : keyedStringValue(values, "sourceRange");
+  const sheetName = purpose === "source"
+    ? keyedStringValue(values, "sourceSheetName") ?? input.target?.sheetName ?? metadata.workbook.activeSheet ?? metadata.sheets[0]?.name
+    : input.target?.sheetName ?? keyedStringValue(values, "targetSheetName", "sheetName") ?? metadata.workbook.activeSheet ?? metadata.sheets[0]?.name;
+  if (!sheetName) {
+    return { ok: false, summary: `Could not resolve ${purpose} sheet.`, warnings: ["Provide target.sheetName or a workbook context with an active sheet."] };
+  }
+  if (explicitRange) {
+    const parsed = tryParseA1Address(stripSheetName(explicitRange));
+    if (!parsed) {
+      return { ok: false, summary: `Could not parse ${purpose} range ${explicitRange}.`, warnings: ["Use an A1-style range."] };
+    }
+    if (parsed.startColumn !== parsed.endColumn) {
+      return { ok: false, summary: `${purpose} range ${explicitRange} spans multiple columns.`, warnings: ["Broad value transform/derive currently requires one target column."] };
+    }
+    return {
+      ok: true,
+      scope: {
+        sheetName,
+        address: stripSheetName(explicitRange),
+        columnLetter: numberToColumn(parsed.startColumn),
+        startRow: parsed.startRow,
+        endRow: parsed.endRow,
+        rowCount: parsed.endRow - parsed.startRow + 1
+      }
+    };
+  }
+
+  const columnHint = purpose === "target"
+    ? input.target?.column ?? keyedStringValue(values, "targetColumn", "targetHeader", "column", "header")
+    : keyedStringValue(values, "sourceColumn", "sourceHeader", "fromColumn", "fromHeader");
+  if (!columnHint) {
+    return {
+      ok: false,
+      summary: `${purpose} column is ambiguous.`,
+      warnings: [`Provide ${purpose === "target" ? "target.column or values.targetColumn" : "values.sourceColumn"}.`],
+      candidates: columnCandidates(metadata, sheetName)
+    };
+  }
+
+  const tableName = purpose === "target" ? input.target?.tableName ?? keyedStringValue(values, "tableName") : keyedStringValue(values, "sourceTableName") ?? input.target?.tableName;
+  const table = tableName
+    ? metadata.tables.find((candidate) => sameText(candidate.name, tableName) || sameText(candidate.id, tableName))
+    : metadata.tables.find((candidate) => candidate.sheetName === sheetName && candidate.columns.some((column) => columnMatchesHint(column, columnHint)));
+  if (table?.dataRange) {
+    const column = table.columns.find((candidate) => columnMatchesHint(candidate, columnHint));
+    const data = tryParseA1Address(stripSheetName(table.dataRange));
+    if (column && data) {
+      const absoluteColumn = columnAbsoluteNumber(column, data.startColumn);
+      return {
+        ok: true,
+        scope: {
+          sheetName: table.sheetName,
+          address: addressFromBounds(data.startRow, absoluteColumn, data.endRow - data.startRow + 1, 1),
+          columnLetter: numberToColumn(absoluteColumn),
+          startRow: data.startRow,
+          endRow: data.endRow,
+          rowCount: data.endRow - data.startRow + 1,
+          headerName: column.name,
+          ...(table.name ? { tableName: table.name } : {})
+        }
+      };
+    }
+  }
+
+  const sheet = metadata.sheets.find((candidate) => candidate.name === sheetName);
+  const header = sheet?.headers
+    .filter((candidate) => candidate.columns.some((column) => columnMatchesHint(column, columnHint)))
+    .sort((left, right) => right.confidence - left.confidence)[0];
+  const column = header?.columns.find((candidate) => columnMatchesHint(candidate, columnHint));
+  const used = sheet?.usedRange ? tryParseA1Address(stripSheetName(sheet.usedRange)) : undefined;
+  if (header && column && used) {
+    const absoluteColumn = columnAbsoluteNumber(column, used.startColumn);
+    const startRow = header.row + 1;
+    return {
+      ok: true,
+      scope: {
+        sheetName,
+        address: addressFromBounds(startRow, absoluteColumn, Math.max(1, used.endRow - startRow + 1), 1),
+        columnLetter: numberToColumn(absoluteColumn),
+        startRow,
+        endRow: used.endRow,
+        rowCount: Math.max(1, used.endRow - startRow + 1),
+        headerName: column.name
+      }
+    };
+  }
+
+  const section = metadata.sections.find((candidate) =>
+    candidate.sheetName === sheetName && candidate.columns.some((column) => columnMatchesHint(column, columnHint))
+  );
+  const dataRange = section ? dataRangeForSection(section) : undefined;
+  const data = dataRange ? tryParseA1Address(stripSheetName(dataRange)) : undefined;
+  const sectionColumn = section?.columns.find((candidate) => columnMatchesHint(candidate, columnHint));
+  if (section && data && sectionColumn) {
+    const absoluteColumn = columnAbsoluteNumber(sectionColumn, data.startColumn);
+    return {
+      ok: true,
+      scope: {
+        sheetName,
+        address: addressFromBounds(data.startRow, absoluteColumn, data.endRow - data.startRow + 1, 1),
+        columnLetter: numberToColumn(absoluteColumn),
+        startRow: data.startRow,
+        endRow: data.endRow,
+        rowCount: data.endRow - data.startRow + 1,
+        headerName: sectionColumn.name,
+        sectionId: section.id
+      }
+    };
+  }
+
+  return {
+    ok: false,
+    summary: `Could not match ${purpose} column "${columnHint}" on ${sheetName}.`,
+    warnings: [`Available columns: ${columnCandidates(metadata, sheetName).map((candidate) => candidate.label).slice(0, 12).join(", ") || "none"}.`],
+    candidates: columnCandidates(metadata, sheetName)
+  };
+}
+
+function columnAbsoluteNumber(column: ColumnMetadata, rangeStartColumn: number): number {
+  const byLetter = /^[A-Z]+$/i.test(column.letter) ? columnToNumber(column.letter) : undefined;
+  return byLetter && byLetter > 0 ? byLetter : rangeStartColumn + column.index;
+}
+
+function columnCandidates(metadata: WorkbookMetadata, sheetName: string): AgentCandidate[] {
+  const tableCandidates = metadata.tables
+    .filter((table) => table.sheetName === sheetName)
+    .flatMap((table) => table.columns.map((column) => ({
+      id: `${table.id}:${column.index}`,
+      kind: "column" as const,
+      label: column.name || column.letter,
+      sheetName: table.sheetName,
+      ...(table.name !== undefined ? { tableName: table.name } : {}),
+      semanticRole: "data_table" as const,
+      confidence: 0.8,
+      reason: table.name ? `Column in table ${table.name}` : "Column in table"
+    })));
+  const headerCandidates = metadata.sheets
+    .find((sheet) => sheet.name === sheetName)?.headers
+    .flatMap((header) => header.columns.map((column) => ({
+      id: `${header.id}:${column.index}`,
+      kind: "column" as const,
+      label: column.name || column.letter,
+      sheetName,
+      range: header.range,
+      confidence: header.confidence,
+      reason: `Header row ${header.row}`
+    }))) ?? [];
+  return [...tableCandidates, ...headerCandidates].slice(0, 20);
+}
+
+function columnMatchesHint(column: ColumnMetadata, hint: string): boolean {
+  const normalized = normalizeHeaderName(hint);
+  return normalizeHeaderName(column.name) === normalized
+    || column.normalizedName === normalized
+    || column.letter.toLowerCase() === hint.trim().toLowerCase()
+    || normalizeHeaderName(column.name).includes(normalized);
+}
+
+function sameText(left: unknown, right: unknown): boolean {
+  return typeof left === "string" && typeof right === "string" && left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
+function compileTransformPlan(
+  target: ValueColumnScope,
+  snapshot: { values: CellMatrix; formulas: CellMatrix },
+  operation: TransformValuesOperation,
+  values: AgentRunInput["values"]
+): { ok: true } & CompiledColumnPlan | { ok: false; summary: string; warnings: string[] } {
+  const before = columnVector(snapshot.values);
+  const formulas = columnVector(snapshot.formulas);
+  const afterValues = [...before];
+  const changedRows = before.map(() => false);
+  const skipped: Record<string, number> = {};
+  const examples: Array<Record<string, unknown>> = [];
+  let changedCount = 0;
+  let unmatchedCount = 0;
+  for (let index = 0; index < before.length; index += 1) {
+    const current = before[index];
+    if (formulaLike(formulas[index])) {
+      incrementCount(skipped, "formulaTarget");
+      continue;
+    }
+    const transformed = transformCellValue(current, operation, values);
+    if (transformed === noChange) {
+      if (operation === "replace_text" || operation === "map_values" || operation === "conditional_replace") unmatchedCount += 1;
+      continue;
+    }
+    if (Object.is(transformed, current)) continue;
+    afterValues[index] = transformed;
+    changedRows[index] = true;
+    changedCount += 1;
+    if (examples.length < 10) {
+      examples.push({ row: target.startRow + index, before: current ?? "", after: transformed ?? "" });
+    }
+  }
+  return { ok: true, afterValues, changedRows, scannedCount: before.length, changedCount, skipped, unmatchedCount, examples, warnings: [] };
+}
+
+function compileDerivePlan(
+  target: ValueColumnScope,
+  targetSnapshot: { values: CellMatrix; formulas: CellMatrix },
+  sources: ValueColumnScope[],
+  sourceSnapshots: Array<{ values: CellMatrix; formulas: CellMatrix }>,
+  operation: DeriveValuesOperation,
+  values: AgentRunInput["values"]
+): { ok: true } & CompiledColumnPlan | { ok: false; summary: string; warnings: string[] } {
+  const before = columnVector(targetSnapshot.values);
+  const targetFormulas = columnVector(targetSnapshot.formulas);
+  const sourceColumns = sourceSnapshots.map((snapshot) => columnVector(snapshot.values));
+  const afterValues = [...before];
+  const changedRows = before.map(() => false);
+  const skipped: Record<string, number> = {};
+  const examples: Array<Record<string, unknown>> = [];
+  let changedCount = 0;
+  let unmatchedCount = 0;
+
+  for (let index = 0; index < before.length; index += 1) {
+    const current = before[index];
+    if (formulaLike(targetFormulas[index])) {
+      incrementCount(skipped, "formulaTarget");
+      continue;
+    }
+    const sourceValues = sourceColumns.map((column) => column[index]);
+    const derived = deriveCellValue(current, sourceValues, operation, values);
+    if (derived === skipBecauseTargetNotBlank) {
+      incrementCount(skipped, "nonBlankTarget");
+      continue;
+    }
+    if (derived === skipBecauseBlankSource) {
+      incrementCount(skipped, "blankSource");
+      continue;
+    }
+    if (derived === noChange) {
+      unmatchedCount += operation === "lookup_map" || operation === "conditional_map" || operation === "extract_pattern" ? 1 : 0;
+      continue;
+    }
+    if (Object.is(derived, current)) continue;
+    afterValues[index] = derived;
+    changedRows[index] = true;
+    changedCount += 1;
+    if (examples.length < 10) {
+      examples.push({
+        row: target.startRow + index,
+        source: Object.fromEntries(sources.map((source, sourceIndex) => [source.headerName ?? source.columnLetter, sourceValues[sourceIndex] ?? ""])),
+        before: { [target.headerName ?? target.columnLetter]: current ?? "" },
+        after: { [target.headerName ?? target.columnLetter]: derived ?? "" }
+      });
+    }
+  }
+  return { ok: true, afterValues, changedRows, scannedCount: before.length, changedCount, skipped, unmatchedCount, examples, warnings: [] };
+}
+
+function compileLookupDerivePlan(
+  target: ValueColumnScope,
+  targetSnapshot: { values: CellMatrix; formulas: CellMatrix },
+  sources: ValueColumnScope[],
+  sourceSnapshots: Array<{ values: CellMatrix; formulas: CellMatrix }>,
+  lookup: LookupMapScope,
+  lookupKeySnapshot: { values: CellMatrix; formulas: CellMatrix },
+  lookupValueSnapshot: { values: CellMatrix; formulas: CellMatrix }
+): { ok: true } & CompiledColumnPlan | { ok: false; summary: string; warnings: string[] } {
+  const lookupKeys = columnVector(lookupKeySnapshot.values);
+  const lookupValues = columnVector(lookupValueSnapshot.values);
+  const lookupMap = new Map<string, unknown>();
+  const duplicates = new Set<string>();
+  for (let index = 0; index < lookupKeys.length; index += 1) {
+    const key = lookupKey(lookupKeys[index]);
+    if (!key) continue;
+    if (lookupMap.has(key)) {
+      duplicates.add(key);
+      continue;
+    }
+    lookupMap.set(key, lookupValues[index]);
+  }
+  const before = columnVector(targetSnapshot.values);
+  const targetFormulas = columnVector(targetSnapshot.formulas);
+  const sourceColumn = columnVector(sourceSnapshots[0]?.values ?? []);
+  const afterValues = [...before];
+  const changedRows = before.map(() => false);
+  const skipped: Record<string, number> = {};
+  const examples: Array<Record<string, unknown>> = [];
+  let changedCount = 0;
+  let unmatchedCount = 0;
+  for (let index = 0; index < before.length; index += 1) {
+    const current = before[index];
+    if (formulaLike(targetFormulas[index])) {
+      incrementCount(skipped, "formulaTarget");
+      continue;
+    }
+    const sourceValue = sourceColumn[index];
+    const key = lookupKey(sourceValue);
+    if (!key) {
+      incrementCount(skipped, "blankSource");
+      continue;
+    }
+    if (!lookupMap.has(key)) {
+      unmatchedCount += 1;
+      continue;
+    }
+    const derived = lookupMap.get(key);
+    if (Object.is(derived, current)) continue;
+    afterValues[index] = derived;
+    changedRows[index] = true;
+    changedCount += 1;
+    if (examples.length < 10) {
+      examples.push({
+        row: target.startRow + index,
+        source: { [sources[0]?.headerName ?? sources[0]?.columnLetter ?? "source"]: sourceValue ?? "" },
+        lookup: {
+          keyColumn: lookup.keyScope.headerName ?? lookup.keyScope.columnLetter,
+          valueColumn: lookup.valueScope.headerName ?? lookup.valueScope.columnLetter
+        },
+        before: { [target.headerName ?? target.columnLetter]: current ?? "" },
+        after: { [target.headerName ?? target.columnLetter]: derived ?? "" }
+      });
+    }
+  }
+  const warnings = duplicates.size > 0
+    ? [`Lookup table contains ${duplicates.size} duplicate key(s); first value was used for each duplicate key.`]
+    : [];
+  return {
+    ok: true,
+    afterValues,
+    changedRows,
+    scannedCount: before.length,
+    changedCount,
+    skipped,
+    unmatchedCount,
+    examples,
+    warnings
+  };
+}
+
+const noChange = Symbol("noChange");
+const skipBecauseTargetNotBlank = Symbol("skipBecauseTargetNotBlank");
+const skipBecauseBlankSource = Symbol("skipBecauseBlankSource");
+
+function transformCellValue(current: unknown, operation: TransformValuesOperation, values: AgentRunInput["values"]): unknown | typeof noChange {
+  const text = current === undefined || current === null ? "" : String(current);
+  switch (operation) {
+    case "add_prefix": {
+      const prefix = keyedRawStringValue(values, "prefix", "value") ?? "";
+      if (!prefix || isBlankishAutoApplyValue(current) || text.startsWith(prefix)) return noChange;
+      return `${prefix}${text}`;
+    }
+    case "add_suffix": {
+      const suffix = keyedRawStringValue(values, "suffix", "value") ?? "";
+      if (!suffix || isBlankishAutoApplyValue(current) || text.endsWith(suffix)) return noChange;
+      return `${text}${suffix}`;
+    }
+    case "replace_text": {
+      const find = keyedRawStringValue(values, "find", "from", "oldValue", "old");
+      const replacement = keyedRawStringValue(values, "replacement", "replaceWith", "to", "newValue", "new") ?? "";
+      if (!find || !text.includes(find)) return noChange;
+      return text.split(find).join(replacement);
+    }
+    case "normalize_whitespace": {
+      if (typeof current !== "string") return noChange;
+      const normalized = current.trim().replace(/\s+/g, " ");
+      return normalized === current ? noChange : normalized;
+    }
+    case "case": {
+      const caseMode = normalizeOperationName(keyedStringValue(values, "case", "caseMode") ?? "");
+      if (typeof current !== "string") return noChange;
+      if (caseMode === "upper" || caseMode === "uppercase") return current.toUpperCase();
+      if (caseMode === "lower" || caseMode === "lowercase") return current.toLowerCase();
+      return noChange;
+    }
+    case "fill_blank": {
+      if (!isBlankishAutoApplyValue(current)) return noChange;
+      return values?.value ?? values?.fillValue ?? "";
+    }
+    case "map_values":
+    case "conditional_replace": {
+      const mapped = lookupMappedValue(current, values);
+      return mapped.matched ? mapped.value : noChange;
+    }
+  }
+}
+
+function deriveCellValue(current: unknown, sourceValues: unknown[], operation: DeriveValuesOperation, values: AgentRunInput["values"]): unknown | typeof noChange | typeof skipBecauseTargetNotBlank | typeof skipBecauseBlankSource {
+  const firstSource = sourceValues[0];
+  switch (operation) {
+    case "copy_if_blank":
+      if (!isBlankishAutoApplyValue(current)) return skipBecauseTargetNotBlank;
+      if (isBlankishAutoApplyValue(firstSource)) return skipBecauseBlankSource;
+      return firstSource;
+    case "copy_from_source":
+      if (isBlankishAutoApplyValue(firstSource)) return skipBecauseBlankSource;
+      return firstSource;
+    case "normalize_from_source":
+      if (isBlankishAutoApplyValue(firstSource)) return skipBecauseBlankSource;
+      return typeof firstSource === "string" ? firstSource.trim().replace(/\s+/g, " ") : firstSource;
+    case "conditional_map":
+    case "lookup_map": {
+      const mapped = lookupMappedValue(firstSource, values);
+      return mapped.matched ? mapped.value : noChange;
+    }
+    case "extract_pattern": {
+      const pattern = keyedStringValue(values, "pattern", "regex");
+      if (!pattern || isBlankishAutoApplyValue(firstSource)) return noChange;
+      const match = String(firstSource).match(new RegExp(pattern));
+      return match?.[1] ?? match?.[0] ?? noChange;
+    }
+    case "formula_like":
+      return deriveFormulaLikeValue(current, sourceValues, values);
+  }
+}
+
+function lookupMappedValue(value: unknown, values: AgentRunInput["values"]): { matched: true; value: unknown } | { matched: false } {
+  const mapValue = values?.map ?? values?.mapping ?? values?.replacements;
+  if (mapValue && typeof mapValue === "object" && !Array.isArray(mapValue)) {
+    const record = mapValue as Record<string, unknown>;
+    const direct = record[String(value ?? "")];
+    if (direct !== undefined) return { matched: true, value: direct };
+    const normalized = normalizeHeaderName(String(value ?? ""));
+    const key = Object.keys(record).find((candidate) => normalizeHeaderName(candidate) === normalized);
+    if (key !== undefined) return { matched: true, value: record[key] };
+  }
+  return { matched: false };
+}
+
+function lookupKey(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  return normalizeHeaderName(String(value));
+}
+
+function compileSheetTransformPlan(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput
+): { ok: true; operation: string; renames: Array<{ from: string; to: string }>; skipped: Array<{ sheetName: string; reason: string }>; warnings: string[] } | { ok: false; summary: string; warnings: string[]; candidates?: AgentCandidate[] } {
+  const values = input.values ?? {};
+  const operation = normalizeOperationName(keyedStringValue(values, "operation", "transform", "type") ?? "");
+  const prefix = keyedRawStringValue(values, "prefix");
+  const suffix = keyedRawStringValue(values, "suffix");
+  const find = keyedRawStringValue(values, "find", "from", "oldValue", "old");
+  const replacement = keyedRawStringValue(values, "replacement", "replaceWith", "to", "newValue", "new") ?? "";
+  const explicitSheets = keyedArrayStringValue(values, "sheets", "sheetNames", "targetSheets");
+  const includeHidden = values.includeHidden === true;
+  const candidateSheets = metadata.sheets
+    .filter((sheet) => includeHidden || sheet.isHidden !== true)
+    .filter((sheet) => explicitSheets.length === 0 || explicitSheets.some((name) => sameText(name, sheet.name)));
+  if (candidateSheets.length === 0) {
+    return {
+      ok: false,
+      summary: "No sheets matched the requested sheet transform.",
+      warnings: ["Provide values.sheets/values.sheetNames, or omit them to target all visible sheets."],
+      candidates: metadata.sheets.slice(0, 12).map((sheet) => ({ id: sheet.id, kind: "sheet", label: sheet.name, sheetName: sheet.name, confidence: 0.8 }))
+    };
+  }
+  const renames: Array<{ from: string; to: string }> = [];
+  const skipped: Array<{ sheetName: string; reason: string }> = [];
+  const existing = new Set(metadata.sheets.map((sheet) => sheet.name));
+  const planned = new Set<string>();
+  for (const sheet of candidateSheets) {
+    let nextName: string | undefined;
+    if (operation === "add_prefix" || (!operation && prefix)) {
+      if (!prefix) return { ok: false, summary: "Sheet prefix transform needs values.prefix.", warnings: ["Provide values.prefix."] };
+      nextName = sheet.name.startsWith(prefix) ? sheet.name : `${prefix}${sheet.name}`;
+    } else if (operation === "add_suffix" || (!operation && suffix)) {
+      if (!suffix) return { ok: false, summary: "Sheet suffix transform needs values.suffix.", warnings: ["Provide values.suffix."] };
+      nextName = sheet.name.endsWith(suffix) ? sheet.name : `${sheet.name}${suffix}`;
+    } else if (operation === "replace_text") {
+      if (!find) return { ok: false, summary: "Sheet replace transform needs values.find and values.replacement.", warnings: ["Provide values.find and values.replacement."] };
+      nextName = sheet.name.includes(find) ? sheet.name.split(find).join(replacement) : sheet.name;
+    } else {
+      return { ok: false, summary: "Sheet transform needs operation add_prefix, add_suffix, or replace_text.", warnings: ["Use transform_sheets for bounded sheet rename plans."] };
+    }
+    if (!nextName || nextName === sheet.name) {
+      skipped.push({ sheetName: sheet.name, reason: "unchanged" });
+      continue;
+    }
+    if (existing.has(nextName) || planned.has(nextName)) {
+      skipped.push({ sheetName: sheet.name, reason: `target name already exists: ${nextName}` });
+      continue;
+    }
+    planned.add(nextName);
+    renames.push({ from: sheet.name, to: nextName });
+  }
+  if (renames.length === 0) {
+    return { ok: false, summary: "Sheet transform produced no safe renames.", warnings: skipped.map((item) => `${item.sheetName}: ${item.reason}`).slice(0, 8) };
+  }
+  return {
+    ok: true,
+    operation: operation || (prefix ? "add_prefix" : suffix ? "add_suffix" : "replace_text"),
+    renames,
+    skipped,
+    warnings: skipped.length > 0 ? [`Skipped ${skipped.length} sheet(s).`] : []
+  };
+}
+
+function changedColumnRuns(scope: ValueColumnScope, afterValues: unknown[], changedRows: boolean[]): Array<{ address: string; values: CellMatrix }> {
+  const runs: Array<{ address: string; values: CellMatrix }> = [];
+  let start: number | undefined;
+  let values: CellMatrix = [];
+  const flush = (exclusiveIndex: number) => {
+    if (start === undefined) return;
+    runs.push({
+      address: addressFromBounds(scope.startRow + start, columnToNumber(scope.columnLetter), exclusiveIndex - start, 1),
+      values
+    });
+    start = undefined;
+    values = [];
+  };
+  for (let index = 0; index < afterValues.length; index += 1) {
+    if (!changedRows[index]) {
+      flush(index);
+      continue;
+    }
+    if (start === undefined) start = index;
+    values.push([afterValues[index] as CellMatrix[number][number]]);
+  }
+  flush(afterValues.length);
+  return runs;
+}
+
+function columnVector(matrix: CellMatrix): unknown[] {
+  return matrix.map((row) => row[0]);
+}
+
+function formulaLike(value: unknown): boolean {
+  return typeof value === "string" && value.trim().startsWith("=");
+}
+
+function incrementCount(record: Record<string, number>, key: string): void {
+  record[key] = (record[key] ?? 0) + 1;
+}
+
+function compactValueColumnScope(scope: ValueColumnScope): Record<string, unknown> {
+  return stripUndefinedRecord({
+    sheet: scope.sheetName,
+    header: scope.headerName,
+    table: scope.tableName,
+    sectionId: scope.sectionId,
+    range: scope.address,
+    column: scope.columnLetter,
+    rows: scope.rowCount
+  });
+}
+
+function keyedStringValue(values: AgentRunInput["values"] | undefined, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = values?.[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function keyedRawStringValue(values: AgentRunInput["values"] | undefined, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = values?.[key];
+    if (typeof value === "string" && value.length > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function keyedArrayStringValue(values: AgentRunInput["values"] | undefined, ...keys: string[]): string[] {
+  for (const key of keys) {
+    const value = values?.[key];
+    if (Array.isArray(value)) {
+      return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
+    }
+    if (typeof value === "string" && value.trim()) {
+      return [value.trim()];
+    }
+  }
+  return [];
+}
+
+function transformNeedsInput(
+  metadata: WorkbookMetadata,
+  requestedMode: AgentRunMode,
+  summary: string,
+  warnings: string[],
+  candidates?: AgentCandidate[]
+): Omit<AgentRunOutput, "telemetry"> {
+  return {
+    status: candidates && candidates.length > 0 ? "AMBIGUOUS_TARGET" : "NEEDS_INPUT",
+    mode: requestedMode,
+    workbookContextId: metadata.workbookContextId,
+    summary,
+    ...(candidates && candidates.length > 0 ? { candidates } : {}),
+    proof: [],
+    resourceLinks: [contextResource(metadata.workbookContextId)],
+    nextAction: "ask_user",
+    warnings
+  };
 }
 
 function combineApplyResults(results: unknown[]) {

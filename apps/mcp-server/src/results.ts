@@ -92,9 +92,13 @@ function stripHeavyAnswerFields(value: unknown): unknown {
     return value;
   }
   const source = value as Record<string, unknown>;
+  const preserveFormulaFields = source.kind === "formula_read" || source.kind === "formula_patterns";
   const next: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(source)) {
-    if (["sparseRows", "rowMetadata", "formulas", "text", "numberFormat", "debug", "routeReasons", "workflowReasons"].includes(key)) {
+    if (["sparseRows", "rowMetadata", "debug", "routeReasons", "workflowReasons"].includes(key)) {
+      continue;
+    }
+    if (!preserveFormulaFields && ["formulas", "text", "numberFormat"].includes(key)) {
       continue;
     }
     next[key] = stripHeavyAnswerFields(entry);
@@ -153,6 +157,12 @@ function enforceStructuredContentBudget(value: AgentRunOutput, responseMode: "br
 }
 
 function minimalStructuredAnswer(answer: Record<string, unknown>, continuation?: AgentRunOutput["continuation"]): Record<string, unknown> {
+  if (answer.kind === "similar_rows") {
+    return minimalSimilarRowsAnswer(answer, continuation);
+  }
+  if (answer.kind === "style_reference_candidates") {
+    return minimalStyleReferenceAnswer(answer, continuation);
+  }
   return {
     kind: answer.kind ?? "compacted_answer",
     source: answer.source,
@@ -163,6 +173,77 @@ function minimalStructuredAnswer(answer: Record<string, unknown>, continuation?:
     resultUri: answer.resultUri ?? continuation?.resultUri,
     fullResultUri: answer.fullResultUri ?? continuation?.fullResultUri
   };
+}
+
+function minimalSimilarRowsAnswer(answer: Record<string, unknown>, continuation?: AgentRunOutput["continuation"]): Record<string, unknown> {
+  const rows = Array.isArray(answer.rows)
+    ? answer.rows.slice(0, 5).map((row) => {
+        const typed = row && typeof row === "object" ? row as Record<string, unknown> : {};
+        return stripUndefinedObject({
+          sheetName: typed.sheetName,
+          sheetRowNumber: typed.sheetRowNumber,
+          range: typed.range,
+          columns: minimalReferenceColumns(typed.columns),
+          matchedSignals: Array.isArray(typed.matchedSignals) ? typed.matchedSignals.slice(0, 6) : undefined,
+          whyMatched: typed.whyMatched
+        });
+      })
+    : undefined;
+  return stripUndefinedObject({
+    kind: answer.kind,
+    source: answer.source,
+    sourceMode: answer.sourceMode,
+    predicates: Array.isArray(answer.predicates) ? answer.predicates.slice(0, 6) : undefined,
+    rows,
+    resultUri: answer.resultUri ?? continuation?.resultUri,
+    fullResultUri: answer.fullResultUri ?? continuation?.fullResultUri
+  });
+}
+
+function minimalReferenceColumns(columns: unknown): unknown[] | undefined {
+  if (!Array.isArray(columns)) {
+    return undefined;
+  }
+  return columns
+    .filter((column) => {
+      if (!column || typeof column !== "object") return false;
+      const typed = column as Record<string, unknown>;
+      const label = `${String(typed.name ?? "")} ${String(typed.role ?? "")}`;
+      return /date|description|type|direction|amount|actual|variance|transfer|from|to|truck|job|vendor|customer|account|note|category|status|identifier/i.test(label);
+    })
+    .slice(0, 8)
+    .map((column) => {
+      const typed = column as Record<string, unknown>;
+      return stripUndefinedObject({
+        letter: typed.letter,
+        name: typed.name,
+        value: typed.value
+      });
+    });
+}
+
+function minimalStyleReferenceAnswer(answer: Record<string, unknown>, continuation?: AgentRunOutput["continuation"]): Record<string, unknown> {
+  const candidates = Array.isArray(answer.candidates)
+    ? answer.candidates.slice(0, 5).map((candidate) => {
+        const typed = candidate && typeof candidate === "object" ? candidate as Record<string, unknown> : {};
+        return stripUndefinedObject({
+          sheetName: typed.sheetName,
+          range: typed.range,
+          label: typed.label,
+          sourceKind: typed.sourceKind,
+          confidence: typed.confidence,
+          reason: typed.reason,
+          styleSummary: typed.styleSummary
+        });
+      })
+    : undefined;
+  return stripUndefinedObject({
+    kind: answer.kind,
+    source: answer.source,
+    candidates,
+    resultUri: answer.resultUri ?? continuation?.resultUri,
+    fullResultUri: answer.fullResultUri ?? continuation?.fullResultUri
+  });
 }
 
 function stripUndefinedObject<T extends Record<string, unknown>>(value: T, omitKeys: string[] = []): Record<string, unknown> {

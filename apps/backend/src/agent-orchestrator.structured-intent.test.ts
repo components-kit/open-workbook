@@ -190,12 +190,57 @@ describe("AgentOrchestrator Structured Intent", () => {
 
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any).kind).toBe("formula_patterns");
-      expect((result.answer as any).patterns.formulaCount).toBe(1);
+      expect((result.answer as any).formulaCount).toBe(1);
       expect(result.proof[0]).toMatchObject({ sheetName: "Report", range: "B2" });
       expect(result.telemetry.intentAction).toBe("read_formula_patterns");
       expect(result.telemetry.internalReadCount).toBe(1);
       expect(runtime.runtimeMethodCalls["formula.read_patterns"]).toBe(1);
       expect(runtime.writeBatchCount).toBe(0);
+    });
+
+  it("uses caller structured intent for exact formula reads with formula status proof", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Read the raw formula in this cell",
+        mode: "answer",
+        intent: { action: "read_formulas", confidence: 0.92 },
+        target: { sheetName: "Report", range: "B2" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("formula_read");
+      expect((result.answer as any).formulaCount).toBe(1);
+      expect((result.answer as any).cells[0]).toMatchObject({
+        cell: "B2",
+        value: 600,
+        formula: "=SUM(Data!C2:C4)",
+        formulaStatus: "formula"
+      });
+      expect((result.answer as any).formulas[0][0]).toBe("=SUM(Data!C2:C4)");
+      expect(result.telemetry.intentAction).toBe("read_formulas");
+      expect(runtime.readBatchCount).toBeGreaterThan(0);
+      expect(runtime.runtimeMethodCalls["formula.read_patterns"]).toBe(1);
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
+  it("redirects exact formula inspection from find mode to formula proof instead of target candidates", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Read the formula in cell B2 if it is a formula",
+        mode: "find",
+        target: { sheetName: "Report", range: "B2" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.mode).toBe("answer");
+      expect((result.answer as any).kind).toBe("formula_read");
+      expect((result.answer as any).cells[0].formulaStatus).toBe("formula");
+      expect(result.candidates).toBeUndefined();
+      expect(runtime.readBatchCount).toBeGreaterThan(0);
     });
 
   it("uses caller structured intent for style fingerprint reads", async () => {

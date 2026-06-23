@@ -1,4 +1,5 @@
 import type { BatchRequest, WorkbookId } from "@components-kit/open-workbook-protocol";
+import { tryParseA1Address } from "@components-kit/open-workbook-excel-core";
 import { createMetadataFingerprint, type WorkbookMetadata } from "./workbook-metadata-cache.js";
 
 export const workbookId = "workbook_agent_unit" as WorkbookId;
@@ -6,9 +7,11 @@ export const activeWorkbook = { workbookId, name: "Agent Unit.xlsx", path: "/tmp
 export const sheets = [
   { workbookId, worksheetId: "sheet_Data", name: "Data", usedRange: { address: "A1:D4", rowCount: 4, columnCount: 4 }, tables: [{ name: "Transactions" }] },
   { workbookId, worksheetId: "sheet_Report", name: "Report", usedRange: { address: "A1:B20", rowCount: 20, columnCount: 2 }, tables: [] },
+  { workbookId, worksheetId: "sheet_CustomerMaster", name: "Customer Master", usedRange: { address: "A1:B4", rowCount: 4, columnCount: 2 }, tables: [] },
   { workbookId, worksheetId: "sheet_Operations", name: "Operations", usedRange: { address: "A1:J24", rowCount: 24, columnCount: 10 }, tables: [] },
   { workbookId, worksheetId: "sheet_Mar", name: "Mar 2026", usedRange: { address: "A1:AJ206", rowCount: 206, columnCount: 36 }, tables: [] },
   { workbookId, worksheetId: "sheet_Apr", name: "Apr 2026", usedRange: { address: "A1:AJ244", rowCount: 244, columnCount: 36 }, tables: [] },
+  { workbookId, worksheetId: "sheet_May", name: "May 2026", usedRange: { address: "A1:AJ244", rowCount: 244, columnCount: 36 }, tables: [] },
   { workbookId, worksheetId: "sheet_FinJun", name: "Financials - June 2026", usedRange: { address: "A1:C4", rowCount: 4, columnCount: 3 }, tables: [] },
   { workbookId, worksheetId: "sheet_FinMay", name: "Financials - May 2026", usedRange: { address: "A1:C4", rowCount: 4, columnCount: 3 }, tables: [] }
 ];
@@ -698,6 +701,7 @@ export class FakeAgentRuntime {
         columnCount: 1,
         formulaCount: 1,
         formulas: [["=SUM(Data!C2:C4)"]],
+        formulasR1C1: [["=SUM(Data!R2C3:R4C3)"]],
         patternMatrix: [["hash_sum_data"]],
         patterns: [{ patternHash: "hash_sum_data", formulaR1C1: "=SUM(Data!R2C3:R4C3)", count: 1, cells: [{ rowIndex: 0, columnIndex: 0 }] }],
         cells: [{ rowIndex: 0, columnIndex: 0, formula: "=SUM(Data!C2:C4)", formulaR1C1: "=SUM(Data!R2C3:R4C3)", patternHash: "hash_sum_data" }],
@@ -1238,10 +1242,12 @@ function valuesFor(sheetName: string, address: string) {
       ];
     }
     if (address === "B2") return [["A-100"]];
+    if (address === "B2:B4") return [["A-100"], ["A-200"], ["A-300"]];
     if (address === "A2:D3") return [["2026-06-01", "A-100", 123, "Open"], ["2026-06-02", "A-101", 456, "Closed"]];
     if (address === "A3:D3") return [["2026-06-02", "A-101", 456, "Closed"]];
     if (address === "A2:B2") return [["20/6/26", "20/6/26"]];
     if (address === "B3") return [[""]];
+    if (address === "C3") return [[200]];
     if (address === "C2") return [[100]];
     if (address === "C1:C4") return [["Amount"], [100], [200], [300]];
     if (address === "D1:D4") return [["Status"], ["Open"], ["Closed"], ["Open"]];
@@ -1259,7 +1265,12 @@ function valuesFor(sheetName: string, address: string) {
   if (sheetName === "Financials - May 2026") {
     return [["Metric", "May 2026", "Variance"], ["Revenue", 1100, 30], ["Expense", 680, 10], ["Profit", 420, 20]];
   }
-  if (sheetName === "Mar 2026" || sheetName === "Apr 2026") {
+  if (sheetName === "Customer Master") {
+    if (address === "A2:A4") return [["A-100"], ["A-200"], ["A-300"]];
+    if (address === "B2:B4") return [["Gold"], ["Silver"], ["Bronze"]];
+    return [["Account", "Tier"], ["A-100", "Gold"], ["A-200", "Silver"], ["A-300", "Bronze"]];
+  }
+  if (sheetName === "Mar 2026" || sheetName === "Apr 2026" || sheetName === "May 2026") {
     return monthlySheetValues(sheetName, address);
   }
   if (sheetName === "Operations") {
@@ -1288,6 +1299,7 @@ function valuesFor(sheetName: string, address: string) {
     return rows;
   }
   if (address === "B1") return [["input"]];
+  if (sheetName === "Report" && address === "B2") return [[600]];
   if (address === "A12") return [["=SUM(B1:B10)"]];
   return [
     ["Metric", "Value"],
@@ -1334,7 +1346,12 @@ function monthlySheetValues(sheetName: string, address: string) {
     sheetName.startsWith("Mar") ? "2026-03-01" : "2026-04-01", "204", "71-4653", "Company gas top-up", "company_gas_topup", "Outflow", "2211.21", "2211.21", "0", "", "Bank", "proof.pdf", "text note", "",
     "INV-001", "204", sheetName.startsWith("Mar") ? "2026-03-01" : "2026-04-01", "ACME", "BK-001", "Customer A", "Job 204", "CONT-1", "20GP", "10000", "1000", "1000", "2000", "0", "12000", "360", "11640"
   ], summaryRows[1]!);
-  const rows = [row1, row2, ...summaryRows.slice(2).map((summary) => padToSummary([], summary))];
+  const ownerFundRow = padToSummary([
+    "2026-04-16", "", "", "เติมเงินเข้าบริษัท", "owner_fund_added", "Inflow", "10000", "10000", "0", "", "From X1183 MR. PRACH YOTHAPRA++", "fund-proof.pdf", "Owner adding fund"
+  ], summaryRows[2]!);
+  const rows = sheetName.startsWith("Apr")
+    ? [row1, row2, ownerFundRow, ...summaryRows.slice(3).map((summary) => padToSummary([], summary))]
+    : [row1, row2, ...summaryRows.slice(2).map((summary) => padToSummary([], summary))];
   if (address === "A2:AJ2") {
     return [row2];
   }
@@ -1343,6 +1360,14 @@ function monthlySheetValues(sheetName: string, address: string) {
   }
   if (address.startsWith("O")) {
     return rows.map((row) => row.slice(14, 31));
+  }
+  const parsed = tryParseA1Address(address);
+  if (parsed) {
+    const startRowIndex = Math.max(0, parsed.startRow - 1);
+    const endRowIndex = Math.min(rows.length - 1, parsed.endRow - 1);
+    const startColumnIndex = Math.max(0, parsed.startColumn - 1);
+    const endColumnIndex = Math.min(35, parsed.endColumn - 1);
+    return rows.slice(startRowIndex, endRowIndex + 1).map((row) => row.slice(startColumnIndex, endColumnIndex + 1));
   }
   return rows;
 }
@@ -1356,6 +1381,18 @@ function padToSummary(left: unknown[], summary: unknown[]) {
 }
 
 function formulasFor(sheetName: string, address: string) {
+  if (sheetName === "Report" && address === "B2") {
+    return [["=SUM(Data!C2:C4)"]];
+  }
+  if (sheetName === "Apr 2026") {
+    const parsed = tryParseA1Address(address);
+    if (parsed && parsed.startColumn === 9 && parsed.endColumn === 9) {
+      return Array.from({ length: parsed.endRow - parsed.startRow + 1 }, (_value, index) => {
+        const row = parsed.startRow + index;
+        return [`=H${row}-G${row}`];
+      });
+    }
+  }
   const values = valuesFor(sheetName, address);
   return values.map((row) => row.map((value) => typeof value === "string" && value.startsWith("=") ? value : null));
 }
@@ -1439,9 +1476,33 @@ export function createCachedMetadata(workbookContextId: string): WorkbookMetadat
       { id: "sheet:0", name: "Data", index: 0, usedRange: "A1:D4", rowCount: 4, columnCount: 4, kind: "transaction", headers: [], tableIds: ["table:Transactions"], sectionIds: [], summaryBlockIds: [], formulaRegionIds: [] },
       { id: "sheet:1", name: "Report", index: 1, usedRange: "A1:B20", rowCount: 20, columnCount: 2, kind: "summary", headers: [], tableIds: [], sectionIds: [], summaryBlockIds: [], formulaRegionIds: ["formula:manual"] },
       {
+        id: "sheet:customer-master",
+        name: "Customer Master",
+        index: 2,
+        usedRange: "A1:B4",
+        rowCount: 4,
+        columnCount: 2,
+        kind: "lookup",
+        headers: [{
+          id: "header:Customer Master:1",
+          sheetName: "Customer Master",
+          row: 1,
+          range: "A1:B1",
+          confidence: 0.92,
+          columns: [
+            { name: "Account", normalizedName: "account", inferredType: "text", role: "account", importance: 0.9, index: 0, letter: "A" },
+            { name: "Tier", normalizedName: "tier", inferredType: "text", role: "category", importance: 0.8, index: 1, letter: "B" }
+          ]
+        }],
+        tableIds: [],
+        sectionIds: [],
+        summaryBlockIds: [],
+        formulaRegionIds: []
+      },
+      {
         id: "sheet:2",
         name: "Mar 2026",
-        index: 2,
+        index: 3,
         usedRange: "A1:AJ206",
         rowCount: 206,
         columnCount: 36,
@@ -1462,7 +1523,7 @@ export function createCachedMetadata(workbookContextId: string): WorkbookMetadat
       {
         id: "sheet:3",
         name: "Apr 2026",
-        index: 3,
+        index: 4,
         usedRange: "A1:AJ244",
         rowCount: 244,
         columnCount: 36,
@@ -1470,6 +1531,27 @@ export function createCachedMetadata(workbookContextId: string): WorkbookMetadat
         headers: [{
           id: "header:Apr 2026:1",
           sheetName: "Apr 2026",
+          row: 1,
+          range: "A1:AJ1",
+          confidence: 0.9,
+          columns: monthlyColumns()
+        }],
+        tableIds: [],
+        sectionIds: [],
+        summaryBlockIds: [],
+        formulaRegionIds: []
+      },
+      {
+        id: "sheet:4",
+        name: "May 2026",
+        index: 5,
+        usedRange: "A1:AJ244",
+        rowCount: 244,
+        columnCount: 36,
+        kind: "transaction",
+        headers: [{
+          id: "header:May 2026:1",
+          sheetName: "May 2026",
           row: 1,
           range: "A1:AJ1",
           confidence: 0.9,

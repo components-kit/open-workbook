@@ -17,6 +17,7 @@ describe("excel.agent.run MCP schema", () => {
     expect(AGENT_INTENT_ACTIONS).toContain("read_style_summary");
     expect(AGENT_INTENT_ACTIONS).toContain("format_diagnostics");
     expect(AGENT_INTENT_ACTIONS).toContain("find_similar_rows");
+    expect(AGENT_INTENT_ACTIONS).toContain("read_formulas");
     expect(AGENT_DETAIL_LEVELS).toContain("full_table");
     expect(AGENT_DETAIL_LEVELS).toContain("semantic_index");
   });
@@ -52,6 +53,43 @@ describe("excel.agent.run MCP schema", () => {
     expect(source).toContain("autoApply false");
   });
 
+  it("advertises one-call grouped patches for multiple explicit edits", () => {
+    const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("multiple explicit value edits from the same user request");
+    expect(source).toContain("one mode:auto call with values.patches");
+    expect(source).toContain("independent row/range edits should still be grouped");
+    expect(source).toContain("Do not issue parallel or sequential excel.agent.run update calls");
+  });
+
+  it("advertises backend-compiled broad transforms and row-aware derivations", () => {
+    const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("intent.action transform_values");
+    expect(source).toContain("do not read full columns into model context");
+    expect(source).toContain("intent.action derive_values");
+    expect(source).toContain("compiles changed cells server-side");
+    expect(source).toContain("formula_like calculations");
+    expect(source).toContain("Payment Variance = Actual Amount - Cash Amount");
+    expect(source).toContain("intent.action settle_reconciliation");
+    expect(source).toContain("Payment Variance, Reconciliation Note, and Detail Notes");
+    expect(source).toContain("one grouped preview");
+    expect(source).toContain("intent.action transform_sheets");
+    expect(source).toContain("one bounded rename plan");
+  });
+
+  it("advertises formula-first inspection and preview-safe formula workflows", () => {
+    const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("intent.action read_formulas");
+    expect(source).toContain("is this a formula");
+    expect(source).toContain("raw formula");
+    expect(source).toContain("never infer formula existence from displayed values or numbers alone");
+    expect(source).toContain("Formula mutations, formula repairs, and formula-like broad derivations are preview/apply workflows");
+    expect(source).toContain("validate_formula_against_template");
+    expect(source).toContain("preview grouped formula/note repairs");
+  });
+
   it("advertises dropdown source-list proof before value corrections", () => {
     const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
 
@@ -66,6 +104,16 @@ describe("excel.agent.run MCP schema", () => {
     expect(source).toContain("row label and column header");
     expect(source).toContain("values.semanticPatches");
     expect(source).toContain("instead of reading whole sections or guessing coordinates");
+  });
+
+  it("advertises cross-sheet reference search intents before broad reads", () => {
+    const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("cross-sheet labels");
+    expect(source).toContain("intent.action find_similar_rows");
+    expect(source).toContain("named reference sheet");
+    expect(source).toContain("instead of broad-reading sheets");
+    expect(source).toContain("intent.action find_style_references");
   });
 
   it("advertises live Excel selection handling in the public tool description", () => {
@@ -110,6 +158,21 @@ describe("excel.agent.run MCP schema", () => {
     expect(combined).toContain("source-list proof");
     expect(combined).toContain("values.semanticPatches");
     expect(combined).toContain("row label and column header");
+    expect(combined).toContain("Multiple Updates");
+    expect(combined).toContain("different topic does not mean different tool call");
+    expect(combined).toContain("same user instruction plus explicit ranges means one grouped patch");
+    expect(combined).toContain("Do not split independent exact edits into separate calls");
+    expect(combined).toContain("transform_values");
+    expect(combined).toContain("derive_values");
+    expect(combined).toContain("read_formulas");
+    expect(combined).toContain("never infer formula existence from displayed values");
+    expect(combined).toContain("formula_like");
+    expect(combined).toContain("settle_reconciliation");
+    expect(combined).toContain("Payment Variance");
+    expect(combined).toContain("Reconciliation Note");
+    expect(combined).toContain("Detail Notes");
+    expect(combined).toContain("transform_sheets");
+    expect(combined).toContain("do not fetch full source/target columns");
     expect(combined).not.toContain("use `excel.agent.run` with `mode: \"preview_update\"` and then `mode: \"apply_update\"` for scoped value edits");
     expect(combined).not.toContain("group related range value edits with `values.patches` in one `preview_update`");
   });

@@ -76,6 +76,7 @@ export function modeForIntentAction(action: AgentIntentAction): AgentRunMode {
   if (action === "detect_external_changes") return "answer";
   if (action === "export_local_config") return "answer";
   if (action === "read_embedded_local_config") return "answer";
+  if (action === "read_formulas") return "answer";
   if (action === "read_formula_patterns") return "answer";
   if (action === "get_formula_dependency_graph") return "answer";
   if (action === "trace_formula_precedents") return "answer";
@@ -86,6 +87,7 @@ export function modeForIntentAction(action: AgentIntentAction): AgentRunMode {
   if (action === "read_named_item") return "answer";
   if (action === "read_region") return "answer";
   if (action === "find_similar_rows") return "answer";
+  if (action === "find_style_references") return "answer";
   if (action === "read_style_summary") return "answer";
   if (action === "format_diagnostics") return "answer";
   if (action === "read_style_fingerprint") return "answer";

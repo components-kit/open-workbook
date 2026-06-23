@@ -39,16 +39,39 @@ The backend owns primitive Excel capabilities, compact reads, batches, plans, va
 
 When the caller LLM can infer routing, pass structured fields alongside the natural request:
 
-- `intent.action`: canonical English action such as `read_values`, `append_table_rows`, `write_values`, `validate_workbook`, `create_backup`, `restore_file_backup`, `rollback_validate`, `save`, or another supported backend action.
+- `intent.action`: canonical English action such as `read_values`, `read_formulas`, `append_table_rows`, `write_values`, `validate_workbook`, `create_backup`, `restore_file_backup`, `rollback_validate`, `save`, or another supported backend action.
 - `intent.targetHints`: workbook-native labels plus useful translated aliases.
 - `target`: explicit `sheetName`, `range`, `tableName`, named item, region, or returned `candidateId`.
 - `values`: 2D values, formulas, styles, table rows, patches, template data, backup IDs, or confirmation data.
 
 For mutations, do not put the write payload only in `request`. Send structured data: `write_values` needs `target.sheetName`, `target.range`, and `values.values` as a 2D matrix; table appends use `values.rows`; multi-range edits use `values.patches`.
 
+### Multiple Updates
+
+When one user instruction contains multiple explicit value edits, send one `excel.agent.run` call with `mode: "auto"` and `values.patches`. A different topic or separate row does not mean different tool call; same user instruction plus explicit ranges means one grouped patch. Do not issue parallel or sequential update calls unless the grouped call fails with actionable details.
+
+Example:
+
+```json
+{
+  "mode": "auto",
+  "intent": { "action": "write_values" },
+  "target": { "sheetName": "May 2026" },
+  "values": {
+    "patches": [
+      { "target": { "sheetName": "May 2026", "range": "C19:E19" }, "values": [["700-5229", "maintenance note", "maintenance"]] },
+      { "target": { "sheetName": "May 2026", "range": "D20:E20" }, "values": [["Owner cash top-up", "owner_cash_topup"]] },
+      { "target": { "sheetName": "May 2026", "range": "H20:J20" }, "values": [[10000, 0, "Owner fund top-up"]] }
+    ]
+  }
+}
+```
+
 When a sheet summary or semantic index identifies a section with header/data anchors, prefer anchor writes over raw coordinates. For “set/update the Klongtoey row Vendor Propose value” style tasks, send `values.semanticPatches` with `sectionId` or `sectionLabel`, `rowMatch` (`column` plus `value`), `columnMatch`, and `value`. This lets Open Workbook resolve the exact cell from the row label and column header, avoids reading whole sections, and keeps safe small edits eligible for one-call `mode: "auto"` after session write access exists.
 
 Use `detailLevel` conservatively: `workbook_summary` for metadata-only workbook context, `semantic_index` for role-aware workbook targets/candidates, `sheet_summary` for “look at/check/how is this sheet” overview requests without live cell reads, `table_sample` for a bounded live table sample, and `full_table` only when the task requires all rows, every value, or full table contents.
+
+For broad deterministic value changes, do not read whole columns into model context and then generate a large write matrix. Use `intent.action: "transform_values"` for one-column transforms such as add prefix/suffix, replace text, normalize whitespace/case, fill blanks, or map values. Use `intent.action: "derive_values"` for row-aware updates such as “fill Category from Suggested Category,” “copy X from Y if blank,” “extract ID from Description,” `formula_like` calculations such as Payment Variance = Actual Amount - Cash Amount, or conditional/lookup-style mappings. Use `intent.action: "settle_reconciliation"` for transaction settlement bundles that need Payment Variance plus Reconciliation Note and Detail Notes kept consistent. Use `intent.action: "transform_sheets"` for workbook structure batches such as adding a prefix/suffix to many sheet names. These workflows let Open Workbook scan rows or sheet metadata internally, preview bounded source/before/after examples, and apply only changed cells or sheet renames with rollback.
 
 For multilingual requests, preserve the original language in `request`, normalize routing fields to canonical English when clear, keep target hints in the workbook/user language, and answer the user in their language unless asked otherwise. Do not translate the whole task into English and discard the original wording.
 
@@ -74,9 +97,11 @@ For reads, start with a bounded `answer` call on the selected range. For mutatio
 - Create from template: use template workflows to preserve structure, formulas, styles, validation, and layout while clearing old data regions for fresh entry.
 - Apply style from template: use `copy_style_from_template`; the source/template sheet is a style source only and must not be duplicated or mutated.
 - Replace styled table: use `replace_range_with_styled_table` to clear stale layout, write headers/rows, copy header/body style samples, and autofit in one preview/apply workflow.
-- Inspect current styling: call `excel.agent.run` with `mode: "answer"`, `intent.action: "read_style_summary"`, and an exact range or current selection. Use `read_style_fingerprint` for template comparison, not normal user-facing style inspection.
+- Inspect current styling: call `excel.agent.run` with `mode: "answer"`, `intent.action: "read_style_summary"`, and an exact range or current selection. Use `read_style_fingerprint` for template comparison, not normal user-facing style inspection. When the user asks for a style/template reference from another sheet or month, call `intent.action: "find_style_references"` so Open Workbook returns bounded source candidates instead of reading whole sheets.
 - Formatting errors: use `format_diagnostics` before mutating. It returns raw value, displayed text, formulas, number formats, style summary, likely issues, and suggested fix actions.
-- Historical labels and similar rows: when the user asks how something was labeled/classified before, start with `semantic_index` or `sheet_summary`, then call `intent.action: "find_similar_rows"` on the current row/range/table before reading whole prior sheets.
+- Historical labels and similar rows: when the user asks how something was labeled/classified before, or asks to look at another month/sheet for a data reference, call `intent.action: "find_similar_rows"` on the current row/range/table or requested prior sheet. Let Open Workbook search related sheets and return exact matched rows with proof; do not manually read broad prior-sheet ranges, fetch fullResultUri, or chunk rows looking for matches.
+- Formulas: for exact checks such as “is this a formula?”, “raw formula”, “show formula”, or “formula in I165”, call `intent.action: "read_formulas"` with the exact target. Use `read_formula_patterns`, `validate_formula_against_template`, or formula dependency/trace actions for repeated layouts and reference comparisons. Never infer formula existence from displayed values or numbers alone. Formula writes, formula repairs, and broad formula-like derivations are preview/apply workflows with validation.
+- Reconciliation conventions: for transaction sheets, inspect the reference month convention before changing Payment Variance, Reconciliation Note, or Detail Notes. Match columns by header/role, use `read_formulas` or `read_formula_patterns` for the variance convention, use `find_similar_rows` for note wording, or call `intent.action: "settle_reconciliation"` to preview one grouped formula/note repair that preserves Reconciliation Note and Detail Notes as separate columns.
 - Dropdowns and allowed values: call `intent.action: "read_data_validation"` on the selected/current column or exact target before guessing from visible values. When dropdown options are wrong, read validation/source-list proof first, then update exact source-list cells with `mode: "auto"` if it is a bounded value correction. Use `write_data_validation` only when the user wants to change the dropdown rule.
 - Filters, borders, dropdowns, and conditional formatting: send canonical intent early. Use `intent.action: "filter_range"` for autofilters, `clear_table_filters` for table filter removal, `format_range` for borders/fills/fonts/alignment, `write_data_validation` for dropdown/list cells, and `write_conditional_formatting` for formula-based formatting. Do not retry as sheet creation or value writes when the target sheet already exists.
 - Column changes: use `insert_columns`/`delete_columns` for sheet structure and `reorder_range_columns` for plain range swaps/reorders; use `reorder_table_columns` only for real Excel tables.
@@ -87,6 +112,8 @@ For reads, start with a bounded `answer` call on the selected range. For mutatio
 - Never bypass permissions, scoped locks, snapshots, backups, fingerprints, Office.js execution, validation, transaction records, or rollback metadata for mutations.
 - For small explicit value edits the user already asked you to make, use `mode: "auto"` and leave `autoApply` unset. Once workbook write access is allowed for the session, do not ask the user to confirm every small exact edit. Use `autoApply: false` or `preview_update` when the user asks to review first, the edit is broad/risky, or the backend says preview is required.
 - Never write cell-by-cell loops. Batch values, formulas, number formats, and styles as narrow 2D matrices or grouped patches.
+- For broad column transforms, row-aware derivations, or batch sheet renames, use `transform_values`, `derive_values`, or `transform_sheets`; do not fetch full source/target columns or issue sheet-by-sheet calls when the backend can compile one plan.
+- For formula-related tasks, preserve formula proof in the response. Do not ask for `fullResultUri` for ordinary exact formula checks when `read_formulas` returns formula/status proof inline.
 - Do not fetch the full sheet before every preview. Reuse `workbookContextId`; preview may perform narrow metadata/fingerprint checks for safety, but agents should only read values first when target resolution is ambiguous, the user refers to current selection, or the change depends on existing values/styles.
 - For “what is this workbook”, “look at this workbook/sheet”, “where is the invoice/customer/receipt/template area”, or similar context requests, use `workbook_summary`, `semantic_index`, or `sheet_summary`. Do not fetch `table_sample` or `full_table` unless the user asks for actual rows/values.
 - For border-only, fill-only, font-only, alignment-only, or number-format-only clearing, use `clear_style_dimensions` with `values.dimensions` such as `["borders"]`. Use `clear_formats` only when the user asks to remove all formatting.

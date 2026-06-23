@@ -29,6 +29,8 @@ Structured intent is a hint, not a bypass. The backend still resolves ambiguity,
 
 Use `detailLevel: "semantic_index"` when you need a compact role-aware workbook map before choosing a sheet, table, template, form region, formula region, or style target. Use `workbook_summary` and `sheet_summary` for overview questions. Do not request table samples or full tables for broad context questions.
 
+For exact formula questions, pass `intent.action: "read_formulas"` with the exact target when known. This covers "is this a formula?", "raw formula", "show formula", and "formula in I165". Do not infer formula existence from displayed values or numbers alone; use returned formula/status proof.
+
 ## Multilingual Requests
 
 For non-English or mixed-language prompts:
@@ -47,11 +49,13 @@ Use `auto` for small explicit value edits that the user already asked you to mak
 
 Use `preview_update` for non-trivial mutations, broad edits, table appends, template actions, workbook lifecycle operations, backup lifecycle changes, or anything the user may want to review.
 
+Formula writes, formula repairs, and broad formula-like derivations are preview/apply workflows with validation. Use `derive_values` with `formula_like` for row-aware calculations such as Payment Variance = Actual Amount - Cash Amount so the backend scans source/target columns and returns bounded source/before/after examples.
+
 Only call `apply_update` with the returned `operationId` and `confirmationToken`. If the backend reports stale context, target drift, ambiguity, missing permission, an active lock, or validation failure, stop and create a fresh preview or ask the user for direction.
 
 If `auto` returns `taskOutcome: "apply_complete"`, stop and report the applied change. If `auto` returns `taskOutcome: "preview_ready"` or `nextAction: "call_apply_update"`, ask the user once unless the user's configuration/instruction already permits applying previews, then call one `apply_update` with the returned `operationId` and `confirmationToken`.
 
-Small explicit value edits may use `auto` when the backend can prove the target and risk are narrow. Related changes should use one grouped preview with `values.patches`, then one apply call.
+Small explicit value edits may use `auto` when the backend can prove the target and risk are narrow. Multiple explicit value edits from the same user instruction should use one `auto` call with `values.patches`; different topic does not mean different tool call when the targets and values are known. Use one grouped preview/apply only when the grouped edit is broad, risky, ambiguous, formula/style/template/table-related, or user-reviewable.
 
 ## Result Handling
 

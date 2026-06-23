@@ -15,7 +15,7 @@ Use display text when reporting what a user sees. Use values/formulas/number for
 1. Identify the smallest sheet, table, region, or range that answers the question.
 2. On the default surface, use `excel.agent.run` with `mode: "answer"` and a clear target or `target.candidateId`; include the sheet/range, raw monthly transaction/invoice section, or row/sample/value wording when actual cell data is needed.
 3. Let the backend use table-native compact reads for Excel tables and range compact reads for normal ranges.
-4. For formula-sensitive analysis, include formulas in the compact read or use a matched formula workflow.
+4. For formula-sensitive analysis, use `intent.action: "read_formulas"` for exact cells/ranges or a matched formula workflow such as `read_formula_patterns`; never infer formula existence from displayed values alone.
 5. For data-quality work, ask through `agent.run`; the backend can use header detection, blank/error scans, and relevant validators.
 
 Do not read the whole workbook when a named table, used range, or explicit range is enough.
@@ -53,9 +53,14 @@ Do not replace this workflow with `excel.sheet.copy` unless the user asks for a 
 For ordinary formula error repairs, use `excel.agent.run` with the error range plus a source formula or explicit formula matrix when known.
 
 1. Use `answer`/`find` to identify the error range or style target.
-2. Use `preview_update` with `intent.action: "write_formulas"` or `format_range` when the repair is clear.
-3. Apply only after preview confirmation.
-4. Recalculate/validate through `agent.run` and report warnings.
+2. Use `read_formulas`, `read_formula_patterns`, or `validate_formula_against_template` to get formula proof before repair.
+3. Use `preview_update` with `intent.action: "write_formulas"` or `format_range` when the repair is clear.
+4. Apply only after preview confirmation.
+5. Recalculate/validate through `agent.run` and report warnings.
+
+For row-aware formula-like calculations such as Payment Variance = Actual Amount - Cash Amount, use `intent.action: "derive_values"` with operation `formula_like`. The backend should scan source and target columns internally, exclude headers, preview bounded examples, and apply only changed cells after confirmation.
+
+For transaction settlement consistency, inspect the reference month convention first. Use `read_formulas` or `read_formula_patterns` for Payment Variance, use `find_similar_rows` for Reconciliation Note and Detail Notes examples, or use `intent.action: "settle_reconciliation"` to compile one grouped preview. Keep those note columns distinct by header/role.
 
 Do not convert formulas to values unless the user explicitly asks or the workflow requires a static export.
 

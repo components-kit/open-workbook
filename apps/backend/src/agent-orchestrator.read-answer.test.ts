@@ -521,6 +521,80 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(result.proof[0]).toMatchObject({ sheetName: "Mar 2026", range: "A2:AJ2" });
     });
 
+  it("searches requested prior sheets for exact reference rows instead of returning compact broad ranges", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_reference_search");
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Look more into Apr 2026 for how we label adding fund from X1183 / PRACH with amount 10,000.",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        target: { sheetName: "Apr 2026", range: "A:L" },
+        budget: { maxPayloadBytes: 1400, maxExamples: 4 }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("similar_rows");
+      expect((result.answer as any).rows[0]).toMatchObject({
+        sheetName: "Apr 2026",
+        sheetRowNumber: 3
+      });
+      expect((result.answer as any).rows[0].columns).toEqual(expect.arrayContaining([
+        expect.objectContaining({ letter: "E", name: "Transaction Type", value: "owner_fund_added" }),
+        expect.objectContaining({ letter: "F", name: "Direction", value: "Inflow" }),
+        expect.objectContaining({ letter: "K", name: "Transfer From/To", value: "From X1183 MR. PRACH YOTHAPRA++" })
+      ]));
+      expect((result.answer as any).comparedRanges.every((range: any) => range.sheetName === "Apr 2026")).toBe(true);
+      expect(result.proof.every((proof) => proof.sheetName === "Apr 2026")).toBe(true);
+      expect(JSON.stringify(result.answer)).not.toContain("agent_result_resource");
+      expect(result.warnings.join(" ")).not.toContain("fullResultUri");
+    });
+
+  it("keeps multilingual reference signals available for similar-row search", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_reference_thai");
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "หา reference Apr 2026 เติมเงินเข้าบริษัท 10000 จาก PRACH",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        target: { sheetName: "Apr 2026", range: "A:L" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).rows[0].matchedSignals.join(" ")).toContain("เติมเงิน");
+      expect((result.answer as any).rows[0].columns.map((column: any) => column.value)).toContain("เติมเงินเข้าบริษัท");
+    });
+
+  it("returns style reference candidates without falling back to value range profiles", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_style_refs");
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Find a prior month style reference so this sheet can look like last month.",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "find_style_references" },
+        target: { sheetName: "Apr 2026" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("style_reference_candidates");
+      expect((result.answer as any).candidates[0]).toEqual(expect.objectContaining({
+        sheetName: expect.any(String),
+        range: expect.any(String),
+        styleSummary: expect.any(Object)
+      }));
+      expect(runtime.runtimeMethodCalls["style.get_fingerprint"]).toBeGreaterThan(0);
+      expect(runtime.readBatchCount).toBe(0);
+    });
+
   it("downgrades vague full table detail requests to sheet summaries", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
