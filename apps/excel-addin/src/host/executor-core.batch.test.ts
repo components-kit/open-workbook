@@ -165,6 +165,8 @@ describe("Office.js batch executor production operations", () => {
       op({ kind: "range.insert_rows", target: range("Ops", "3:3") }),
       op({ kind: "range.delete_rows", target: range("Ops", "4:4") }),
       op({ kind: "range.delete_columns", target: range("Ops", "L:L") }),
+      op({ kind: "range.hide_columns", target: range("Ops", "M:N") }),
+      op({ kind: "range.unhide_columns", target: range("Ops", "O:P") }),
       op({ kind: "range.autofit_columns", target: range("Ops", "A1:B10") }),
       op({ kind: "range.autofit_rows", target: range("Ops", "A1:A2") }),
       op({ kind: "range.autofit_many", entries: [{ target: range("Ops", "A1:B10"), dimension: "both" }] }),
@@ -215,6 +217,8 @@ describe("Office.js batch executor production operations", () => {
       { type: "clear", address: "A2:A2", applyTo: "contents" },
       { type: "copyFrom", address: "H1:I2", source: "A1:B2", copyType: "values" },
       { type: "delete", address: "L:L", shift: "left" },
+      { type: "set", address: "M:N", property: "columnHidden", value: true },
+      { type: "set", address: "O:P", property: "columnHidden", value: false },
       { type: "autofitColumns", address: "A1:B10" },
       { type: "autofitRows", address: "A1:A2" },
       { type: "autoFilter.apply", address: "A1:B10", range: "A1:B10" },
@@ -309,6 +313,8 @@ const BEHAVIOR_COVERED_OPERATION_KINDS = new Set([
   "range.delete_rows",
   "range.insert_columns",
   "range.delete_columns",
+  "range.hide_columns",
+  "range.unhide_columns",
   "range.autofit_columns",
   "range.autofit_rows",
   "range.autofit_many",
@@ -513,6 +519,10 @@ class FakeRange {
 
   set numberFormat(value: unknown[][]) {
     this.fixture.calls.push({ type: "set", address: this.address, property: "numberFormat", value });
+  }
+
+  set columnHidden(value: boolean) {
+    this.fixture.calls.push({ type: "set", address: this.address, property: "columnHidden", value });
   }
 
   getEntireColumn() {

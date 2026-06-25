@@ -1300,6 +1300,7 @@ function valuesFor(sheetName: string, address: string) {
   }
   if (address === "B1") return [["input"]];
   if (sheetName === "Report" && address === "B2") return [[600]];
+  if (sheetName === "Report" && address === "B3") return [[""]];
   if (address === "A12") return [["=SUM(B1:B10)"]];
   return [
     ["Metric", "Value"],
@@ -1346,17 +1347,31 @@ function monthlySheetValues(sheetName: string, address: string) {
     sheetName.startsWith("Mar") ? "2026-03-01" : "2026-04-01", "204", "71-4653", "Company gas top-up", "company_gas_topup", "Outflow", "2211.21", "2211.21", "0", "", "Bank", "proof.pdf", "text note", "",
     "INV-001", "204", sheetName.startsWith("Mar") ? "2026-03-01" : "2026-04-01", "ACME", "BK-001", "Customer A", "Job 204", "CONT-1", "20GP", "10000", "1000", "1000", "2000", "0", "12000", "360", "11640"
   ], summaryRows[1]!);
+  if (sheetName.startsWith("May")) {
+    const rows = Array.from({ length: 100 }, (_row, index) => padToSummary(index === 0 ? row1 : [], summaryRows[index % summaryRows.length] ?? []));
+    rows[1] = padToSummary(["2026-05-01", "204", "71-4653", "Company gas top-up", "company_gas_topup", "Outflow", "2211.21", "2211.21", "0", "", "Bank", "proof.pdf", "text note"], summaryRows[1]!);
+    for (const [rowNumber, amount] of [[25, 200], [27, 3400], [28, 60], [31, 1337.5], [33, 650], [37, 768], [38, 3600], [39, 1000], [40, 450], [44, 1500], [48, 665]] as Array<[number, number]>) {
+      rows[rowNumber - 1] = padToSummary(["2026-05-18", "", "", "", "", "Outflow", amount, "", 0, "", "To X3488 MR. WITSARUT KONLA++"], summaryRows[(rowNumber - 1) % summaryRows.length] ?? []);
+    }
+    rows[32 - 1] = padToSummary(["2026-05-19", "", "", "", "", "Outflow", 500, "", 0, "", "To X0556 MR. PRAKRIT THARAS++"], summaryRows[31 % summaryRows.length] ?? []);
+    rows[81 - 1] = padToSummary(["2026-05-30", "", "", "", "", "Outflow", 999, "", 0, "", "To X7010 OTHER PAYEE++"], summaryRows[80 % summaryRows.length] ?? []);
+    return sliceMonthlyRows(rows, address);
+  }
   const ownerFundRow = padToSummary([
     "2026-04-16", "", "", "เติมเงินเข้าบริษัท", "owner_fund_added", "Inflow", "10000", "10000", "0", "", "From X1183 MR. PRACH YOTHAPRA++", "fund-proof.pdf", "Owner adding fund"
   ], summaryRows[2]!);
   const rows = sheetName.startsWith("Apr")
     ? [row1, row2, ownerFundRow, ...summaryRows.slice(3).map((summary) => padToSummary([], summary))]
     : [row1, row2, ...summaryRows.slice(2).map((summary) => padToSummary([], summary))];
+  return sliceMonthlyRows(rows, address);
+}
+
+function sliceMonthlyRows(rows: unknown[][], address: string) {
   if (address === "A2:AJ2") {
-    return [row2];
+    return [rows[1] ?? []];
   }
   if (address === "A1:AJ1") {
-    return [row1];
+    return [rows[0] ?? []];
   }
   if (address.startsWith("O")) {
     return rows.map((row) => row.slice(14, 31));
@@ -1391,6 +1406,14 @@ function formulasFor(sheetName: string, address: string) {
         const row = parsed.startRow + index;
         return [`=H${row}-G${row}`];
       });
+    }
+    if (parsed && parsed.startColumn <= 9 && parsed.endColumn >= 9) {
+      const values = valuesFor(sheetName, address);
+      const formulaColumnIndex = 9 - parsed.startColumn;
+      return values.map((row, index) => row.map((_value, columnIndex) => {
+        const rowNumber = parsed.startRow + index;
+        return columnIndex === formulaColumnIndex && rowNumber > 1 ? `=H${rowNumber}-G${rowNumber}` : null;
+      }));
     }
   }
   const values = valuesFor(sheetName, address);

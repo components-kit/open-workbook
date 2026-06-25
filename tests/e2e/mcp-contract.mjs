@@ -63,10 +63,14 @@ async function main() {
       arguments: { request: "noop" }
     }, { messageIncludes: "tool", codeOneOf: [-32602, -32603] });
 
-    await expectCallFailure(mcp, "missing required request", {
+    await expectToolResult(mcp, "missing request uses default continuation prompt", {
       name: "excel.agent.run",
       arguments: { mode: "status" }
-    }, { messageIncludes: "request", codeOneOf: [-32602] });
+    }, (result) => {
+      assert(result.structuredContent?.status === "NEEDS_INPUT", "missing request should still route through the agent result contract");
+      assert(result.structuredContent?.mode === "status", "missing request should preserve the requested mode");
+      assert(result.isError !== true, "missing request is allowed by the published optional request schema");
+    });
 
     await expectCallFailure(mcp, "invalid mode enum", {
       name: "excel.agent.run",

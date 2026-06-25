@@ -17,7 +17,7 @@ describe("backend capability registry", () => {
     const catalog = listExcelCapabilities();
     const registry = listBackendCapabilityRegistry();
 
-    expect(catalog).toHaveLength(306);
+    expect(catalog).toHaveLength(308);
     expect(registry).toHaveLength(catalog.length);
     expect(new Set(registry.map((entry) => entry.name)).size).toBe(catalog.length);
     expect(registry.map((entry) => entry.name).sort()).toEqual(catalog.map((capability) => capability.name).sort());

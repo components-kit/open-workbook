@@ -248,6 +248,16 @@ export interface AutofitRowsOperation extends OperationBase {
   target: A1Range;
 }
 
+export interface HideColumnsOperation extends OperationBase {
+  kind: "range.hide_columns";
+  target: A1Range;
+}
+
+export interface UnhideColumnsOperation extends OperationBase {
+  kind: "range.unhide_columns";
+  target: A1Range;
+}
+
 export interface AutofitManyOperation extends OperationBase {
   kind: "range.autofit_many";
   entries: Array<{
@@ -423,6 +433,8 @@ export type ExcelOperation =
   | DeleteColumnsOperation
   | AutofitColumnsOperation
   | AutofitRowsOperation
+  | HideColumnsOperation
+  | UnhideColumnsOperation
   | AutofitManyOperation
   | ApplyAutoFilterOperation
   | ClearAutoFilterOperation

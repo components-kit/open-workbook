@@ -171,7 +171,7 @@ describe("AgentOrchestrator Structured Intent", () => {
       });
 
       expect(result.status).toBe("PREVIEW_READY");
-      expect((result.answer as any).kind).toBe("formula_preview");
+      expect((result.answer as any).kind).toBe("formula_update_preview");
       expect(result.telemetry.intentAction).toBe("write_formulas");
       expect(result.telemetry.operationRisk).toBe("formula_write");
       expect(runtime.writeBatchCount).toBe(0);
@@ -223,6 +223,30 @@ describe("AgentOrchestrator Structured Intent", () => {
       expect(runtime.readBatchCount).toBeGreaterThan(0);
       expect(runtime.runtimeMethodCalls["formula.read_patterns"]).toBe(1);
       expect(runtime.writeBatchCount).toBe(0);
+    });
+
+  it("counts formula cells even when the displayed formula result is blank", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Read the formula in the blank result cell",
+        mode: "answer",
+        intent: { action: "read_formulas", confidence: 0.92 },
+        target: { sheetName: "Report", range: "B3" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("formula_read");
+      expect((result.answer as any).formulaCount).toBe(1);
+      expect((result.answer as any).blankCount).toBe(0);
+      expect((result.answer as any).formulaResultBlankCount).toBe(1);
+      expect((result.answer as any).cells[0]).toMatchObject({
+        cell: "B3",
+        value: "",
+        formula: "=SUM(Data!C2:C4)",
+        formulaStatus: "formula"
+      });
     });
 
   it("redirects exact formula inspection from find mode to formula proof instead of target candidates", async () => {

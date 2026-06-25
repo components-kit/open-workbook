@@ -1411,6 +1411,14 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
             getRange(context, operation.target).format.autofitColumns();
             break;
           }
+          case "range.hide_columns": {
+            getRange(context, operation.target).getEntireColumn().columnHidden = true;
+            break;
+          }
+          case "range.unhide_columns": {
+            getRange(context, operation.target).getEntireColumn().columnHidden = false;
+            break;
+          }
           case "range.autofit_rows": {
             getRange(context, operation.target).format.autofitRows();
             break;

@@ -7883,6 +7883,8 @@ function scopesFromOperation(workbookId: WorkbookId, operation: ExcelOperation):
     case "range.delete_columns":
     case "range.autofit_columns":
     case "range.autofit_rows":
+    case "range.hide_columns":
+    case "range.unhide_columns":
     case "range.apply_autofilter":
     case "range.clear_autofilter":
     case "range.merge":

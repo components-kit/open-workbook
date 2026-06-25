@@ -79,6 +79,16 @@ export function routeAgentRequest(request: string, requestedMode: AgentRunMode =
     };
   }
 
+  if (isMatchUpdateRequest(request)) {
+    return {
+      mode: "preview_update",
+      matchedRule: "mutation.match_update",
+      confidence: 0.88,
+      reasons: ["Request describes matching rows and updating a column value."],
+      ...workflow
+    };
+  }
+
   const matched = ROUTE_RULES.find((rule) => rule.pattern.test(request));
   if (matched) {
     return {
@@ -131,6 +141,9 @@ function routeAgentWorkflow(
   if (action && modeForIntentAction(action) === "preview_update") return workflow("mutation.preview", intent?.confidence ?? 0.9, "Structured mutation action.", "sampled_allowed", "preview_only");
 
   const lower = request.toLowerCase();
+  if (isMatchUpdateRequest(request)) {
+    return workflow("mutation.preview", 0.88, "Request describes matching rows and updating a column value.", "sampled_allowed", "preview_only");
+  }
   if (/\b(formula|formulas|raw formula|r1c1|calculation)\b/.test(lower) && /\b(read|check|verify|inspect|show|explain|is|has|look)\b/.test(lower)) {
     return workflow("range.read", 0.86, "Request asks to inspect existing formulas.", "sampled_allowed", "targeted_read");
   }
@@ -165,6 +178,11 @@ function routeAgentWorkflow(
     return workflow("mutation.preview", 0.82, "Request contains workbook mutation language.", "sampled_allowed", "preview_only");
   }
   return workflow("range.read", 0.65, "Default answer route may use targeted reads after metadata.", "sampled_allowed", "targeted_read");
+}
+
+function isMatchUpdateRequest(request: string): boolean {
+  return /\b(?:all\s+)?(?:transfer|transfers|transfer\s+from\/to|payer|payee|vendor|customer|account)\s+(?:to|from|contains?|for)?\s*["']?[A-Z0-9][\p{L}\p{M}\p{N}\s._&+-]{1,60}?["']?\s+(?:is|are|=|as|to)\s+(?:truck(?:\s+id)?|vehicle)\s+["']?[\w-]{2,20}["']?/iu.test(request)
+    || /\b(?:where|rows?\s+where|all\s+rows?\s+where)\s+[\p{L}\p{M}\p{N}\s/_-]{2,40}\s+(?:contains?|equals?|=|is)\s+["']?[^"',]+?["']?\s*,?\s*(?:set|update|write)\s+[\p{L}\p{M}\p{N}\s/_-]{2,40}\s+(?:to|=|as)\s+["']?[^"']+?["']?$/iu.test(request);
 }
 
 function isReadVerificationRequest(request: string): boolean {

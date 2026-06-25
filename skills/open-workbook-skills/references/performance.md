@@ -48,6 +48,7 @@ When only a preview is inline and the next step requires exact rows, raw values,
 - For repeated values, number formats, styles, clears, or autofit across related ranges, use one grouped preview; the backend compiles it to internal `*_many` range operations so stale checks, backups, telemetry, and rollback stay single-operation.
 - For broad deterministic value transforms, use `transform_values` so Open Workbook scans the target internally and returns bounded examples instead of full-column payloads.
 - For row-aware derivations, use `derive_values` so Open Workbook reads source/target columns internally, verifies row alignment, and compiles only changed target cells. Use `formula_like` for calculations such as Payment Variance = Actual Amount - Cash Amount instead of reading full source/target columns into the model.
+- For full-range formula repair from one repeated A1 pattern, use `write_formulas` with one `values.formula` and the full target range. Let Open Workbook expand relative references; do not generate large formula matrices or dummy value matrices in model context.
 - For transaction settlement bundles, use `settle_reconciliation` so Payment Variance, Reconciliation Note, and Detail Notes are previewed as one grouped plan instead of separate formula/note calls.
 - For batch sheet renames from one deterministic rule, use `transform_sheets` so Open Workbook previews one bounded workbook-structure plan instead of looping through individual sheet calls.
 - Ask for preview before applying large generated changes.

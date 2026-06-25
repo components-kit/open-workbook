@@ -84,10 +84,17 @@ describe("agent action handlers", () => {
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "delete_sheet" }, target }, "delete_sheet", false)?.id).toBe("delete_sheet");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "hide_sheet" }, target }, "hide_sheet", false)?.id).toBe("hide_sheet");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "unhide_sheet" }, target }, "unhide_sheet", false)?.id).toBe("unhide_sheet");
+    expect(findAgentActionHandler({ request: "Do it", intent: { action: "hide_columns" }, target: { ...target, range: "B:C" } }, "hide_columns", true)?.id).toBe("hide_columns");
+    expect(findAgentActionHandler({ request: "Do it", intent: { action: "unhide_columns" }, target: { ...target, range: "B:C" } }, "unhide_columns", true)?.id).toBe("unhide_columns");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "protect_sheet" }, target }, "protect_sheet", false)?.id).toBe("protect_sheet");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "unprotect_sheet" }, target }, "unprotect_sheet", false)?.id).toBe("unprotect_sheet");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "clear_sheet" }, target }, "clear_sheet", false)?.id).toBe("clear_sheet");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "set_sheet_tab_color" }, target }, "set_sheet_tab_color", false)?.id).toBe("set_sheet_tab_color");
+  });
+
+  it("matches column hide and unhide requests", () => {
+    expect(findAgentActionHandler({ request: "Hide columns B:C", target: { sheetName: "Data", range: "B:C" } }, undefined, true)?.id).toBe("hide_columns");
+    expect(findAgentActionHandler({ request: "Show cols B:C", target: { sheetName: "Data", range: "B:C" } }, undefined, true)?.id).toBe("unhide_columns");
   });
 
   it("matches promoted workbook mutation actions by caller intent", () => {

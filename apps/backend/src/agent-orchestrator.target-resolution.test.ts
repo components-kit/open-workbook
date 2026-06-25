@@ -12,7 +12,7 @@ describe("AgentOrchestrator Target Resolution", () => {
       expect(result.status).toBe("SUCCESS");
       expect(result.telemetry.internalReadCount).toBe(1);
       expect(result.telemetry.fullReadCellCount).toBeLessThanOrEqual(16);
-      expect(runtime.readBatchCount).toBeLessThanOrEqual(8);
+      expect(runtime.readBatchCount).toBeLessThanOrEqual(sheets.length);
     });
 
   it("reads live values when batch results use the protocol data field", async () => {
@@ -361,7 +361,7 @@ describe("AgentOrchestrator Target Resolution", () => {
       expect((result.answer as any).sheets.map((sheet: any) => sheet.sheetName)).toEqual(["Financials - June 2026", "Financials - May 2026"]);
       expect((result.answer as any).numericComparison.highestSumSheet).toBe("Financials - June 2026");
       expect(result.telemetry.internalReadCount).toBe(2);
-      expect(runtime.readBatchCount).toBeLessThanOrEqual(8);
+      expect(runtime.readBatchCount).toBeLessThanOrEqual(sheets.length + 1);
     });
 
   it("compares monthly performance from KPI sections instead of whole used ranges", async () => {

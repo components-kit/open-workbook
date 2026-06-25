@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AgentOrchestrator } from "./agent-orchestrator.js";
-import { FakeAgentRuntime, createCachedMetadata, selectionInfo, sheets } from "./agent-orchestrator.test-support.js";
+import { FakeAgentRuntime, createCachedMetadata, selectionInfo, sheets, workbookId } from "./agent-orchestrator.test-support.js";
 
 describe("AgentOrchestrator Read Answer Routing", () => {
   it("fails fast with reload guidance when the Excel add-in session is stale", async () => {
@@ -192,6 +192,48 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(runtime.lastSnapshotRanges).toEqual([]);
     });
 
+  it("analyzes a reference sheet as compact patterns instead of row chunks", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Please skim quickly by tx type from Apr 2026, count types, explain relation between Desc, Tx Type, Detail Note, Cash Amount, Actual Amount, formulas and header styling.",
+        mode: "answer",
+        intent: { action: "analyze_reference_sheet" },
+        target: { sheetName: "Apr 2026" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("reference_sheet_analysis");
+      expect((result.answer as any).reference).toMatchObject({ sheetName: "Apr 2026", range: "A1:AJ244" });
+      expect((result.answer as any).columnProfiles.some((profile: any) => profile.name === "Transaction Type" && profile.uniqueCount >= 1)).toBe(true);
+      expect((result.answer as any).relationships.some((relationship: any) => relationship.columns.includes("Description") && relationship.columns.includes("Transaction Type"))).toBe(true);
+      expect((result.answer as any).formulaPatterns.some((pattern: any) => pattern.column === "Payment Variance")).toBe(true);
+      expect((result.answer as any).stylePatterns.some((style: any) => style.label === "header_style")).toBe(true);
+      expect(result.agentInstruction).toContain("Do not broad-read or chunk-read");
+      expect(runtime.lastBatchOperations[0]).toMatchObject({
+        kind: "range.read_full",
+        workbookId,
+        target: { sheetName: "Apr 2026", address: "A1:AJ244" }
+      });
+      expect(runtime.snapshotRangesHistory).toEqual([]);
+    });
+
+  it("auto-routes reference convention prompts to reference analysis", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Look into Apr 2026 as reference and learn the same conventions for notes, formulas, header styling, and row conditions.",
+        mode: "answer"
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("reference_sheet_analysis");
+      expect((result.answer as any).objectives).toEqual(expect.arrayContaining(["formula patterns", "style conventions", "row conditions"]));
+      expect(result.maxRecommendedFollowupCalls).toBe(0);
+    });
+
   it("uses row windows from table read requests instead of the active selected row", async () => {
       const runtime = new FakeAgentRuntime();
       runtime.selection = selectionInfo("Data", "C3", { row: 3, column: 3 });
@@ -348,9 +390,10 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       });
 
       expect(result.status).toBe("SUCCESS");
+      expect(result.nextAction).toBe("ask_user");
       expect((result.answer as any).kind).toBe("large_range_guard");
       expect((result.answer as any).requestedCells).toBeGreaterThan(10000);
-      expect(result.warnings[0]).toContain("Large range read was summarized");
+      expect(result.warnings[0]).toContain("Large full-data read was blocked");
       expect(result.telemetry.internalReadCount).toBe(0);
       expect(result.telemetry.fullReadCellCount).toBe(0);
       expect(runtime.readBatchCount).toBe(0);
@@ -519,6 +562,27 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect((result.answer as any).rows[0]).toMatchObject({ sheetName: "Mar 2026", range: "A2:AJ2" });
       expect((result.answer as any).rows[0].values).toContain("company_gas_topup");
       expect(result.proof[0]).toMatchObject({ sheetName: "Mar 2026", range: "A2:AJ2" });
+    });
+
+  it("returns exact row numbers for bounded text searches without full result handles", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_exact_search_rows");
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Search column K in May 2026 for all cells containing WITSARUT and return row numbers.",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        target: { sheetName: "May 2026", range: "K1:K244" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("exact_search_rows");
+      expect((result.answer as any).matchedRows).toEqual([25, 27, 28, 31, 33, 37, 38, 39, 40, 44, 48]);
+      expect((result.answer as any).fullResultUri).toBeUndefined();
+      expect(result.nextAction).toBe("answer_now");
+      expect(result.agentInstruction).toContain("Do not fetch full rows");
     });
 
   it("searches requested prior sheets for exact reference rows instead of returning compact broad ranges", async () => {
@@ -972,6 +1036,248 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect((full.answer as any).rowLimit).toBe(10000);
       expect((full.answer as any).fullResultUri).toMatch(/\?view=full$/);
       expect(runtime.runtimeMethodCalls["table.read"]).toBe(2);
+    });
+
+  it("requires fetching stored detail when an explicit full-table request is compacted to preview rows", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_full_table_compacted");
+      metadata.tables[0]!.range = "A1:D121";
+      metadata.tables[0]!.dataRange = "A2:D121";
+      agent.metadataCache.set(metadata);
+      runtime.readTable = async (request: any) => {
+        runtime.runtimeMethodCalls["table.read"] = (runtime.runtimeMethodCalls["table.read"] ?? 0) + 1;
+        return {
+          ok: true,
+          table: {
+            tableName: request.tableName,
+            headers: ["Date", "Account", "Amount", "Status"],
+            values: Array.from({ length: 120 }, (_value, index) => [`2026-06-${String((index % 28) + 1).padStart(2, "0")}`, `A-${index}`, index, "Open"])
+          }
+        };
+      };
+
+      const result = await agent.run({
+        request: "Show all rows from Transactions table",
+        mode: "answer",
+        detailLevel: "full_table",
+        workbookContextId: metadata.workbookContextId,
+        target: { tableName: "Transactions" },
+        budget: { maxPayloadBytes: 1800, maxExamples: 2 }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.nextAction).toBe("fetch_resource");
+      expect(result.taskOutcome).toBe("cannot_complete");
+      expect(result.requiredFollowup?.nextAction).toBe("fetch_resource");
+      expect((result.answer as any).inlineIsComplete).toBe(false);
+      expect((result.answer as any).inlineRowCount).toBeLessThan((result.answer as any).totalRowCount);
+      expect(result.agentInstruction).toContain("fetch the stored full result");
+    });
+
+  it("marks small full-table reads as complete inline", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Show all rows from Transactions table",
+        mode: "answer",
+        detailLevel: "full_table",
+        target: { tableName: "Transactions" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.nextAction).toBe("answer_now");
+      expect((result.answer as any).inlineIsComplete).toBe(true);
+      expect((result.answer as any).inlineRowCount).toBe(3);
+      expect((result.answer as any).totalRowCount).toBe(3);
+    });
+
+  it("asks for predicates instead of broad-reading large search-like ranges", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Find METRO PARTICLE in Data!A1:XFD1048576",
+        mode: "answer",
+        target: { sheetName: "Data", range: "A1:XFD1048576" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.nextAction).toBe("ask_user");
+      expect((result.answer as any).kind).toBe("large_range_guard");
+      expect(result.warnings.join(" ")).toContain("Do not broad-read follow-up chunks");
+    });
+
+  it("asks users to narrow explicit huge full-sheet reads", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Show all rows from Data!A1:XFD1048576",
+        mode: "answer",
+        target: { sheetName: "Data", range: "A1:XFD1048576" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.nextAction).toBe("ask_user");
+      expect((result.answer as any).kind).toBe("large_range_guard");
+      expect((result.answer as any).recommendation).toContain("smaller range");
+      expect(result.taskOutcome).toBe("needs_user_input");
+      expect(result.warnings.join(" ")).toContain("Large full-data read was blocked");
+      expect(result.telemetry.internalReadCount).toBe(0);
+    });
+
+  it("asks the user after a targeted search returns no exact match", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.readRangeMetadata = async (method: string, request: any) => {
+        runtime.runtimeMethodCalls[method] = (runtime.runtimeMethodCalls[method] ?? 0) + 1;
+        return { ok: true, method, request, data: { address: request.address, count: 0, matches: [] } };
+      };
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Search Data for Missing Customer",
+        mode: "answer",
+        intent: { action: "search_range" },
+        target: { sheetName: "Data", range: "A1:D4" },
+        values: { text: "Missing Customer" }
+      });
+
+      expect(result.status).toBe("NEEDS_INPUT");
+      expect(result.nextAction).toBe("ask_user");
+      expect((result.answer as any).kind).toBe("range_search_no_match");
+      expect((result.answer as any).searchedRangeWasComplete).toBe(true);
+      expect(result.warnings.join(" ")).toContain("Do not broad-read adjacent chunks");
+    });
+
+  it("labels fresh empty sheets as successful empty results instead of live-read failures", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.snapshotRangesOverride = {
+        ok: true,
+        workbookId: "workbook_agent_unit",
+        rangeSnapshots: [{ workbookId: "workbook_agent_unit", sheetName: "Fresh", address: "A1:D20", values: [] }]
+      };
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_fresh_empty_sheet");
+      metadata.sheets.push({
+        id: "sheet:Fresh",
+        name: "Fresh",
+        index: 99,
+        usedRange: "A1:D20",
+        rowCount: 20,
+        columnCount: 4,
+        kind: "transaction",
+        headers: [],
+        tableIds: [],
+        sectionIds: [],
+        summaryBlockIds: [],
+        formulaRegionIds: []
+      });
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Read Fresh!A1:D20",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "read_values" },
+        target: { sheetName: "Fresh", range: "A1:D20" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).emptyResultKind).toBe("fresh_sheet");
+      expect(result.taskOutcome).toBe("final_answer");
+      expect(result.warnings.join(" ")).toContain("No non-empty cells");
+    });
+
+  it("normalizes short-year date writes and adds targeted date number formats", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Update booking dates",
+        mode: "preview_update",
+        target: { sheetName: "Data", range: "A2:B2" },
+        values: { values: [["25/6/26", "27/6/26"]] }
+      });
+
+      expect(result.status).toBe("PREVIEW_READY");
+      const operations = (agent.dumpOperations()[0] as any).action.operations;
+      expect(operations[0]).toMatchObject({ kind: "range.write_values" });
+      expect(operations[0].values).toEqual([[46198, 46200]]);
+      expect(operations[1]).toMatchObject({ kind: "range.write_number_formats_many" });
+      expect(operations[1].entries).toHaveLength(2);
+      expect(operations[1].entries[0].numberFormat).toEqual([["dd/mm/yyyy"]]);
+      expect(result.warnings.join(" ")).toContain("Short-year date text was normalized");
+    });
+
+  it("normalizes multi-row short-year booking dates without formatting non-date cells", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Write booking dates",
+        mode: "preview_update",
+        target: { sheetName: "Data", range: "A2:C3" },
+        values: { values: [["25/6/26", "Customer A", "27/6/26"], ["26/6/26", "Customer B", "28/6/26"]] }
+      });
+
+      expect(result.status).toBe("PREVIEW_READY");
+      const operations = (agent.dumpOperations()[0] as any).action.operations;
+      expect(operations[0].values).toEqual([[46198, "Customer A", 46200], [46199, "Customer B", 46201]]);
+      expect(operations[1]).toMatchObject({ kind: "range.write_number_formats_many" });
+      expect(operations[1].entries.map((entry: any) => entry.target.address)).toEqual(["A2", "C2", "A3", "C3"]);
+    });
+
+  it("does not normalize impossible short-year date text", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Update booking dates",
+        mode: "preview_update",
+        target: { sheetName: "Data", range: "A2:A2" },
+        values: { values: [["31/2/26"]] }
+      });
+
+      expect(result.status).toBe("PREVIEW_READY");
+      const operations = (agent.dumpOperations()[0] as any).action.operations;
+      expect(operations).toHaveLength(1);
+      expect(operations[0].values).toEqual([["31/2/26"]]);
+      expect(result.warnings.join(" ")).not.toContain("Short-year date text was normalized");
+    });
+
+  it("asks for scope before building unclear broad mutation payloads", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Update all rows in the worksheet",
+        mode: "preview_update",
+        target: { sheetName: "Data", range: "A1:Z100" },
+        values: { value: "Reviewed" }
+      });
+
+      expect(result.status).toBe("NEEDS_INPUT");
+      expect(result.nextAction).toBe("ask_user");
+      expect((result.answer as any).kind).toBe("broad_mutation_scope_guard");
+      expect(result.warnings.join(" ")).toContain("Broad update scope is unclear");
+    });
+
+  it("asks for scope before broad mutations even when values are not provided yet", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Color all rows in the worksheet",
+        mode: "preview_update",
+        target: { sheetName: "Data", range: "A1:Z100" }
+      });
+
+      expect(result.status).toBe("NEEDS_INPUT");
+      expect(result.nextAction).toBe("ask_user");
+      expect((result.answer as any).kind).toBe("broad_mutation_scope_guard");
+      expect((result.answer as any).alternatives).toContain("matching rows only");
     });
 
   it("preserves compact table row details in verbose mode", async () => {

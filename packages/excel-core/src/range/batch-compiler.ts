@@ -127,6 +127,9 @@ function getOperationTargets(operation: ExcelOperation): A1Range[] {
     case "range.insert_columns":
     case "range.delete_columns":
       return [shiftedColumnRange(operation.target)];
+    case "range.hide_columns":
+    case "range.unhide_columns":
+      return [shiftedRowRange(operation.target)];
     case "range.copy":
     case "range.move":
       return [operation.source, operation.target];

@@ -76,6 +76,8 @@ export type AgentActionHandlerId =
   | "delete_rows"
   | "insert_columns"
   | "delete_columns"
+  | "hide_columns"
+  | "unhide_columns"
   | "merge_range"
   | "unmerge_range"
   | "format_range"
@@ -705,6 +707,22 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     matches: (_input, request) => /\b(autofit|auto\s*fit)\b/.test(request) && /\b(rows?|height)\b/.test(request)
   },
   {
+    id: "hide_columns",
+    capabilityName: "excel.range.hide_columns",
+    intentAction: "hide_columns",
+    requiresResolvedTarget: true,
+    riskKind: "structure_change",
+    matches: (_input, request) => /\bhide\b/.test(request) && /\b(cols?|columns?)\b/.test(request)
+  },
+  {
+    id: "unhide_columns",
+    capabilityName: "excel.range.unhide_columns",
+    intentAction: "unhide_columns",
+    requiresResolvedTarget: true,
+    riskKind: "structure_change",
+    matches: (_input, request) => /\b(unhide|show)\b/.test(request) && /\b(cols?|columns?)\b/.test(request)
+  },
+  {
     id: "clear_range",
     capabilityName: "excel.range.clear",
     intentAction: "clear_range",
@@ -924,7 +942,11 @@ function hasFormulaLikeValue(values: AgentRunInput["values"]): boolean {
   if (!values) {
     return false;
   }
-  const matrix = Array.isArray(values.values)
+  const matrix = Array.isArray(values.formulas)
+    ? values.formulas
+    : typeof values.formula === "string"
+      ? [[values.formula]]
+      : Array.isArray(values.values)
     ? values.values
     : Array.isArray(values.rows)
       ? values.rows

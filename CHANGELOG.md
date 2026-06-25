@@ -6,6 +6,26 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+## [0.1.23] - 2026-06-25
+
+### Added
+
+- Added reference-sheet analysis for `excel.agent.run`, including structure, column profiles, formula/style patterns, row-condition hints, and bounded evidence so agents can learn conventions without chunk-reading the same sheet.
+- Added exact row search answers and no-match diagnostics that return matched row evidence or ask for a narrower search instead of broad-reading huge ranges.
+- Added orchestrated `hide_columns` and `unhide_columns` support through the protocol catalog, backend capability registry, batch compiler, and Excel add-in executor.
+
+### Fixed
+
+- Fixed grouped match/update workflows so safe previews can auto-apply and return matched-row update results without splitting the task into single-cell writes.
+- Fixed full-range formula writes so a single repeated same-sheet A1 formula can expand across the target range without requiring large formula arrays.
+- Fixed budgeted full-data responses and large search follow-ups so agents are directed to fetch stored full results only when appropriate and avoid unsafe broad reads.
+
+### Changed
+
+- Improved agent routing for match/update requests, reference-sheet analysis, exact search, missing-request status calls, and large-range search guardrails.
+- Improved inline completeness metadata for compact range and table reads so truncated results advertise whether inline data is complete or partial.
+- Refreshed MCP descriptions, Open Workbook skill guidance, docs, and E2E regression coverage for formula writes, reference analysis, exact search, and column visibility workflows.
+
 ## [0.1.22] - 2026-06-23
 
 ### Added

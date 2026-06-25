@@ -277,7 +277,8 @@ describe("AgentOrchestrator Prepare Cache", () => {
       expect(result.status).toBe("SUCCESS");
       expect(result.proof[0]).toMatchObject({ sheetName: "Report", range: "B1:B3" });
       expect((result.answer as any).kind).toBe("range_profile");
-      expect(runtime.readBatchCount).toBe(1);
+      expect(runtime.snapshotRangesHistory).toHaveLength(1);
+      expect(runtime.snapshotRangesHistory[0]?.[0]).toMatchObject({ sheetName: "Report", address: "B1:B3" });
     });
 
   it("runs workbook validation through the agent validate mode", async () => {

@@ -286,6 +286,77 @@ Data rows:
       expect((runtime.lastBatchOperations[0] as any).entries.map((entry: any) => entry.target.address)).toEqual(["C19:E19", "D20:E20", "H20:J20"]);
     });
 
+  it("auto-applies exact transfer match updates as one backend-owned grouped operation", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "all transfer to WITSARUT is truck 71-4653",
+        mode: "auto",
+        target: { sheetName: "May 2026" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.taskOutcome).toBe("apply_complete");
+      expect(result.maxRecommendedFollowupCalls).toBe(0);
+      expect((result.answer as any).kind).toBe("match_update_result");
+      expect((result.answer as any).matchColumn.name).toBe("Transfer From/To");
+      expect((result.answer as any).updateColumn.name).toBe("Truck ID");
+      expect((result.answer as any).predicate).toEqual({ operator: "contains", value: "WITSARUT" });
+      expect((result.answer as any).updateValue).toBe("71-4653");
+      expect((result.answer as any).matchedRows).toEqual([25, 27, 28, 31, 33, 37, 38, 39, 40, 44, 48]);
+      expect(result.agentInstruction).toContain("Do not fetch full rows");
+      expect(runtime.writeBatchCount).toBe(1);
+      expect(runtime.lastBatchOperations).toHaveLength(1);
+      expect(runtime.lastBatchOperations[0]?.kind).toBe("range.write_values_many");
+      expect((runtime.lastBatchOperations[0] as any).entries.map((entry: any) => entry.target.address)).toEqual(["C25", "C27", "C28", "C31", "C33", "C37", "C38", "C39", "C40", "C44", "C48"]);
+    });
+
+  it("previews exact transfer match updates without full-row handles when auto apply is disabled", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "all transfer to WITSARUT is truck 71-4653",
+        mode: "preview_update",
+        target: { sheetName: "May 2026" }
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).kind).toBe("match_update_preview");
+      expect((preview.answer as any).matchedRowCount).toBe(11);
+      expect((preview.answer as any).matchedRows).toEqual([25, 27, 28, 31, 33, 37, 38, 39, 40, 44, 48]);
+      expect((preview.answer as any).fullResultUri).toBeUndefined();
+      expect(preview.maxRecommendedFollowupCalls).toBe(1);
+      expect(preview.agentInstruction).toContain("Do not fetch full rows");
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
+  it("inherits parent sheet for grouped cell-only patch targets", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Set WITSARUT truck cells",
+        mode: "auto",
+        target: { sheetName: "May 2026" },
+        values: {
+          patches: [
+            { target: { range: "C31" }, values: [["71-4653"]] },
+            { target: { range: "C33" }, values: [["71-4653"]] }
+          ]
+        }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(runtime.writeBatchCount).toBe(1);
+      expect(runtime.lastBatchOperations[0]?.kind).toBe("range.write_values_many");
+      expect((runtime.lastBatchOperations[0] as any).entries.map((entry: any) => entry.target)).toEqual([
+        { workbookId, sheetName: "May 2026", address: "C31" },
+        { workbookId, sheetName: "May 2026", address: "C33" }
+      ]);
+    });
+
   it("auto-applies semantic section row and column patches after resolving exact cells", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -803,9 +874,95 @@ Data rows:
       });
 
       expect(result.status).toBe("PREVIEW_READY");
-      expect((result.answer as any).kind).toBe("formula_preview");
+      expect((result.answer as any).kind).toBe("formula_update_preview");
       expect(result.nextAction).toBe("call_apply_update");
       expect(runtime.writeBatchCount).toBe(0);
+    });
+
+  it("expands one A1 formula across the target range before apply", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Write Payment Variance formula to May 2026",
+        mode: "preview_update",
+        intent: { action: "write_formulas" },
+        target: { sheetName: "May 2026", range: "I2:I4" },
+        values: { formula: "=H2-G2" }
+      });
+      const applied = await agent.run({
+        request: "Apply formula repair",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).kind).toBe("formula_update_preview");
+      expect((preview.answer as any).formulaPattern).toBe("=H2-G2");
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations).toHaveLength(1);
+      expect(runtime.lastBatchOperations[0]).toMatchObject({
+        kind: "range.write_formulas",
+        target: { sheetName: "May 2026", address: "I2:I4" },
+        formulas: [["=H2-G2"], ["=H3-G3"], ["=H4-G4"]]
+      });
+    });
+
+  it("groups formula writes and red font styling in one preview", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Write formulas and make the text red",
+        mode: "preview_update",
+        intent: { action: "write_formulas" },
+        target: { sheetName: "May 2026", range: "I2:I3" },
+        values: { formula: "=H2-G2", style: { fontColor: "#FF0000" } }
+      });
+      const applied = await agent.run({
+        request: "Apply formula and style repair",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).kind).toBe("formula_update_preview");
+      expect((preview.answer as any).operationCount).toBe(2);
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations.map((operation) => operation.kind)).toEqual(["range.write_formulas", "range.write_styles"]);
+      expect(runtime.lastBatchOperations[1]).toMatchObject({
+        kind: "range.write_styles",
+        target: { sheetName: "May 2026", address: "I2:I3" },
+        style: { fontColor: "#FF0000" },
+        preserveValues: true
+      });
+    });
+
+  it("accepts shorthand source and destination for formula fill with parent sheet", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Fill formula down",
+        mode: "preview_update",
+        intent: { action: "fill_formula_down" },
+        target: { sheetName: "May 2026" },
+        values: { source: "I4", destination: "I2:I244" }
+      });
+      const applied = await agent.run({
+        request: "Apply formula fill",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).kind).toBe("formula_fill_down_preview");
+      expect((preview.answer as any)).toMatchObject({ sheetName: "May 2026", range: "I2:I244" });
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.runtimeMethodCalls["formula.fill_down"]).toBe(1);
     });
 
   it("previews and applies number-format writes through the agent surface", async () => {
@@ -2408,6 +2565,46 @@ Data rows:
     expect(runtime.writeBatchCount).toBe(0);
   });
 
+  it("previews Payment Variance formula derivation without skipping blank source rows", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Payment Variance should be formula Actual Amount minus Cash Amount for May 2026 and text red",
+      mode: "preview_update",
+      intent: { action: "derive_values" },
+      target: { sheetName: "May 2026", tableName: "May2026_Transaction_Filter", column: "Payment Variance" },
+      values: {
+        operation: "formula_like",
+        outputMode: "formula",
+        style: { fontColor: "#FF0000" }
+      }
+    });
+    const applied = await agent.run({
+      request: "Apply Payment Variance formula repair",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect((preview.answer as any).kind).toBe("formula_update_preview");
+    expect((preview.answer as any).target.range).toBe("I2:I244");
+    expect((preview.answer as any).sources.map((source: any) => source.header)).toEqual(["Cash Amount", "Actual Amount"]);
+    expect((preview.answer as any).changedCells).toBe(243);
+    expect((preview.answer as any).examples[0]).toMatchObject({
+      row: 2,
+      after: { "Payment Variance": "=H2-G2" }
+    });
+    expect(applied.status).toBe("SUCCESS");
+    expect(runtime.lastBatchOperations.map((operation) => operation.kind)).toEqual(["range.write_formulas", "range.write_styles"]);
+    expect(runtime.lastBatchOperations[0]).toMatchObject({
+      kind: "range.write_formulas",
+      target: { sheetName: "May 2026", address: "I2:I244" }
+    });
+    expect((runtime.lastBatchOperations[0] as any).formulas[242]).toEqual(["=H244-G244"]);
+  });
+
   it("previews settlement bundles with payment variance formulas and separate reconciliation/detail notes", async () => {
     const runtime = new FakeAgentRuntime();
     const agent = new AgentOrchestrator(runtime as any);
@@ -2715,6 +2912,26 @@ Data rows:
           request: "Delete columns",
           mode: "preview_update",
           intent: { action: "delete_columns" },
+          target: { sheetName: "Data", range: "B:C" }
+        }
+      },
+      {
+        capabilityName: "excel.range.hide_columns",
+        expectedOperationKind: "range.hide_columns",
+        input: {
+          request: "Hide columns",
+          mode: "preview_update",
+          intent: { action: "hide_columns" },
+          target: { sheetName: "Data", range: "B:C" }
+        }
+      },
+      {
+        capabilityName: "excel.range.unhide_columns",
+        expectedOperationKind: "range.unhide_columns",
+        input: {
+          request: "Unhide columns",
+          mode: "preview_update",
+          intent: { action: "unhide_columns" },
           target: { sheetName: "Data", range: "B:C" }
         }
       },

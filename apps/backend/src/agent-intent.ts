@@ -87,6 +87,7 @@ export function modeForIntentAction(action: AgentIntentAction): AgentRunMode {
   if (action === "read_named_item") return "answer";
   if (action === "read_region") return "answer";
   if (action === "find_similar_rows") return "answer";
+  if (action === "analyze_reference_sheet") return "answer";
   if (action === "find_style_references") return "answer";
   if (action === "read_style_summary") return "answer";
   if (action === "format_diagnostics") return "answer";

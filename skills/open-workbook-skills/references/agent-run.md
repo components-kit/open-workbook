@@ -49,7 +49,7 @@ Use `auto` for small explicit value edits that the user already asked you to mak
 
 Use `preview_update` for non-trivial mutations, broad edits, table appends, template actions, workbook lifecycle operations, backup lifecycle changes, or anything the user may want to review.
 
-Formula writes, formula repairs, and broad formula-like derivations are preview/apply workflows with validation. Use `derive_values` with `formula_like` for row-aware calculations such as Payment Variance = Actual Amount - Cash Amount so the backend scans source/target columns and returns bounded source/before/after examples.
+Formula writes, formula repairs, and broad formula-like derivations are preview/apply workflows with validation. Use `derive_values` with `formula_like` for row-aware calculations such as Payment Variance = Actual Amount - Cash Amount so the backend scans source/target columns and returns bounded source/before/after examples. When a full range should receive the same relative A1 formula pattern, use `write_formulas` with the full target range and one `values.formula`, for example `=H2-G2` on `I2:I244`; do not create a row-per-formula array unless the backend asks for it.
 
 Only call `apply_update` with the returned `operationId` and `confirmationToken`. If the backend reports stale context, target drift, ambiguity, missing permission, an active lock, or validation failure, stop and create a fresh preview or ask the user for direction.
 

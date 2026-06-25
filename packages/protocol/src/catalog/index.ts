@@ -153,6 +153,8 @@ const STABLE_TOOLS = new Set([
   "excel.range.delete_rows",
   "excel.range.insert_columns",
   "excel.range.delete_columns",
+  "excel.range.hide_columns",
+  "excel.range.unhide_columns",
   "excel.range.autofit_columns",
   "excel.range.autofit_rows",
   "excel.range.autofit_many",
@@ -464,6 +466,8 @@ const TOOL_NAMES = [
   "excel.range.delete_rows",
   "excel.range.insert_columns",
   "excel.range.delete_columns",
+  "excel.range.hide_columns",
+  "excel.range.unhide_columns",
   "excel.range.autofit_columns",
   "excel.range.autofit_rows",
   "excel.range.autofit_many",
@@ -806,7 +810,7 @@ function getDestructiveLevel(name: string, namespace: CapabilityNamespace): Dest
   if (namespace === "workbook" || name.includes(".close") || name.includes(".save_as") || name.includes(".restore_backup")) {
     return "workbook";
   }
-  if (namespace === "sheet" || namespace === "template" || name.includes("insert_") || name.includes("delete_") || name.includes("reorder_")) {
+  if (namespace === "sheet" || namespace === "template" || name.includes("insert_") || name.includes("delete_") || name.includes("reorder_") || name.includes("hide_") || name.includes("unhide_")) {
     return "structure";
   }
   if (namespace === "workflow") {

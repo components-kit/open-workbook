@@ -60,6 +60,8 @@ For ordinary formula error repairs, use `excel.agent.run` with the error range p
 
 For row-aware formula-like calculations such as Payment Variance = Actual Amount - Cash Amount, use `intent.action: "derive_values"` with operation `formula_like`. The backend should scan source and target columns internally, exclude headers, preview bounded examples, and apply only changed cells after confirmation.
 
+For full-column/table formula repairs where one same-sheet A1 pattern applies to every row, target the full data range and pass one `values.formula`. Example: `target: { "sheetName": "May 2026", "range": "I2:I244" }`, `intent.action: "write_formulas"`, `values: { "formula": "=H2-G2" }`. Open Workbook expands relative references for the target range. Do not preview only sample rows, do not build a 243-row formula matrix, and do not include dummy `values.values`.
+
 For transaction settlement consistency, inspect the reference month convention first. Use `read_formulas` or `read_formula_patterns` for Payment Variance, use `find_similar_rows` for Reconciliation Note and Detail Notes examples, or use `intent.action: "settle_reconciliation"` to compile one grouped preview. Keep those note columns distinct by header/role.
 
 Do not convert formulas to values unless the user explicitly asks or the workflow requires a static export.

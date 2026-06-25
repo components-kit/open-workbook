@@ -169,6 +169,29 @@
     "budgets": { "maxToolCalls": 2, "maxPayloadBytes": 30000, "maxLatencyMs": 6500 }
   },
   {
+    "id": "regression-opencode-large-search-asks-user",
+    "category": "production regression",
+    "difficulty": "medium",
+    "intent": "agent_contract",
+    "prompt": "Ask for a narrower search instead of broad-reading a huge worksheet when a customer is not easy to find.",
+    "input": {
+      "request": "Find METRO PARTICLE in Sales!A1:XFD1048576",
+      "mode": "answer",
+      "target": { "sheetName": "Sales", "range": "A1:XFD1048576" }
+    },
+    "expected": {
+      "resultType": "clarification",
+      "status": "SUCCESS",
+      "nextAction": "ask_user",
+      "answerKind": "large_range_guard",
+      "shouldMutateWorkbook": false,
+      "mustNotMutateWorkbook": true,
+      "mustNotReadFullWorkbook": true,
+      "warningIncludes": ["Do not broad-read follow-up chunks"]
+    },
+    "budgets": { "maxToolCalls": 1, "maxPayloadBytes": 12000, "maxLatencyMs": 4000 }
+  },
+  {
     "id": "regression-closed-workbook-status-error",
     "category": "production regression",
     "difficulty": "negative",

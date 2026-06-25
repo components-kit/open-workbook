@@ -215,7 +215,7 @@ export class AgentOrchestrator {
       const targetFingerprintStatus = isTargetFingerprintStatus(outputMetrics?.targetFingerprintStatus) ? outputMetrics.targetFingerprintStatus : runMetrics.targetFingerprintStatus;
       const safetyFingerprintOnly = typeof outputMetrics?.safetyFingerprintOnly === "boolean" ? outputMetrics.safetyFingerprintOnly : runMetrics.safetyFingerprintOnly;
       const preBudgetPayloadBytes = Buffer.byteLength(JSON.stringify(output));
-      const budgeted = withTaskOutcomeContract(applyOutputBudget(output, input, this.results, this.metadataCache));
+      const budgeted = withTaskOutcomeContract(enforceFullDataFollowupAfterBudget(applyOutputBudget(output, input, this.results, this.metadataCache), input));
       const targetHintCount = runMetrics.intent.targetHints?.length ?? 0;
       const targetHintUsed = targetHintCount > 0 && outputUsedCallerTargetHint(output);
       const payloadBytes = Buffer.byteLength(JSON.stringify(budgeted));
@@ -480,6 +480,17 @@ export class AgentOrchestrator {
           ...applied,
           mode,
           ...(applied.status === "SUCCESS" ? { taskOutcome: "apply_complete" as const, maxRecommendedFollowupCalls: 0 } : {}),
+          ...(applied.status === "SUCCESS" && isMatchUpdatePreviewAnswer(preview.answer)
+            ? {
+                answer: {
+                  ...preview.answer,
+                  kind: "match_update_result",
+                  applied: true,
+                  transactionId: typeof (applied.answer as { transactionId?: unknown } | undefined)?.transactionId === "string" ? (applied.answer as { transactionId: string }).transactionId : undefined
+                },
+                agentInstruction: "Use matchedRows and changes from this match/update result. Answer now. Do not fetch full rows, chunk-read, or split this task into single-cell writes."
+              }
+            : {}),
           summary: applied.status === "SUCCESS"
             ? `${applied.summary} Auto-applied after safe preview.`
             : `${preview.summary} Auto-apply attempted after safe preview but did not complete.`,
@@ -775,9 +786,17 @@ export class AgentOrchestrator {
     if (templateAnswer) {
       return templateAnswer;
     }
+    const referenceAnalysisAnswer = await this.referenceSheetAnalysisAnswerOutput(metadata, input, requestedMode, runMetrics);
+    if (referenceAnalysisAnswer) {
+      return referenceAnalysisAnswer;
+    }
     const styleAnswer = await this.styleAnswerOutput(metadata, input, requestedMode, runMetrics);
     if (styleAnswer) {
       return styleAnswer;
+    }
+    const exactSearchAnswer = await this.exactRowSearchAnswerOutput(metadata, input, requestedMode, runMetrics);
+    if (exactSearchAnswer) {
+      return exactSearchAnswer;
     }
     const similarRowsAnswer = await this.similarRowsAnswerOutput(metadata, input, requestedMode, runMetrics);
     if (similarRowsAnswer) {
@@ -837,6 +856,8 @@ export class AgentOrchestrator {
       return emptyLiveReadDiagnostic;
     }
     const inlinePreview = inlinePreviewForProfile(input, profile, normalizedRange);
+    const rangeInlineCompleteness = inlineCompletenessMetadata(inlinePreview, (profile.rows ?? []) as CellMatrix, profile.shape.rows);
+    const emptyResultKind = emptyResultKindForProfile(metadata, resolved.sheetName, normalizedRange, profile);
     const aggregate = aggregateProfileForRequest(input, profile, adjustedTarget.column);
     if (aggregate) {
       return {
@@ -858,7 +879,7 @@ export class AgentOrchestrator {
       mode: requestedMode,
       workbookContextId: metadata.workbookContextId,
       summary: `Answered from ${resolved.candidate.label} on ${resolved.sheetName} using a targeted compact read.`,
-      answer: { ...profile, ...inlinePreview },
+      answer: { ...profile, ...rangeInlineCompleteness, ...(emptyResultKind ? { emptyResultKind } : {}), ...inlinePreview },
       metrics: profile.metrics,
       candidates: candidates.slice(0, 5),
       proof: selectionAwareProof(metadata, resolved, normalizedRange, adjustedTarget.column?.name ?? resolved.candidate.label),
@@ -1234,6 +1255,7 @@ export class AgentOrchestrator {
     const inlinePreview = inlinePreviewForMatrix(input, matrix as CellMatrix, table.dataRange ?? table.range)
       ?? tinyInlinePreviewForMatrix(matrix as CellMatrix, table.dataRange ?? table.range);
     const totalRows = dimensionsFromAddress(table.dataRange ?? table.range)?.rows ?? profile.shape.rows;
+    const inlineCompleteness = inlineCompletenessMetadata(inlinePreview, matrix as CellMatrix, totalRows);
     const rowMetadata = tableReadRowMetadata(table.dataRange ?? table.range, rowOffset, matrix as CellMatrix);
     const compactColumn = (column: TableMetadata["columns"][number]) => ({
       name: column.name,
@@ -1261,6 +1283,7 @@ export class AgentOrchestrator {
         dataRange: table.dataRange,
         rowOffset,
         rowLimit,
+        ...inlineCompleteness,
         projectedColumns,
         truncated,
         ...(truncated ? { nextPage: { rowOffset: rowOffset + rowLimit } } : {}),
@@ -1689,6 +1712,160 @@ export class AgentOrchestrator {
     };
   }
 
+  private async exactRowSearchAnswerOutput(
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode,
+    runMetrics: AgentRunMetrics
+  ): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
+    const search = resolveExactRowSearchRequest(input);
+    if (!search) {
+      return undefined;
+    }
+    const resolved = resolveAgentReadTarget(metadata, input);
+    if (!resolved.ok) {
+      return undefined;
+    }
+    const workbookId = metadata.workbook.workbookId as WorkbookId;
+    const range = normalizeOperationRange(metadata, resolved.sheetName, resolved.range);
+    const parsed = tryParseA1Address(stripSheetName(range));
+    if (!parsed) {
+      return undefined;
+    }
+    const values = await this.readRangeValues(workbookId, resolved.sheetName, range, runMetrics);
+    const matchedRows: number[] = [];
+    const evidenceRows: Array<Record<string, unknown>> = [];
+    for (let rowIndex = 0; rowIndex < values.length; rowIndex += 1) {
+      const row = values[rowIndex] ?? [];
+      const matchedColumnIndexes = search.columnOffset !== undefined
+        ? [search.columnOffset]
+        : row.map((_value, index) => index);
+      const matchedValue = matchedColumnIndexes.map((index) => row[index]).find((value) => cellMatchesPredicate(value, search.predicate));
+      if (matchedValue === undefined) {
+        continue;
+      }
+      const sheetRow = parsed.startRow + rowIndex;
+      matchedRows.push(sheetRow);
+      if (evidenceRows.length < 10) {
+        evidenceRows.push({ row: sheetRow, matchedValue });
+      }
+    }
+    const answer = {
+      kind: matchedRows.length > 0 ? "exact_search_rows" : "exact_search_no_match",
+      sheetName: resolved.sheetName,
+      searchedRange: range,
+      predicate: search.predicate,
+      matchedRowCount: matchedRows.length,
+      matchedRows,
+      evidenceRows
+    };
+    return {
+      status: matchedRows.length > 0 ? "SUCCESS" : "NEEDS_INPUT",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      summary: matchedRows.length > 0
+        ? `Found ${matchedRows.length} exact row match(es) in ${resolved.sheetName}!${range}.`
+        : `No exact row matches were found in ${resolved.sheetName}!${range}.`,
+      answer,
+      metrics: { source: "runtime_exact_row_search", matchedRowCount: matchedRows.length },
+      candidates: findAgentCandidates(metadata, input).slice(0, 5),
+      proof: [{ sheetName: resolved.sheetName, range, label: "searched range" }],
+      resourceLinks: [contextResource(metadata.workbookContextId)],
+      nextAction: matchedRows.length > 0 ? "answer_now" : "ask_user",
+      agentInstruction: matchedRows.length > 0
+        ? "Answer from matchedRows and evidenceRows. Do not fetch full rows or chunk-read this search result."
+        : "Ask the user to refine the search term, sheet, or range; do not broad-read chunks.",
+      maxRecommendedFollowupCalls: 0,
+      warnings: []
+    };
+  }
+
+  private async referenceSheetAnalysisAnswerOutput(
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode,
+    runMetrics: AgentRunMetrics
+  ): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
+    if (intentAction(input) !== "analyze_reference_sheet" && !shouldAnalyzeReferenceSheet(input)) {
+      return undefined;
+    }
+    const reference = resolveReferenceAnalysisTarget(metadata, input);
+    if (!reference) {
+      return {
+        status: "NEEDS_INPUT",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: "Reference analysis needs a reference sheet, table, or range.",
+        candidates: findAgentCandidates(metadata, input).slice(0, 8),
+        proof: [],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "ask_user",
+        warnings: ["Ask the user which reference sheet/range to learn from before broad-reading workbook data."]
+      };
+    }
+
+    const workbookId = metadata.workbook.workbookId as WorkbookId;
+    const snapshot = await this.readRangeSnapshot(workbookId, reference.sheetName, reference.range, ["values", "text", "formulas", "numberFormat", "style"], runMetrics);
+    const analysis = referenceAnalysisFromSnapshot(metadata, input, reference, snapshot);
+    const styleTargets = referenceStyleTargets(metadata, reference.sheetName, reference.range);
+    const styleSummaries = [];
+    for (const target of styleTargets.slice(0, 2)) {
+      runMetrics.internalReadCount += 1;
+      const result = await this.runtime.getStyleFingerprint({
+        workbookId,
+        sheetName: reference.sheetName,
+        address: target.range,
+        maxCellSamples: target.label === "header_style" ? 60 : 120
+      });
+      styleSummaries.push({
+        label: target.label,
+        range: target.range,
+        summary: compactStyleReferenceFingerprint(result)
+      });
+    }
+
+    return {
+      status: "SUCCESS",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      summary: `Analyzed reference patterns from ${reference.sheetName}!${reference.range}.`,
+      answer: {
+        kind: "reference_sheet_analysis",
+        source: "live_read_metadata_formula_style",
+        reference,
+        objectives: analysis.objectives,
+        structure: analysis.structure,
+        columnProfiles: analysis.columnProfiles,
+        relationships: analysis.relationships,
+        formulaPatterns: analysis.formulaPatterns,
+        stylePatterns: styleSummaries,
+        rowConditionPatterns: analysis.rowConditionPatterns,
+        evidenceRows: analysis.evidenceRows,
+        nextRequestHints: [
+          "Use this reference analysis to answer convention questions; do not chunk-read the same reference sheet for the same objective.",
+          "For updates, ask the user for target rows/facts or call preview_update with grouped structured values."
+        ]
+      },
+      metrics: {
+        source: "runtime_reference_sheet_analysis",
+        rowCount: analysis.structure.rowCount,
+        columnCount: analysis.structure.columnCount,
+        profileCount: analysis.columnProfiles.length,
+        relationshipCount: analysis.relationships.length
+      },
+      candidates: findAgentCandidates(metadata, input).slice(0, 5),
+      proof: [
+        { sheetName: reference.sheetName, range: reference.range, label: "reference analysis range" },
+        ...styleTargets.slice(0, 2).map((target) => ({ sheetName: reference.sheetName, range: target.range, label: target.label }))
+      ],
+      resourceLinks: [contextResource(metadata.workbookContextId)],
+      nextAction: "answer_now",
+      agentInstruction: "Answer the user's reference-sheet questions from this derived analysis. Do not broad-read or chunk-read the same reference sheet again for this task.",
+      maxRecommendedFollowupCalls: 0,
+      warnings: analysis.warnings
+    };
+  }
+
   private async rangeMetadataAnswerOutput(
     metadata: WorkbookMetadata,
     input: AgentRunInput,
@@ -1724,6 +1901,28 @@ export class AgentOrchestrator {
       : { workbookId, sheetName: resolved.sheetName, address: normalizedRange };
     runMetrics.internalReadCount += 1;
     const result = await this.runtime.readRangeMetadata(method, request);
+    if (method === "range.search" && searchResultHasNoMatches(result)) {
+      return {
+        status: "NEEDS_INPUT",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: `No exact match was found in ${resolved.sheetName}!${normalizedRange}. Ask the user for a more exact search term, a different sheet/range, or permission to broaden the search.`,
+        answer: {
+          kind: "range_search_no_match",
+          sheetName: resolved.sheetName,
+          range: normalizedRange,
+          searchedText: (request as RangeSearchRequest).text,
+          searchedRangeWasComplete: true,
+          result
+        },
+        metrics: { source: "runtime_range_search", matchCount: 0 },
+        candidates: findAgentCandidates(metadata, input).slice(0, 5),
+        proof: [{ sheetName: resolved.sheetName, range: normalizedRange, label: "searched range" }],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "ask_user",
+        warnings: ["No exact match was found. Do not broad-read adjacent chunks; ask the user to refine the search or target."]
+      };
+    }
     return {
       status: (result as { ok?: boolean }).ok === false ? "VALIDATION_FAILED" : "SUCCESS",
       mode: requestedMode,
@@ -2086,6 +2285,10 @@ export class AgentOrchestrator {
   }
 
   private async previewUpdate(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Promise<Omit<AgentRunOutput, "telemetry">> {
+    const matchUpdate = await this.previewMatchUpdate(metadata, input, requestedMode);
+    if (matchUpdate) {
+      return matchUpdate;
+    }
     const patches = valuePatchesFromInput(input);
     if (patches.length > 0) {
       return this.previewPatchUpdate(metadata, input, requestedMode, patches);
@@ -2097,12 +2300,30 @@ export class AgentOrchestrator {
     if (semanticPatches.patches.length > 0) {
       return this.previewPatchUpdate(metadata, input, requestedMode, semanticPatches.patches);
     }
+    if (isPotentialBroadMutationRequest(input)) {
+      const scoped = resolveUpdateTarget(metadata, input);
+      if (scoped.ok) {
+        const guard = broadMutationNeedsScopeOutput(metadata, input, requestedMode, scoped, objectToCellMatrix(input.values ?? {}));
+        if (guard) {
+          return guard;
+        }
+      } else {
+        const guard = broadMutationExplicitTargetNeedsScopeOutput(metadata, input, requestedMode);
+        if (guard) {
+          return guard;
+        }
+      }
+    }
     const operationPreview = await this.previewOperationIntent(metadata, input, requestedMode);
     if (operationPreview) {
       return operationPreview;
     }
     const resolved = resolveUpdateTarget(metadata, input);
     if (!resolved.ok) {
+      const guard = broadMutationExplicitTargetNeedsScopeOutput(metadata, input, requestedMode);
+      if (guard) {
+        return guard;
+      }
       return {
         status: resolved.status,
         mode: requestedMode,
@@ -2129,13 +2350,19 @@ export class AgentOrchestrator {
       };
     }
     const matrix = objectToCellMatrix(input.values ?? {});
-    if (containsFormulaLikeValue(matrix) && intentAction(input) !== "write_conditional_formatting" && (intentAction(input) === "write_formulas" || isFormulaMutationRequest(input.request))) {
-      return this.previewFormulaUpdate(metadata, input, requestedMode, resolved, matrix);
+    const broadMutationGuard = broadMutationNeedsScopeOutput(metadata, input, requestedMode, resolved, matrix);
+    if (broadMutationGuard) {
+      return broadMutationGuard;
+    }
+    const dateNormalization = normalizeShortYearDatesForWrite(metadata.workbook.workbookId as WorkbookId, input, resolved.range, matrix);
+    const writeMatrix = dateNormalization.matrix;
+    if (containsFormulaLikeValue(writeMatrix) && (intentAction(input) === "write_formulas" || (!isConditionalFormattingMutationRequest(input.request) && isFormulaMutationRequest(input.request)))) {
+      return this.previewFormulaUpdate(metadata, input, requestedMode, resolved, writeMatrix);
     }
     if ((intentAction(input) === "append_table_rows" || isTableAppendIntent(input.request)) && resolved.candidate.kind === "table") {
-      return this.previewTableAppend(metadata, input, requestedMode, resolved, matrix);
+      return this.previewTableAppend(metadata, input, requestedMode, resolved, writeMatrix);
     }
-    if (isSparseBroadWrite(resolved.range, matrix)) {
+    if (isSparseBroadWrite(resolved.range, writeMatrix)) {
       return {
         status: "VALIDATION_FAILED",
         mode: requestedMode,
@@ -2147,7 +2374,7 @@ export class AgentOrchestrator {
         warnings: ["Sparse/null-padded broad writes are blocked by the agent workflow."]
       };
     }
-    if (containsFormulaLikeValue(matrix) && intentAction(input) !== "write_conditional_formatting") {
+    if (containsFormulaLikeValue(writeMatrix) && intentAction(input) !== "write_conditional_formatting") {
       return {
         status: "VALIDATION_FAILED",
         mode: requestedMode,
@@ -2162,7 +2389,7 @@ export class AgentOrchestrator {
     const formulaWarnings = overlapsFormulaRegion(metadata, resolved.sheetName, resolved.range)
       ? ["Target overlaps detected formula regions. Review carefully before applying."]
       : [];
-    if (formulaWarnings.length > 0 && (!input.target?.range || (cellCountFromAddress(resolved.range) ?? 0) > Math.max(1, matrixCellCount(matrix)))) {
+    if (formulaWarnings.length > 0 && (!input.target?.range || (cellCountFromAddress(resolved.range) ?? 0) > Math.max(1, matrixCellCount(writeMatrix)))) {
       return {
         status: "VALIDATION_FAILED",
         mode: requestedMode,
@@ -2181,11 +2408,11 @@ export class AgentOrchestrator {
         targetSheetName: resolved.sheetName,
         targetAddress: resolved.range,
         request: input.request,
-        values: matrix
+        values: writeMatrix
       });
       if (redirect) return redirect;
     }
-    const detailedPreview = shouldBuildDetailedPreviewChanges(matrix);
+    const detailedPreview = shouldBuildDetailedPreviewChanges(writeMatrix);
     const before = detailedPreview ? await this.readRangeValues(metadata.workbook.workbookId as WorkbookId, resolved.sheetName, resolved.range) : [];
     const operation: ExcelOperation = {
       kind: "range.write_values",
@@ -2194,11 +2421,22 @@ export class AgentOrchestrator {
       destructiveLevel: "values",
       reason: input.request,
       target: { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: resolved.sheetName, address: resolved.range },
-      values: matrix,
+      values: writeMatrix,
       preserveFormats: true
     };
-    const changes = previewChangesForMatrix(resolved.sheetName, resolved.range, matrix, before);
-    const action = { kind: "batch" as const, operations: [operation] };
+    const operations: ExcelOperation[] = [operation];
+    if (dateNormalization.numberFormatEntries.length > 0) {
+      operations.push({
+        kind: "range.write_number_formats_many",
+        operationId: makeId<OperationId>("op"),
+        workbookId: metadata.workbook.workbookId as WorkbookId,
+        destructiveLevel: "format",
+        reason: "Apply date number format for normalized short-year date values.",
+        entries: dateNormalization.numberFormatEntries
+      });
+    }
+    const changes = previewChangesForMatrix(resolved.sheetName, resolved.range, writeMatrix, before);
+    const action = { kind: "batch" as const, operations };
     const pending = this.createPendingOperation(metadata, {
       action,
       changes,
@@ -2216,7 +2454,7 @@ export class AgentOrchestrator {
       proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "preview target" }],
       resourceLinks: [operationResource(String(pending.operationId))],
       nextAction: "call_apply_update",
-      warnings: formulaWarnings
+      warnings: [...formulaWarnings, ...dateNormalization.warnings]
     };
   }
 
@@ -2295,9 +2533,10 @@ export class AgentOrchestrator {
     let detailedPreviewCells = 0;
 
     for (const [index, patch] of patches.entries()) {
+      const patchTarget = inheritPatchTargetSheet(input, patch.target);
       const resolved = resolveUpdateTarget(metadata, {
         ...input,
-        target: patch.target,
+        target: patchTarget,
         values: { values: patch.values }
       });
       if (!resolved.ok) {
@@ -2422,6 +2661,153 @@ export class AgentOrchestrator {
     };
   }
 
+  private async previewMatchUpdate(
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode
+  ): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
+    const spec = resolveMatchUpdateSpec(metadata, input);
+    if (!spec) {
+      return undefined;
+    }
+    if (!spec.ok) {
+      return {
+        status: "NEEDS_INPUT",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: spec.summary,
+        ...(spec.candidates !== undefined ? { candidates: spec.candidates } : {}),
+        proof: [],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "ask_user",
+        warnings: spec.warnings,
+        taskOutcome: "needs_user_input",
+        maxRecommendedFollowupCalls: 0
+      };
+    }
+
+    const parsed = tryParseA1Address(stripSheetName(spec.searchedRange));
+    if (!parsed) {
+      return undefined;
+    }
+
+    const workbookId = metadata.workbook.workbookId as WorkbookId;
+    const matrix = await this.readRangeValues(workbookId, spec.sheetName, spec.searchedRange);
+    const headerOffset = Math.max(0, spec.headerRow - parsed.startRow);
+    const dataStartIndex = Math.max(headerOffset + 1, 0);
+    const matchedRows: number[] = [];
+    const evidenceRows: Array<Record<string, unknown>> = [];
+    const changes: NonNullable<AgentRunOutput["changes"]> = [];
+    const entries: Array<{ target: A1Range; values: CellMatrix; preserveFormats?: true }> = [];
+
+    for (let rowIndex = dataStartIndex; rowIndex < matrix.length; rowIndex += 1) {
+      const row = matrix[rowIndex] ?? [];
+      const matchValue = row[spec.matchColumn.index];
+      if (!cellMatchesPredicate(matchValue, spec.predicate)) {
+        continue;
+      }
+      const sheetRow = parsed.startRow + rowIndex;
+      const targetAddress = `${numberToColumn(spec.updateColumn.index + 1)}${sheetRow}`;
+      matchedRows.push(sheetRow);
+      entries.push({
+        target: { workbookId, sheetName: spec.sheetName, address: targetAddress },
+        values: [[spec.updateValue as CellMatrix[number][number]]],
+        preserveFormats: true
+      });
+      changes.push({
+        sheetName: spec.sheetName,
+        cell: targetAddress,
+        range: `${targetAddress}:${targetAddress}`,
+        before: row[spec.updateColumn.index] ?? "",
+        after: spec.updateValue
+      });
+      if (evidenceRows.length < 8) {
+        evidenceRows.push(stripUndefinedRecord({
+          row: sheetRow,
+          matchValue,
+          before: row[spec.updateColumn.index] ?? "",
+          after: spec.updateValue,
+          date: valueByHeader(spec.headers, row, /date/i),
+          amount: valueByHeader(spec.headers, row, /amount|cash|actual/i)
+        }));
+      }
+    }
+
+    if (matchedRows.length === 0) {
+      return {
+        status: "NEEDS_INPUT",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: `No rows matched ${spec.matchColumn.name} ${spec.predicate.operator} "${spec.predicate.value}" in ${spec.sheetName}!${spec.searchedRange}.`,
+        answer: {
+          kind: "match_update_no_match",
+          sheetName: spec.sheetName,
+          searchedRange: spec.searchedRange,
+          matchColumn: spec.matchColumn,
+          predicate: spec.predicate,
+          updateColumn: spec.updateColumn,
+          updateValue: spec.updateValue,
+          matchedRowCount: 0,
+          matchedRows: []
+        },
+        proof: [{ sheetName: spec.sheetName, range: spec.searchedRange, label: "searched range" }],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "ask_user",
+        warnings: ["No exact match was found. Ask the user to refine the match text, sheet, or column; do not broad-read chunks."]
+      };
+    }
+
+    const pending = this.createPendingOperation(metadata, {
+      action: {
+        kind: "batch",
+        operations: [{
+          kind: "range.write_values_many",
+          operationId: makeId<OperationId>("op"),
+          workbookId,
+          destructiveLevel: "values",
+          reason: input.request,
+          entries
+        }]
+      },
+      changes,
+      summary: `Prepared match/update for ${matchedRows.length} row(s): set ${spec.updateColumn.name} to ${String(spec.updateValue)} where ${spec.matchColumn.name} ${spec.predicate.operator} "${spec.predicate.value}".`
+    });
+
+    return {
+      status: "PREVIEW_READY",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      operationId: pending.operationId,
+      confirmationToken: pending.confirmationToken,
+      summary: `${pending.summary} Apply this grouped preview once; do not fetch full rows or split into single-cell writes.`,
+      answer: {
+        kind: "match_update_preview",
+        sheetName: spec.sheetName,
+        searchedRange: spec.searchedRange,
+        matchColumn: spec.matchColumn,
+        predicate: spec.predicate,
+        updateColumn: spec.updateColumn,
+        updateValue: spec.updateValue,
+        matchedRowCount: matchedRows.length,
+        matchedRows,
+        evidenceRows,
+        operationCount: 1,
+        grouped: true
+      },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched", safetyFingerprintOnly: true, workflowKind: "match_update", groupedOperationCount: 1 },
+      changes,
+      proof: [
+        { sheetName: spec.sheetName, range: spec.searchedRange, label: "searched range" },
+        ...uniqueProofFromChanges(changes).slice(0, 5)
+      ],
+      resourceLinks: [operationResource(String(pending.operationId))],
+      nextAction: "call_apply_update",
+      agentInstruction: "Use matchedRows and changes from this match/update preview. Do not fetch full rows, chunk-read, or split this task into single-cell writes.",
+      maxRecommendedFollowupCalls: 1,
+      warnings: []
+    };
+  }
+
   private async previewOperationIntent(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
     const action = intentAction(input);
     if (action === "transform_values") {
@@ -2482,7 +2868,6 @@ export class AgentOrchestrator {
   }
 
   private async previewDeriveValues(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Promise<Omit<AgentRunOutput, "telemetry">> {
-    const values = input.values ?? {};
     const derivation = derivationOperationFromInput(input);
     if (!derivation.ok) {
       return transformNeedsInput(metadata, requestedMode, derivation.summary, derivation.warnings);
@@ -2491,12 +2876,15 @@ export class AgentOrchestrator {
     if (!target.ok) {
       return transformNeedsInput(metadata, requestedMode, target.summary, target.warnings, target.candidates);
     }
-    const sourceScopes = resolveDeriveSourceScopes(metadata, input);
+    const formulaMode = derivation.operation === "formula_like" && shouldDeriveAsFormula(input);
+    const deriveInput = formulaMode ? withFormulaDeriveSourceDefaults(input, target.scope) : input;
+    const values = deriveInput.values ?? {};
+    const sourceScopes = resolveDeriveSourceScopes(metadata, deriveInput);
     if (!sourceScopes.ok) {
       return transformNeedsInput(metadata, requestedMode, sourceScopes.summary, sourceScopes.warnings, sourceScopes.candidates);
     }
     if (derivation.operation === "lookup_map") {
-      const lookup = resolveLookupMapScope(metadata, input);
+      const lookup = resolveLookupMapScope(metadata, deriveInput);
       if (!lookup.ok) {
         return transformNeedsInput(metadata, requestedMode, lookup.summary, lookup.warnings, lookup.candidates);
       }
@@ -2510,7 +2898,7 @@ export class AgentOrchestrator {
       if (!plan.ok) {
         return transformNeedsInput(metadata, requestedMode, plan.summary, plan.warnings);
       }
-      return this.previewCompiledColumnPlan(metadata, input, requestedMode, {
+      return this.previewCompiledColumnPlan(metadata, deriveInput, requestedMode, {
         kind: "derive_values_preview",
         summary: `Prepared lookup_map derivation for ${target.scope.sheetName}!${target.scope.address}.`,
         target: target.scope,
@@ -2529,6 +2917,46 @@ export class AgentOrchestrator {
     const sourceSnapshots = await Promise.all(sourceScopes.scopes.map((source) =>
       this.readColumnSnapshot(metadata.workbook.workbookId as WorkbookId, source.sheetName, source.address)
     ));
+    if (formulaMode) {
+      const plan = compileFormulaDeriveMatrix(target.scope, sourceScopes.scopes, sourceSnapshots, values);
+      if (!plan.ok) {
+        return transformNeedsInput(metadata, requestedMode, plan.summary, plan.warnings);
+      }
+      const formulaInput: AgentRunInput = {
+        ...deriveInput,
+        target: { ...(deriveInput.target ?? {}), sheetName: target.scope.sheetName, range: target.scope.address },
+        values: { ...(deriveInput.values ?? {}), formulas: plan.formulas }
+      };
+      const resolved = {
+        ok: true,
+        sheetName: target.scope.sheetName,
+        range: target.scope.address,
+        candidate: {
+          id: `formula-derive:${target.scope.sheetName}:${target.scope.address}`,
+          kind: "range" as const,
+          label: target.scope.headerName ?? target.scope.address,
+          sheetName: target.scope.sheetName,
+          range: target.scope.address,
+          semanticRole: "formula_region" as const,
+          confidence: 1,
+          reason: "Formula derivation target"
+        }
+      } satisfies Extract<AgentTargetResolution, { ok: true }>;
+      const preview = this.previewFormulaUpdate(metadata, formulaInput, requestedMode, resolved, plan.formulas);
+      if (isRecord(preview.answer)) {
+        preview.answer = {
+          ...preview.answer,
+          target: compactValueColumnScope(target.scope),
+          sources: sourceScopes.scopes.map(compactValueColumnScope),
+          rowAlignment: { type: "same_row", rows: target.scope.rowCount },
+          scannedRows: target.scope.rowCount,
+          changedCells: plan.changedCount,
+          examples: plan.examples
+        };
+      }
+      preview.summary = `Prepared formula derivation for ${target.scope.sheetName}!${target.scope.address}: ${plan.changedCount} formula cell(s).`;
+      return preview;
+    }
     const plan = compileDerivePlan(target.scope, targetSnapshot, sourceScopes.scopes, sourceSnapshots, derivation.operation, values);
     if (!plan.ok) {
       return transformNeedsInput(metadata, requestedMode, plan.summary, plan.warnings);
@@ -2941,6 +3369,9 @@ export class AgentOrchestrator {
       case "write_data_validation":
         return resolved ? this.previewWriteDataValidation(metadata, input, requestedMode, resolved) : undefined;
       case "write_conditional_formatting":
+        if (resolved && hasFormulaWriteInput(input) && !isConditionalFormattingMutationRequest(input.request)) {
+          return this.previewFormulaUpdate(metadata, input, requestedMode, resolved, objectToCellMatrix(input.values ?? {}));
+        }
         return resolved ? this.previewWriteConditionalFormatting(metadata, input, requestedMode, resolved) : undefined;
       case "insert_rows":
         return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, "range.insert_rows") : undefined;
@@ -2950,6 +3381,10 @@ export class AgentOrchestrator {
         return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, "range.insert_columns") : undefined;
       case "delete_columns":
         return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, "range.delete_columns") : undefined;
+      case "hide_columns":
+        return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, "range.hide_columns") : undefined;
+      case "unhide_columns":
+        return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, "range.unhide_columns") : undefined;
       case "merge_range":
         return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, "range.merge") : undefined;
       case "unmerge_range":
@@ -3305,7 +3740,20 @@ export class AgentOrchestrator {
   private previewFormulaFill(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode, direction: "down" | "right"): Omit<AgentRunOutput, "telemetry"> {
     const request = formulaFillRequestFromInput(metadata, input, direction);
     if (!request) {
-      return workbookLevelNeedsInput(metadata, requestedMode, `Formula fill ${direction} needs values.source and values.destination ranges on the same sheet.`);
+      const sheetName = input.target?.sheetName ?? metadata.workbook.activeSheet ?? metadata.sheets[0]?.name;
+      return {
+        ...workbookLevelNeedsInput(metadata, requestedMode, `Formula fill ${direction} needs values.source and values.destination ranges on the same sheet.`),
+        answer: stripUndefinedRecord({
+          kind: `formula_fill_${direction}_needs_input`,
+          suggestedIntentAction: direction === "down" ? "fill_formula_down" : "fill_formula_right",
+          suggestedValues: {
+            source: { ...(sheetName ? { sheetName } : {}), range: "SOURCE_CELL" },
+            destination: { ...(sheetName ? { sheetName } : {}), range: direction === "down" ? "TARGET_COLUMN_RANGE" : "TARGET_ROW_RANGE" }
+          }
+        }),
+        agentInstruction: "Retry once with values.source and values.destination in the suggested object shape; do not split formula fill into single-cell writes.",
+        maxRecommendedFollowupCalls: 1
+      };
     }
     const redirect = this.fragmentationRedirect(metadata, requestedMode, {
       family: direction === "down" ? "formula_fill_down" : "formula_fill_right",
@@ -3653,7 +4101,7 @@ export class AgentOrchestrator {
     input: AgentRunInput,
     requestedMode: AgentRunMode,
     resolved: Extract<AgentTargetResolution, { ok: true }>,
-    kind: "range.clear_values" | "range.insert_rows" | "range.delete_rows" | "range.insert_columns" | "range.delete_columns" | "range.merge" | "range.unmerge"
+    kind: "range.clear_values" | "range.insert_rows" | "range.delete_rows" | "range.insert_columns" | "range.delete_columns" | "range.hide_columns" | "range.unhide_columns" | "range.merge" | "range.unmerge"
   ): Omit<AgentRunOutput, "telemetry"> {
     const workbookId = metadata.workbook.workbookId as WorkbookId;
     const values = input.values as Record<string, unknown> | undefined;
@@ -4697,40 +5145,54 @@ export class AgentOrchestrator {
     resolved: Extract<AgentTargetResolution, { ok: true }>,
     matrix: CellMatrix
   ): Omit<AgentRunOutput, "telemetry"> {
-    const formulas = matrix.map((row) => row.map((value) => typeof value === "string" && value.trim().startsWith("=") ? value : null));
+    const normalized = formulaMatrixFromInput(input, resolved.range, matrix);
+    if (!normalized.ok) {
+      return formulaNeedsInputOutput(metadata, requestedMode, resolved, normalized.summary, normalized.suggestedValues, normalized.warnings);
+    }
+    const formulas = normalized.formulas;
     const formulaCount = formulas.flat().filter((value) => value !== null && value !== undefined && value !== "").length;
     if (formulaCount === 0) {
-      return {
-        status: "NEEDS_INPUT",
-        mode: requestedMode,
-        workbookContextId: metadata.workbookContextId,
-        summary: "Formula updates need explicit formula values before OpenWorkbook can preview the update.",
-        proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "formula target" }],
-        resourceLinks: [contextResource(metadata.workbookContextId)],
-        nextAction: "ask_user",
-        warnings: []
-      };
+      return formulaNeedsInputOutput(metadata, requestedMode, resolved, "Formula updates need explicit formula values before OpenWorkbook can preview the update.");
     }
-    const operation: ExcelOperation = {
+    const operations: ExcelOperation[] = [];
+    const formulaOperation: ExcelOperation = {
       kind: "range.write_formulas",
       operationId: makeId<OperationId>("op"),
       workbookId: metadata.workbook.workbookId as WorkbookId,
       destructiveLevel: "values",
       reason: input.request,
       target: { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: resolved.sheetName, address: resolved.range },
-      formulas,
+      formulas: formulas as Array<Array<string | null>>,
       preserveFormats: true
     };
-    const changes = formulas.flatMap((row, rowIndex) => row.map((value, columnIndex) => ({
+    operations.push(formulaOperation);
+    const style = styleFromInput(input);
+    const hasStyle = Object.keys(style).length > 0;
+    if (hasStyle) {
+      operations.push({
+        kind: "range.write_styles",
+        operationId: makeId<OperationId>("op"),
+        workbookId: metadata.workbook.workbookId as WorkbookId,
+        destructiveLevel: "format",
+        reason: input.request,
+        target: { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: resolved.sheetName, address: resolved.range },
+        style,
+        preserveValues: true
+      });
+    }
+    const changes: NonNullable<AgentRunOutput["changes"]> = formulas.flatMap((row, rowIndex) => row.map((value, columnIndex) => ({
       sheetName: resolved.sheetName,
       cell: cellAddressFor(resolved.range, rowIndex, columnIndex),
       range: resolved.range,
       after: value
-    })));
+    }))).filter((change) => typeof change.after === "string" && change.after.length > 0);
+    if (hasStyle) {
+      changes.unshift({ sheetName: resolved.sheetName, range: resolved.range, after: { style } });
+    }
     const pending = this.createPendingOperation(metadata, {
-      action: { kind: "batch", operations: [operation] },
+      action: { kind: "batch", operations },
       changes,
-      summary: `Prepared ${changes.length} formula update(s) on ${resolved.sheetName}!${resolved.range}.`
+      summary: `Prepared ${formulaCount} formula update(s) on ${resolved.sheetName}!${resolved.range}${hasStyle ? " with formatting" : ""}.`
     });
     return {
       status: "PREVIEW_READY",
@@ -4739,13 +5201,27 @@ export class AgentOrchestrator {
       operationId: pending.operationId,
       confirmationToken: pending.confirmationToken,
       summary: pending.summary,
-      answer: { kind: "formula_preview", sheetName: resolved.sheetName, range: resolved.range, formulaCount },
+      answer: {
+        kind: "formula_update_preview",
+        sheetName: resolved.sheetName,
+        range: resolved.range,
+        target: { sheetName: resolved.sheetName, range: resolved.range },
+        formulaCount,
+        formulaPattern: normalized.formulaPattern,
+        scannedRows: normalized.dimensions.rows,
+        changedCells: formulaCount,
+        examples: formulaPreviewExamples(resolved.range, formulas),
+        operationCount: operations.length,
+        ...(hasStyle ? { style } : {})
+      },
       metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
       changes,
       proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "formula target" }],
       resourceLinks: [operationResource(String(pending.operationId))],
       nextAction: "call_apply_update",
-      warnings: []
+      agentInstruction: "Apply this formula preview with apply_update, or answer with the preview details. Do not fetch full rows, chunk-read, or split formula writes.",
+      maxRecommendedFollowupCalls: 1,
+      warnings: normalized.warnings
     };
   }
 
@@ -6066,6 +6542,9 @@ function emptyLiveReadDiagnosticOutput(
   if ((requestedCells !== undefined && requestedCells <= 1) || profile.metrics.nonEmptyCount !== 0 || !metadataSuggestsRangeHasData(metadata, sheetName, range)) {
     return undefined;
   }
+  if (emptyResultKindForProfile(metadata, sheetName, range, profile) === "fresh_sheet") {
+    return undefined;
+  }
   return {
     status: "ERROR",
     mode: requestedMode,
@@ -6092,6 +6571,558 @@ function emptyLiveReadDiagnosticOutput(
       "Do not use Python/openpyxl/offline parsing as a fallback for live Excel state unless the user explicitly asks."
     ]
   };
+}
+
+function shouldAnalyzeReferenceSheet(input: AgentRunInput): boolean {
+  const request = input.request.toLowerCase();
+  if (intentAction(input) === "find_similar_rows" || intentAction(input) === "find_style_references") {
+    return false;
+  }
+  if (!/\b(reference|same as|similar to|prior|previous|last month|before|template|convention|pattern|skim|learn from|look into)\b/.test(request)) {
+    return false;
+  }
+  return /\b(analy[sz]e|skim|look|inspect|learn|understand|pattern|relation|relationship|how many|count|counts?|types?|style|styling|header|formula|condition|format|note|columns?)\b/.test(request);
+}
+
+function resolveReferenceAnalysisTarget(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput
+): { sheetName: string; range: string; tableName?: string; label: string } | undefined {
+  const values = input.values as Record<string, unknown> | undefined;
+  const requestedSheet = stringValue(values?.referenceSheetName ?? values?.referenceSheet ?? values?.sourceSheetName ?? values?.sourceSheet)
+    ?? stringValue(input.target?.sheetName)
+    ?? sheetNameFromRequest(metadata, input.request);
+  const requestedRange = stringValue(values?.referenceRange ?? values?.sourceRange ?? values?.range ?? input.target?.range);
+  const requestedTable = stringValue(values?.referenceTableName ?? values?.sourceTableName ?? input.target?.tableName);
+  if (requestedTable) {
+    const table = metadata.tables.find((candidate) => typeof candidate.name === "string" && normalizeComparableText(candidate.name) === normalizeComparableText(requestedTable));
+    if (table) {
+      const tableName = table.name ?? requestedTable;
+      return {
+        sheetName: table.sheetName,
+        range: clampReferenceAnalysisRange(table.dataRange ?? table.range),
+        tableName,
+        label: tableName
+      };
+    }
+  }
+  if (!requestedSheet) {
+    return undefined;
+  }
+  const sheet = metadata.sheets.find((candidate) => normalizeComparableText(candidate.name) === normalizeComparableText(requestedSheet));
+  if (!sheet) {
+    return undefined;
+  }
+  return {
+    sheetName: sheet.name,
+    range: clampReferenceAnalysisRange(requestedRange ?? sheet.usedRange ?? "A1:A1"),
+    label: sheet.name
+  };
+}
+
+function clampReferenceAnalysisRange(range: string): string {
+  const parsed = tryParseA1Address(stripSheetName(range));
+  if (!parsed) {
+    return stripSheetName(range);
+  }
+  const maxColumns = 36;
+  const maxCells = 9000;
+  const columnCount = Math.min(maxColumns, parsed.endColumn - parsed.startColumn + 1);
+  const maxRows = Math.max(1, Math.floor(maxCells / columnCount));
+  const endRow = Math.min(parsed.endRow, parsed.startRow + maxRows - 1);
+  const endColumn = Math.min(parsed.endColumn, parsed.startColumn + columnCount - 1);
+  return `${numberToColumn(parsed.startColumn)}${parsed.startRow}:${numberToColumn(endColumn)}${endRow}`;
+}
+
+function referenceStyleTargets(metadata: WorkbookMetadata, sheetName: string, range: string): Array<{ label: string; range: string }> {
+  const sheet = metadata.sheets.find((candidate) => candidate.name === sheetName);
+  const header = sheet?.headers[0]?.range;
+  const parsed = tryParseA1Address(stripSheetName(range));
+  const dataRange = parsed && parsed.endRow > parsed.startRow
+    ? `${numberToColumn(parsed.startColumn)}${parsed.startRow + 1}:${numberToColumn(parsed.endColumn)}${Math.min(parsed.endRow, parsed.startRow + 12)}`
+    : undefined;
+  return [
+    ...(header ? [{ label: "header_style", range: header }] : []),
+    ...(dataRange ? [{ label: "data_row_style", range: dataRange }] : [{ label: "range_style", range }])
+  ];
+}
+
+function referenceAnalysisFromSnapshot(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput,
+  reference: { sheetName: string; range: string; tableName?: string; label: string },
+  snapshot: RangeSnapshot | undefined
+) {
+  const values = snapshot?.values ?? [];
+  const formulas = normalizeFormulaOnlyMatrix(snapshot?.formulas ?? []);
+  const numberFormats = snapshot?.numberFormat ?? [];
+  const parsed = tryParseA1Address(stripSheetName(reference.range));
+  const headers = referenceHeaders(metadata, reference.sheetName, values);
+  const dataRows = values.slice(headers.sourceRowIndex + 1).filter((row) => row.some(hasCellValue));
+  const requestedColumns = requestedReferenceColumns(input, headers.headers);
+  const columnProfiles = headers.headers
+    .map((header, index) => referenceColumnProfile(header, index, dataRows, numberFormats, requestedColumns.has(index)))
+    .filter((profile): profile is Record<string, unknown> => profile !== undefined)
+    .sort((left, right) => Number(Boolean(right.requested)) - Number(Boolean(left.requested)) || Number(right.nonEmptyCount ?? 0) - Number(left.nonEmptyCount ?? 0))
+    .slice(0, 16);
+  const relationships = referenceColumnRelationships(headers.headers, dataRows, requestedColumns);
+  const formulaPatterns = referenceFormulaPatterns(headers.headers, formulas, parsed?.startRow ?? 1);
+  const rowConditionPatterns = referenceRowConditionPatterns(headers.headers, dataRows);
+  const evidenceRows = referenceEvidenceRows(headers.headers, dataRows, requestedColumns, 6);
+  return {
+    objectives: referenceObjectives(input.request),
+    structure: {
+      sheetName: reference.sheetName,
+      tableName: reference.tableName,
+      range: reference.range,
+      rowCount: values.length,
+      dataRowCount: dataRows.length,
+      columnCount: headers.headers.length,
+      headerRow: parsed ? parsed.startRow + headers.sourceRowIndex : undefined,
+      headers: headers.headers.map((name, index) => ({ name, index, letter: numberToColumn(index + (parsed?.startColumn ?? 1)) }))
+    },
+    columnProfiles,
+    relationships,
+    formulaPatterns,
+    rowConditionPatterns,
+    evidenceRows,
+    warnings: values.length === 0
+      ? ["No values were returned from the reference range; ask the user to reload the taskpane or choose another reference range."]
+      : reference.range !== stripSheetName(reference.range)
+        ? []
+        : []
+  };
+}
+
+function referenceHeaders(metadata: WorkbookMetadata, sheetName: string, values: CellMatrix): { headers: string[]; sourceRowIndex: number } {
+  const sheetHeaders = metadata.sheets.find((sheet) => sheet.name === sheetName)?.headers[0]?.columns.map((column) => column.name);
+  const firstNonEmptyIndex = values.findIndex((row) => row.some(hasCellValue));
+  const rowIndex = firstNonEmptyIndex >= 0 ? firstNonEmptyIndex : 0;
+  const valueHeaders = (values[rowIndex] ?? []).map((value, index) => String(value ?? sheetHeaders?.[index] ?? `Column ${index + 1}`).trim() || `Column ${index + 1}`);
+  const headers = valueHeaders.length > 0 ? valueHeaders : sheetHeaders ?? [];
+  return { headers, sourceRowIndex: rowIndex };
+}
+
+function requestedReferenceColumns(input: AgentRunInput, headers: string[]): Set<number> {
+  const values = input.values as Record<string, unknown> | undefined;
+  const requested = new Set<number>();
+  const add = (name: string) => {
+    const normalized = normalizeComparableText(name);
+    const index = headers.findIndex((header) => normalizeComparableText(header) === normalized || normalizeComparableText(header).includes(normalized));
+    if (index >= 0) requested.add(index);
+  };
+  const columns = values?.columns ?? values?.referenceColumns ?? values?.sourceColumns;
+  if (Array.isArray(columns)) {
+    columns.forEach((column) => typeof column === "string" ? add(column) : undefined);
+  }
+  const request = normalizeComparableText(input.request);
+  headers.forEach((header, index) => {
+    const normalized = normalizeComparableText(header);
+    if (normalized && request.includes(normalized)) requested.add(index);
+    if (/\b(type|category|status|description|desc|note|amount|actual|cash|variance|formula|date|style|header)\b/.test(normalized) && request.match(/\b(type|category|status|description|desc|note|amount|actual|cash|variance|formula|date|style|header)\b/)) {
+      requested.add(index);
+    }
+  });
+  return requested;
+}
+
+function referenceColumnProfile(header: string, index: number, rows: CellMatrix, numberFormats: string[][], requested: boolean): Record<string, unknown> | undefined {
+  const values = rows.map((row) => row[index]).filter(hasCellValue);
+  if (values.length === 0 && !requested) {
+    return undefined;
+  }
+  const counts = countBy(values.map(referenceCellKey), (value) => value);
+  const topValues = Object.entries(counts)
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 8)
+    .map(([value, count]) => ({ value, count }));
+  const numeric = values.map(numericCellValue).filter((value): value is number => value !== undefined);
+  const formats = new Set(numberFormats.slice(1).map((row) => row[index]).filter((value): value is string => typeof value === "string" && value.length > 0));
+  return stripUndefinedRecord({
+    name: header,
+    index,
+    letter: numberToColumn(index + 1),
+    requested,
+    nonEmptyCount: values.length,
+    uniqueCount: Object.keys(counts).length,
+    topValues,
+    numericSummary: numeric.length > 0 ? {
+      count: numeric.length,
+      min: Math.min(...numeric),
+      max: Math.max(...numeric),
+      sum: numeric.reduce((total, value) => total + value, 0)
+    } : undefined,
+    numberFormats: [...formats].slice(0, 4)
+  });
+}
+
+function referenceColumnRelationships(headers: string[], rows: CellMatrix, requestedColumns: Set<number>): Array<Record<string, unknown>> {
+  const candidateIndexes = new Set<number>(requestedColumns);
+  headers.forEach((header, index) => {
+    if (/\b(description|desc|type|category|status|note|amount|cash|actual|variance|date)\b/i.test(header)) {
+      candidateIndexes.add(index);
+    }
+  });
+  const indexes = [...candidateIndexes].slice(0, 8);
+  const relationships: Array<Record<string, unknown>> = [];
+  for (let left = 0; left < indexes.length; left += 1) {
+    for (let right = left + 1; right < indexes.length; right += 1) {
+      const leftIndex = indexes[left]!;
+      const rightIndex = indexes[right]!;
+      const examples = rows
+        .filter((row) => hasCellValue(row[leftIndex]) && hasCellValue(row[rightIndex]))
+        .slice(0, 5)
+        .map((row) => ({
+          [headers[leftIndex] ?? `Column ${leftIndex + 1}`]: row[leftIndex],
+          [headers[rightIndex] ?? `Column ${rightIndex + 1}`]: row[rightIndex]
+        }));
+      if (examples.length > 0) {
+        relationships.push({
+          columns: [headers[leftIndex] ?? `Column ${leftIndex + 1}`, headers[rightIndex] ?? `Column ${rightIndex + 1}`],
+          examples
+        });
+      }
+    }
+  }
+  return relationships.slice(0, 12);
+}
+
+function referenceFormulaPatterns(headers: string[], formulas: CellMatrix, startRow: number): Array<Record<string, unknown>> {
+  const byColumn = new Map<number, Map<string, number>>();
+  formulas.forEach((row, rowIndex) => {
+    row.forEach((formula, columnIndex) => {
+      if (typeof formula !== "string" || !formula.startsWith("=")) return;
+      const normalized = formula.replace(/\d+/g, "#");
+      const counts = byColumn.get(columnIndex) ?? new Map<string, number>();
+      counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
+      byColumn.set(columnIndex, counts);
+    });
+  });
+  return [...byColumn.entries()].map(([columnIndex, counts]) => ({
+    column: headers[columnIndex] ?? `Column ${columnIndex + 1}`,
+    letter: numberToColumn(columnIndex + 1),
+    formulaCount: [...counts.values()].reduce((total, count) => total + count, 0),
+    patterns: [...counts.entries()].sort((left, right) => right[1] - left[1]).slice(0, 4).map(([formulaR1C1Like, count]) => ({ formulaR1C1Like, count })),
+    firstFormulaRow: startRow
+  })).slice(0, 8);
+}
+
+function referenceRowConditionPatterns(headers: string[], rows: CellMatrix): Array<Record<string, unknown>> {
+  const amountIndexes = headers
+    .map((header, index) => ({ header, index }))
+    .filter((entry) => /\b(amount|cash|actual|variance|total|price|cost|fee)\b/i.test(entry.header))
+    .map((entry) => entry.index)
+    .slice(0, 4);
+  return amountIndexes.flatMap((index) => {
+    const numeric = rows.map((row) => numericCellValue(row[index])).filter((value): value is number => value !== undefined);
+    if (numeric.length === 0) return [];
+    return [stripUndefinedRecord({
+      column: headers[index] ?? `Column ${index + 1}`,
+      positiveCount: numeric.filter((value) => value > 0).length,
+      zeroCount: numeric.filter((value) => value === 0).length,
+      negativeCount: numeric.filter((value) => value < 0).length,
+      suggestedUse: /variance/i.test(headers[index] ?? "") ? "Row note/style conditions often follow positive, zero, and negative variance states." : undefined
+    })];
+  });
+}
+
+function referenceEvidenceRows(headers: string[], rows: CellMatrix, requestedColumns: Set<number>, limit: number): Array<Record<string, unknown>> {
+  const indexes = requestedColumns.size > 0
+    ? [...requestedColumns].slice(0, 10)
+    : headers.map((_header, index) => index).filter((index) => rows.some((row) => hasCellValue(row[index]))).slice(0, 10);
+  return rows.slice(0, limit).map((row, rowIndex) => stripUndefinedRecord({
+    rowOffset: rowIndex + 1,
+    values: Object.fromEntries(indexes.map((index) => [headers[index] ?? `Column ${index + 1}`, row[index] ?? ""]))
+  }));
+}
+
+function referenceObjectives(request: string): string[] {
+  const objectives = [
+    /\bhow many|counts?|unique|types?\b/i.test(request) ? "counts/groupings" : undefined,
+    /\brelation|relationship|map|mapping|between\b/i.test(request) ? "column relationships" : undefined,
+    /\bformula|formulas?\b/i.test(request) ? "formula patterns" : undefined,
+    /\bstyle|styling|format|header|color|border|font\b/i.test(request) ? "style conventions" : undefined,
+    /\bcondition|conditional|row\b/i.test(request) ? "row conditions" : undefined,
+    /\bnote|notes?|description|desc|text\b/i.test(request) ? "text/note conventions" : undefined
+  ].filter((objective): objective is string => objective !== undefined);
+  return objectives.length > 0 ? objectives : ["reference patterns"];
+}
+
+function hasCellValue(value: unknown): boolean {
+  return value !== null && value !== undefined && value !== "";
+}
+
+function referenceCellKey(value: unknown): string {
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+  return String(value ?? "").trim();
+}
+
+type MatchUpdatePredicate = { operator: "contains" | "equals"; value: string };
+
+type MatchUpdateColumn = {
+  name: string;
+  index: number;
+  letter: string;
+};
+
+type MatchUpdateSpec = {
+  sheetName: string;
+  searchedRange: string;
+  headerRow: number;
+  headers: HeaderMetadata["columns"];
+  matchColumn: MatchUpdateColumn;
+  predicate: MatchUpdatePredicate;
+  updateColumn: MatchUpdateColumn;
+  updateValue: unknown;
+};
+
+function resolveMatchUpdateSpec(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput
+): { ok: true } & MatchUpdateSpec | { ok: false; summary: string; candidates?: AgentCandidate[]; warnings: string[] } | undefined {
+  const parsedRequest = resolveMatchUpdateRequest(input.request, input.values);
+  if (!parsedRequest) {
+    return undefined;
+  }
+  const sheet = resolveMatchUpdateSheet(metadata, input);
+  if (!sheet.ok) {
+    return {
+      ok: false,
+      summary: sheet.summary,
+      ...(sheet.candidates !== undefined ? { candidates: sheet.candidates } : {}),
+      warnings: sheet.warnings
+    };
+  }
+  const header = bestHeaderForSheet(metadata, sheet.sheetName, [...parsedRequest.matchHints, ...parsedRequest.updateHints]);
+  if (!header) {
+    return {
+      ok: false,
+      summary: `Could not find a header row on ${sheet.sheetName} for the match/update task.`,
+      candidates: findAgentCandidates(metadata, input).slice(0, 5),
+      warnings: ["Ask the user for an exact table/range or header row before updating."]
+    };
+  }
+  const matchColumn = findMatchUpdateColumn(header.columns, parsedRequest.matchHints, "match");
+  if (!matchColumn) {
+    return {
+      ok: false,
+      summary: `Could not resolve the match column for "${parsedRequest.matchHints.join(" / ")}".`,
+      candidates: header.columns.slice(0, 8).map((column) => columnCandidate(sheet.sheetName, header, column)),
+      warnings: ["Ask the user which column to search before reading chunks."]
+    };
+  }
+  const updateColumn = findMatchUpdateColumn(header.columns, parsedRequest.updateHints, "update");
+  if (!updateColumn) {
+    return {
+      ok: false,
+      summary: `Could not resolve the update column for "${parsedRequest.updateHints.join(" / ")}".`,
+      candidates: header.columns.slice(0, 8).map((column) => columnCandidate(sheet.sheetName, header, column)),
+      warnings: ["Ask the user which column to update before trying cell writes."]
+    };
+  }
+  const searchedRange = matchUpdateSearchRange(sheet.usedRange, header);
+  if (!searchedRange) {
+    return {
+      ok: false,
+      summary: `Could not resolve a bounded search range on ${sheet.sheetName}.`,
+      candidates: findAgentCandidates(metadata, input).slice(0, 5),
+      warnings: ["Ask the user for a specific table or range."]
+    };
+  }
+  return {
+    ok: true,
+    sheetName: sheet.sheetName,
+    searchedRange,
+    headerRow: header.row,
+    headers: header.columns,
+    matchColumn,
+    predicate: parsedRequest.predicate,
+    updateColumn,
+    updateValue: parsedRequest.updateValue
+  };
+}
+
+function resolveMatchUpdateRequest(request: string, values?: AgentRunInput["values"]): {
+  matchHints: string[];
+  predicate: MatchUpdatePredicate;
+  updateHints: string[];
+  updateValue: unknown;
+} | undefined {
+  if (values && hasStructuredMutationPayload({ request, values })) {
+    return undefined;
+  }
+  const text = request.trim();
+  const truckMatch = text.match(/\b(?:all\s+)?(?:transfer|transfers|transfer\s+from\/to|payer|payee|vendor|customer|account)\s+(?:to|from|contains?|for)?\s*["']?([A-Z0-9][\p{L}\p{M}\p{N}\s._&+-]{1,60}?)["']?\s+(?:is|are|=|as|to)\s+(?:truck(?:\s+id)?|vehicle)\s+["']?([\w-]{2,20})["']?/iu);
+  if (truckMatch?.[1] && truckMatch[2]) {
+    return {
+      matchHints: ["Transfer From/To", "transfer", "payer", "payee", "account"],
+      predicate: { operator: "contains", value: cleanupMatchText(truckMatch[1]) },
+      updateHints: ["Truck ID", "truck", "vehicle"],
+      updateValue: truckMatch[2].trim()
+    };
+  }
+  const setWhereMatch = text.match(/\b(?:where|rows?\s+where|all\s+rows?\s+where)\s+([\p{L}\p{M}\p{N}\s/_-]{2,40})\s+(contains?|equals?|=|is)\s+["']?([^"',]+?)["']?\s*,?\s*(?:set|update|write)\s+([\p{L}\p{M}\p{N}\s/_-]{2,40})\s+(?:to|=|as)\s+["']?([^"']+?)["']?$/iu);
+  if (setWhereMatch?.[1] && setWhereMatch[3] && setWhereMatch[4] && setWhereMatch[5]) {
+    return {
+      matchHints: [setWhereMatch[1].trim()],
+      predicate: { operator: /equal|=|is/i.test(setWhereMatch[2] ?? "") ? "equals" : "contains", value: cleanupMatchText(setWhereMatch[3]) },
+      updateHints: [setWhereMatch[4].trim()],
+      updateValue: cleanupMatchText(setWhereMatch[5])
+    };
+  }
+  return undefined;
+}
+
+function resolveExactRowSearchRequest(input: AgentRunInput): { predicate: MatchUpdatePredicate; columnOffset?: number } | undefined {
+  if (intentAction(input) === "search_range") {
+    return undefined;
+  }
+  if (resolveMatchUpdateRequest(input.request, input.values)) {
+    return undefined;
+  }
+  const request = input.request;
+  if (!/\b(search|find|where|contains?|matching|matches)\b/i.test(request)) {
+    return undefined;
+  }
+  const valueMatch = request.match(/\bcontain(?:s|ing)?\s+["']?([^"',]+?)["']?(?:\s|$)/i)
+    ?? request.match(/\b(?:for|matching|match(?:es)?)\s+["']?([A-Z0-9][\p{L}\p{M}\p{N}\s._&+-]{1,60}?)["']?(?:\s|$)/iu);
+  const value = valueMatch?.[1] ? cleanupMatchText(valueMatch[1]) : undefined;
+  if (!value || COMMON_EXACT_SEARCH_VALUES.has(value.toLowerCase())) {
+    return undefined;
+  }
+  const columnMatch = request.match(/\bcolumn\s+([A-Z]{1,3})\b/i);
+  let columnOffset: number | undefined;
+  if (columnMatch?.[1] && input.target?.range) {
+    const parsed = tryParseA1Address(stripSheetName(input.target.range));
+    const column = columnToNumber(columnMatch[1].toUpperCase());
+    if (parsed && column >= parsed.startColumn && column <= parsed.endColumn) {
+      columnOffset = column - parsed.startColumn;
+    }
+  }
+  return stripUndefinedRecord({
+    predicate: { operator: "contains" as const, value },
+    columnOffset
+  }) as { predicate: MatchUpdatePredicate; columnOffset?: number };
+}
+
+const COMMON_EXACT_SEARCH_VALUES = new Set(["row", "rows", "column", "data", "value", "values", "all"]);
+
+function cleanupMatchText(value: string): string {
+  return value.replace(/\s+(?:is|are|as|to|for)$/i, "").trim();
+}
+
+function resolveMatchUpdateSheet(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput
+): { ok: true; sheetName: string; usedRange: string } | { ok: false; summary: string; candidates?: AgentCandidate[]; warnings: string[] } {
+  if (input.target?.sheetName) {
+    const exact = metadata.sheets.find((sheet) => normalizeComparableText(sheet.name) === normalizeComparableText(input.target!.sheetName!));
+    if (exact?.usedRange) {
+      return { ok: true, sheetName: exact.name, usedRange: exact.usedRange };
+    }
+  }
+  const request = normalizeComparableText(input.request);
+  const mentioned = metadata.sheets.filter((sheet) => sheet.usedRange && request.includes(normalizeComparableText(sheet.name)));
+  if (mentioned.length === 1) {
+    return { ok: true, sheetName: mentioned[0]!.name, usedRange: mentioned[0]!.usedRange! };
+  }
+  const transactionSheets = metadata.sheets.filter((sheet) => sheet.usedRange && sheet.kind === "transaction");
+  if (transactionSheets.length === 1) {
+    return { ok: true, sheetName: transactionSheets[0]!.name, usedRange: transactionSheets[0]!.usedRange! };
+  }
+  const candidates: AgentCandidate[] = (mentioned.length > 1 ? mentioned : transactionSheets)
+    .slice(0, 8)
+    .flatMap((sheet) => typeof sheet.usedRange === "string" ? [{
+      id: sheet.id,
+      kind: "sheet" as const,
+      label: sheet.name,
+      sheetName: sheet.name,
+      range: sheet.usedRange,
+      confidence: mentioned.includes(sheet) ? 0.95 : 0.7
+    }] : []);
+  return {
+    ok: false,
+    summary: "Match/update needs one sheet or table scope before searching rows.",
+    ...(candidates.length > 0 ? { candidates } : {}),
+    warnings: ["Ask the user which sheet to update; do not broad-read workbook chunks."]
+  };
+}
+
+function bestHeaderForSheet(metadata: WorkbookMetadata, sheetName: string, hints: string[] = []): HeaderMetadata | undefined {
+  const sheet = metadata.sheets.find((candidate) => candidate.name === sheetName);
+  return sheet?.headers
+    .slice()
+    .sort((left, right) => headerMatchUpdateScore(right, hints) - headerMatchUpdateScore(left, hints) || right.confidence - left.confidence || left.row - right.row)[0];
+}
+
+function headerMatchUpdateScore(header: HeaderMetadata, hints: string[]): number {
+  return header.columns.reduce((total, column) => total + matchUpdateColumnScore(column, hints, "match"), 0);
+}
+
+function findMatchUpdateColumn(columns: HeaderMetadata["columns"], hints: string[], role: "match" | "update"): MatchUpdateColumn | undefined {
+  const scored = columns
+    .map((column) => ({ column, score: matchUpdateColumnScore(column, hints, role) }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score || left.column.index - right.column.index);
+  const winner = scored[0];
+  if (!winner) {
+    return undefined;
+  }
+  return { name: winner.column.name || winner.column.letter, index: winner.column.index, letter: winner.column.letter };
+}
+
+function matchUpdateColumnScore(column: HeaderMetadata["columns"][number], hints: string[], role: "match" | "update"): number {
+  const haystack = normalizeComparableText([column.name, column.normalizedName, column.role, column.letter].filter(Boolean).join(" "));
+  let score = 0;
+  for (const hint of hints) {
+    const normalizedHint = normalizeComparableText(hint);
+    if (!normalizedHint) continue;
+    if (haystack === normalizedHint) score += 20;
+    if (haystack.includes(normalizedHint) || normalizedHint.includes(haystack)) score += 10;
+    for (const token of normalizedHint.split(/\s+/).filter((entry) => entry.length > 2)) {
+      if (haystack.includes(token)) score += 3;
+    }
+  }
+  if (role === "match" && /\btransfer|from|to|payer|payee|account|vendor|customer|description|note\b/.test(haystack)) score += 6;
+  if (role === "update" && /\btruck|vehicle|id|status|type|description|note\b/.test(haystack)) score += 6;
+  return score;
+}
+
+function columnCandidate(sheetName: string, header: HeaderMetadata, column: HeaderMetadata["columns"][number]): AgentCandidate {
+  return stripUndefinedRecord({
+    id: `column:${sheetName}:${column.letter}`,
+    kind: "range",
+    label: column.name || column.letter,
+    sheetName,
+    range: `${column.letter}${header.row}:${column.letter}${header.row}`,
+    semanticRole: column.role,
+    confidence: column.importance ?? header.confidence
+  }) as AgentCandidate;
+}
+
+function matchUpdateSearchRange(usedRange: string, header: HeaderMetadata): string | undefined {
+  const parsed = tryParseA1Address(stripSheetName(usedRange));
+  if (!parsed) {
+    return undefined;
+  }
+  const startColumn = Math.min(...header.columns.map((column) => column.index + 1), parsed.startColumn);
+  const endColumn = Math.max(...header.columns.map((column) => column.index + 1), parsed.endColumn);
+  return `${numberToColumn(startColumn)}${header.row}:${numberToColumn(endColumn)}${parsed.endRow}`;
+}
+
+function cellMatchesPredicate(value: unknown, predicate: MatchUpdatePredicate): boolean {
+  const actual = normalizeComparableText(String(value ?? ""));
+  const expected = normalizeComparableText(predicate.value);
+  if (!actual || !expected) {
+    return false;
+  }
+  return predicate.operator === "equals" ? actual === expected : actual.includes(expected);
+}
+
+function valueByHeader(headers: HeaderMetadata["columns"], row: CellMatrix[number], pattern: RegExp): unknown {
+  const column = headers.find((candidate) => pattern.test(candidate.name) || pattern.test(candidate.normalizedName));
+  return column ? row[column.index] : undefined;
 }
 
 function metadataSuggestsRangeHasData(metadata: WorkbookMetadata, sheetName: string, range: string): boolean {
@@ -6154,6 +7185,28 @@ function workbookDumpGuardOutput(metadata: WorkbookMetadata, input: AgentRunInpu
   };
 }
 
+function emptyResultKindForProfile(
+  metadata: WorkbookMetadata,
+  sheetName: string,
+  range: string,
+  profile: ReturnType<typeof profileValues>
+): "fresh_sheet" | "empty_range" | "trailing_empty_rows" | undefined {
+  if (profile.metrics.nonEmptyCount !== 0) {
+    const trailingRows = typeof profile.emptySummary?.trailingRows === "number" ? profile.emptySummary.trailingRows : 0;
+    return trailingRows > 0 ? "trailing_empty_rows" : undefined;
+  }
+  const sheet = metadata.sheets.find((candidate) => candidate.name === sheetName);
+  const normalizedRange = stripSheetName(range);
+  if (sheet?.usedRange
+    && stripSheetName(sheet.usedRange) === normalizedRange
+    && sheet.tableIds.length === 0
+    && sheet.headers.length === 0
+    && sheet.sectionIds.length === 0) {
+    return "fresh_sheet";
+  }
+  return "empty_range";
+}
+
 function largeRangeGuardOutput(
   metadata: WorkbookMetadata,
   input: AgentRunInput,
@@ -6187,7 +7240,9 @@ function largeRangeGuardOutput(
       columnCount: sheet?.columnCount,
       recommendation: searchLike
         ? "Retry once with intent.action search_range or find_similar_rows and the specific column/text predicates; do not fetch fullResultUri or broad-read the sheet."
-        : "Ask for a smaller range, a table, specific columns, or a compact schema/profile.",
+        : isExplicitFullDataRequest(input.request)
+          ? "Ask for a smaller range, specific columns, filters, or an export-style workflow."
+          : "Ask for a smaller range, a table, specific columns, or a compact schema/profile.",
       suggestedIntentAction: searchLike ? "search_range" : undefined,
       suggestedNextRequest: searchLike ? `Search ${sheetName} with exact column/text predicates and return bounded exact matching rows.` : undefined
     },
@@ -6195,8 +7250,12 @@ function largeRangeGuardOutput(
     candidates: findAgentCandidates(metadata, input).slice(0, 5),
     proof: [{ sheetName, range: sheet?.usedRange ?? range, label }],
     resourceLinks: [contextResource(metadata.workbookContextId)],
-    nextAction: searchLike ? "manual_review" : "answer_now",
-    warnings: [searchLike ? "Large search-like read was blocked; use a targeted search intent so Open Workbook scans internally." : "Large range read was summarized from cached metadata without reading cell values."]
+    nextAction: (searchLike || isExplicitFullDataRequest(input.request)) ? "ask_user" : "answer_now",
+    warnings: [searchLike
+      ? "Large search-like read was blocked; ask the user for exact predicates or call one targeted search intent. Do not broad-read follow-up chunks."
+      : isExplicitFullDataRequest(input.request)
+        ? "Large full-data read was blocked; ask the user for a smaller range, specific columns, filters, or an export-style workflow."
+        : "Large range read was summarized from cached metadata without reading cell values."]
   };
 }
 
@@ -6373,6 +7432,17 @@ function resolveComparisonTargets(metadata: WorkbookMetadata, request: string): 
     return [];
   }
   const normalizedRequest = normalizeComparableText(request);
+  const exactMatches = metadata.sheets
+    .filter((sheet) => sheet.usedRange && normalizedRequest.includes(normalizeComparableText(sheet.name)))
+    .sort((left, right) => normalizeComparableText(right.name).length - normalizeComparableText(left.name).length)
+    .filter((sheet, index, sheets) => {
+      const normalizedSheet = normalizeComparableText(sheet.name);
+      return !sheets.slice(0, index).some((other) => normalizeComparableText(other.name).includes(normalizedSheet));
+    })
+    .map((sheet) => ({ sheetName: sheet.name, range: preferredComparisonRange(metadata, sheet, request) ?? sheet.usedRange! }));
+  if (exactMatches.length >= 2) {
+    return dedupeBy(exactMatches, (target) => target.sheetName).slice(0, 4);
+  }
   const matches = metadata.sheets
     .filter((sheet) => sheet.usedRange && requestMentionsComparisonSheet(normalizedRequest, sheet.name))
     .map((sheet) => ({ sheetName: sheet.name, range: preferredComparisonRange(metadata, sheet, request) ?? sheet.usedRange! }));
@@ -6448,7 +7518,7 @@ function monthlySummaryColumnRange(metadata: WorkbookMetadata, sheet: WorkbookMe
   if (merged) {
     return merged;
   }
-  return `AG1:AJ${Math.min(used.endRow, 60)}`;
+  return `AG1:AJ${Math.min(used.endRow, 20)}`;
 }
 
 function comparisonSectionScore(section: WorkbookMetadata["sections"][number]): number {
@@ -7130,14 +8200,17 @@ function formulaReadAnswerFromSnapshot(snapshot: RangeSnapshot | undefined, patt
   const values = snapshot?.values ?? [];
   const text = snapshot?.text ?? [];
   const rawFormulas = snapshot?.formulas ?? [];
-  const formulas = normalizeFormulaOnlyMatrix(rawFormulas);
-  const formulasR1C1 = matrixFromUnknown(isRecord(patterns) ? patterns.formulasR1C1 : undefined) ?? [];
-  const patternMatrix = matrixFromUnknown(isRecord(patterns) ? patterns.patternMatrix : undefined) ?? [];
+  const snapshotFormulas = normalizeFormulaOnlyMatrix(rawFormulas);
+  const patternFormulas = formulaMatrixFromPatternCells(patterns, "formula");
+  const patternFormulasR1C1 = formulaMatrixFromPatternCells(patterns, "formulaR1C1");
+  const formulas = mergeFormulaMatrices(snapshotFormulas, matrixFromUnknown(isRecord(patterns) ? patterns.formulas : undefined) ?? [], patternFormulas);
+  const formulasR1C1 = mergeFormulaMatrices(matrixFromUnknown(isRecord(patterns) ? patterns.formulasR1C1 : undefined) ?? [], patternFormulasR1C1);
+  const patternMatrix = mergePatternMatrices(matrixFromUnknown(isRecord(patterns) ? patterns.patternMatrix : undefined) ?? [], patterns);
   const parsed = tryParseA1Address(stripSheetName(range));
   const rowCount = Math.max(values.length, text.length, formulas.length, formulasR1C1.length, patternMatrix.length);
   const columnCount = Math.max(maxMatrixColumns(values), maxMatrixColumns(text), maxMatrixColumns(formulas), maxMatrixColumns(formulasR1C1), maxMatrixColumns(patternMatrix));
   const formulaColumns = new Set<number>();
-  for (const row of formulas) {
+  for (const row of [formulas, formulasR1C1].flat()) {
     row.forEach((formula, index) => {
       if (formulaLike(formula)) formulaColumns.add(index);
     });
@@ -7146,6 +8219,7 @@ function formulaReadAnswerFromSnapshot(snapshot: RangeSnapshot | undefined, patt
   let formulaCount = 0;
   let hardcodedCount = 0;
   let blankCount = 0;
+  let formulaResultBlankCount = 0;
   let hardcodedInFormulaColumnCount = 0;
   const missingFormulaGaps: Array<Record<string, unknown>> = [];
   for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
@@ -7155,7 +8229,8 @@ function formulaReadAnswerFromSnapshot(snapshot: RangeSnapshot | undefined, patt
       const formula = formulas[rowIndex]?.[columnIndex];
       const formulaR1C1 = formulasR1C1[rowIndex]?.[columnIndex];
       const patternHash = patternMatrix[rowIndex]?.[columnIndex];
-      const status = formulaLike(formula)
+      const hasFormulaProof = formulaLike(formula) || formulaLike(formulaR1C1) || typeof patternHash === "string";
+      const status = hasFormulaProof
         ? "formula"
         : isBlankishAutoApplyValue(value) && isBlankishAutoApplyValue(displayedText)
           ? "blank"
@@ -7163,6 +8238,7 @@ function formulaReadAnswerFromSnapshot(snapshot: RangeSnapshot | undefined, patt
       if (status === "formula") formulaCount += 1;
       if (status === "hardcoded") hardcodedCount += 1;
       if (status === "blank") blankCount += 1;
+      if (status === "formula" && isBlankishAutoApplyValue(value) && isBlankishAutoApplyValue(displayedText)) formulaResultBlankCount += 1;
       const cell = parsed ? `${numberToColumn(parsed.startColumn + columnIndex)}${parsed.startRow + rowIndex}` : undefined;
       if (status !== "formula" && formulaColumns.has(columnIndex)) {
         hardcodedInFormulaColumnCount += 1;
@@ -7192,6 +8268,7 @@ function formulaReadAnswerFromSnapshot(snapshot: RangeSnapshot | undefined, patt
     formulaCount,
     hardcodedCount,
     blankCount,
+    formulaResultBlankCount,
     hardcodedInFormulaColumnCount,
     missingFormulaGaps,
     cells,
@@ -7215,6 +8292,56 @@ function formulaReadSummary(answer: { formulaCount: number; hardcodedCount: numb
     return `Read formula proof for ${sheetName}!${range}: ${answer.formulaCount} formula cell(s), ${answer.hardcodedCount} hardcoded cell(s), ${answer.blankCount} blank cell(s).`;
   }
   return `Read formula proof for ${sheetName}!${range}: no formula cells found; ${answer.hardcodedCount} hardcoded cell(s), ${answer.blankCount} blank cell(s).`;
+}
+
+function formulaMatrixFromPatternCells(patterns: unknown, field: "formula" | "formulaR1C1"): CellMatrix {
+  if (!isRecord(patterns) || !Array.isArray(patterns.cells)) {
+    return [];
+  }
+  const rows = typeof patterns.rowCount === "number" ? patterns.rowCount : 0;
+  const columns = typeof patterns.columnCount === "number" ? patterns.columnCount : 0;
+  const matrix: CellMatrix = Array.from({ length: rows }, () => Array.from({ length: columns }, () => null));
+  for (const rawCell of patterns.cells) {
+    if (!isRecord(rawCell)) continue;
+    const rowIndex = typeof rawCell.rowIndex === "number" ? rawCell.rowIndex : undefined;
+    const columnIndex = typeof rawCell.columnIndex === "number" ? rawCell.columnIndex : undefined;
+    const formula = typeof rawCell[field] === "string" ? rawCell[field] : undefined;
+    if (rowIndex === undefined || columnIndex === undefined || !formula) continue;
+    matrix[rowIndex] ??= [];
+    matrix[rowIndex]![columnIndex] = formula;
+  }
+  return matrix;
+}
+
+function mergeFormulaMatrices(...matrices: CellMatrix[]): CellMatrix {
+  const rowCount = Math.max(...matrices.map((matrix) => matrix.length), 0);
+  const columnCount = Math.max(...matrices.map(maxMatrixColumns), 0);
+  return Array.from({ length: rowCount }, (_row, rowIndex) =>
+    Array.from({ length: columnCount }, (_column, columnIndex) => {
+      for (const matrix of matrices) {
+        const value = matrix[rowIndex]?.[columnIndex];
+        if (formulaLike(value)) return String(value);
+      }
+      return null;
+    })
+  );
+}
+
+function mergePatternMatrices(matrix: CellMatrix, patterns: unknown): CellMatrix {
+  const cellMatrix = matrix.map((row) => [...row]);
+  if (!isRecord(patterns) || !Array.isArray(patterns.cells)) {
+    return cellMatrix;
+  }
+  for (const rawCell of patterns.cells) {
+    if (!isRecord(rawCell)) continue;
+    const rowIndex = typeof rawCell.rowIndex === "number" ? rawCell.rowIndex : undefined;
+    const columnIndex = typeof rawCell.columnIndex === "number" ? rawCell.columnIndex : undefined;
+    const hash = typeof rawCell.patternHash === "string" ? rawCell.patternHash : undefined;
+    if (rowIndex === undefined || columnIndex === undefined || !hash) continue;
+    cellMatrix[rowIndex] ??= [];
+    cellMatrix[rowIndex]![columnIndex] = hash;
+  }
+  return cellMatrix;
 }
 
 function normalizeFormulaOnlyMatrix(matrix: CellMatrix): CellMatrix {
@@ -7620,6 +8747,24 @@ function rangeMetadataMethodForAction(action: AgentIntentAction | undefined): st
     default:
       return undefined;
   }
+}
+
+function searchResultHasNoMatches(result: unknown): boolean {
+  if ((result as { ok?: boolean }).ok === false) {
+    return false;
+  }
+  const record = result && typeof result === "object" ? result as Record<string, unknown> : {};
+  const data = record.data && typeof record.data === "object" ? record.data as Record<string, unknown> : record;
+  if (typeof data.count === "number") {
+    return data.count === 0;
+  }
+  if (Array.isArray(data.matches)) {
+    return data.matches.length === 0;
+  }
+  if (Array.isArray(data.areas)) {
+    return data.areas.length === 0;
+  }
+  return false;
 }
 
 function workflowPlanForAction(action: AgentIntentAction | undefined) {
@@ -8131,6 +9276,9 @@ function referencePredicatesFromRequest(request: string, numbers: number[]): Sim
 
 function shouldRunReferenceRowSearch(input: AgentRunInput): boolean {
   if (intentAction(input) === "find_style_references") {
+    return false;
+  }
+  if (resolveMatchUpdateRequest(input.request)) {
     return false;
   }
   const request = input.request.toLowerCase();
@@ -8863,6 +10011,60 @@ function applyOutputBudget(output: Omit<AgentRunOutput, "telemetry">, input: Age
   return stripUndefinedOptionals(compact);
 }
 
+function enforceFullDataFollowupAfterBudget(output: Omit<AgentRunOutput, "telemetry">, input: AgentRunInput): Omit<AgentRunOutput, "telemetry"> {
+  if (!isExplicitFullDataRequest(input.request)) {
+    return output;
+  }
+  const answer = output.answer && typeof output.answer === "object" ? output.answer as Record<string, unknown> : undefined;
+  if (!answer || (answer.kind !== "table_compact_read" && answer.kind !== "range_profile")) {
+    return output;
+  }
+  const actualInlineRows = countMatrixRows(answer.rows) ?? countMatrixRows(answer.values) ?? countMatrixRows(answer.valuesPreview) ?? countMatrixRows(answer.sparseRows) ?? 0;
+  const totalRowCount = typeof answer.totalRowCount === "number" ? answer.totalRowCount : undefined;
+  const actuallyComplete = totalRowCount !== undefined
+    ? actualInlineRows >= totalRowCount && answer.previewTruncated !== true
+    : answer.inlineIsComplete === true;
+  if (actuallyComplete) {
+    return output;
+  }
+  const fullResultUri = stringValue(answer.fullResultUri ?? output.continuation?.fullResultUri);
+  const resultUri = stringValue(answer.resultUri ?? output.continuation?.resultUri);
+  const inlineRowCount = actualInlineRows;
+  const target = [answer.sheetName, answer.tableName ?? answer.range].filter(Boolean).join(" ");
+  const summary = fullResultUri
+    ? `Full data was requested, but only ${inlineRowCount ?? 0}${totalRowCount !== undefined ? ` of ${totalRowCount}` : ""} row(s) are inline for ${target || "the requested result"}. Fetch the stored full result once.`
+    : `Full data was requested, but the result is not complete inline. Ask the user for a narrower range, columns, filters, or export-style workflow.`;
+  const { taskOutcome: _taskOutcome, ...outputWithoutTaskOutcome } = output;
+  return stripUndefinedOptionals({
+    ...outputWithoutTaskOutcome,
+    summary,
+    nextAction: fullResultUri ? "fetch_resource" : "ask_user",
+    finalAnswer: summary,
+    agentInstruction: fullResultUri
+      ? "Call excel.agent.run once with continuation.fullResultUri to fetch the stored full result; do not answer as if the inline preview is complete and do not broad-read another chunk."
+      : "Ask the user to narrow the full-data request by row range, columns, filters, or export workflow; do not broad-read more chunks.",
+    maxRecommendedFollowupCalls: fullResultUri ? 1 : 0,
+    ...(fullResultUri ? {
+      requiredFollowup: {
+        mode: "answer" as const,
+        nextAction: "fetch_resource" as const,
+        instruction: "Call excel.agent.run once with continuation.fullResultUri or the returned excel:// handle. Never use Webfetch/browser for excel:// handles."
+      },
+      continuation: {
+        ...(output.continuation ?? {}),
+        ...(resultUri ? { resultUri } : {}),
+        fullResultUri
+      }
+    } : {}),
+    warnings: [
+      ...output.warnings,
+      fullResultUri
+        ? "Inline rows are a preview only; the user asked for all data, so fetch the stored full result before presenting all rows."
+        : "Inline rows are incomplete for a full-data request; ask the user to narrow the request."
+    ]
+  });
+}
+
 function compactExactReadForBudget(output: Omit<AgentRunOutput, "telemetry">, byteBudget: number): Omit<AgentRunOutput, "telemetry"> | undefined {
   const answer = output.answer;
   if (!answer || typeof answer !== "object" || Array.isArray(answer)) {
@@ -8886,6 +10088,10 @@ function compactExactReadForBudget(output: Omit<AgentRunOutput, "telemetry">, by
     range: typed.range,
     shape: typed.shape,
     metrics: typed.metrics,
+    inlineRowCount: typed.inlineRowCount,
+    totalRowCount: typed.totalRowCount,
+    inlineIsComplete: typed.inlineIsComplete,
+    missingInlineReason: typed.missingInlineReason,
     ...(rows ? { rows } : {}),
     ...(valuesPreview ? { valuesPreview } : {}),
     previewRange: typed.previewRange,
@@ -8912,6 +10118,10 @@ function compactExactReadForBudget(output: Omit<AgentRunOutput, "telemetry">, by
       source: slimAnswer.source,
       sheetName: slimAnswer.sheetName,
       range: slimAnswer.range,
+      inlineRowCount: slimAnswer.inlineRowCount,
+      totalRowCount: slimAnswer.totalRowCount,
+      inlineIsComplete: slimAnswer.inlineIsComplete,
+      missingInlineReason: slimAnswer.missingInlineReason,
       ...(rows ? { rows } : {}),
       ...(valuesPreview && !rows ? { valuesPreview } : {}),
       previewRange: slimAnswer.previewRange,
@@ -8929,6 +10139,10 @@ function compactExactReadForBudget(output: Omit<AgentRunOutput, "telemetry">, by
 function truncateForBudget(value: string, maxLength: number): string {
   const normalized = value.replace(/\s+/g, " ").trim();
   return normalized.length <= maxLength ? normalized : `${normalized.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function countMatrixRows(value: unknown): number | undefined {
+  return Array.isArray(value) ? value.length : undefined;
 }
 
 function resultFreshnessForOutput(output: Omit<AgentRunOutput, "telemetry">, metadataCache: WorkbookMetadataCache): AgentResultFreshness | undefined {
@@ -8967,6 +10181,7 @@ function minimalAnswerForBudget(answer: unknown, continuation: AgentRunOutput["c
         });
       }) : undefined,
       tables: Array.isArray(typed.tables) ? typed.tables.slice(0, 12) : undefined,
+      namedRanges: Array.isArray(typed.namedRanges) ? typed.namedRanges.slice(0, 12) : undefined,
       resultUri: typed.resultUri ?? continuation?.resultUri,
       fullResultUri: typed.fullResultUri ?? continuation?.fullResultUri,
       resource: continuation?.resultUri ?? (workbookContextId ? contextResource(String(workbookContextId)).uri : undefined)
@@ -9001,6 +10216,10 @@ function minimalAnswerForBudget(answer: unknown, continuation: AgentRunOutput["c
       dataRange: typed.dataRange,
       rowOffset: typed.rowOffset,
       rowLimit: typed.rowLimit,
+      inlineRowCount: typed.inlineRowCount,
+      totalRowCount: typed.totalRowCount,
+      inlineIsComplete: typed.inlineIsComplete,
+      missingInlineReason: typed.missingInlineReason,
       projectedColumns: Array.isArray(typed.projectedColumns) ? typed.projectedColumns.slice(0, 16) : undefined,
       schemaSummary: typed.schemaSummary,
       shape: typed.shape,
@@ -9026,6 +10245,25 @@ function minimalAnswerForBudget(answer: unknown, continuation: AgentRunOutput["c
   }
   if (typed.kind === "style_reference_candidates") {
     return compactStyleReferenceCandidatesAnswer(typed, continuation?.resultUri, continuation?.fullResultUri);
+  }
+  if (typed.kind === "reference_sheet_analysis") {
+    return stripUndefinedRecord({
+      kind: typed.kind,
+      source: typed.source,
+      reference: typed.reference,
+      objectives: Array.isArray(typed.objectives) ? typed.objectives.slice(0, 8) : undefined,
+      structure: typed.structure,
+      columnProfiles: Array.isArray(typed.columnProfiles) ? typed.columnProfiles.slice(0, 12) : undefined,
+      relationships: Array.isArray(typed.relationships) ? typed.relationships.slice(0, 8) : undefined,
+      formulaPatterns: Array.isArray(typed.formulaPatterns) ? typed.formulaPatterns.slice(0, 6) : undefined,
+      stylePatterns: Array.isArray(typed.stylePatterns) ? typed.stylePatterns.slice(0, 4) : undefined,
+      rowConditionPatterns: Array.isArray(typed.rowConditionPatterns) ? typed.rowConditionPatterns.slice(0, 6) : undefined,
+      evidenceRows: Array.isArray(typed.evidenceRows) ? typed.evidenceRows.slice(0, 4) : undefined,
+      nextRequestHints: Array.isArray(typed.nextRequestHints) ? typed.nextRequestHints.slice(0, 2) : undefined,
+      resultUri: typed.resultUri ?? continuation?.resultUri,
+      fullResultUri: typed.fullResultUri ?? continuation?.fullResultUri,
+      resource: continuation?.resultUri ?? (workbookContextId ? contextResource(String(workbookContextId)).uri : undefined)
+    });
   }
   return stripUndefinedRecord({
     kind: typed.kind ?? "compacted_answer",
@@ -9123,6 +10361,26 @@ function inlinePreviewForMatrix(input: AgentRunInput, matrix: CellMatrix, range?
     valuesPreview: preview,
     previewRange: range,
     previewTruncated: truncated || preview.length < matrix.length
+  });
+}
+
+function inlineCompletenessMetadata(inlinePreview: Record<string, unknown> | undefined, matrix: CellMatrix, totalRows: number): Record<string, unknown> {
+  const valuesPreview = Array.isArray(inlinePreview?.valuesPreview) ? inlinePreview.valuesPreview as CellMatrix : undefined;
+  const inlineRowCount = valuesPreview?.length ?? 0;
+  const previewTruncated = inlinePreview?.previewTruncated === true;
+  const inlineIsComplete = inlineRowCount >= totalRows && !previewTruncated;
+  const missingInlineReason = inlineIsComplete
+    ? undefined
+    : inlineRowCount === 0 && matrix.length === 0
+      ? "empty_result"
+      : previewTruncated || inlineRowCount < totalRows
+        ? "payload_budget_preview"
+        : undefined;
+  return stripUndefinedRecord({
+    inlineRowCount,
+    totalRowCount: totalRows,
+    inlineIsComplete,
+    missingInlineReason
   });
 }
 
@@ -9342,6 +10600,9 @@ function answerNeedsResultResource(answer: unknown): boolean {
   }
   const text = JSON.stringify(answer);
   const typed = answer as Record<string, unknown>;
+  if (typed.kind === "match_update_preview" || typed.kind === "match_update_result" || typed.kind === "match_update_no_match" || typed.kind === "exact_search_rows" || typed.kind === "exact_search_no_match") {
+    return false;
+  }
   return text.length > 2_000
     || ["headers", "values", "formulas", "text", "numberFormat", "sample", "sparseRows", "rows", "valueCounts"].some((key) => typed[key] !== undefined)
     || Object.values(typed).some((value) => value && typeof value === "object" && ["headers", "values", "sample", "sparseRows", "rows", "valueCounts"].some((key) => (value as Record<string, unknown>)[key] !== undefined));
@@ -9392,6 +10653,9 @@ function compactAnswerForResponseMode(answer: unknown, responseMode: AgentRespon
   if (kind === "similar_rows") {
     return compactSimilarRowsAnswer(typed, resultUri, fullResultUri);
   }
+  if (kind === "match_update_preview" || kind === "match_update_result" || kind === "match_update_no_match" || kind === "exact_search_rows" || kind === "exact_search_no_match") {
+    return typed;
+  }
   if (kind === "style_reference_candidates") {
     return compactStyleReferenceCandidatesAnswer(typed, resultUri, fullResultUri);
   }
@@ -9415,6 +10679,7 @@ function compactFormulaReadAnswer(answer: Record<string, unknown>, responseMode:
     formulaCount: answer.formulaCount,
     hardcodedCount: answer.hardcodedCount,
     blankCount: answer.blankCount,
+    formulaResultBlankCount: answer.formulaResultBlankCount,
     hardcodedInFormulaColumnCount: answer.hardcodedInFormulaColumnCount,
     missingFormulaGaps: Array.isArray(answer.missingFormulaGaps) ? answer.missingFormulaGaps.slice(0, 5) : undefined,
     cells: Array.isArray(answer.cells) ? answer.cells.slice(0, maxCells) : undefined,
@@ -9482,6 +10747,8 @@ function compactRangeProfileAnswer(answer: Record<string, unknown>, responseMode
   const sparseRows = Array.isArray(answer.sparseRows) ? answer.sparseRows : undefined;
   const exactCellCount = rows ? matrixCellCount(rows) : sparseRowsCellCount(sparseRows);
   const preserveExact = shouldPreserveExactInlineData(input, responseMode, exactCellCount, proof);
+  const inlineRows = preserveExact && rows ? rows.length : countMatrixRows(answer.valuesPreview) ?? 0;
+  const totalRows = typeof answer.totalRowCount === "number" ? answer.totalRowCount : typeof (answer.shape as Record<string, unknown> | undefined)?.rows === "number" ? (answer.shape as Record<string, number>).rows : undefined;
   return stripUndefinedRecord({
     kind: answer.kind,
     source: answer.source,
@@ -9489,6 +10756,11 @@ function compactRangeProfileAnswer(answer: Record<string, unknown>, responseMode
     range: answer.range,
     shape: answer.shape,
     metrics: compactProfileMetrics(answer.metrics),
+    inlineRowCount: inlineRows,
+    totalRowCount: totalRows,
+    inlineIsComplete: totalRows !== undefined ? inlineRows >= totalRows && answer.previewTruncated !== true : answer.inlineIsComplete,
+    missingInlineReason: totalRows !== undefined && inlineRows < totalRows ? "payload_budget_preview" : answer.missingInlineReason,
+    emptyResultKind: answer.emptyResultKind,
     rowMetadata: answer.rowMetadata,
     ...(preserveExact && rows ? { rows } : {}),
     ...(preserveExact && !rows && sparseRows ? { sparseRows } : {}),
@@ -9536,6 +10808,8 @@ function compactTableReadAnswer(answer: Record<string, unknown>, responseMode: A
   const projectedFormulas = preserveExact ? (formulas && roleProjected ? projectMatrixColumns(formulas, roleProjected.indexes) : formulas) : undefined;
   const projectedText = preserveExact ? (text && roleProjected ? projectMatrixColumns(text, roleProjected.indexes) : text) : undefined;
   const projectedNumberFormat = preserveExact ? (numberFormat && roleProjected ? projectMatrixColumns(numberFormat, roleProjected.indexes) : numberFormat) : undefined;
+  const compactInlineRows = countMatrixRows(projectedValues) ?? countMatrixRows(projectedText) ?? countMatrixRows(projectedFormulas) ?? countMatrixRows(answer.valuesPreview) ?? 0;
+  const totalRows = typeof answer.totalRowCount === "number" ? answer.totalRowCount : undefined;
   const domainEncoding = projectedValues
     ? domainEncodeMatrix(projectedValues, inlineColumns, {
       formulas: projectedFormulas,
@@ -9552,6 +10826,10 @@ function compactTableReadAnswer(answer: Record<string, unknown>, responseMode: A
     dataRange: answer.dataRange,
     rowOffset: answer.rowOffset,
     rowLimit: answer.rowLimit,
+    inlineRowCount: compactInlineRows,
+    totalRowCount: totalRows,
+    inlineIsComplete: totalRows !== undefined ? compactInlineRows >= totalRows && answer.previewTruncated !== true : answer.inlineIsComplete,
+    missingInlineReason: totalRows !== undefined && compactInlineRows < totalRows ? "payload_budget_preview" : answer.missingInlineReason,
     projectedColumns,
     truncated: answer.truncated,
     nextPage: answer.nextPage,
@@ -10350,6 +11628,10 @@ function deriveRequiredFollowup(
   return undefined;
 }
 
+function isMatchUpdatePreviewAnswer(answer: unknown): answer is Record<string, unknown> & { kind: "match_update_preview" } {
+  return typeof answer === "object" && answer !== null && (answer as { kind?: unknown }).kind === "match_update_preview";
+}
+
 function resolveUpdateTarget(metadata: WorkbookMetadata, input: AgentRunInput):
   | Extract<AgentTargetResolution, { ok: true }>
   | { ok: false; status: AgentRunOutput["status"]; summary: string; candidates?: AgentCandidate[]; nextAction: AgentRunOutput["nextAction"]; warnings: string[] } {
@@ -10855,6 +12137,12 @@ function autoApplyDecision(input: AgentRunInput, preview: Omit<AgentRunOutput, "
   if (action === "transform_values" || action === "derive_values") {
     return { allow: false, safetyDecision: "manual_review:broad_compiled_transform", reason: "backend-compiled broad transforms and derivations require preview before apply" };
   }
+  if (isMatchUpdatePreviewAnswer(preview.answer)) {
+    if ((preview.changes?.length ?? 0) === 0 || (preview.changes?.length ?? 0) > 16) {
+      return { allow: false, safetyDecision: "manual_review:match_update_change_count", reason: "the match/update change count is not safe for auto-apply" };
+    }
+    return { allow: true, safetyDecision: "auto_apply:match_update" };
+  }
   if (!input.values) {
     return { allow: false, safetyDecision: "manual_review:missing_values", reason: "values were not provided explicitly" };
   }
@@ -10953,6 +12241,15 @@ function containsFormulaLikeValue(values: CellMatrix): boolean {
   return values.flat().some((value) => typeof value === "string" && value.trim().startsWith("="));
 }
 
+function hasFormulaWriteInput(input: AgentRunInput): boolean {
+  const values = input.values as Record<string, unknown> | undefined;
+  return Boolean(values && (Array.isArray(values.formulas) || typeof values.formula === "string" || intentAction(input) === "write_formulas"));
+}
+
+function isConditionalFormattingMutationRequest(request: string): boolean {
+  return /\b(conditional\s+format|conditional\s+formatting|formula\s+(format|color|colour|fill)|if\b.*\b(fill|color|colour|format))\b/i.test(request);
+}
+
 function unsafeAutoApplyChangeReason(input: AgentRunInput, changes: NonNullable<AgentRunOutput["changes"]>): string | undefined {
   const request = input.request.toLowerCase();
   const explicitlyHeaderEdit = /\b(header|heading|title|label|reference|caption)\b/i.test(input.request);
@@ -11007,15 +12304,336 @@ function hasCellValues(values: CellMatrix): boolean {
   return values.some((row) => row.some((value) => value !== null && value !== undefined && value !== ""));
 }
 
+function broadMutationNeedsScopeOutput(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput,
+  requestedMode: AgentRunMode,
+  resolved: Extract<AgentTargetResolution, { ok: true }>,
+  matrix: CellMatrix
+): Omit<AgentRunOutput, "telemetry"> | undefined {
+  const targetCells = cellCountFromAddress(resolved.range) ?? 0;
+  const writeCells = matrixCellCount(matrix);
+  const backendSideAction = ["transform_values", "derive_values", "settle_reconciliation"].includes(intentAction(input) ?? "");
+  if (!isPotentialBroadMutationRequest(input) || backendSideAction || targetCells < 500 || writeCells >= targetCells) {
+    return undefined;
+  }
+  return {
+    status: "NEEDS_INPUT",
+    mode: requestedMode,
+    workbookContextId: metadata.workbookContextId,
+    summary: `The requested update may affect ${targetCells.toLocaleString()} cells in ${resolved.sheetName}!${resolved.range}. Ask whether to apply it to all rows, matching rows, the selected range, or a specified range before building a large payload.`,
+    answer: {
+      kind: "broad_mutation_scope_guard",
+      sheetName: resolved.sheetName,
+      range: resolved.range,
+      estimatedCellCount: targetCells,
+      providedCellCount: writeCells,
+      alternatives: ["all rows", "matching rows only", "selected range", "specified range"]
+    },
+    candidates: findAgentCandidates(metadata, input).slice(0, 5),
+    proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "broad update target" }],
+    resourceLinks: [contextResource(metadata.workbookContextId)],
+    nextAction: "ask_user",
+    warnings: ["Broad update scope is unclear. Do not generate or apply a large write matrix until the user confirms scope."]
+  };
+}
+
+function broadMutationExplicitTargetNeedsScopeOutput(
+  metadata: WorkbookMetadata,
+  input: AgentRunInput,
+  requestedMode: AgentRunMode
+): Omit<AgentRunOutput, "telemetry"> | undefined {
+  const sheetName = input.target?.sheetName;
+  const range = input.target?.range;
+  const targetCells = typeof range === "string" ? cellCountFromAddress(range) : undefined;
+  const backendSideAction = ["transform_values", "derive_values", "settle_reconciliation"].includes(intentAction(input) ?? "");
+  if (!isPotentialBroadMutationRequest(input) || backendSideAction || !sheetName || !range || targetCells === undefined || targetCells < 500) {
+    return undefined;
+  }
+  return {
+    status: "NEEDS_INPUT",
+    mode: requestedMode,
+    workbookContextId: metadata.workbookContextId,
+    summary: `The requested update may affect ${targetCells.toLocaleString()} cells in ${sheetName}!${range}. Ask whether to apply it to all rows, matching rows, the selected range, or a specified range before building a large payload.`,
+    answer: {
+      kind: "broad_mutation_scope_guard",
+      sheetName,
+      range,
+      estimatedCellCount: targetCells,
+      providedCellCount: 0,
+      alternatives: ["all rows", "matching rows only", "selected range", "specified range"]
+    },
+    candidates: findAgentCandidates(metadata, input).slice(0, 5),
+    proof: [{ sheetName, range, label: "broad update target" }],
+    resourceLinks: [contextResource(metadata.workbookContextId)],
+    nextAction: "ask_user",
+    warnings: ["Broad update scope is unclear. Do not generate or apply a large write matrix until the user confirms scope."]
+  };
+}
+
+function isPotentialBroadMutationRequest(input: AgentRunInput): boolean {
+  return /\b(?:all|whole|entire|every|these|matching|rows?|sheet|worksheet)\b/i.test(input.request)
+    && /\b(?:color|colour|fill|highlight|format|update|fix|change|set|replace)\b/i.test(input.request);
+}
+
+function normalizeShortYearDatesForWrite(workbookId: WorkbookId, input: AgentRunInput, range: string, matrix: CellMatrix): {
+  matrix: CellMatrix;
+  numberFormatEntries: Array<{ target: A1Range; numberFormat: string[][]; preserveValues?: true }>;
+  warnings: string[];
+} {
+  if (!/\b(?:date|booking|bookings|วันที่|วัน\/เวลา|เรือออก|คืนตู้|รับตู้|ปิดสาย)\b/i.test(input.request)) {
+    return { matrix, numberFormatEntries: [], warnings: [] };
+  }
+  const parsedRange = tryParseA1Address(stripSheetName(range));
+  if (!parsedRange) {
+    return { matrix, numberFormatEntries: [], warnings: [] };
+  }
+  const sheetName = input.target?.sheetName;
+  if (!sheetName) {
+    return { matrix, numberFormatEntries: [], warnings: [] };
+  }
+  let changed = false;
+  const entries: Array<{ target: A1Range; numberFormat: string[][]; preserveValues?: true }> = [];
+  const normalized = matrix.map((row, rowIndex) => row.map((value, columnIndex) => {
+    const date = parseShortYearDate(value);
+    if (!date) {
+      return value;
+    }
+    changed = true;
+    entries.push({
+      target: {
+        workbookId,
+        sheetName,
+        address: `${numberToColumn(parsedRange.startColumn + columnIndex)}${parsedRange.startRow + rowIndex}`
+      },
+      numberFormat: [["dd/mm/yyyy"]],
+      preserveValues: true
+    });
+    return excelSerialFromDate(date.year, date.month, date.day);
+  }));
+  return {
+    matrix: normalized,
+    numberFormatEntries: entries,
+    warnings: changed ? ["Short-year date text was normalized to Excel date serials and formatted as dd/mm/yyyy."] : []
+  };
+}
+
+function parseShortYearDate(value: unknown): { year: number; month: number; day: number } | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const match = /^\s*(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2})\s*$/.exec(value);
+  if (!match?.[1] || !match[2] || !match[3]) {
+    return undefined;
+  }
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const year = 2000 + Number(match[3]);
+  if (day < 1 || day > 31 || month < 1 || month > 12) {
+    return undefined;
+  }
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    return undefined;
+  }
+  return { year, month, day };
+}
+
+function excelSerialFromDate(year: number, month: number, day: number): number {
+  const excelEpoch = Date.UTC(1899, 11, 30);
+  const date = Date.UTC(year, month - 1, day);
+  return Math.round((date - excelEpoch) / 86_400_000);
+}
+
 function firstNonEmptyRows(values: CellMatrix, limit: number): CellMatrix {
   const nonEmpty = values.filter((row) => row.some((value) => value !== null && value !== undefined && value !== ""));
   return (nonEmpty.length > 0 ? nonEmpty : values).slice(0, limit);
 }
 
 function objectToCellMatrix(values: Record<string, unknown>): CellMatrix {
+  if (Array.isArray(values.formulas)) return values.formulas as CellMatrix;
+  if (typeof values.formula === "string") return [[values.formula]];
   if (Array.isArray(values.rows)) return values.rows as CellMatrix;
   if (Array.isArray(values.values)) return values.values as CellMatrix;
   return [Object.values(values) as CellMatrix[number]];
+}
+
+type FormulaMatrixNormalization = {
+  ok: true;
+  formulas: CellMatrix;
+  dimensions: { rows: number; columns: number };
+  formulaPattern?: string;
+  warnings: string[];
+} | {
+  ok: false;
+  summary: string;
+  warnings: string[];
+  suggestedValues?: Record<string, unknown>;
+};
+
+function formulaMatrixFromInput(input: AgentRunInput, address: string, fallbackMatrix: CellMatrix): FormulaMatrixNormalization {
+  const values = input.values as Record<string, unknown> | undefined;
+  const rawMatrix = matrixFromUnknown(values?.formulas)
+    ?? (typeof values?.formula === "string" ? [[values.formula]] : undefined)
+    ?? matrixFromUnknown(values?.values)
+    ?? matrixFromUnknown(values?.rows)
+    ?? fallbackMatrix;
+  const formulas = normalizeFormulaOnlyMatrix(rawMatrix);
+  const dimensions = dimensionsFromAddress(address) ?? {
+    rows: Math.max(1, formulas.length),
+    columns: Math.max(1, maxMatrixColumns(formulas))
+  };
+  const formulaCells = formulas.flat().filter(formulaLike);
+  if (formulaCells.length === 0) {
+    return {
+      ok: false,
+      summary: "Formula updates need values.formula, values.formulas, or a formula matrix in values.values.",
+      warnings: ["Formula cells must be strings that start with '='."],
+      suggestedValues: { formula: "=FORMULA_HERE" }
+    };
+  }
+  const matrixRows = formulas.length;
+  const matrixColumns = Math.max(1, maxMatrixColumns(formulas));
+  if (matrixRows === dimensions.rows && matrixColumns === dimensions.columns) {
+    const formulaPattern = formulaCells.length === 1 ? String(formulaCells[0]) : undefined;
+    return {
+      ok: true,
+      formulas: padFormulaMatrix(formulas, dimensions.rows, dimensions.columns),
+      dimensions,
+      ...(formulaPattern !== undefined ? { formulaPattern } : {}),
+      warnings: []
+    };
+  }
+  if (formulaCells.length === 1 && matrixRows === 1 && matrixColumns === 1) {
+    const formula = String(formulaCells[0]);
+    const expanded = expandSingleFormulaAcrossRange(formula, dimensions);
+    if (expanded.ok) {
+      return {
+        ok: true,
+        formulas: expanded.formulas,
+        dimensions,
+        formulaPattern: formula,
+        warnings: dimensions.rows * dimensions.columns > 1 ? [`Expanded one formula across ${dimensions.rows * dimensions.columns} cell(s) using relative A1 references.`] : []
+      };
+    }
+    return {
+      ok: false,
+      summary: expanded.summary,
+      warnings: expanded.warnings,
+      suggestedValues: {
+        source: { sheetName: input.target?.sheetName, range: cellAddressFor(address, 0, 0) },
+        destination: { sheetName: input.target?.sheetName, range: address },
+        formula
+      }
+    };
+  }
+  return {
+    ok: false,
+    summary: `Formula matrix shape ${matrixRows}x${matrixColumns} does not match target range ${address} (${dimensions.rows}x${dimensions.columns}).`,
+    warnings: ["Provide values.formulas with one formula per target cell, or provide values.formula as one formula to expand across the target range."],
+    suggestedValues: {
+      formula: formulaCells[0],
+      formulas: padFormulaMatrix(formulas, dimensions.rows, dimensions.columns)
+    }
+  };
+}
+
+function padFormulaMatrix(matrix: CellMatrix, rows: number, columns: number): CellMatrix {
+  return Array.from({ length: rows }, (_row, rowIndex) =>
+    Array.from({ length: columns }, (_column, columnIndex) => {
+      const value = matrix[rowIndex]?.[columnIndex];
+      return formulaLike(value) ? String(value) : null;
+    })
+  );
+}
+
+function expandSingleFormulaAcrossRange(formula: string, dimensions: { rows: number; columns: number }): { ok: true; formulas: CellMatrix } | { ok: false; summary: string; warnings: string[] } {
+  if (dimensions.rows <= 0 || dimensions.columns <= 0) {
+    return { ok: false, summary: "Formula target range has no cells.", warnings: ["Provide a non-empty A1 target range."] };
+  }
+  if (/[![\]#]|[@]/.test(formula)) {
+    return {
+      ok: false,
+      summary: "Formula expansion needs a same-sheet A1 formula or an explicit formula matrix.",
+      warnings: ["External-sheet, structured, spill, and implicit-intersection formulas should be copied from a source cell or supplied as values.formulas."]
+    };
+  }
+  return {
+    ok: true,
+    formulas: Array.from({ length: dimensions.rows }, (_row, rowOffset) =>
+      Array.from({ length: dimensions.columns }, (_column, columnOffset) => shiftFormulaA1References(formula, rowOffset, columnOffset))
+    )
+  };
+}
+
+function shiftFormulaA1References(formula: string, rowOffset: number, columnOffset: number): string {
+  return formula.replace(/(?<![A-Z0-9_])(\$?)([A-Z]{1,3})(\$?)(\d+)(?![A-Z0-9_])/gi, (token, absoluteColumn: string, column: string, absoluteRow: string, row: string, index: number) => {
+    if (formulaIndexInsideString(formula, index)) {
+      return token;
+    }
+    const nextColumn = absoluteColumn ? column.toUpperCase() : numberToColumn(columnToNumber(column) + columnOffset);
+    const nextRow = absoluteRow ? row : String(Number(row) + rowOffset);
+    return `${absoluteColumn}${nextColumn}${absoluteRow}${nextRow}`;
+  });
+}
+
+function formulaIndexInsideString(formula: string, index: number): boolean {
+  let quoteCount = 0;
+  for (let cursor = 0; cursor < index; cursor += 1) {
+    if (formula[cursor] === '"') {
+      if (formula[cursor + 1] === '"') {
+        cursor += 1;
+      } else {
+        quoteCount += 1;
+      }
+    }
+  }
+  return quoteCount % 2 === 1;
+}
+
+function formulaPreviewExamples(range: string, formulas: CellMatrix): Array<{ cell: string; formula: string }> {
+  const examples: Array<{ cell: string; formula: string }> = [];
+  for (let rowIndex = 0; rowIndex < formulas.length; rowIndex += 1) {
+    for (let columnIndex = 0; columnIndex < (formulas[rowIndex]?.length ?? 0); columnIndex += 1) {
+      const formula = formulas[rowIndex]?.[columnIndex];
+      if (!formulaLike(formula)) {
+        continue;
+      }
+      examples.push({ cell: cellAddressFor(range, rowIndex, columnIndex), formula: String(formula) });
+      if (examples.length >= 8) {
+        return examples;
+      }
+    }
+  }
+  return examples;
+}
+
+function formulaNeedsInputOutput(
+  metadata: WorkbookMetadata,
+  requestedMode: AgentRunMode,
+  resolved: Extract<AgentTargetResolution, { ok: true }>,
+  summary: string,
+  suggestedValues?: Record<string, unknown>,
+  warnings: string[] = []
+): Omit<AgentRunOutput, "telemetry"> {
+  return {
+    status: "NEEDS_INPUT",
+    mode: requestedMode,
+    workbookContextId: metadata.workbookContextId,
+    summary,
+    answer: stripUndefinedRecord({
+      kind: "formula_update_needs_input",
+      target: { sheetName: resolved.sheetName, range: resolved.range },
+      suggestedIntentAction: "write_formulas",
+      suggestedValues
+    }),
+    proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "formula target" }],
+    resourceLinks: [contextResource(metadata.workbookContextId)],
+    nextAction: "ask_user",
+    agentInstruction: "Use the suggested formula payload shape if present; do not split this into repeated single-cell formula writes.",
+    maxRecommendedFollowupCalls: 1,
+    warnings
+  };
 }
 
 function numberFormatMatrixFromInput(input: AgentRunInput, address: string): string[][] | undefined {
@@ -11036,8 +12654,9 @@ function numberFormatMatrixFromInput(input: AgentRunInput, address: string): str
 
 function rangeTransferEndpointsFromInput(metadata: WorkbookMetadata, input: AgentRunInput): { source: A1Range; destination: A1Range } | undefined {
   const values = input.values as (Record<string, unknown> | undefined);
-  const source = explicitRangeTarget(metadata, values?.source);
-  const destination = explicitRangeTarget(metadata, values?.destination ?? values?.target ?? input.target);
+  const fallbackSheetName = input.target?.sheetName;
+  const source = explicitRangeTarget(metadata, values?.source, fallbackSheetName);
+  const destination = explicitRangeTarget(metadata, values?.destination ?? values?.target ?? input.target, fallbackSheetName);
   return source && destination ? { source, destination } : undefined;
 }
 
@@ -12083,6 +13702,85 @@ function sameText(left: unknown, right: unknown): boolean {
   return typeof left === "string" && typeof right === "string" && left.trim().toLowerCase() === right.trim().toLowerCase();
 }
 
+function shouldDeriveAsFormula(input: AgentRunInput): boolean {
+  const values = input.values ?? {};
+  const mode = normalizeOperationName(keyedStringValue(values, "outputMode", "mode", "writeMode") ?? "");
+  if (mode === "formula" || mode === "formulas") {
+    return true;
+  }
+  return /\b(should\s+be\s+(?:a\s+)?formula|write\s+formula|as\s+formula|auto[-\s]?calculate|formula\s+(?:for|to)\s+all|fill\s+formula)\b/i.test(input.request);
+}
+
+function withFormulaDeriveSourceDefaults(input: AgentRunInput, target: ValueColumnScope): AgentRunInput {
+  const values = input.values ?? {};
+  const sourceColumns = keyedArrayStringValue(values, "sourceColumns", "sources", "source");
+  if (sourceColumns.length > 0) {
+    return input;
+  }
+  if (headerTextMatches(target.headerName, "payment_variance") || /payment\s+variance/i.test(input.request)) {
+    return {
+      ...input,
+      values: {
+        ...values,
+        sourceColumns: ["Cash Amount", "Actual Amount"],
+        formula: keyedStringValue(values, "formula", "formulaType", "expression") ?? "actual_minus_cash"
+      }
+    };
+  }
+  return input;
+}
+
+function compileFormulaDeriveMatrix(
+  target: ValueColumnScope,
+  sources: ValueColumnScope[],
+  sourceSnapshots: Array<{ values: CellMatrix; formulas: CellMatrix }>,
+  values: AgentRunInput["values"]
+): { ok: true; formulas: CellMatrix; changedCount: number; examples: Array<Record<string, unknown>> } | { ok: false; summary: string; warnings: string[] } {
+  if (sources.length < 2) {
+    return {
+      ok: false,
+      summary: "Formula derivation needs at least two source columns.",
+      warnings: ["Provide values.sourceColumns, for example [\"Cash Amount\", \"Actual Amount\"]."]
+    };
+  }
+  const expression = normalizeOperationName(keyedStringValue(values, "formula", "formulaType", "expression", "operationFormula", "calculation") ?? "");
+  const cashSource = sources.find((source) => headerTextMatches(source.headerName, "cash_amount"));
+  const actualSource = sources.find((source) => headerTextMatches(source.headerName, "actual_amount"));
+  const left = expression === "cash_minus_actual"
+    ? cashSource ?? sources[0]
+    : actualSource ?? sources[1];
+  const right = expression === "cash_minus_actual"
+    ? actualSource ?? sources[1]
+    : cashSource ?? sources[0];
+  if (!left || !right) {
+    return {
+      ok: false,
+      summary: "Could not resolve two source columns for the formula derivation.",
+      warnings: ["Provide source columns explicitly and keep them aligned with the target rows."]
+    };
+  }
+  const sourceColumns = sourceSnapshots.map((snapshot) => columnVector(snapshot.values));
+  const formulas = Array.from({ length: target.rowCount }, (_row, index) => {
+    const row = target.startRow + index;
+    return [`=${left.columnLetter}${row}-${right.columnLetter}${row}`];
+  });
+  const examples: Array<Record<string, unknown>> = [];
+  for (let index = 0; index < target.rowCount && examples.length < 10; index += 1) {
+    const row = target.startRow + index;
+    examples.push({
+      row,
+      source: Object.fromEntries(sources.map((source, sourceIndex) => [source.headerName ?? source.columnLetter, sourceColumns[sourceIndex]?.[index] ?? ""])),
+      after: { [target.headerName ?? target.columnLetter]: formulas[index]?.[0] }
+    });
+  }
+  return { ok: true, formulas, changedCount: formulas.length, examples };
+}
+
+function headerTextMatches(header: string | undefined, normalizedNeedle: string): boolean {
+  const normalized = normalizeHeaderName(header ?? "");
+  return normalized.includes(normalizedNeedle) || normalized.replace(/_/g, "").includes(normalizedNeedle.replace(/_/g, ""));
+}
+
 function compileTransformPlan(
   target: ValueColumnScope,
   snapshot: { values: CellMatrix; formulas: CellMatrix },
@@ -12818,13 +14516,28 @@ function formulaFillRequestFromInput(metadata: WorkbookMetadata, input: AgentRun
   };
 }
 
-function explicitRangeTarget(metadata: WorkbookMetadata, value: unknown): A1Range | undefined {
+function explicitRangeTarget(metadata: WorkbookMetadata, value: unknown, fallbackSheetName?: string): A1Range | undefined {
+  if (typeof value === "string") {
+    const parsed = parseSheetQualifiedAddress(value);
+    const sheetName = parsed?.sheetName ?? fallbackSheetName;
+    const range = parsed?.address ?? value;
+    if (!sheetName || !range) {
+      return undefined;
+    }
+    const sheet = metadata.sheets.find((candidate) => normalizeComparableText(candidate.name) === normalizeComparableText(sheetName));
+    if (!sheet) {
+      return undefined;
+    }
+    return { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: sheet.name, address: normalizeOperationRange(metadata, sheet.name, stripSheetName(range)) };
+  }
   if (!value || typeof value !== "object") {
     return undefined;
   }
   const target = value as Partial<AgentRunTarget> & { address?: unknown };
-  const sheetName = typeof target.sheetName === "string" ? target.sheetName : undefined;
-  const range = typeof target.range === "string" ? target.range : typeof target.address === "string" ? target.address : undefined;
+  const rawRange = typeof target.range === "string" ? target.range : typeof target.address === "string" ? target.address : undefined;
+  const parsed = rawRange ? parseSheetQualifiedAddress(rawRange) : undefined;
+  const sheetName = typeof target.sheetName === "string" ? target.sheetName : parsed?.sheetName ?? fallbackSheetName;
+  const range = parsed?.address ?? rawRange;
   if (!sheetName || !range) {
     return undefined;
   }
@@ -12833,6 +14546,19 @@ function explicitRangeTarget(metadata: WorkbookMetadata, value: unknown): A1Rang
     return undefined;
   }
   return { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: sheet.name, address: normalizeOperationRange(metadata, sheet.name, range) };
+}
+
+function parseSheetQualifiedAddress(value: string): { sheetName: string; address: string } | undefined {
+  const trimmed = value.trim();
+  const quoted = /^'([^']+)'!(.+)$/.exec(trimmed);
+  if (quoted?.[1] && quoted[2]) {
+    return { sheetName: quoted[1], address: quoted[2] };
+  }
+  const unquoted = /^([^!]+)!(.+)$/.exec(trimmed);
+  if (unquoted?.[1] && unquoted[2]) {
+    return { sheetName: unquoted[1], address: unquoted[2] };
+  }
+  return undefined;
 }
 
 function rangeCopyTypeFromInput(input: AgentRunInput): NonNullable<Extract<ExcelOperation, { kind: "range.copy" }>["copyType"]> {
@@ -12914,6 +14640,13 @@ function valuePatchesFromInput(input: AgentRunInput): AgentValuePatch[] {
     }
     return [{ target, values: values as CellMatrix, ...(patch.reason ? { reason: patch.reason } : {}) }];
   });
+}
+
+function inheritPatchTargetSheet(input: AgentRunInput, target: AgentRunTarget): AgentRunTarget {
+  if (target.sheetName || !input.target?.sheetName) {
+    return target;
+  }
+  return { ...target, sheetName: input.target.sheetName };
 }
 
 function semanticValuePatchesFromInput(input: AgentRunInput): AgentSemanticValuePatch[] {

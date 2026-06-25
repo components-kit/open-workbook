@@ -18,7 +18,7 @@ const deprecatedInternalSurfaceEnv = "OPEN_WORKBOOK_" + "INTERNAL_TOOL_SURFACE";
 const deprecatedInternalSurfaceFlag = "expose" + "InternalToolSurface";
 const forbiddenPrimitiveRegistrations = ["Runtime", "Workbook", "Range", "Batch", "Workflow", "Table", "Chart", "Pivot"]
   .map((name) => `register${name}Tools(server)`);
-const expectedInternalCapabilityCount = 306;
+const expectedInternalCapabilityCount = 308;
 
 const requiredInternalCapabilities = [
   "excel.workflow.prepare_session",

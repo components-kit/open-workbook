@@ -133,6 +133,12 @@ function validateRegressionPack() {
         scenario.expected.hostMethods.includes("operation.execute_batch") || scenario.expected.hostMethods.includes("table.reorder_columns"),
         `${scenario.id}: regression scenario must assert the broken layer route`
       );
+    } else if (scenario.intent === "agent_contract") {
+      assert(scenario.expected.mustNotMutateWorkbook === true, `${scenario.id}: agent contract regression must forbid mutation`);
+      assert(
+        ["ask_user", "fetch_resource", "manual_review"].includes(scenario.expected.nextAction),
+        `${scenario.id}: agent contract regression must assert a safe nextAction`
+      );
     } else {
       assert(scenario.fixture?.excelState === "noActiveWorkbook", `${scenario.id}: non-mutating regression must declare its disconnected workbook fixture`);
       assert(scenario.expected.shouldFailGracefully === true, `${scenario.id}: disconnected regression must assert graceful failure`);
