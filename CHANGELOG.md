@@ -6,6 +6,13 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+## [0.1.24] - 2026-06-25
+
+### Fixed
+
+- Fixed the published runtime version constant so protocol, backend, MCP server, CLI, and Excel engine metadata report `0.1.24` consistently after the `0.1.23` release packaged a stale `0.1.22` protocol version.
+- Refreshed generated release documentation so the release gate can verify committed package metadata and documentation outputs cleanly.
+
 ## [0.1.23] - 2026-06-25
 
 ### Added
