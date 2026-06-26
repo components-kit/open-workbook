@@ -6,6 +6,26 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+## [0.1.25] - 2026-06-26
+
+### Added
+
+- Added first-class grouped-header summary answers so agents can inspect row-1 header spans, labels, and merged/unmerged status without chasing broad workbook overviews or stored result handles.
+- Added explicit row and column structure operations, including insert/delete row support and richer delete-column guidance, so authorized destructive requests route to real structural changes instead of style or row-height workarounds.
+- Added merge-aware multi-range previews for grouped headers so merge operations and center alignment can be batched and applied together.
+
+### Fixed
+
+- Fixed grouped-header color routing so row 1 grouped headers stay visually distinct from row 2 column headers, including exact `target.address` handling and darker grouped-header defaults.
+- Fixed freeze-pane workflows so agents can apply, unfreeze, and answer frozen row/column status through live workbook state instead of cached style summaries.
+- Fixed batched column width updates and column reorder/swap operations so widths, formulas, values, and formatting move with the affected columns.
+- Fixed merged-header alignment normalization so center/middle alignment requests are translated to Office.js-compatible alignment values.
+
+### Changed
+
+- Improved `excel.agent.run` guidance, capability metadata, packaged skill docs, and generated MCP surface docs for batched updates, merge operations, freeze panes, grouped headers, and structural worksheet edits.
+- Improved preview/apply regression coverage for OpenCode Excel workflows, including header styling, width preservation, merge batching, row/column deletion, freeze panes, and grouped-header summaries.
+
 ## [0.1.24] - 2026-06-25
 
 ### Fixed
