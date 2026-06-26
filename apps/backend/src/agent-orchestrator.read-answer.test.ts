@@ -3,6 +3,114 @@ import { AgentOrchestrator } from "./agent-orchestrator.js";
 import { FakeAgentRuntime, createCachedMetadata, selectionInfo, sheets, workbookId } from "./agent-orchestrator.test-support.js";
 
 describe("AgentOrchestrator Read Answer Routing", () => {
+  it("answers style overview when caller omits mode but provides structured style_overview intent", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "style overview of Data sheet",
+        intent: { action: "style_overview" },
+        target: { sheetName: "Data" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.mode).toBe("auto");
+      expect((result.answer as any).kind).toBe("style_overview");
+      expect(result.nextAction).toBe("answer_now");
+      expect(result.operationId).toBeUndefined();
+    });
+
+  it("summarizes grouped header row 1 without chasing design overview or full results", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_grouped_header_summary");
+      metadata.workbook = { ...metadata.workbook, activeSheet: "Invoices" };
+      metadata.sheets = [
+        ...metadata.sheets,
+        {
+          id: "sheet:Invoices",
+          name: "Invoices",
+          index: 3,
+          usedRange: "A1:O1002",
+          rowCount: 1002,
+          columnCount: 15,
+          kind: "transaction",
+          headers: [],
+          tableIds: [],
+          sectionIds: [],
+          summaryBlockIds: [],
+          formulaRegionIds: []
+        }
+      ];
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Okay, can you look at grouped header at row 1 on Invoices, please summarize it",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        target: { sheetName: "Invoices", range: "A1:O1002" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.nextAction).toBe("answer_now");
+      expect(result.maxRecommendedFollowupCalls).toBe(0);
+      expect((result.answer as any)).toMatchObject({
+        kind: "grouped_header_summary",
+        sheetName: "Invoices",
+        range: "A1:O1",
+        mergedRangeCount: 3,
+        mergeStatus: "merged_spans_detected",
+        spans: [
+          { range: "A1:B1", label: "สถานะ", merged: true },
+          { range: "C1:F1", label: "ข้อมูลการจอง", merged: true },
+          { range: "G1:N1", label: "ค่าใช้จ่าย", merged: true }
+        ],
+        unmergedLabels: [
+          { cell: "O1", label: "งานจ้างช่วง", merged: false }
+        ]
+      });
+      expect(runtime.runtimeMethodCalls["range.read_merged_cells"]).toBe(1);
+      expect(runtime.readBatchCount).toBe(1);
+      expect(runtime.lastBatchOperations).toEqual([
+        expect.objectContaining({
+          kind: "range.read_full",
+          target: expect.objectContaining({ sheetName: "Invoices", address: "A1:O1" })
+        })
+      ]);
+    });
+
+  it("updates permission policy through public agent intents", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const updated = await agent.run({
+        request: "Allow workbook styling structure changes for this workbook",
+        intent: { action: "set_permissions" },
+        values: {
+          permissions: {
+            allowWrites: true,
+            allowDestructiveActions: true,
+            scopeToWorkbook: true,
+            requireConfirmationFor: []
+          }
+        }
+      });
+      const readBack = await agent.run({
+        request: "Read permissions",
+        intent: { action: "get_permissions" }
+      });
+
+      expect(updated.status).toBe("SUCCESS");
+      expect((updated.answer as any).kind).toBe("permissions_update");
+      expect((updated.answer as any).result.permissions).toMatchObject({
+        allowWrites: true,
+        allowDestructiveActions: true,
+        scope: { workbookId }
+      });
+      expect(readBack.status).toBe("SUCCESS");
+      expect((readBack.answer as any).result.permissions.allowDestructiveActions).toBe(true);
+    });
+
   it("fails fast with reload guidance when the Excel add-in session is stale", async () => {
       const runtime = new FakeAgentRuntime();
       runtime.readiness = {
@@ -542,6 +650,45 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect((result.answer as any).result.data.rules[0].source).toEqual(["Open", "Closed", "Pending"]);
     });
 
+  it("routes natural dropdown inspection to data-validation metadata without reading values", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Check data validation / dropdown on these specific cells. Is there any list validation?",
+        mode: "answer",
+        target: { sheetName: "Data", range: "D1:D4" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any)).toMatchObject({
+        kind: "range_metadata",
+        method: "range.read_data_validation"
+      });
+      expect(runtime.runtimeMethodCalls["range.read_data_validation"]).toBe(1);
+      expect(result.telemetry.fullReadCellCount).toBe(0);
+    });
+
+  it("does not large-range guard full-column validation inspection", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Check data validation (dropdown lists) across the entire Data sheet. Which columns have dropdown validation?",
+        mode: "answer",
+        target: { sheetName: "Data" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any)).toMatchObject({
+        kind: "range_metadata",
+        method: "range.read_data_validation"
+      });
+      expect((result.answer as any).kind).not.toBe("large_range_guard");
+      expect(runtime.runtimeMethodCalls["range.read_data_validation"]).toBe(1);
+      expect(result.telemetry.fullReadCellCount).toBe(0);
+    });
+
   it("finds similar prior-period rows across related workbook sheets", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -731,6 +878,72 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(runtime.runtimeMethodCalls["style.get_fingerprint"]).toBe(1);
     });
 
+  it("answers freeze pane status questions without starting a mutation preview", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Which column is frozen on Data?",
+        mode: "answer",
+        target: { sheetName: "Data" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("freeze_panes_status");
+      expect((result.answer as any).readable).toBe(true);
+      expect((result.answer as any).lastFrozenColumn).toBe("C");
+      expect((result.answer as any).firstUnfrozenColumn).toBe("D");
+      expect(result.summary).toContain("columns A:C are frozen");
+      expect(result.operationId).toBeUndefined();
+      expect(result.nextAction).toBe("answer_now");
+    });
+
+  it("uses intent.reason to answer freeze pane status even when caller chose the wrong read action", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Check Invoices",
+        mode: "answer",
+        target: { sheetName: "Data" },
+        intent: { action: "read_style_summary", reason: "Check freeze panes on Data sheet" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("freeze_panes_status");
+      expect((result.answer as any).lastFrozenColumn).toBe("C");
+      expect((result.answer as any).firstUnfrozenColumn).toBe("D");
+      expect(runtime.runtimeMethodCalls["style.get_fingerprint"]).toBe(1);
+    });
+
+  it("does not treat legacy freeze pane notes as no frozen panes", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.getStyleFingerprint = async (request: any) => {
+        runtime.runtimeMethodCalls["style.get_fingerprint"] = (runtime.runtimeMethodCalls["style.get_fingerprint"] ?? 0) + 1;
+        return {
+          ok: true,
+          fingerprint: {
+            workbookId: request.workbookId,
+            sheetName: request.sheetName,
+            address: request.address,
+            dimensions: { freezePanes: { note: "Office.js freeze pane capture is tracked as a layout capability." } },
+            warnings: []
+          }
+        };
+      };
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Which column is frozen on Data?",
+        mode: "answer",
+        target: { sheetName: "Data" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).readable).toBe(false);
+      expect(result.summary).toContain("cannot be read");
+    });
+
   it("infers style summary reads from auto-mode styling questions", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -747,6 +960,107 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(result.telemetry.routeMode).toBe("answer");
       expect(result.telemetry.workflowRoute).toBe("style.inspect");
       expect(runtime.runtimeMethodCalls["style.get_fingerprint"]).toBe(1);
+    });
+
+  it("returns a compact style overview with grouped header suggestions without reading table values", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_style_overview");
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Give me a styling overview and best-practice suggestions for Apr 2026.",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "style_overview" },
+        target: { sheetName: "Apr 2026" },
+        detailLevel: "style_overview"
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).toBe("style_overview");
+      expect((result.answer as any).detected.headerRange).toBe("A1:AJ1");
+      expect((result.answer as any).freezePanes).toMatchObject({
+        readable: true,
+        frozen: true,
+        rows: 2,
+        columns: 3,
+        lastFrozenColumn: "C",
+        firstUnfrozenColumn: "D"
+      });
+      expect((result.answer as any).columnRoles).toEqual(expect.arrayContaining([
+        expect.objectContaining({ column: "A", freezePane: expect.objectContaining({ isFrozen: true }) }),
+        expect.objectContaining({ column: "C", freezePane: expect.objectContaining({ isFrozen: true, isLastFrozenColumn: true }) }),
+        expect.objectContaining({ column: "D", freezePane: expect.objectContaining({ isFrozen: false, isFirstUnfrozenColumn: true }) })
+      ]));
+      expect((result.answer as any).groupedHeaderSuggestion).toMatchObject({
+        kind: "grouped_header_suggestion",
+        requiresStructuralPreview: true,
+        defaultApplyBehavior: "suggest_only"
+      });
+      expect((result.answer as any).groupedHeaderSuggestion.groups.length).toBeGreaterThan(1);
+      expect((result.answer as any).recommendations.map((item: any) => item.id)).toContain("grouped_header");
+      expect(result.telemetry.fullReadCellCount).toBe(0);
+      expect(runtime.runtimeMethodCalls["style.get_fingerprint"]).toBe(1);
+      expect(runtime.readBatchCount).toBe(0);
+    });
+
+  it("returns workbook design overview with column recommendations without sampling values", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_design_overview");
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Before applying, please do a workbook design review for this sheet. For each column decide free text, date, number/money, ID/text code, dropdown list, or lookup/reference from another sheet.",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "workbook_design_overview" },
+        target: { sheetName: "Data" }
+      });
+
+      const answer = result.answer as any;
+      expect(result.status).toBe("SUCCESS");
+      expect(answer.kind).toBe("workbook_design_overview");
+      expect(answer.inspectionPolicy.fullReadCellCount).toBe(0);
+      expect(answer.columnRecommendations).toEqual(expect.arrayContaining([
+        expect.objectContaining({ column: "A", header: "Date", recommendedBehavior: "date" }),
+        expect.objectContaining({ column: "B", header: "Account", recommendedBehavior: "lookup_reference" }),
+        expect.objectContaining({ column: "C", header: "Amount", recommendedBehavior: "number_money" }),
+        expect.objectContaining({ column: "D", header: "Status", recommendedBehavior: "dropdown_list" })
+      ]));
+      expect(answer.relatedSheets).toEqual(expect.arrayContaining([
+        expect.objectContaining({ sheetName: "Customer Master" })
+      ]));
+      expect(answer.nextWorkflows.map((workflow: any) => workflow.intentAction)).toEqual(expect.arrayContaining(["improve_visual_readability", "write_data_validation"]));
+      expect(result.telemetry.fullReadCellCount).toBe(0);
+      expect(runtime.readBatchCount).toBe(0);
+      expect(runtime.runtimeMethodCalls["style.get_fingerprint"]).toBeUndefined();
+    });
+
+  it("routes natural column-by-column design review prompts to workbook_design_overview", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_design_natural");
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Please review Apr 2026 column-by-column and recommend which columns should be dates, money, dropdowns, IDs, or lookups. Do not apply yet.",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId
+      });
+
+      const answer = result.answer as any;
+      expect(result.status).toBe("SUCCESS");
+      expect(answer.kind).toBe("workbook_design_overview");
+      expect(answer.sheet.name).toBe("Apr 2026");
+      expect(answer.columnRecommendations).toEqual(expect.arrayContaining([
+        expect.objectContaining({ header: "Transaction Date", recommendedBehavior: "date" }),
+        expect.objectContaining({ header: "Payment Variance", recommendedBehavior: "number_money" }),
+        expect.objectContaining({ header: "Container Size", recommendedBehavior: "dropdown_list" })
+      ]));
+      expect(answer.inspectionPolicy.guidance).toContain("Do not broad-read empty data rows");
+      expect(runtime.readBatchCount).toBe(0);
     });
 
   it("keeps compact style summaries useful and retrieves full result handles", async () => {

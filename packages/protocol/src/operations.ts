@@ -119,7 +119,11 @@ export interface WriteStylesManyOperation extends OperationBase {
 
 export interface WriteDataValidationOperation extends OperationBase {
   kind: "range.write_data_validation";
-  target: A1Range;
+  target?: A1Range;
+  entries?: Array<{
+    target: A1Range;
+    validation: WriteDataValidationOperation["validation"];
+  }>;
   validation: {
     type: "list";
     source: string | string[];
@@ -387,6 +391,13 @@ export interface SetSheetTabColorOperation extends OperationBase {
   color: string;
 }
 
+export interface FreezePanesOperation extends OperationBase {
+  kind: "sheet.freeze_panes";
+  sheetName: string;
+  rows?: number;
+  columns?: number;
+}
+
 export interface WorkbookCalculateOperation extends OperationBase {
   kind: "workbook.calculate";
   calculationType?: "full" | "recalculate";
@@ -453,6 +464,7 @@ export type ExcelOperation =
   | UnprotectSheetOperation
   | ClearSheetOperation
   | SetSheetTabColorOperation
+  | FreezePanesOperation
   | WorkbookCalculateOperation
   | WorkbookSaveOperation
   | CreateSheetFromTemplateOperation;
@@ -588,6 +600,7 @@ export interface RangeSnapshot {
     verticalAlignment?: string;
     rowHeight?: number;
     columnWidth?: number;
+    wrapText?: boolean;
     borders?: RangeBorderStyle;
   };
 }

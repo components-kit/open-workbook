@@ -100,7 +100,8 @@ export type AgentActionHandlerId =
   | "protect_sheet"
   | "unprotect_sheet"
   | "clear_sheet"
-  | "set_sheet_tab_color";
+  | "set_sheet_tab_color"
+  | "freeze_panes";
 
 export interface AgentActionHandlerDefinition {
   id: AgentActionHandlerId;
@@ -117,7 +118,8 @@ export interface AgentActionHandlerDefinition {
   matches: (input: AgentRunInput, request: string) => boolean;
 }
 
-const RANGE_MUTATION_WORDS = /\b(filter|filters|autofilter|auto\s*filter|style|format|formatting|conditional|validation|dropdown|drop\s*down|select\s+list|border|borders|fill|font|alignment|range|cells?|rows?|columns?|cols?|header row)\b/;
+const RANGE_MUTATION_WORDS = /\b(filter|filters|autofilter|auto\s*filter|style|format|formatting|conditional|validation|dropdown|drop\s*down|select\s+list|border|borders|fill|font|alignment|color|colour|dark|darker|range|cells?|rows?|columns?|cols?|header row)\b/;
+const STYLE_ONLY_WORDS = /\b(style|format|formatting|fill|font|bold|italic|alignment|align|center|centered|colour|color|background|highlight|border|borders|dark|darker|light|lighter)\b/;
 
 export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
   {
@@ -318,7 +320,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "create_name",
     requiresResolvedTarget: false,
     riskKind: "structure_change",
-    matches: (_input, request) => /\b(create|add)\b/.test(request) && /\b(named range|name|named item)\b/.test(request)
+    matches: (_input, request) => /\b(create|add|define|register)\b/.test(request) && /\b(named range|named item|name manager|workbook name|defined name)\b/.test(request)
   },
   {
     id: "update_name",
@@ -596,7 +598,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "update_table_rows",
     requiresResolvedTarget: true,
     riskKind: "broad_range_write",
-    matches: (_input, request) => /\b(update|change|edit)\b/.test(request) && /\b(rows?|records?|table)\b/.test(request)
+    matches: (_input, request) => /\b(update|change|edit)\b/.test(request) && /\b(rows?|records?|table)\b/.test(request) && !STYLE_ONLY_WORDS.test(request)
   },
   {
     id: "create_table",
@@ -620,7 +622,10 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "reorder_table_columns",
     requiresResolvedTarget: true,
     riskKind: "structure_change",
-    matches: (_input, request) => /\b(reorder|move|rearrange|swap)\b/.test(request) && /\b(columns?|table columns?)\b/.test(request)
+    matches: (input, request) =>
+      /\b(reorder|move|rearrange|swap)\b/.test(request) &&
+      /\b(columns?|cols?)\b/.test(request) &&
+      (input.target?.tableName !== undefined || /\btable\b/.test(request))
   },
   {
     id: "reorder_range_columns",
@@ -628,7 +633,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "reorder_range_columns",
     requiresResolvedTarget: true,
     riskKind: "structure_change",
-    matches: (_input, request) => /\b(reorder|rearrange|swap)\b/.test(request) && /\b(columns?|cols?)\b/.test(request) && !/\btable\b/.test(request)
+    matches: (_input, request) => /\b(reorder|rearrange|swap|move)\b/.test(request) && /\b(columns?|cols?)\b/.test(request) && !/\btable\b/.test(request)
   },
   {
     id: "clear_table_data",
@@ -691,6 +696,14 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     matches: (_input, request) => /\b(repair|fix)\b/.test(request) && /\btable structure\b/.test(request)
   },
   {
+    id: "freeze_panes",
+    capabilityName: "excel.sheet.freeze_panes",
+    intentAction: "freeze_panes",
+    requiresResolvedTarget: false,
+    riskKind: "safe_format",
+    matches: (_input, request) => !isReadOnlyFreezeQuestion(request) && /\b(unfreeze|freeze|frozen)\b/.test(request) && /\b(panes?|rows?|columns?|cols?|header|top|first|all)\b/.test(request)
+  },
+  {
     id: "autofit_columns",
     capabilityName: "excel.range.autofit_columns",
     intentAction: "autofit",
@@ -728,7 +741,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "clear_range",
     requiresResolvedTarget: true,
     riskKind: "destructive",
-    matches: (_input, request) => /\b(clear|remove|delete|wipe)\b/.test(request) && /\b(all|everything|range|cells?)\b/.test(request)
+    matches: (_input, request) => /\b(clear|remove|delete|wipe)\b/.test(request) && /\b(all|everything|entire range|whole range)\b/.test(request)
   },
   {
     id: "normalize_headers",
@@ -816,7 +829,11 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "clear_values",
     requiresResolvedTarget: true,
     riskKind: "destructive",
-    matches: (_input, request) => /\b(clear|remove|delete|wipe)\b/.test(request) && /\b(data|values?|contents?|test data|input data)\b/.test(request) && !/\b(formats?|formatting|styles?)\b/.test(request)
+    matches: (_input, request) =>
+      /\b(clear|remove|delete|wipe)\b/.test(request)
+      && /\b(data|values?|contents?|test data|input data|cells?|this cell|selected cell|current cell)\b/.test(request)
+      && !/\b(formats?|formatting|styles?)\b/.test(request)
+      && !(/\b(delete|remove|drop)\b/.test(request) && /\b(rows?|cols?|columns?)\b/.test(request))
   },
   {
     id: "clear_values_raw",
@@ -856,7 +873,9 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "write_data_validation",
     requiresResolvedTarget: true,
     riskKind: "safe_format",
-    matches: (_input, request) => /\b(data\s+validation|validation|dropdown|drop\s*down|select\s+list|selection\s+list)\b/.test(request)
+    matches: (_input, request) =>
+      /\b(add|set|apply|write|create|update|change|replace)\b/.test(request)
+      && /\b(data\s+validation|validation|dropdown|drop\s*down|select\s+list|selection\s+list)\b/.test(request)
   },
   {
     id: "write_conditional_formatting",
@@ -896,7 +915,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "delete_columns",
     requiresResolvedTarget: true,
     riskKind: "destructive",
-    matches: (_input, request) => /\b(delete|remove)\b/.test(request) && /\bcolumns?\b/.test(request)
+    matches: (_input, request) => /\b(delete|remove)\b/.test(request) && /\b(cols?|columns?)\b/.test(request)
   },
   {
     id: "merge_range",
@@ -920,17 +939,42 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     intentAction: "format_range",
     requiresResolvedTarget: true,
     riskKind: "safe_format",
-    matches: (_input, request) => /\b(style|format|formatting|header\s+row|borders?)\b/.test(request)
+    matches: (_input, request) => /\b(style|format|formatting|header\s+row|fill|font|alignment|align|center|centered|color|colour|background|highlight|borders?)\b/.test(request)
   }
 ];
 
 export function findAgentActionHandler(input: AgentRunInput, action: AgentIntentAction | undefined, requiresResolvedTarget: boolean): AgentActionHandlerDefinition | undefined {
   const request = input.request.toLowerCase();
   const scopeHandlers = AGENT_ACTION_HANDLERS.filter((handler) => handler.requiresResolvedTarget === requiresResolvedTarget);
-  if (action !== undefined) {
-    return scopeHandlers.find((handler) => handler.intentAction === action);
+  const effectiveAction = action ?? intentActionFromValues(input);
+  if (effectiveAction !== undefined) {
+    return scopeHandlers.find((handler) => handler.intentAction === effectiveAction);
   }
   return scopeHandlers.find((handler) => handler.matches(input, request));
+}
+
+function intentActionFromValues(input: AgentRunInput): AgentIntentAction | undefined {
+  const values = input.values as Record<string, unknown> | undefined;
+  if (!values) {
+    return undefined;
+  }
+  if (isTruthy(values.delete_rows ?? values.deleteRows ?? values.deleteRow ?? values.remove_rows ?? values.removeRows ?? values.removeRow)) {
+    return "delete_rows";
+  }
+  if (isTruthy(values.insert_rows ?? values.insertRows ?? values.insertRow ?? values.add_rows ?? values.addRows ?? values.addRow)) {
+    return "insert_rows";
+  }
+  if (isTruthy(values.delete_columns ?? values.deleteColumns ?? values.deleteColumn ?? values.delete_col ?? values.deleteCol ?? values.remove_columns ?? values.removeColumns ?? values.removeColumn ?? values.remove_col ?? values.removeCol)) {
+    return "delete_columns";
+  }
+  if (isTruthy(values.insert_columns ?? values.insertColumns ?? values.insertColumn ?? values.insert_col ?? values.insertCol ?? values.add_columns ?? values.addColumns ?? values.addColumn ?? values.add_col ?? values.addCol)) {
+    return "insert_columns";
+  }
+  return undefined;
+}
+
+function isTruthy(value: unknown): boolean {
+  return value === true || value === "true" || value === 1 || value === "1";
 }
 
 function hasStyleCopyEndpoints(input: AgentRunInput): boolean {
@@ -952,4 +996,9 @@ function hasFormulaLikeValue(values: AgentRunInput["values"]): boolean {
       ? values.rows
       : [Object.values(values)];
   return matrix.flat().some((value) => typeof value === "string" && value.trim().startsWith("="));
+}
+
+function isReadOnlyFreezeQuestion(request: string): boolean {
+  return /\b(which|what|where|show|tell|check|read|inspect|current|currently|is|are|has|have|status)\b/.test(request)
+    && /\b(freeze|frozen)\b/.test(request);
 }

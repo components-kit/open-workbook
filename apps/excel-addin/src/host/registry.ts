@@ -64,6 +64,7 @@ export const BATCH_OPERATION_KINDS = [
   "sheet.unprotect",
   "sheet.clear",
   "sheet.set_tab_color",
+  "sheet.freeze_panes",
   "template.create_sheet_from_template"
 ] as const;
 
@@ -310,6 +311,7 @@ export const HOST_METHOD_REGISTRY: HostMethodDefinition[] = [
       "excel.sheet.unprotect",
       "excel.sheet.clear",
       "excel.sheet.set_tab_color",
+      "excel.sheet.freeze_panes",
       "excel.template.create_sheet_from_template"
     ],
     operationKinds: [...BATCH_OPERATION_KINDS],

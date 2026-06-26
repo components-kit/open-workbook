@@ -63,6 +63,7 @@ export const AGENT_ACTION_REGISTRY: AgentActionDefinition[] = [
   { kind: "sheet.unprotect", risk: "structure_change", previewRequired: true, confirmationRequired: true },
   { kind: "sheet.clear", risk: "destructive", previewRequired: true, confirmationRequired: true },
   { kind: "sheet.set_tab_color", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "sheet.freeze_panes", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "workbook.calculate", risk: "read_only", previewRequired: true, confirmationRequired: true },
   { kind: "workbook.save", risk: "destructive", previewRequired: true, confirmationRequired: true },
   { kind: "workbook.snapshot", risk: "read_only", previewRequired: true, confirmationRequired: true },

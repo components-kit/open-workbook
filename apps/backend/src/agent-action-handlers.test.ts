@@ -37,6 +37,15 @@ describe("agent action handlers", () => {
     expect(findAgentActionHandler(natural, undefined, true)?.id).toBe("format_range");
   });
 
+  it("routes header row color-only changes to formatting instead of table row updates", () => {
+    const input: AgentRunInput = {
+      request: "Change row 1 header grouping fill to a darker color",
+      target: { sheetName: "Invoices", range: "A1:O1" }
+    };
+
+    expect(findAgentActionHandler(input, undefined, true)?.id).toBe("format_range");
+  });
+
   it("matches promoted range-core actions by caller intent", () => {
     const target: AgentRunInput["target"] = { sheetName: "Data", range: "A1:B2" };
 
@@ -75,6 +84,21 @@ describe("agent action handlers", () => {
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "copy_table_structure" }, target }, "copy_table_structure", true)?.id).toBe("copy_table_structure");
   });
 
+  it("routes freeze and unfreeze pane requests to the sheet freeze panes operation", () => {
+    const target: AgentRunInput["target"] = { sheetName: "Invoices", range: "A1:O1002" };
+
+    expect(findAgentActionHandler({ request: "unfreeze all panes on Invoices", target }, undefined, false)?.id).toBe("freeze_panes");
+    expect(findAgentActionHandler({ request: "freeze top row and first column", target }, undefined, false)?.id).toBe("freeze_panes");
+    expect(findAgentActionHandler({ request: "Do it", intent: { action: "freeze_panes" }, target }, "freeze_panes", false)?.id).toBe("freeze_panes");
+  });
+
+  it("does not route read-only freeze pane questions to the mutation handler", () => {
+    const target: AgentRunInput["target"] = { sheetName: "Invoices", range: "A1:O1002" };
+
+    expect(findAgentActionHandler({ request: "Which column is frozen on Invoices?", target }, undefined, false)).toBeUndefined();
+    expect(findAgentActionHandler({ request: "Check current freeze panes column", target }, undefined, false)).toBeUndefined();
+  });
+
   it("matches promoted sheet-core actions by caller intent", () => {
     const target: AgentRunInput["target"] = { sheetName: "Report" };
 
@@ -97,6 +121,17 @@ describe("agent action handlers", () => {
     expect(findAgentActionHandler({ request: "Show cols B:C", target: { sheetName: "Data", range: "B:C" } }, undefined, true)?.id).toBe("unhide_columns");
   });
 
+  it("routes explicit deletion wording by row, column, or cell scope", () => {
+    expect(findAgentActionHandler({ request: "Delete this row", target: { sheetName: "Data", range: "5:5" } }, undefined, true)?.id).toBe("delete_rows");
+    expect(findAgentActionHandler({ request: "Delete col B", target: { sheetName: "Data", range: "B:B" } }, undefined, true)?.id).toBe("delete_columns");
+    expect(findAgentActionHandler({ request: "Remove this cell", target: { sheetName: "Data", range: "B5" } }, undefined, true)?.id).toBe("clear_values");
+  });
+
+  it("routes column swap and move wording to column reorder", () => {
+    expect(findAgentActionHandler({ request: "Swap cols A and B", target: { sheetName: "Data", range: "A:B" } }, undefined, true)?.id).toBe("reorder_range_columns");
+    expect(findAgentActionHandler({ request: "Move column B before column A", target: { sheetName: "Data", range: "A:B" } }, undefined, true)?.id).toBe("reorder_range_columns");
+  });
+
   it("matches promoted workbook mutation actions by caller intent", () => {
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "restore_workbook_backup" } }, "restore_workbook_backup", false)?.id).toBe("restore_workbook_backup");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "import_local_config" } }, "import_local_config", false)?.id).toBe("import_local_config");
@@ -117,6 +152,15 @@ describe("agent action handlers", () => {
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "create_name" } }, "create_name", false)?.id).toBe("create_name");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "update_name" } }, "update_name", false)?.id).toBe("update_name");
     expect(findAgentActionHandler({ request: "Do it", intent: { action: "delete_name" } }, "delete_name", false)?.id).toBe("delete_name");
+  });
+
+  it("does not route grouped header creation wording to named-range creation", () => {
+    expect(findAgentActionHandler({
+      request: "Create merged group header cells for the Invoices sheet with labels and colors."
+    }, undefined, false)?.id).not.toBe("create_name");
+    expect(findAgentActionHandler({
+      request: "Create a named range for the input cells."
+    }, undefined, false)?.id).toBe("create_name");
   });
 
   it("matches promoted region mutation actions by caller intent", () => {

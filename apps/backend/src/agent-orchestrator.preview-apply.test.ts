@@ -3,6 +3,145 @@ import { AgentOrchestrator } from "./agent-orchestrator.js";
 import { FakeAgentRuntime, createCachedMetadata, selectionInfo, sheets, workbookId } from "./agent-orchestrator.test-support.js";
 
 describe("AgentOrchestrator Preview Apply Safety", () => {
+  it("applies visual readability to Thai invoice body after grouped headers without skipping all rules", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_thai_invoices_grouped");
+      const headers = [
+        "สถานะวางบิล",
+        "จ่ายผู้รับเหมาช่วงแล้ว?",
+        "เลขบุ๊คกิ้ง",
+        "ลูกค้า",
+        "สถานะงาน",
+        "วันที่โหลดสินค้า",
+        "ราคางาน",
+        "ค่ายกตู้ขึ้น",
+        "ค่ายกตู้ลง",
+        "ค่ายกรวม",
+        "ค่าใช้จ่ายอื่น",
+        "ยอดวางบิลรวม",
+        "ภาษีหัก ณ ที่จ่าย",
+        "ยอดรับสุทธิ",
+        "งานจ้างช่วง?"
+      ];
+      const invoiceColumns = headers.map((header, index) => ({
+        name: header,
+        normalizedName: header,
+        inferredType: "unknown" as const,
+        role: "unknown" as const,
+        importance: 0.55,
+        index,
+        letter: String.fromCharCode("A".charCodeAt(0) + index)
+      }));
+      metadata.workbook = { ...metadata.workbook, activeSheet: "Invoices", name: "มิถุนายน.xlsx" };
+      metadata.sheets = [{
+        id: "sheet:Invoices",
+        name: "Invoices",
+        index: 0,
+        usedRange: "A1:O1002",
+        rowCount: 1002,
+        columnCount: 15,
+        kind: "transaction",
+        headers: [{
+          id: "header:Invoices:wide",
+          sheetName: "Invoices",
+          row: 2,
+          range: "A2:O1002",
+          confidence: 0.9,
+          columns: invoiceColumns
+        }],
+        tableIds: ["table:InvoicesTable"],
+        sectionIds: ["section:Invoices:grouped-header"],
+        summaryBlockIds: ["summary:Invoices:grouped-header"],
+        formulaRegionIds: []
+      }];
+      metadata.tables = [{
+        id: "table:InvoicesTable",
+        sheetName: "Invoices",
+        name: "InvoicesTable",
+        range: "A2:O1002",
+        columns: invoiceColumns
+      }];
+      metadata.sections = [{
+        id: "section:Invoices:grouped-header",
+        sheetName: "Invoices",
+        label: "Grouped header",
+        kind: "summary",
+        range: "A1:O2",
+        columns: [],
+        labels: ["สถานะ", "ข้อมูลการจอง", "ยอดเงิน", "งานจ้างช่วง"],
+        rowCount: 2,
+        columnCount: 15,
+        nonEmptyCellCount: 19,
+        confidence: 0.95
+      }];
+      metadata.summaryBlocks = [{
+        id: "summary:Invoices:grouped-header",
+        sheetName: "Invoices",
+        range: "A1:O2",
+        labels: ["สถานะ", "ข้อมูลการจอง", "ยอดเงิน", "งานจ้างช่วง"],
+        confidence: 0.95
+      }];
+      agent.metadataCache.set(metadata);
+
+      const preview = await agent.run({
+        request: "Make Invoices easier to read. Header is already good, focus on each column and data cells.",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Invoices", tableName: "InvoicesTable" }
+      });
+
+      const visualPlan = (preview.answer as any).visualPlan;
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect(preview.nextAction).toBe("call_apply_update");
+      expect((preview.metrics as any).operationCount).toBeGreaterThan(0);
+      expect((preview.metrics as any).skippedRuleCount).toBeLessThan((preview.metrics as any).groupedOperationCount);
+      expect((preview.answer as any).detected).toMatchObject({
+        headerRow: 2,
+        headerRange: "A2:O2",
+        dataRange: "A3:O1002"
+      });
+      expect((preview.answer as any).columnRoles.map((column: any) => [column.column, column.role])).toEqual(expect.arrayContaining([
+        ["A", "status"],
+        ["C", "id"],
+        ["D", "entity"],
+        ["E", "status"],
+        ["F", "date"],
+        ["G", "money"]
+      ]));
+      expect(visualPlan.skipped.map((skip: any) => skip.reason).join(" ")).not.toMatch(/column\.G\.number_format.*protected/);
+
+      const applied = await agent.run({
+        request: "Apply visual readability preview",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations.map((operation) => operation.kind)).toEqual(expect.arrayContaining([
+        "range.write_styles_many",
+        "range.write_number_formats_many"
+      ]));
+      expect(runtime.lastBatchOperations.some((operation) => operation.kind === "range.apply_autofilter")).toBe(false);
+      expect(visualPlan.skipped).toEqual(expect.arrayContaining([
+        expect.objectContaining({ ruleId: "layout.filter", reason: expect.stringContaining("already provided by the detected Excel table") })
+      ]));
+      const numberFormatOperation = runtime.lastBatchOperations.find((operation) => operation.kind === "range.write_number_formats_many") as any;
+      expect(numberFormatOperation.entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ target: expect.objectContaining({ sheetName: "Invoices", address: "F3:F1002" }) }),
+        expect.objectContaining({ target: expect.objectContaining({ sheetName: "Invoices", address: "G3:G1002" }) }),
+        expect.objectContaining({ target: expect.objectContaining({ sheetName: "Invoices", address: "N3:N1002" }) })
+      ]));
+      expect(numberFormatOperation.entries.find((entry: any) => entry.target.address === "G3:G1002").numberFormat[0][0]).toBe("#,##0.00");
+      const styleOperation = runtime.lastBatchOperations.find((operation) => operation.kind === "range.write_styles_many") as any;
+      expect(styleOperation.entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ target: expect.objectContaining({ sheetName: "Invoices", address: "A3:A1002" }), style: expect.objectContaining({ horizontalAlignment: "Center" }) }),
+        expect.objectContaining({ target: expect.objectContaining({ sheetName: "Invoices", address: "G3:G1002" }), style: expect.objectContaining({ horizontalAlignment: "Right" }) })
+      ]));
+    });
+
   it("previews and applies visual readability safe operations through the update lifecycle", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -38,11 +177,13 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
         density: "comfortable",
         preserveFormulas: true,
         preserveExistingStyle: true,
+        stylePreservationMode: "protected_regions",
         allowValidationSuggestions: false,
         allowFormulaSuggestions: false,
         allowReplaceConditionalFormatting: false,
         allowReplaceDataValidation: false,
-        allowInsertRowsOrColumns: false
+        allowInsertRowsOrColumns: false,
+        applySuggestionBuckets: []
       });
       expect((preview.answer as any).detected).toMatchObject({
         sheetName: "Data",
@@ -84,12 +225,15 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
       expect((applied.answer as any).ok).toBe(true);
       expect(runtime.lastBatchOperations.map((operation) => operation.kind)).toEqual([
         "range.write_styles_many",
-        "range.apply_autofilter",
         "range.write_conditional_formatting",
         "range.write_conditional_formatting",
         "range.write_conditional_formatting",
         "range.write_number_formats_many"
       ]);
+      expect(runtime.lastBatchOperations.some((operation) => operation.kind === "range.apply_autofilter")).toBe(false);
+      expect(visualPlan.skipped).toEqual(expect.arrayContaining([
+        expect.objectContaining({ ruleId: "layout.filter", reason: expect.stringContaining("already provided by the detected Excel table") })
+      ]));
       expect(runtime.lastBatchOperations.some((operation) => operation.kind === "range.write_values" || operation.kind === "range.write_formulas")).toBe(false);
       const styleOperation = runtime.lastBatchOperations.find((operation) => operation.kind === "range.write_styles_many") as any;
       expect(styleOperation.entries.every((entry: any) => entry.preserveValues === true)).toBe(true);
@@ -170,6 +314,101 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
       ]));
       expect(applied.status).toBe("SUCCESS");
       expect(runtime.lastBatchOperations.some((operation) => operation.kind === "range.write_data_validation" || operation.kind === "range.write_formulas")).toBe(false);
+    });
+
+  it("applies visual readability validation suggestions only when the validation bucket is requested", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Make this sheet easier to read and add dropdowns",
+        mode: "preview_update",
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Data" },
+        values: {
+          visualReadability: {
+            applySuggestionBuckets: ["validation"]
+          }
+        }
+      });
+      const applied = await agent.run({
+        request: "Apply visual readability preview",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      const visualPlan = (preview.answer as any).visualPlan;
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).defaults.applySuggestionBuckets).toEqual(["validation"]);
+      expect(visualPlan.validationSuggestions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "validation.D.dropdown", target: "D2:D4" })
+      ]));
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations.some((operation) => operation.kind === "range.write_data_validation")).toBe(true);
+      expect(runtime.lastBatchOperations.find((operation) => operation.kind === "range.write_data_validation")).toMatchObject({
+        target: { sheetName: "Data", address: "D2:D4" },
+        validation: { type: "list", source: ["Open", "In Progress", "Blocked", "Done"] }
+      });
+      expect(runtime.lastBatchOperations.some((operation) => operation.kind === "range.write_formulas")).toBe(false);
+    });
+
+  it("applies freeze column suggestions when the freeze_panes bucket is requested", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Make this easier to read and freeze first column",
+        mode: "preview_update",
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Data" },
+        values: {
+          visualReadability: {
+            applySuggestionBuckets: ["freeze_panes"]
+          }
+        }
+      });
+      const applied = await agent.run({
+        request: "Apply visual readability preview",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      const visualPlan = (preview.answer as any).visualPlan;
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).defaults.freezePanes).toEqual({ columns: 1 });
+      expect(visualPlan.ruleIds).toEqual(expect.arrayContaining(["layout.freeze_header", "layout.freeze_columns"]));
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations.filter((operation) => operation.kind === "sheet.freeze_panes")).toEqual([
+        expect.objectContaining({ kind: "sheet.freeze_panes", sheetName: "Data", rows: 1, columns: 1 })
+      ]);
+    });
+
+  it("previews and applies direct unfreeze pane requests without visual readability", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Unfreeze all panes in Data",
+        mode: "preview_update",
+        intent: { action: "freeze_panes" },
+        target: { sheetName: "Data" }
+      });
+      const applied = await agent.run({
+        request: "Apply unfreeze panes",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).kind).toBe("freeze_panes_preview");
+      expect((preview.answer as any).freezePanes).toEqual({ rows: 0, columns: 0 });
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations.filter((operation) => operation.kind === "sheet.freeze_panes")).toEqual([
+        expect.objectContaining({ kind: "sheet.freeze_panes", sheetName: "Data", rows: 0, columns: 0 })
+      ]);
     });
 
   it("keeps visual readability reference-style adaptation preview-only", async () => {
@@ -431,12 +670,371 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
       expect(preview.status).toBe("PREVIEW_READY");
       expect((preview.answer as any).detected.existingStyleRanges).toEqual(["A1:D1"]);
       expect(visualPlan.skipped).toEqual(expect.arrayContaining([
-        expect.objectContaining({ ruleId: "layout.header_style", reason: expect.stringContaining("existing styled summary/template area") }),
-        expect.objectContaining({ ruleId: "layout.header_alignment", reason: expect.stringContaining("existing styled summary/template area") })
+        expect.objectContaining({ ruleId: "layout.header_style", reason: expect.stringContaining("protected summary/template style area") }),
+        expect.objectContaining({ ruleId: "layout.header_alignment", reason: expect.stringContaining("protected summary/template style area") })
       ]));
       expect(visualPlan.operationCount).toBeGreaterThan(0);
       expect(preview.changes.some((change) => change.range === "A1:D1")).toBe(true);
       expect(runtime.writeBatchCount).toBe(0);
+    });
+
+  it("supports strict style preservation when callers want all existing style protected", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_visual_strict_style");
+      metadata.summaryBlocks.push({
+        id: "summary:data-title",
+        sheetName: "Data",
+        range: "A1:D1",
+        labels: ["Transactions"],
+        confidence: 0.95
+      });
+      agent.metadataCache.set(metadata);
+
+      const preview = await agent.run({
+        request: "Make Data easier to read but preserve every existing style",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Data" },
+        values: {
+          visualReadability: {
+            stylePreservationMode: "strict"
+          }
+        }
+      });
+      const visualPlan = (preview.answer as any).visualPlan;
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).defaults.stylePreservationMode).toBe("strict");
+      expect(visualPlan.skipped).toEqual(expect.arrayContaining([
+        expect.objectContaining({ ruleId: "layout.header_style", reason: expect.stringContaining("protected summary/template style area") })
+      ]));
+      expect(visualPlan.skipped.some((skip: any) => skip.ruleId === "column.A.width")).toBe(false);
+      expect(visualPlan.operationCount).toBeGreaterThan(0);
+    });
+
+  it("does not invite apply when a visual readability preview compiles zero operations", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_visual_zero_operations");
+      const dataSheet = metadata.sheets.find((sheet) => sheet.name === "Data")!;
+      dataSheet.tableIds = [];
+      dataSheet.headers = [{
+        id: "header:Data:1",
+        sheetName: "Data",
+        row: 1,
+        range: "A1:D1",
+        confidence: 0.95,
+        columns: [
+          { name: "Date", normalizedName: "date", inferredType: "date", role: "date", importance: 0.97, index: 0, letter: "A" },
+          { name: "Account", normalizedName: "account", inferredType: "text", role: "account", importance: 0.82, index: 1, letter: "B" },
+          { name: "Amount", normalizedName: "amount", inferredType: "currency", role: "amount", importance: 0.99, index: 2, letter: "C" },
+          { name: "Status", normalizedName: "status", inferredType: "text", role: "status", importance: 0.9, index: 3, letter: "D" }
+        ]
+      }];
+      metadata.tables = [];
+      metadata.summaryBlocks.push({
+        id: "summary:data-all",
+        sheetName: "Data",
+        range: "A1:D4",
+        labels: ["Protected Data"],
+        confidence: 0.95
+      });
+      agent.metadataCache.set(metadata);
+
+      const preview = await agent.run({
+        request: "Make Data easier to read but preserve protected layout",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Data" },
+        values: {
+          visualReadability: {
+            styleDepth: "basic"
+          }
+        }
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect(preview.nextAction).toBe("answer_now");
+      expect(preview.agentInstruction).toContain("Do not call apply_update");
+      expect((preview.metrics as any).operationCount).toBe(0);
+      expect(preview.warnings.join(" ")).toContain("No apply-ready visual operations");
+    });
+
+  it("suggests grouped headers for wide visual readability previews without applying structural edits by default", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_visual_grouped_header_suggestion");
+      agent.metadataCache.set(metadata);
+
+      const preview = await agent.run({
+        request: "Make Apr 2026 easier to read with modern grouped headers if useful",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Apr 2026" }
+      });
+      const applied = await agent.run({
+        request: "Apply safe visual readability preview",
+        mode: "apply_update",
+        workbookContextId: metadata.workbookContextId,
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).groupedHeaderSuggestion).toMatchObject({
+        kind: "grouped_header_suggestion",
+        requiresStructuralPreview: true,
+        defaultApplyBehavior: "suggest_only"
+      });
+      expect((preview.answer as any).groupedHeaderSuggestion.operationsNeeded).toEqual(expect.arrayContaining([
+        "insert_rows",
+        "merge_range",
+        "write_styles_many"
+      ]));
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations.some((operation) => operation.kind === "range.insert_rows" || operation.kind === "range.merge" || operation.kind === "range.reorder_columns")).toBe(false);
+    });
+
+  it("compiles grouped header styling into one structural preview instead of named-range or value-only patches", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_grouped_header_regression");
+      agent.metadataCache.set(metadata);
+
+      const preview = await agent.run({
+        request: "Create merged group header cells for Apr 2026 with a 2-layer grouped header and color bands.",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "grouped_header" },
+        target: { sheetName: "Apr 2026" },
+        values: {
+          groupedHeader: {
+            groups: [
+              { label: "Transactions", startColumn: "A", endColumn: "N", fillColor: "#1F4E78", headerFillColor: "#D9EAF7" },
+              { label: "Invoices", startColumn: "O", endColumn: "AE", fillColor: "#548235", headerFillColor: "#E2EFDA" },
+              { label: "Summary", startColumn: "AF", endColumn: "AJ", fillColor: "#8064A2", headerFillColor: "#EDE7F6" }
+            ]
+          }
+        }
+      });
+      const applied = await agent.run({
+        request: "Apply grouped header preview",
+        mode: "apply_update",
+        workbookContextId: metadata.workbookContextId,
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any)).toMatchObject({
+        kind: "grouped_header_preview",
+        sheetName: "Apr 2026",
+        headerRow: 1,
+        groupRow: 1,
+        shiftedHeaderRow: 2,
+        preservesExistingHeaderLabels: true
+      });
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations.map((operation) => operation.kind)).toEqual([
+        "range.insert_rows",
+        "range.write_values_many",
+        "range.merge",
+        "range.merge",
+        "range.merge",
+        "range.write_styles_many"
+      ]);
+      expect(runtime.lastBatchOperations[0]).toMatchObject({
+        kind: "range.insert_rows",
+        target: { sheetName: "Apr 2026", address: "A1:AJ1" }
+      });
+      expect(runtime.lastBatchOperations[1]).toMatchObject({
+        kind: "range.write_values_many",
+        entries: [
+          expect.objectContaining({ target: expect.objectContaining({ sheetName: "Apr 2026", address: "A1:A1" }), values: [["Transactions"]] }),
+          expect.objectContaining({ target: expect.objectContaining({ sheetName: "Apr 2026", address: "O1:O1" }), values: [["Invoices"]] }),
+          expect.objectContaining({ target: expect.objectContaining({ sheetName: "Apr 2026", address: "AF1:AF1" }), values: [["Summary"]] })
+        ]
+      });
+      const styleOperation = runtime.lastBatchOperations.at(-1) as any;
+      expect(styleOperation.entries.some((entry: any) => entry.target.address === "A1:N1" && entry.style.fillColor === "#1F4E78")).toBe(true);
+      expect(styleOperation.entries.some((entry: any) => entry.target.address === "A2:N2" && entry.style.fillColor === "#D9EAF7")).toBe(true);
+    });
+
+  it("keeps grouped header row darker than row 2 when matching header styling is requested", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_grouped_header_color_hierarchy");
+      agent.metadataCache.set(metadata);
+
+      const preview = await agent.run({
+        request: "Apply matching header fill color and font styling to row 1 grouped header to match the style already applied to row 2.",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "format_range" },
+        target: { sheetName: "Data", range: "A1:D1" }
+      });
+      const applied = await agent.run({
+        request: "Apply grouped header color hierarchy.",
+        mode: "apply_update",
+        workbookContextId: metadata.workbookContextId,
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any)).toMatchObject({
+        kind: "style_preview",
+        sheetName: "Data",
+        range: "A1:D1",
+        style: {
+          fillColor: "#1A3C6E",
+          fontColor: "#FFFFFF",
+          fontBold: true,
+          horizontalAlignment: "center"
+        }
+      });
+      expect(preview.warnings.join(" ")).toContain("visually distinct from row 2");
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations[0]).toMatchObject({
+        kind: "range.write_styles",
+        target: { sheetName: "Data", address: "A1:D1" },
+        style: {
+          fillColor: "#1A3C6E",
+          fontColor: "#FFFFFF",
+          fontBold: true,
+          horizontalAlignment: "center"
+        }
+      });
+    });
+
+  it("accepts target.address as an exact format range without expanding to the used range", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_target_address_alias");
+      agent.metadataCache.set(metadata);
+
+      const preview = await agent.run({
+        request: "Apply dark blue fill to row 1 only A1:D1",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "format_range" },
+        target: { sheetName: "Data", address: "A1:D1" },
+        values: { style: { fillColor: "#1A3C6E", fontColor: "#FFFFFF", fontBold: true, horizontalAlignment: "center" } }
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).range).toBe("A1:D1");
+      expect((preview.answer as any).range).not.toBe("A1:D4");
+    });
+
+  it("accepts OpenCode grouped header column arrays and does not trigger broad scope guard", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_grouped_header_columns_shape");
+      agent.metadataCache.set(metadata);
+
+      const preview = await agent.run({
+        request: "Preview a grouped_header workflow for Transactions table. Add a higher-level grouped header row above the existing column headers and apply it to all rows of the table without changing data rows.",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "grouped_header" },
+        target: { sheetName: "Data", tableName: "Transactions" },
+        values: {
+          stylePreservationMode: "none",
+          groupedHeader: {
+            groups: [
+              { label: "Timeline", columns: ["A"] },
+              { label: "Account", columns: ["B"] },
+              { label: "Financial", columns: ["C"] },
+              { label: "Workflow", columns: ["D"] }
+            ]
+          }
+        }
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).kind).toBe("grouped_header_preview");
+      expect((preview.answer as any).groups.map((group: any) => [group.label, group.startColumn, group.endColumn])).toEqual([
+        ["Timeline", "A", "A"],
+        ["Account", "B", "B"],
+        ["Financial", "C", "C"],
+        ["Workflow", "D", "D"]
+      ]);
+      expect((preview.answer as any).groups[0].fillColor).toBe("#1A3C6E");
+      expect((preview.answer as any).groups[0].headerFillColor).toBe("#D9EAF7");
+      expect((preview.answer as any).operationCount).toBeGreaterThan(0);
+      expect((preview.answer as any).kind).not.toBe("broad_mutation_scope_guard");
+      expect(preview.summary).not.toContain("15,015");
+      expect((preview.metrics as any).workflowKind).toBe("grouped_header_preview");
+    });
+
+  it("accepts grouped header ranges as group spans", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_grouped_header_range_shape");
+      agent.metadataCache.set(metadata);
+
+      const preview = await agent.run({
+        request: "Preview a two-level grouped header for Apr 2026 using range-shaped group spans.",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "grouped_header" },
+        target: { sheetName: "Apr 2026" },
+        values: {
+          groupedHeader: {
+            groups: [
+              { label: "Transactions", range: "A:N" },
+              { label: "Invoices", range: "O:AE" },
+              { label: "Summary", range: "AF:AJ" }
+            ]
+          }
+        }
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).groups.map((group: any) => [group.label, group.startColumn, group.endColumn])).toEqual([
+        ["Transactions", "A", "N"],
+        ["Invoices", "O", "AE"],
+        ["Summary", "AF", "AJ"]
+      ]);
+      expect((preview.answer as any).operationCount).toBe(6);
+    });
+
+  it("rejects preview_update calls that reuse a stale operationId from another workflow", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const visualPreview = await agent.run({
+        request: "Make this sheet easier to read",
+        mode: "preview_update",
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Data" }
+      });
+      const reused = await agent.run({
+        request: "Apply the grouped_header preview to all rows of Transactions.",
+        mode: "preview_update",
+        operationId: visualPreview.operationId,
+        confirmationToken: visualPreview.confirmationToken,
+        intent: { action: "grouped_header" }
+      });
+      const status = await agent.run({
+        request: "Check grouped_header preview status.",
+        mode: "operation_status",
+        operationId: visualPreview.operationId,
+        intent: { action: "grouped_header" }
+      });
+
+      expect(visualPreview.status).toBe("PREVIEW_READY");
+      expect(reused.status).toBe("VALIDATION_FAILED");
+      expect((reused.answer as any).kind).toBe("invalid_preview_operation_reuse");
+      expect(reused.warnings.join(" ")).toContain("operationId from a different preview");
+      expect((status.answer as any).workflowKind).toBe("visual_readability_preview");
+      expect(status.warnings.join(" ")).toContain("belongs to visual_readability_preview");
+      expect(status.warnings.join(" ")).toContain("grouped_header_preview");
     });
 
   it("requires structured values for write previews even when request text includes rows", async () => {
@@ -2095,6 +2693,36 @@ Data rows:
     expect(runtime.runtimeMethodCalls["style.copy_dimensions"]).toBeUndefined();
   });
 
+  it("preserves column widths by default when replacing a styled table", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Rotate booking fields to headers and replace the old vertical table with same style",
+      mode: "preview_update",
+      intent: { action: "replace_range_with_styled_table" },
+      target: { sheetName: "Report", range: "A1:C2" },
+      values: {
+        headers: ["Dated", "Loading Date", "Qty"],
+        row: ["20/6/26", "20/6/26", "5X40'HQ"],
+        clearRange: "A1:B25",
+        headerStyleSource: { sheetName: "Data", range: "A1:C1" },
+        bodyStyleSource: { sheetName: "Data", range: "A2:C2" },
+        dimensions: ["fills", "fonts", "borders", "alignment"]
+      }
+    });
+    const applied = await agent.run({
+      request: "Apply styled table replacement",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect(applied.status).toBe("SUCCESS");
+    expect(runtime.lastWriteOperations.map((operation) => operation.kind)).toEqual(["range.clear", "range.write_values"]);
+  });
+
   it("routes generic OCR field/value data to the styled table replacement workflow", async () => {
     const runtime = new FakeAgentRuntime();
     const agent = new AgentOrchestrator(runtime as any);
@@ -2304,7 +2932,99 @@ Data rows:
       ]);
     });
 
-    it("applies inserted columns through the structural batch operation", async () => {
+    it("prepends real merge operations when batched style entries ask to merge header spans", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Merge row 1 grouped header spans and center align them on Invoices.",
+        mode: "preview_update",
+        intent: { action: "write_styles_many" },
+        target: { sheetName: "Invoices" },
+        values: {
+          entries: [
+            { sheetName: "Invoices", range: "A1:B1", style: { horizontalAlignment: "center", verticalAlignment: "center" } },
+            { sheetName: "Invoices", range: "C1:F1", style: { horizontalAlignment: "center", verticalAlignment: "center" } },
+            { sheetName: "Invoices", range: "G1:N1", style: { horizontalAlignment: "center", verticalAlignment: "center" } },
+            { sheetName: "Invoices", range: "O1:O1", style: { horizontalAlignment: "center", verticalAlignment: "center" } }
+          ]
+        }
+      });
+      const applied = await agent.run({
+        request: "Apply grouped header merge alignment.",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any)).toMatchObject({ kind: "merge_and_write_styles_many_preview", mergeCount: 3, rangeCount: 4 });
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations.map((operation) => operation.kind)).toEqual([
+        "range.merge",
+        "range.merge",
+        "range.merge",
+        "range.write_styles_many"
+      ]);
+      expect(runtime.lastBatchOperations.slice(0, 3)).toEqual([
+        expect.objectContaining({ kind: "range.merge", target: expect.objectContaining({ sheetName: "Invoices", address: "A1:B1" }) }),
+        expect.objectContaining({ kind: "range.merge", target: expect.objectContaining({ sheetName: "Invoices", address: "C1:F1" }) }),
+        expect.objectContaining({ kind: "range.merge", target: expect.objectContaining({ sheetName: "Invoices", address: "G1:N1" }) })
+      ]);
+      expect(runtime.lastBatchOperations.at(-1)).toMatchObject({
+        kind: "range.write_styles_many",
+        entries: [
+          expect.objectContaining({ target: expect.objectContaining({ address: "A1:B1" }), style: expect.objectContaining({ horizontalAlignment: "center", verticalAlignment: "center" }) }),
+          expect.objectContaining({ target: expect.objectContaining({ address: "C1:F1" }), style: expect.objectContaining({ horizontalAlignment: "center", verticalAlignment: "center" }) }),
+          expect.objectContaining({ target: expect.objectContaining({ address: "G1:N1" }), style: expect.objectContaining({ horizontalAlignment: "center", verticalAlignment: "center" }) }),
+          expect.objectContaining({ target: expect.objectContaining({ address: "O1:O1" }), style: expect.objectContaining({ horizontalAlignment: "center", verticalAlignment: "center" }) })
+        ]
+      });
+    });
+
+    it("supports explicit multi-range merge payloads with default center alignment", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Merge these row 1 header spans and center them vertically and horizontally.",
+        mode: "preview_update",
+        target: { sheetName: "Invoices" },
+        values: {
+          merges: [
+            { sheetName: "Invoices", range: "A1:B1" },
+            { sheetName: "Invoices", range: "C1:F1" },
+            { sheetName: "Invoices", range: "G1:N1" }
+          ]
+        }
+      });
+      const applied = await agent.run({
+        request: "Apply grouped header merges.",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any)).toMatchObject({ kind: "merge_ranges_preview", mergeCount: 3, styledRangeCount: 3 });
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations.map((operation) => operation.kind)).toEqual([
+        "range.merge",
+        "range.merge",
+        "range.merge",
+        "range.write_styles_many"
+      ]);
+      expect(runtime.lastBatchOperations.at(-1)).toMatchObject({
+        kind: "range.write_styles_many",
+        entries: [
+          expect.objectContaining({ style: expect.objectContaining({ horizontalAlignment: "center", verticalAlignment: "center", wrapText: true }) }),
+          expect.objectContaining({ style: expect.objectContaining({ horizontalAlignment: "center", verticalAlignment: "center", wrapText: true }) }),
+          expect.objectContaining({ style: expect.objectContaining({ horizontalAlignment: "center", verticalAlignment: "center", wrapText: true }) })
+        ]
+      });
+    });
+
+  it("applies inserted columns through the structural batch operation", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
 
@@ -2537,6 +3257,92 @@ Data rows:
     });
   });
 
+  it("accepts top-level style patches from agents and expands whole-column width targets", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Set column widths on Data sheet.",
+      mode: "preview_update",
+      intent: { action: "format_range" },
+      target: { sheetName: "Data" },
+      patches: [
+        { target: { sheetName: "Data", range: "A:A" }, style: { columnWidth: 14 } },
+        { target: { sheetName: "Data", range: "B:B" }, style: { columnWidth: 12 } }
+      ]
+    } as any);
+    const applied = await agent.run({
+      request: "Apply column widths.",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect((preview.answer as any).kind).toBe("write_styles_many_preview");
+    expect(applied.status).toBe("SUCCESS");
+    expect(runtime.lastBatchOperations[0]).toMatchObject({
+      kind: "range.write_styles_many",
+      entries: [
+        { target: { sheetName: "Data", address: "A1:A4" }, style: { columnWidth: 73.5 } },
+        { target: { sheetName: "Data", address: "B1:B4" }, style: { columnWidth: 63 } }
+      ]
+    });
+  });
+
+  it("routes style-shaped values.patches to write_styles_many instead of writing objects into cells", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Set column widths on Data sheet for all columns in one batch",
+      mode: "preview_update",
+      intent: { action: "format_range" },
+      values: {
+        patches: [
+          { target: { sheetName: "Data", range: "A1" }, values: [[{ columnWidth: 14 }]] },
+          { target: { sheetName: "Data", range: "B1" }, values: [[{ columnWidth: 12 }]] }
+        ]
+      }
+    });
+    const applied = await agent.run({
+      request: "Apply column widths.",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect((preview.answer as any).kind).toBe("write_styles_many_preview");
+    expect((preview.answer as any).rangeCount).toBe(2);
+    expect(applied.status).toBe("SUCCESS");
+    expect(runtime.lastBatchOperations[0]).toMatchObject({
+      kind: "range.write_styles_many",
+      entries: [
+        { target: { sheetName: "Data", address: "A1" }, style: { columnWidth: 73.5 } },
+        { target: { sheetName: "Data", address: "B1" }, style: { columnWidth: 63 } }
+      ]
+    });
+    expect(runtime.lastBatchOperations[0]?.kind).not.toBe("range.write_values_many");
+  });
+
+  it("rejects empty style previews instead of applying a no-op", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Set column widths on Data sheet but forgot structured style values.",
+      mode: "preview_update",
+      intent: { action: "format_range" },
+      target: { sheetName: "Data" }
+    });
+
+    expect(preview.status).toBe("NEEDS_INPUT");
+    expect(preview.summary).toContain("Style update needs at least one supported style property");
+    expect(runtime.lastBatchOperations.some((operation) => operation.kind === "range.write_styles")).toBe(false);
+    expect(runtime.lastBatchOperations.some((operation) => operation.kind === "range.write_styles_many")).toBe(false);
+  });
+
   it("previews dropdown data validation as a validation operation", async () => {
     const runtime = new FakeAgentRuntime();
     const agent = new AgentOrchestrator(runtime as any);
@@ -2563,6 +3369,43 @@ Data rows:
       target: { sheetName: "Data", address: "D2:D4" },
       validation: { type: "list", source: ["20GP", "40GP", "40HQ"] }
     });
+  });
+
+  it("previews multi-range dropdown validation entries without broadening to the table", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Add dropdown data validation to column A and column E only.",
+      mode: "preview_update",
+      target: { sheetName: "Data", tableName: "Transactions" },
+      values: {
+        validation: { type: "list", source: ["Open", "Closed"], inCellDropDown: true },
+        entries: [
+          { sheetName: "Data", range: "A3:A1002", validation: { type: "list", source: ["Open", "Closed"], inCellDropDown: true } },
+          { sheetName: "Data", range: "E3:E1002", validation: { type: "list", source: ["Open", "Closed"], inCellDropDown: true } }
+        ]
+      }
+    });
+    const applied = await agent.run({
+      request: "Apply dropdown validation.",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect((preview.answer as any).kind).toBe("write_data_validation_preview");
+    expect((preview.answer as any).entries.map((entry: any) => entry.range)).toEqual(["A3:A1002", "E3:E1002"]);
+    expect(applied.status).toBe("SUCCESS");
+    expect(runtime.lastBatchOperations[0]).toMatchObject({
+      kind: "range.write_data_validation",
+      entries: [
+        { target: { sheetName: "Data", address: "A3:A1002" }, validation: { type: "list", source: ["Open", "Closed"] } },
+        { target: { sheetName: "Data", address: "E3:E1002" }, validation: { type: "list", source: ["Open", "Closed"] } }
+      ]
+    });
+    expect((runtime.lastBatchOperations[0] as any).target.address).not.toBe("A1:Z1000");
   });
 
   it("previews formula conditional formatting instead of sheet creation", async () => {
@@ -3329,6 +4172,16 @@ Data rows:
           mode: "preview_update",
           intent: { action: "delete_rows" },
           target: { sheetName: "Data", range: "2:3" }
+        }
+      },
+      {
+        capabilityName: "excel.range.delete_rows.corrected_from_bad_column_intent",
+        expectedOperationKind: "range.delete_rows",
+        input: {
+          request: "Please delete row 2",
+          mode: "preview_update",
+          intent: { action: "delete_columns" },
+          target: { sheetName: "Data", range: "2:2" }
         }
       },
       {

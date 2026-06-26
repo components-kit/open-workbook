@@ -7868,7 +7868,6 @@ function scopesFromOperation(workbookId: WorkbookId, operation: ExcelOperation):
     case "range.write_values":
     case "range.write_number_formats":
     case "range.write_styles":
-    case "range.write_data_validation":
     case "range.write_conditional_formatting":
     case "range.clear_style_dimensions":
     case "range.write_hyperlinks":
@@ -7891,6 +7890,12 @@ function scopesFromOperation(workbookId: WorkbookId, operation: ExcelOperation):
     case "range.unmerge":
     case "range.restore_snapshot":
       return [rangeScope(operation.target)];
+    case "range.write_data_validation":
+      return operation.entries?.length
+        ? operation.entries.map((entry) => rangeScope(entry.target))
+        : operation.target
+          ? [rangeScope(operation.target)]
+          : [];
     case "range.reorder_columns":
       return [rangeScope(operation.target)];
     case "range.write_values_many":
@@ -7940,6 +7945,7 @@ function scopesFromOperation(workbookId: WorkbookId, operation: ExcelOperation):
     case "sheet.unprotect":
     case "sheet.clear":
     case "sheet.set_tab_color":
+    case "sheet.freeze_panes":
       return [{ type: "sheet", workbookId, sheetName: operation.sheetName }];
   }
 }

@@ -17,7 +17,7 @@ describe("excel capabilities", () => {
   it("keeps Excel operations available as internal backend capabilities", () => {
     const capabilities = listExcelCapabilities();
 
-    expect(capabilities.length).toBe(308);
+    expect(capabilities.length).toBe(309);
     expect(getExcelCapability("excel.agent.run")).toBeTruthy();
     expect(getExcelCapability("excel.range.write_values")?.mutatesWorkbook).toBe(true);
     expect(getExcelCapability("excel.range.write_data_validation")?.mutatesWorkbook).toBe(true);
@@ -45,7 +45,7 @@ describe("excel capabilities", () => {
     const exposed = getPublicAgentToolCatalog();
 
     expect(exposed.map((tool) => tool.name)).toEqual(["excel.agent.run"]);
-    expect(summary.total).toBe(308);
+    expect(summary.total).toBe(309);
     expect(summary.exposed).toBe(0);
     expect(summary.capabilities.some((capability) => capability.name === "excel.range.read_compact")).toBe(true);
   });

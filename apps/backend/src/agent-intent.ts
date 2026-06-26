@@ -34,7 +34,21 @@ const ACTION_ALIASES: Record<string, AgentIntentAction> = {
   conditional_formatting: "write_conditional_formatting",
   add_conditional_formatting: "write_conditional_formatting",
   formula_format: "write_conditional_formatting",
-  swap_columns: "reorder_range_columns"
+  swap_columns: "reorder_range_columns",
+  delete_row: "delete_rows",
+  remove_row: "delete_rows",
+  delete_selected_row: "delete_rows",
+  remove_selected_row: "delete_rows",
+  insert_row: "insert_rows",
+  add_row: "insert_rows",
+  delete_column: "delete_columns",
+  delete_col: "delete_columns",
+  remove_column: "delete_columns",
+  remove_col: "delete_columns",
+  insert_column: "insert_columns",
+  insert_col: "insert_columns",
+  add_column: "insert_columns",
+  add_col: "insert_columns"
 };
 
 export function normalizeAgentIntent(input: AgentRunInput): NormalizedAgentIntent {
@@ -76,6 +90,11 @@ export function modeForIntentAction(action: AgentIntentAction): AgentRunMode {
   if (action === "detect_external_changes") return "answer";
   if (action === "export_local_config") return "answer";
   if (action === "read_embedded_local_config") return "answer";
+  if (action === "get_permissions") return "answer";
+  if (action === "set_permissions") return "answer";
+  if (action === "allow_destructive_actions") return "answer";
+  if (action === "style_overview") return "answer";
+  if (action === "workbook_design_overview") return "answer";
   if (action === "read_formulas") return "answer";
   if (action === "read_formula_patterns") return "answer";
   if (action === "get_formula_dependency_graph") return "answer";

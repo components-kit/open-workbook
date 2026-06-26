@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeAgentIntent } from "./agent-intent.js";
+import { modeForIntentAction, normalizeAgentIntent } from "./agent-intent.js";
 
 describe("agent intent normalization", () => {
   it("accepts common agent aliases for canonical actions", () => {
@@ -27,5 +27,13 @@ describe("agent intent normalization", () => {
     expect(intent.accepted).toBe(true);
     expect(intent.action).toBe("improve_visual_readability");
     expect(intent.rejectedReason).toBeUndefined();
+  });
+
+  it("routes style/design overview and permission actions through answer mode", () => {
+    expect(modeForIntentAction("style_overview")).toBe("answer");
+    expect(modeForIntentAction("workbook_design_overview")).toBe("answer");
+    expect(modeForIntentAction("get_permissions")).toBe("answer");
+    expect(modeForIntentAction("set_permissions")).toBe("answer");
+    expect(modeForIntentAction("allow_destructive_actions")).toBe("answer");
   });
 });

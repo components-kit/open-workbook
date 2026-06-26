@@ -126,6 +126,7 @@ export interface PendingAgentOperation {
   workbookContextId: string;
   workbookId: WorkbookId;
   action: PendingAgentAction;
+  workflowKind?: string;
   changes: NonNullable<AgentRunOutput["changes"]>;
   createdAt: number;
   summary: string;

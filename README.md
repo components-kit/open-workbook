@@ -169,7 +169,40 @@ Agents call `excel.agent.run` with natural language plus optional structured fie
 
 The backend keeps verbose workbook context local and returns compact proof, resource links, telemetry, warnings, and next actions. Caller LLMs may provide canonical `intent.action`, `intent.targetHints`, explicit `target`, and structured `values`, but the backend still owns ambiguity checks, stale-context checks, permissions, locks, backups, validation, and rollback metadata.
 
-For broad styling/readability work, agents should use `intent.action: "improve_visual_readability"` with `mode: "preview_update"` rather than issuing many primitive style calls. Options live under `values.visualReadability`; standard mode compiles safe column-first layout/formatting/highlight rules, comprehensive mode can include preview-only validation/formula suggestions, `referenceStyle` can preview adaptation from another sheet, and `presentationMode` can preview print/export suggestions. Apply still requires `apply_update` with the returned operation token and only applies safe visual operations.
+For styling review, agents should use `intent.action: "style_overview"` or `detailLevel: "style_overview"` with `mode: "answer"` to get current style context, column groups, grouped-header suggestions, and workflow hints without full data reads. For workbook design review, such as deciding which columns should be free text, dates, money, ID/text codes, dropdowns, or lookups/references from related sheets, agents should use `intent.action: "workbook_design_overview"` with `mode: "answer"` once before reading related sheets manually. It returns column-by-column recommendations, related-sheet hints, and next workflows without broad-reading empty data rows. For broad styling/readability work, agents should use `intent.action: "improve_visual_readability"` with `mode: "preview_update"` rather than issuing many primitive style calls. Options live under `values.visualReadability`; standard mode compiles safe column-first layout/formatting/highlight rules, comprehensive mode can include preview-only validation/formula suggestions, `stylePreservationMode` defaults to `protected_regions` so summary/template areas and grouped header bands stay guarded while ordinary table body styling, widths, alignment, and date/money formats can still be intentionally improved, `strict` preserves every detected existing style, `none` allows an explicit redesign, `referenceStyle` can preview adaptation from another sheet, and `presentationMode` can preview print/export suggestions. Apply still requires `apply_update` with the returned operation token, `nextAction: "call_apply_update"`, and `operationCount > 0`; if a preview reports `operationCount: 0` or `nextAction: "answer_now"`, agents should explain the skipped reasons instead of applying or decomposing the work into primitive style calls. Use `intent.action: "grouped_header"` for the separate structural preview that inserts a visual group row, merges group labels, and restyles the shifted table header. Grouped-header groups should use `{ "label": "...", "startColumn": "A", "endColumn": "B" }`; `{ "columns": ["A", "B"] }` and `{ "range": "A:B" }` are also accepted. Do not reuse an `operationId` from visual readability when creating a grouped-header preview.
+
+Grouped headers are structure-level styling. If apply is blocked by `DESTRUCTIVE_ACTION_BLOCKED` or `PERMISSION_DENIED`, the public agent path can enable the required policy with `intent.action: "set_permissions"` and `values.permissions` such as `{ "allowWrites": true, "allowDestructiveActions": true, "scopeToWorkbook": true, "requireConfirmationFor": [] }`; after that, create and apply a fresh grouped-header preview.
+
+Example OpenCode prompts:
+
+```text
+Use open-workbook. Inspect the active sheet with a style overview first, without reading every data cell. Suggest visual readability improvements including grouped headers, one consistent palette, safe widths, alignment, filters, number formats, and highlights. Do not apply yet.
+```
+
+```text
+Preview a grouped_header workflow for this sheet. Add a higher-level grouped header row above the existing column headers, merge group labels, and use matching group colors. Wait for approval before apply_update.
+```
+
+```json
+{
+  "mode": "preview_update",
+  "intent": { "action": "grouped_header" },
+  "target": { "sheetName": "Invoices", "tableName": "InvoicesTable" },
+  "values": {
+    "stylePreservationMode": "none",
+    "groupedHeader": {
+      "groups": [
+        { "label": "สถานะ", "startColumn": "A", "endColumn": "B" },
+        { "label": "ข้อมูลงาน", "startColumn": "C", "endColumn": "E" }
+      ]
+    }
+  }
+}
+```
+
+```text
+Apply the safe visual readability preview in one apply_update. Include opt-in buckets layout, validation, and freeze_panes only if they were present in the preview.
+```
 
 With the shared daemon, multiple MCP sessions get distinct trusted agent identities. `status` and `prepare` include compact collaboration summaries for active agents, open tasks, locks, queued/applying transactions, conflicts, and recent events.
 

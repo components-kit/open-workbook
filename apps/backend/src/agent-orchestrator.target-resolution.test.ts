@@ -34,6 +34,45 @@ describe("AgentOrchestrator Target Resolution", () => {
       expect(result.telemetry.fullReadCellCount).toBeGreaterThan(0);
     });
 
+  it("resolves explicit row deletion wording to a row range instead of the sheet used range", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Please delete row 2 on Data",
+        mode: "preview_update"
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect(preview.proof[0]).toMatchObject({ sheetName: "Data", range: "2:2" });
+
+      await agent.run({
+        request: "Apply row delete",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(runtime.lastBatchOperations[0]).toMatchObject({
+        kind: "range.delete_rows",
+        target: { sheetName: "Data", address: "2:2" }
+      });
+    });
+
+  it("resolves this row deletion to the current selected worksheet row", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.selection = selectionInfo("Data", "C5", { row: 5, column: 3 });
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Delete this row",
+        mode: "preview_update"
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect(preview.proof[0]).toMatchObject({ sheetName: "Data", range: "5:5" });
+    });
+
   it("treats headers plus rows as a live value read instead of schema metadata", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);

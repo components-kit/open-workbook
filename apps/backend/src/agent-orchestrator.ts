@@ -4,6 +4,7 @@ import {
   type AgentCandidate,
   type AgentOperationId,
   type AgentProofReference,
+  type AgentRequiredFollowup,
   type AgentRunInput,
   type AgentRunExecutionContext,
   type AgentRunMode,
@@ -50,6 +51,7 @@ import {
   type WorkbookLocalConfigImportRequest,
   type WorkbookRestoreFileBackupRequest,
   type BackupId,
+  type PermissionState,
   type SnapshotId,
   type WorkbookId
 } from "@components-kit/open-workbook-protocol";
@@ -81,6 +83,16 @@ const AGENT_FRAGMENT_WINDOW_MS = 2 * 60 * 1000;
 const AGENT_FRAGMENT_REDIRECT_THRESHOLD = 2;
 
 type AgentResponseMode = NonNullable<AgentRunInput["responseMode"]>;
+type RangeStructuralOperationKind =
+  | "range.clear_values"
+  | "range.insert_rows"
+  | "range.delete_rows"
+  | "range.insert_columns"
+  | "range.delete_columns"
+  | "range.hide_columns"
+  | "range.unhide_columns"
+  | "range.merge"
+  | "range.unmerge";
 
 interface StoredAgentResult {
   resultId: string;
@@ -318,6 +330,10 @@ export class AgentOrchestrator {
 
       if (mode === "rollback") {
         return finish(await this.rollback(input));
+      }
+
+      if (mode === "preview_update" && input.operationId !== undefined) {
+        return finish(invalidPreviewOperationReuseOutput(input));
       }
 
       const handleOutput = this.resourceHandleOutput(input, mode);
@@ -601,6 +617,7 @@ export class AgentOrchestrator {
       operationId,
       workbookContextId: pending.workbookContextId,
       workbookId: pending.workbookId,
+      ...(pending.workflowKind !== undefined ? { workflowKind: pending.workflowKind } : {}),
       summary: pending.summary,
       changes: pending.changes,
       createdAt: pending.createdAt,
@@ -760,9 +777,17 @@ export class AgentOrchestrator {
     if (workflowAnswer) {
       return workflowAnswer;
     }
+    const freezeStatusAnswer = await freezePaneStatusAnswerOutput(this.runtime, metadata, input, requestedMode, runMetrics);
+    if (freezeStatusAnswer) {
+      return freezeStatusAnswer;
+    }
     const workbookDumpGuard = workbookDumpGuardOutput(metadata, input, requestedMode);
     if (workbookDumpGuard) {
       return workbookDumpGuard;
+    }
+    const designOverviewAnswer = workbookDesignOverviewAnswerOutput(metadata, input, requestedMode);
+    if (designOverviewAnswer) {
+      return designOverviewAnswer;
     }
     const workbookAnswer = workbookOverviewAnswer(metadata, input, requestedMode);
     if (workbookAnswer) {
@@ -835,8 +860,17 @@ export class AgentOrchestrator {
     }
     const adjustedTarget = adjustReadRangeForSemanticColumn(metadata, input, resolved.sheetName, resolved.range);
     const normalizedRange = normalizeOperationRange(metadata, resolved.sheetName, adjustedTarget.range);
+    if (shouldSummarizeGroupedHeader(input)) {
+      return this.groupedHeaderSummaryOutput(metadata, input, requestedMode, resolved.sheetName, normalizedRange, runMetrics);
+    }
     if (isFormulaReadIntentAction(intentAction(input)) || shouldInspectFormulaInline(input)) {
       return this.formulaAnswerOutput(metadata, input, requestedMode, normalizedRange, resolved, runMetrics);
+    }
+    if (hasRangeMetadataReadIntent(input)) {
+      const rangeMetadataAnswer = await this.rangeMetadataAnswerOutput(metadata, input, requestedMode, normalizedRange, resolved, runMetrics);
+      if (rangeMetadataAnswer) {
+        return rangeMetadataAnswer;
+      }
     }
     const largeRangeGuard = largeRangeGuardOutput(metadata, input, requestedMode, resolved.sheetName, normalizedRange, resolved.candidate.label);
     if (largeRangeGuard) {
@@ -846,8 +880,8 @@ export class AgentOrchestrator {
     if (rangeMetadataAnswer) {
       return rangeMetadataAnswer;
     }
-    const table = tableFromResolution(metadata, resolved);
-    if (table && (resolved.candidate.kind === "table" || input.target?.tableName)) {
+    const table = tableFromResolution(metadata, resolved) ?? explicitlyRequestedTable(metadata, input);
+    if (table && (resolved.candidate.kind === "table" || input.target?.tableName || requestExplicitlyNamesTable(input, table))) {
       return this.tableCompactAnswerOutput(metadata, input, requestedMode, resolved, table, runMetrics);
     }
     const profile = await this.readAndProfileRange(metadata.workbook.workbookId as WorkbookId, resolved.sheetName, normalizedRange, runMetrics);
@@ -958,6 +992,29 @@ export class AgentOrchestrator {
         kind = "workbook_embedded_local_config";
         summary = "Read embedded Open Workbook config from this workbook.";
         break;
+      case "get_permissions":
+        runMetrics.internalReadCount += 1;
+        result = this.runtime.getPermissions();
+        kind = "permissions";
+        summary = "Read current Open Workbook permission policy.";
+        break;
+      case "set_permissions": {
+        const update = permissionUpdateFromInput(input, workbookId);
+        if (Object.keys(update).length === 0) {
+          return safetyArtifactNeedsInput(metadata, requestedMode, "Permission update needs values.permissions or explicit permission fields such as allowWrites or allowDestructiveActions.");
+        }
+        result = this.runtime.setPermissions(update);
+        kind = "permissions_update";
+        summary = "Updated Open Workbook permission policy.";
+        break;
+      }
+      case "allow_destructive_actions": {
+        const allow = booleanValue(input.values?.allow ?? input.values?.enabled ?? input.values?.allowDestructiveActions) ?? true;
+        result = this.runtime.allowDestructiveActions(allow);
+        kind = "permissions_destructive_actions";
+        summary = `${allow ? "Allowed" : "Blocked"} Open Workbook structure/workbook actions.`;
+        break;
+      }
       default:
         return undefined;
     }
@@ -1459,8 +1516,14 @@ export class AgentOrchestrator {
     requestedMode: AgentRunMode,
     runMetrics: AgentRunMetrics
   ): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
-    const action = intentAction(input) ?? (runMetrics.route.workflowRoute === "style.inspect" ? "read_style_summary" : undefined);
+    const action = intentAction(input)
+      ?? (input.detailLevel === "style_overview" ? "style_overview" : undefined)
+      ?? (runMetrics.route.workflowRoute === "style.inspect" && isStyleOverviewRequest(input.request) ? "style_overview" : undefined)
+      ?? (runMetrics.route.workflowRoute === "style.inspect" ? "read_style_summary" : undefined);
     const workbookId = metadata.workbook.workbookId as WorkbookId;
+    if (action === "style_overview") {
+      return this.styleOverviewOutput(metadata, input, requestedMode, runMetrics);
+    }
     if (action === "find_style_references" || shouldRunStyleReferenceSearch(input)) {
       const candidates = styleReferenceCandidates(metadata, input).slice(0, Math.max(1, Math.min(input.budget?.maxExamples ?? 5, 8)));
       const enriched = [];
@@ -1635,6 +1698,50 @@ export class AgentOrchestrator {
       };
     }
     return undefined;
+  }
+
+  private async styleOverviewOutput(
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode,
+    runMetrics: AgentRunMetrics
+  ): Promise<Omit<AgentRunOutput, "telemetry">> {
+    const resolved = resolveAgentReadTarget(metadata, input);
+    if (!resolved.ok) {
+      return {
+        status: resolved.status,
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: resolved.summary,
+        ...(resolved.candidates !== undefined ? { candidates: resolved.candidates } : {}),
+        proof: [],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: resolved.nextAction,
+        warnings: resolved.warnings
+      };
+    }
+    const workbookId = metadata.workbook.workbookId as WorkbookId;
+    runMetrics.internalReadCount += 1;
+    const fingerprint = await this.runtime.getStyleFingerprint({
+      workbookId,
+      sheetName: resolved.sheetName,
+      address: resolved.range,
+      maxCellSamples: 240
+    });
+    const styleSummary = styleSummaryFromFingerprint((fingerprint as { fingerprint?: unknown }).fingerprint ?? fingerprint);
+    const overview = styleOverviewFromMetadata(metadata, resolved.sheetName, resolved.range, styleSummary);
+    return {
+      status: "SUCCESS",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      summary: `Returned style overview for ${resolved.sheetName}!${resolved.range}.`,
+      answer: overview,
+      metrics: { source: "metadata_and_runtime_style_overview", fullReadCellCount: 0, internalReadCount: 1 },
+      proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "style overview" }],
+      resourceLinks: [contextResource(metadata.workbookContextId)],
+      nextAction: "answer_now",
+      warnings: styleWarnings(fingerprint)
+    };
   }
 
   private async similarRowsAnswerOutput(
@@ -1891,7 +1998,7 @@ export class AgentOrchestrator {
         warnings: profile.warning ? [profile.warning] : []
       };
     }
-    const method = rangeMetadataMethodForAction(action);
+    const method = rangeMetadataMethodForAction(action ?? inferredRangeMetadataReadAction(input));
     if (!method) {
       return undefined;
     }
@@ -1934,6 +2041,56 @@ export class AgentOrchestrator {
       resourceLinks: [contextResource(metadata.workbookContextId)],
       nextAction: (result as { ok?: boolean }).ok === false ? "manual_review" : "answer_now",
       warnings: []
+    };
+  }
+
+  private async groupedHeaderSummaryOutput(
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode,
+    sheetName: string,
+    normalizedRange: string,
+    runMetrics: AgentRunMetrics
+  ): Promise<Omit<AgentRunOutput, "telemetry">> {
+    const workbookId = metadata.workbook.workbookId as WorkbookId;
+    const headerRange = groupedHeaderSummaryRange(metadata, sheetName, normalizedRange, input);
+    runMetrics.internalReadCount += 1;
+    const mergedResult = await this.runtime.readRangeMetadata("range.read_merged_cells", { workbookId, sheetName, address: headerRange });
+    const snapshot = await this.readRangeSnapshot(workbookId, sheetName, headerRange, ["values", "text", "style"], runMetrics);
+    const mergedRanges = mergedRangesFromMetadataResult(mergedResult);
+    const spans = groupedHeaderSpansFromSnapshot(headerRange, snapshot, mergedRanges);
+    const unmergedLabels = groupedHeaderUnmergedLabels(headerRange, snapshot, mergedRanges);
+    const warnings = [
+      ...styleWarnings(mergedResult),
+      ...(mergedRanges.length === 0 ? ["No merged areas were detected in the grouped header range."] : [])
+    ];
+    return {
+      status: (mergedResult as { ok?: boolean }).ok === false ? "VALIDATION_FAILED" : "SUCCESS",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      summary: `Summarized grouped header row for ${sheetName}!${headerRange}.`,
+      answer: {
+        kind: "grouped_header_summary",
+        sheetName,
+        range: headerRange,
+        mergedRangeCount: mergedRanges.length,
+        spans,
+        unmergedLabels,
+        mergeStatus: mergedRanges.length > 0 ? "merged_spans_detected" : "no_merged_spans_detected",
+        rawMergedCellSummary: (mergedResult as { data?: unknown }).data
+      },
+      metrics: {
+        source: "runtime_grouped_header_summary",
+        internalReadCount: 2,
+        mergedRangeCount: mergedRanges.length,
+        labelCount: spans.length + unmergedLabels.length
+      },
+      proof: [{ sheetName, range: headerRange, label: "grouped header summary" }],
+      resourceLinks: [contextResource(metadata.workbookContextId)],
+      nextAction: "answer_now",
+      agentInstruction: "Answer from this grouped_header_summary. Do not call workbook_design_overview, semantic_index, fullResultUri, or broad value reads for the same grouped-header summary question.",
+      maxRecommendedFollowupCalls: 0,
+      warnings
     };
   }
 
@@ -2288,6 +2445,15 @@ export class AgentOrchestrator {
     const matchUpdate = await this.previewMatchUpdate(metadata, input, requestedMode);
     if (matchUpdate) {
       return matchUpdate;
+    }
+    if (hasMergeBatchInput(input)) {
+      const mergePreview = this.previewMergeRangesWithStyles(metadata, input, requestedMode);
+      if (mergePreview) {
+        return mergePreview;
+      }
+    }
+    if (hasStyleBatchInput(input) && styleEntriesFromInput(metadata, metadata.workbook.workbookId as WorkbookId, input).length > 0) {
+      return this.previewWriteStylesMany(metadata, input, requestedMode);
     }
     const patches = valuePatchesFromInput(input);
     if (patches.length > 0) {
@@ -2825,6 +2991,9 @@ export class AgentOrchestrator {
     if (action === "replace_range_with_styled_table" || shouldPreviewReplaceStyledTable(input)) {
       return this.previewReplaceStyledTable(metadata, input, requestedMode);
     }
+    if (action === "grouped_header" || (!action && shouldPreviewGroupedHeader(input))) {
+      return this.previewGroupedHeader(metadata, input, requestedMode);
+    }
     if (action === "improve_visual_readability") {
       return this.previewVisualReadability(metadata, input, requestedMode);
     }
@@ -2876,9 +3045,13 @@ export class AgentOrchestrator {
     const sheetType = inferVisualReadabilitySheetType(sheet, columnRoles);
     const resolvedProfile = options.profile === "auto" ? profileForVisualSheetType(sheetType) : options.profile;
     const visualPlan = compileVisualReadabilityPlan(metadata, sheet, detected, columnRoles, { ...options, profile: resolvedProfile }, sheetType);
-    const compiledOperations = compileVisualReadabilityOperations(metadata.workbook.workbookId as WorkbookId, sheet.name, visualPlan.rules, {
+    const groupedHeaderSuggestion = groupedHeaderSuggestionFromColumns(detected, suggestedColumnGroups(columnRoles, detected));
+    const compiledOperations = compileVisualReadabilityOperations(metadata.workbook.workbookId as WorkbookId, sheet.name, visualPlan.rules, visualPlan.validationSuggestions, {
       preserveExistingStyle: options.preserveExistingStyle,
+      stylePreservationMode: options.stylePreservationMode,
       allowReplaceConditionalFormatting: options.allowReplaceConditionalFormatting,
+      allowReplaceDataValidation: options.allowReplaceDataValidation,
+      applySuggestionBuckets: options.applySuggestionBuckets,
       preservation: detected
     });
     const formulaRanges = visualReadabilityFormulaCheckRanges(detected);
@@ -2897,8 +3070,13 @@ export class AgentOrchestrator {
       changes: visualPlan.previewExamples.length > 0
         ? visualPlan.previewExamples.map((example) => ({ sheetName: sheet.name, range: example.range, before: example.before, after: example.after }))
         : [{ sheetName: sheet.name, ...(range ? { range } : {}), after: "visual readability compiled preview; no workbook styles will be changed yet" }],
-      summary: `Prepared visual readability preview for ${sheet.name}.`
+      summary: `Prepared visual readability preview for ${sheet.name}.`,
+      workflowKind: "visual_readability_preview"
     });
+    const hasApplyReadyOperations = compiledOperations.operations.length > 0;
+    const zeroOperationWarnings = !hasApplyReadyOperations
+      ? visualReadabilityZeroOperationWarnings(compiledOperations.skipped)
+      : [];
     return {
       status: "PREVIEW_READY",
       mode: requestedMode,
@@ -2915,8 +3093,10 @@ export class AgentOrchestrator {
         detected,
         columnRoles,
         sheetType,
+        groupedHeaderSuggestion,
         visualPlan: {
           ...visualPlan,
+          ruleIds: visualPlan.rules.map((rule) => rule.id),
           operationId: pending.operationId,
           risk: pending.risk,
           operationCount: compiledOperations.operations.length,
@@ -2924,7 +3104,7 @@ export class AgentOrchestrator {
           preservation: {
             formulas: options.preserveFormulas ? "preserved" : "not_checked",
             formulaRanges,
-            existingStyle: options.preserveExistingStyle ? "preserved" : "not_checked"
+            existingStyle: options.preserveExistingStyle ? options.stylePreservationMode : "not_checked"
           }
         }
       },
@@ -2932,11 +3112,137 @@ export class AgentOrchestrator {
       changes: pending.changes,
       proof: range ? [{ sheetName: sheet.name, range, label: "visual readability target" }] : [],
       resourceLinks: [operationResource(String(pending.operationId))],
-      nextAction: "call_apply_update",
+      nextAction: hasApplyReadyOperations ? "call_apply_update" : "answer_now",
+      ...(!hasApplyReadyOperations ? { agentInstruction: "Do not call apply_update for this visual readability preview because it compiled zero workbook operations. Explain the skipped reasons and ask for a narrower target or supported workflow." } : {}),
       warnings: compiledOperations.skipped.length > 0
-        ? [`Compiled ${compiledOperations.operations.length} safe visual operation(s). ${compiledOperations.skipped.length} rule(s) are preview-only because the current operation schema does not support them or preservation settings skipped them.`]
+        ? [
+            `Compiled ${compiledOperations.operations.length} safe visual operation(s). ${compiledOperations.skipped.length} rule(s) are preview-only because the current operation schema does not support them, an opt-in bucket is required, or preservation settings skipped them.`,
+            ...zeroOperationWarnings
+          ]
         : [`Compiled ${compiledOperations.operations.length} safe visual operation(s) for apply.`]
     };
+  }
+
+  private previewGroupedHeader(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> {
+    const workbookId = metadata.workbook.workbookId as WorkbookId;
+    const requestedSheetName = input.target?.sheetName
+      ?? stringValue((input.values as Record<string, unknown> | undefined)?.sheetName)
+      ?? metadata.workbook.activeSheet
+      ?? metadata.sheets[0]?.name;
+    const sheet = requestedSheetName ? metadata.sheets.find((candidate) => sameText(candidate.name, requestedSheetName)) : undefined;
+    if (!sheet) {
+      return workbookLevelNeedsInput(metadata, requestedMode, "Grouped header preview needs target.sheetName.");
+    }
+    const range = input.target?.range ?? sheet.usedRange;
+    const detected = detectVisualReadabilityStructure(metadata, sheet, range);
+    const detectionFailure = visualReadabilityDetectionFailure(metadata, requestedMode, sheet.name, range, detected);
+    if (detectionFailure) {
+      return detectionFailure;
+    }
+    const columns = inferVisualReadabilityColumns(metadata, sheet, detected);
+    const groups = groupedHeaderGroupsFromInput(input, columns, detected);
+    if (groups.length < 2) {
+      return workbookLevelNeedsInput(metadata, requestedMode, "Grouped header preview needs at least two column groups or a wide table/header range that can be grouped.");
+    }
+    const headerRow = detected.headerRow ?? 1;
+    const groupRow = headerRow;
+    const shiftedHeaderRow = headerRow + 1;
+    const firstGroupColumn = groups[0]!.startColumn;
+    const lastGroupColumn = groups[groups.length - 1]!.endColumn;
+    const groupRowRange = `${firstGroupColumn}${groupRow}:${lastGroupColumn}${groupRow}`;
+    const shiftedHeaderRowRange = `${firstGroupColumn}${shiftedHeaderRow}:${lastGroupColumn}${shiftedHeaderRow}`;
+    const styleEntries: Extract<ExcelOperation, { kind: "range.write_styles_many" }>["entries"] = [
+      { target: { workbookId, sheetName: sheet.name, address: groupRowRange }, style: { rowHeight: groupedHeaderRowHeight(input, 34) }, preserveValues: true },
+      { target: { workbookId, sheetName: sheet.name, address: shiftedHeaderRowRange }, style: { rowHeight: groupedHeaderRowHeight(input, 26, "headerRowHeight") }, preserveValues: true },
+      ...groups.flatMap((group): Extract<ExcelOperation, { kind: "range.write_styles_many" }>["entries"] => [
+        {
+          target: { workbookId, sheetName: sheet.name, address: `${group.startColumn}${groupRow}:${group.endColumn}${groupRow}` },
+          style: {
+            fillColor: group.fillColor,
+            fontColor: "#FFFFFF",
+            fontBold: true,
+            horizontalAlignment: "center",
+            verticalAlignment: "center"
+          },
+          preserveValues: true
+        },
+        {
+          target: { workbookId, sheetName: sheet.name, address: `${group.startColumn}${shiftedHeaderRow}:${group.endColumn}${shiftedHeaderRow}` },
+          style: {
+            fillColor: group.headerFillColor,
+            fontColor: "#1F2937",
+            fontBold: true,
+            horizontalAlignment: "center",
+            verticalAlignment: "center",
+            wrapText: true,
+            borders: { edgeBottom: { style: "continuous", weight: "thin", color: group.fillColor } }
+          },
+          preserveValues: true
+        }
+      ])
+    ];
+    const operations: ExcelOperation[] = [
+      {
+        kind: "range.insert_rows",
+        operationId: makeId<OperationId>("op"),
+        workbookId,
+        destructiveLevel: "structure",
+        reason: input.request,
+        target: { workbookId, sheetName: sheet.name, address: groupRowRange }
+      },
+      {
+        kind: "range.write_values_many",
+        operationId: makeId<OperationId>("op"),
+        workbookId,
+        destructiveLevel: "values",
+        reason: input.request,
+        entries: groups.map((group) => ({
+          target: { workbookId, sheetName: sheet.name, address: `${group.startColumn}${groupRow}:${group.startColumn}${groupRow}` },
+          values: [[group.label]],
+          preserveFormats: true
+        }))
+      },
+      ...groups
+        .filter((group) => columnToNumber(group.endColumn) > columnToNumber(group.startColumn))
+        .map((group): ExcelOperation => ({
+          kind: "range.merge",
+          operationId: makeId<OperationId>("op"),
+          workbookId,
+          destructiveLevel: "structure",
+          reason: input.request,
+          target: { workbookId, sheetName: sheet.name, address: `${group.startColumn}${groupRow}:${group.endColumn}${groupRow}` },
+          across: false
+        })),
+      {
+        kind: "range.write_styles_many",
+        operationId: makeId<OperationId>("op"),
+        workbookId,
+        destructiveLevel: "format",
+        reason: input.request,
+        entries: styleEntries
+      }
+    ];
+    return this.previewBatchOperation(
+      metadata,
+      requestedMode,
+      operations,
+      [
+        { sheetName: sheet.name, range: groupRowRange, after: "insert grouped visual header row above existing table headers" },
+        ...groups.map((group) => ({ sheetName: sheet.name, range: `${group.startColumn}${groupRow}:${group.endColumn}${groupRow}`, after: `group header ${group.label}` })),
+        { sheetName: sheet.name, range: shiftedHeaderRowRange, after: "existing header row restyled with lighter group fills" }
+      ],
+      `Prepared grouped header preview for ${sheet.name}; existing headers shift from row ${headerRow} to row ${shiftedHeaderRow}.`,
+      {
+        kind: "grouped_header_preview",
+        sheetName: sheet.name,
+        headerRow,
+        groupRow,
+        shiftedHeaderRow,
+        groups,
+        operationCount: operations.length,
+        preservesExistingHeaderLabels: true
+      }
+    );
   }
 
   private async previewTransformValues(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Promise<Omit<AgentRunOutput, "telemetry">> {
@@ -3437,6 +3743,8 @@ export class AgentOrchestrator {
         return resolved ? this.previewAutofit(metadata, input, requestedMode, resolved, "columns") : undefined;
       case "autofit_rows":
         return resolved ? this.previewAutofit(metadata, input, requestedMode, resolved, "rows") : undefined;
+      case "freeze_panes":
+        return this.previewFreezePanes(metadata, input, requestedMode, resolved);
       case "clear_range":
         return resolved ? this.previewClearRange(metadata, input, requestedMode, resolved) : undefined;
       case "normalize_headers":
@@ -3471,13 +3779,13 @@ export class AgentOrchestrator {
         }
         return resolved ? this.previewWriteConditionalFormatting(metadata, input, requestedMode, resolved) : undefined;
       case "insert_rows":
-        return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, "range.insert_rows") : undefined;
+        return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, structuralRangeOperationKind(input, resolved, "range.insert_rows")) : undefined;
       case "delete_rows":
-        return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, "range.delete_rows") : undefined;
+        return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, structuralRangeOperationKind(input, resolved, "range.delete_rows")) : undefined;
       case "insert_columns":
-        return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, "range.insert_columns") : undefined;
+        return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, structuralRangeOperationKind(input, resolved, "range.insert_columns")) : undefined;
       case "delete_columns":
-        return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, "range.delete_columns") : undefined;
+        return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, structuralRangeOperationKind(input, resolved, "range.delete_columns")) : undefined;
       case "hide_columns":
         return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, "range.hide_columns") : undefined;
       case "unhide_columns":
@@ -4077,6 +4385,57 @@ export class AgentOrchestrator {
     return this.previewBatchOperation(metadata, requestedMode, [operation], [{ sheetName: resolved.sheetName, range: resolved.range, after: `autofit ${dimension}` }], `Prepared autofit ${dimension} on ${resolved.sheetName}!${resolved.range}.`, { kind: "autofit_preview", dimension, sheetName: resolved.sheetName, range: resolved.range });
   }
 
+  private previewFreezePanes(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode, resolved?: Extract<AgentTargetResolution, { ok: true }>): Omit<AgentRunOutput, "telemetry"> {
+    const sheetName = resolved?.sheetName ?? freezePanesSheetName(metadata, input);
+    if (!sheetName) {
+      return {
+        status: "NEEDS_INPUT",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: "Freeze panes needs a target sheet.",
+        candidates: findAgentCandidates(metadata, input).slice(0, 5),
+        proof: [],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "ask_user",
+        warnings: ["Provide target.sheetName or use a prepared workbook context with an active sheet."]
+      };
+    }
+    const freeze = freezePanesFromInput(input);
+    if (!freeze) {
+      return {
+        status: "NEEDS_INPUT",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: "Freeze panes needs a clear request such as unfreeze panes, freeze top row, freeze first column, or values.freezePanes with row/column counts.",
+        proof: [{ sheetName, range: resolved?.range ?? usedRangeForSheet(metadata, sheetName), label: "freeze panes target sheet" }],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "ask_user",
+        warnings: []
+      };
+    }
+    const operation: ExcelOperation = {
+      kind: "sheet.freeze_panes",
+      operationId: makeId<OperationId>("op"),
+      workbookId: metadata.workbook.workbookId as WorkbookId,
+      destructiveLevel: "format",
+      reason: input.request,
+      sheetName,
+      rows: freeze.rows ?? 0,
+      columns: freeze.columns ?? 0
+    };
+    const after = freeze.rows === 0 && freeze.columns === 0
+      ? "unfreeze all panes"
+      : `freeze panes at ${freeze.rows ?? 0} row(s) and ${freeze.columns ?? 0} column(s)`;
+    return this.previewBatchOperation(
+      metadata,
+      requestedMode,
+      [operation],
+      [{ sheetName, after }],
+      `Prepared freeze panes update on ${sheetName}.`,
+      { kind: "freeze_panes_preview", sheetName, freezePanes: { rows: operation.rows, columns: operation.columns } }
+    );
+  }
+
   private previewAutoFilterMutation(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode, resolved: Extract<AgentTargetResolution, { ok: true }>): Omit<AgentRunOutput, "telemetry"> {
     if (isClearFilterRequest(input.request)) {
       return this.previewClearAutoFilter(metadata, input, requestedMode, resolved);
@@ -4193,12 +4552,19 @@ export class AgentOrchestrator {
     );
   }
 
+  private structuralOperationWarning(input: AgentRunInput, resolved: Extract<AgentTargetResolution, { ok: true }>, requestedKind: RangeStructuralOperationKind, actualKind: RangeStructuralOperationKind): string | undefined {
+    if (requestedKind === actualKind) {
+      return undefined;
+    }
+    return `Corrected ${String(input.intent?.action ?? "structural operation")} to ${actualKind.replace("range.", "").replace(/_/g, " ")} because ${resolved.range} is a ${structuralAddressShape(resolved.range) ?? "matching"} target.`;
+  }
+
   private previewRangeStructuralOperation(
     metadata: WorkbookMetadata,
     input: AgentRunInput,
     requestedMode: AgentRunMode,
     resolved: Extract<AgentTargetResolution, { ok: true }>,
-    kind: "range.clear_values" | "range.insert_rows" | "range.delete_rows" | "range.insert_columns" | "range.delete_columns" | "range.hide_columns" | "range.unhide_columns" | "range.merge" | "range.unmerge"
+    kind: RangeStructuralOperationKind
   ): Omit<AgentRunOutput, "telemetry"> {
     const workbookId = metadata.workbook.workbookId as WorkbookId;
     const values = input.values as Record<string, unknown> | undefined;
@@ -4215,7 +4581,7 @@ export class AgentOrchestrator {
         ? { ...base, kind, ...(typeof values?.across === "boolean" ? { across: values.across } : {}) }
         : base;
     const actionLabel = kind.replace("range.", "").replace(/_/g, " ");
-    return this.previewBatchOperation(
+    const output = this.previewBatchOperation(
       metadata,
       requestedMode,
       [operation],
@@ -4223,11 +4589,13 @@ export class AgentOrchestrator {
       `Prepared ${actionLabel} on ${resolved.sheetName}!${resolved.range}.`,
       { kind: `${kind}_preview`, sheetName: resolved.sheetName, range: resolved.range }
     );
+    const corrected = this.structuralOperationWarning(input, resolved, intentStructuralOperationKind(input) ?? kind, kind);
+    return corrected ? { ...output, warnings: [corrected, ...output.warnings] } : output;
   }
 
   private previewWriteStylesMany(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> {
     const workbookId = metadata.workbook.workbookId as WorkbookId;
-    const entries = styleEntriesFromInput(workbookId, input);
+    const entries = styleEntriesFromInput(metadata, workbookId, input);
     if (entries.length === 0) {
       return workbookLevelNeedsInput(metadata, requestedMode, "Multi-style writes need values.entries with sheetName, range, and style.");
     }
@@ -4243,21 +4611,83 @@ export class AgentOrchestrator {
       });
       if (redirect) return redirect;
     }
-    const operations: ExcelOperation[] = [{
+    const mergeEntries = shouldMergeRangesFromRequest(input) ? mergeEntriesFromStyleEntries(entries) : [];
+    const operations: ExcelOperation[] = [
+      ...mergeEntries.map((entry): ExcelOperation => ({
+        kind: "range.merge",
+        operationId: makeId<OperationId>("op"),
+        workbookId,
+        destructiveLevel: "structure",
+        reason: input.request,
+        target: entry.target,
+        across: false
+      })),
+      {
       kind: "range.write_styles_many",
       operationId: makeId<OperationId>("op"),
       workbookId,
       destructiveLevel: "format",
       reason: input.request,
-      entries: entries.map((entry) => ({ target: entry.target, style: entry.style, preserveValues: true }))
-    }];
+      entries: entries.map((entry) => ({ target: entry.target, style: entry.style, preserveValues: true as const }))
+      }
+    ];
     return this.previewBatchOperation(
       metadata,
       requestedMode,
       operations,
-      entries.map((entry) => ({ sheetName: entry.target.sheetName, range: entry.target.address, after: "styles updated" })),
-      `Prepared style updates for ${entries.length} range(s).`,
-      { kind: "write_styles_many_preview", rangeCount: entries.length }
+      [
+        ...mergeEntries.map((entry) => ({ sheetName: entry.target.sheetName, range: entry.target.address, after: "merged range" })),
+        ...entries.map((entry) => ({ sheetName: entry.target.sheetName, range: entry.target.address, after: "styles updated" }))
+      ],
+      mergeEntries.length > 0
+        ? `Prepared ${mergeEntries.length} merge(s) and style updates for ${entries.length} range(s).`
+        : `Prepared style updates for ${entries.length} range(s).`,
+      { kind: mergeEntries.length > 0 ? "merge_and_write_styles_many_preview" : "write_styles_many_preview", mergeCount: mergeEntries.length, rangeCount: entries.length }
+    );
+  }
+
+  private previewMergeRangesWithStyles(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> | undefined {
+    const workbookId = metadata.workbook.workbookId as WorkbookId;
+    const entries = mergeEntriesFromInput(metadata, workbookId, input);
+    if (entries.length === 0) {
+      return undefined;
+    }
+    const mergeEntries = entries.filter((entry) => isMultiCellRange(entry.target.address));
+    const styleEntries = entries
+      .map((entry) => ({ target: entry.target, style: entry.style ?? defaultStyleForMergeRequest(input) }))
+      .filter((entry) => Object.keys(entry.style).length > 0);
+    const operations: ExcelOperation[] = [
+      ...mergeEntries.map((entry): ExcelOperation => ({
+        kind: "range.merge",
+        operationId: makeId<OperationId>("op"),
+        workbookId,
+        destructiveLevel: "structure",
+        reason: input.request,
+        target: entry.target,
+        across: false
+      })),
+      ...(styleEntries.length > 0 ? [{
+        kind: "range.write_styles_many" as const,
+        operationId: makeId<OperationId>("op"),
+        workbookId,
+        destructiveLevel: "format" as const,
+        reason: input.request,
+        entries: styleEntries.map((entry) => ({ target: entry.target, style: entry.style, preserveValues: true as const }))
+      }] : [])
+    ];
+    if (operations.length === 0) {
+      return undefined;
+    }
+    return this.previewBatchOperation(
+      metadata,
+      requestedMode,
+      operations,
+      [
+        ...mergeEntries.map((entry) => ({ sheetName: entry.target.sheetName, range: entry.target.address, after: "merged range" })),
+        ...styleEntries.map((entry) => ({ sheetName: entry.target.sheetName, range: entry.target.address, after: "styles updated" }))
+      ],
+      `Prepared ${mergeEntries.length} merge(s)${styleEntries.length > 0 ? ` and style updates for ${styleEntries.length} range(s)` : ""}.`,
+      { kind: "merge_ranges_preview", mergeCount: mergeEntries.length, rangeCount: entries.length, styledRangeCount: styleEntries.length }
     );
   }
 
@@ -4271,6 +4701,27 @@ export class AgentOrchestrator {
     const validation = dataValidationFromInput(input);
     if (!validation) {
       return workbookLevelNeedsInput(metadata, requestedMode, "Data validation writes need values.validation.source or values.options for the dropdown list.");
+    }
+    const entries = dataValidationEntriesFromInput(workbookId, input, validation);
+    if (entries.length > 0) {
+      const operation: ExcelOperation = {
+        kind: "range.write_data_validation",
+        operationId: makeId<OperationId>("op"),
+        workbookId,
+        destructiveLevel: "format",
+        reason: input.request,
+        target: entries[0]!.target,
+        validation: entries[0]!.validation,
+        entries
+      };
+      return this.previewBatchOperation(
+        metadata,
+        requestedMode,
+        [operation],
+        entries.map((entry) => ({ sheetName: entry.target.sheetName, range: entry.target.address, after: "data validation updated" })),
+        `Prepared data validation updates for ${entries.length} range(s).`,
+        { kind: "write_data_validation_preview", rangeCount: entries.length, entries: entries.map((entry) => ({ sheetName: entry.target.sheetName, range: entry.target.address, validation: entry.validation })) }
+      );
     }
     const operation: ExcelOperation = {
       kind: "range.write_data_validation",
@@ -4352,10 +4803,12 @@ export class AgentOrchestrator {
   }
 
   private previewBatchOperation(metadata: WorkbookMetadata, requestedMode: AgentRunMode, operations: ExcelOperation[], changes: NonNullable<AgentRunOutput["changes"]>, summary: string, answer: unknown): Omit<AgentRunOutput, "telemetry"> {
+    const workflowKind = previewWorkflowKind(answer);
     const pending = this.createPendingOperation(metadata, {
       action: { kind: "batch", operations },
       changes,
-      summary
+      summary,
+      ...(workflowKind !== undefined ? { workflowKind } : {})
     });
     return {
       status: "PREVIEW_READY",
@@ -4365,7 +4818,7 @@ export class AgentOrchestrator {
       confirmationToken: pending.confirmationToken,
       summary,
       answer,
-      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched", safetyFingerprintOnly: true },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched", safetyFingerprintOnly: true, ...(workflowKind !== undefined ? { workflowKind } : {}) },
       changes,
       proof: changes.flatMap((change) => change.range ? [{ sheetName: change.sheetName, range: change.range, label: "preview target" }] : []).slice(0, 1),
       resourceLinks: [operationResource(String(pending.operationId))],
@@ -4807,7 +5260,30 @@ export class AgentOrchestrator {
     if (/\b(clear|remove|delete|wipe)\b/i.test(input.request) && styleDimensionsFromAgentInput(input).length > 0) {
       return this.previewClearStyleDimensions(metadata, input, requestedMode, resolved);
     }
-    const style = styleFromInput(input);
+    const batchEntries = styleEntriesFromInput(metadata, metadata.workbook.workbookId as WorkbookId, input);
+    if (batchEntries.length > 0 && hasStyleBatchInput(input)) {
+      return this.previewWriteStylesMany(metadata, input, requestedMode);
+    }
+    let style = styleFromInput(input);
+    if (Object.keys(style).length === 0 && intentAction(input) === "format_range" && hasExactFormatRangeTarget(input)) {
+      style = defaultFormatRangeStyle(input);
+    }
+    if (Object.keys(style).length === 0) {
+      return {
+        status: "NEEDS_INPUT",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: "Style update needs at least one supported style property such as fillColor, fontColor, fontBold, alignment, rowHeight, or columnWidth.",
+        proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "style target" }],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "ask_user",
+        warnings: [
+          "No apply-ready style properties were parsed, so no workbook preview was created.",
+          "For batched width changes, send intent.action write_styles_many with values.entries containing sheetName, range, and style.columnWidth."
+        ]
+      };
+    }
+    const warnings = groupedHeaderStyleWarnings(input, style);
     const redirect = this.fragmentationRedirect(metadata, requestedMode, {
       family: "format_range",
       workbookContextId: metadata.workbookContextId,
@@ -4845,7 +5321,7 @@ export class AgentOrchestrator {
       proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "style target" }],
       resourceLinks: [operationResource(String(pending.operationId))],
       nextAction: "call_apply_update",
-      warnings: []
+      warnings
     };
   }
 
@@ -5419,18 +5895,19 @@ export class AgentOrchestrator {
     if (!pending) {
       return { status: "NOT_FOUND", mode: "operation_status", summary: "No pending or terminal operation was found for the supplied operationId.", proof: [], resourceLinks: [], nextAction: "ask_user", warnings: [] };
     }
+    const mismatchWarning = operationWorkflowMismatchWarning(input, pending.workflowKind);
     return {
       status: pending.applyStatus === "applying" ? "IN_PROGRESS" : "SUCCESS",
       mode: "operation_status",
       workbookContextId: pending.workbookContextId,
       operationId: pending.operationId,
-      summary: `Operation ${pending.operationId} is ${pending.applyStatus ?? "previewed"}.`,
+      summary: mismatchWarning ?? `Operation ${pending.operationId} is ${pending.applyStatus ?? "previewed"}.`,
       answer: this.getOperationResource(String(pending.operationId)),
       changes: pending.changes,
       proof: [],
       resourceLinks: [operationResource(String(pending.operationId))],
       nextAction: pending.applyStatus === "previewed" ? "call_apply_update" : "answer_now",
-      warnings: []
+      warnings: mismatchWarning ? [mismatchWarning] : []
     };
   }
 
@@ -5577,6 +6054,7 @@ export class AgentOrchestrator {
     const resultWarnings = Array.isArray(resultRecord.warnings) ? resultRecord.warnings.map(operationWarningMessage) : [];
     const errorWarning = applyErrorMessage(resultRecord.error);
     const invalidated = applyFailed ? { invalidatedContextIds: [] as string[], invalidatedResourceUris: [] as string[] } : this.invalidateWorkbookContext(pending.workbookContextId);
+    const permissionFollowup = this.structuralPermissionFollowup(resultWarnings, pending);
     const output: Omit<AgentRunOutput, "telemetry"> = {
       status: applyFailed || validationFailed ? "VALIDATION_FAILED" : "SUCCESS",
       mode: "apply_update",
@@ -5608,8 +6086,19 @@ export class AgentOrchestrator {
       resourceLinks: resultRecord.transactionId ? [{ uri: `excel://transactions/${resultRecord.transactionId}`, name: "transaction", description: "Applied workbook transaction.", mimeType: "application/json" }] : [],
       invalidatedContextIds: invalidated.invalidatedContextIds,
       invalidatedResourceUris: invalidated.invalidatedResourceUris,
-      nextAction: applyFailed || validationFailed ? "manual_review" : "answer_now",
-      warnings: [...resultWarnings, ...(errorWarning && !resultWarnings.includes(errorWarning) ? [errorWarning] : []), ...(validation?.issues?.slice(0, 5).map((issue) => issue.message) ?? [])]
+      nextAction: permissionFollowup ? "ask_user" : applyFailed || validationFailed ? "manual_review" : "answer_now",
+      ...(permissionFollowup ? {
+        requiredFollowup: permissionFollowup,
+        taskOutcome: "needs_user_input" as const,
+        agentInstruction: "Ask the user for approval if needed, then call excel.agent.run with intent.action set_permissions and the provided permission values. After permission succeeds, create a fresh preview for the original workflow; do not retry this stale failed operationId.",
+        finalAnswer: "This structural update needs workbook structure permission before it can be applied."
+      } : {}),
+      warnings: [
+        ...resultWarnings,
+        ...(errorWarning && !resultWarnings.includes(errorWarning) ? [errorWarning] : []),
+        ...(permissionFollowup ? ["Enable structure permission with intent.action set_permissions, then create a fresh preview before applying."] : []),
+        ...(validation?.issues?.slice(0, 5).map((issue) => issue.message) ?? [])
+      ]
     };
     this.operations.markCompleted(operationId, output);
     return output;
@@ -5620,6 +6109,23 @@ export class AgentOrchestrator {
       pending.agentId ? { agentId: pending.agentId, ...(pending.agentName !== undefined ? { agentName: pending.agentName } : {}), clientType: "mcp" } : undefined,
       () => this.applyPendingActionInContext(pending, operationId)
     );
+  }
+
+  private structuralPermissionFollowup(
+    warnings: string[],
+    pending: NonNullable<ReturnType<AgentOperationStore["get"]>>
+  ): AgentRequiredFollowup | undefined {
+    const warningText = warnings.join(" ");
+    const blockedByPermissions = /\b(DESTRUCTIVE_ACTION_BLOCKED|PERMISSION_DENIED)\b/.test(warningText)
+      || warningText.includes("Structure and workbook actions are disabled");
+    if (!blockedByPermissions || (pending.risk !== "structure_change" && pending.risk !== "destructive")) {
+      return undefined;
+    }
+    return {
+      mode: "answer",
+      nextAction: "answer_now",
+      instruction: "Call excel.agent.run with intent.action set_permissions and values.permissions {\"allowWrites\":true,\"allowDestructiveActions\":true,\"scopeToWorkbook\":true,\"requireConfirmationFor\":[]}. After it succeeds, create a fresh preview for the original structural workflow and apply that fresh preview."
+    };
   }
 
   private applyPendingActionInContext(pending: NonNullable<ReturnType<AgentOperationStore["get"]>>, operationId: string) {
@@ -5981,6 +6487,7 @@ export class AgentOrchestrator {
       action: Parameters<AgentOperationStore["create"]>[0]["action"];
       changes: NonNullable<AgentRunOutput["changes"]>;
       summary: string;
+      workflowKind?: string;
     }
   ) {
     const risk = classifyAgentActionRisk(input.action);
@@ -5989,6 +6496,7 @@ export class AgentOrchestrator {
       workbookContextId: metadata.workbookContextId,
       workbookId: metadata.workbook.workbookId as WorkbookId,
       action: input.action,
+      ...(input.workflowKind !== undefined ? { workflowKind: input.workflowKind } : {}),
       changes: input.changes,
       summary: input.summary,
       risk,
@@ -6023,6 +6531,52 @@ function formulaMutationPreviewOutput(
     nextAction: "call_apply_update",
     warnings: []
   };
+}
+
+function previewWorkflowKind(answer: unknown): string | undefined {
+  if (!answer || typeof answer !== "object" || Array.isArray(answer)) {
+    return undefined;
+  }
+  return stringValue((answer as Record<string, unknown>).kind);
+}
+
+function invalidPreviewOperationReuseOutput(input: AgentRunInput): Omit<AgentRunOutput, "telemetry"> {
+  const operationId = String(input.operationId ?? "");
+  return {
+    status: "VALIDATION_FAILED",
+    mode: "preview_update",
+    ...(operationId ? { operationId } : {}),
+    summary: "preview_update cannot reuse an existing operationId. Use operation_status for an existing preview, apply_update to apply it, or call preview_update without operationId to create a fresh preview.",
+    answer: {
+      kind: "invalid_preview_operation_reuse",
+      operationId,
+      requestedMode: "preview_update",
+      validModes: ["operation_status", "apply_update"]
+    },
+    proof: [],
+    resourceLinks: operationId ? [operationResource(operationId)] : [],
+    nextAction: "ask_user",
+    warnings: ["Do not continue a new preview workflow with an operationId from a different preview."]
+  };
+}
+
+function operationWorkflowMismatchWarning(input: AgentRunInput, storedWorkflowKind: string | undefined): string | undefined {
+  const requestedWorkflowKind = requestedWorkflowKindFromInput(input);
+  if (!requestedWorkflowKind || !storedWorkflowKind || requestedWorkflowKind === storedWorkflowKind) {
+    return undefined;
+  }
+  return `The supplied operationId belongs to ${storedWorkflowKind}, but this request appears to be for ${requestedWorkflowKind}. Create a fresh preview_update for the requested workflow instead of reusing this operationId.`;
+}
+
+function requestedWorkflowKindFromInput(input: AgentRunInput): string | undefined {
+  const action = intentAction(input);
+  if (action === "grouped_header" || shouldPreviewGroupedHeader(input)) {
+    return "grouped_header_preview";
+  }
+  if (action === "improve_visual_readability") {
+    return "visual_readability_preview";
+  }
+  return undefined;
 }
 
 function backupLifecyclePreviewOutput(
@@ -6388,6 +6942,112 @@ function isLargeTargetRangeRequest(input: AgentRunInput): boolean {
   return requestedCells !== undefined && requestedCells > AGENT_LARGE_RANGE_CELL_LIMIT;
 }
 
+async function freezePaneStatusAnswerOutput(
+    runtime: RuntimeService,
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode,
+    runMetrics: AgentRunMetrics
+  ): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
+  if (!isFreezePaneStatusQuestion(input)) {
+    return undefined;
+  }
+  const workbookId = metadata.workbook.workbookId as WorkbookId;
+  const sheetName = input.target?.sheetName ?? metadata.selection?.sheetName ?? metadata.sheets.find((sheet) => sheet.usedRange)?.name ?? metadata.sheets[0]?.name;
+  const sheet = sheetName ? metadata.sheets.find((candidate) => candidate.name === sheetName) : undefined;
+  const range = sheet?.usedRange ?? input.target?.range;
+  if (!sheetName) {
+    return {
+      status: "NEEDS_INPUT",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      summary: "Freeze pane status needs a target sheet.",
+      proof: [],
+      resourceLinks: [contextResource(metadata.workbookContextId)],
+      nextAction: "ask_user",
+      warnings: ["Provide target.sheetName or prepare a workbook context with an active sheet."]
+    };
+  }
+  runMetrics.internalReadCount += 1;
+  const result = await runtime.getStyleFingerprint({
+    workbookId,
+    sheetName,
+    ...(range !== undefined ? { address: range } : {}),
+    maxCellSamples: 0
+  });
+  if ((result as { ok?: boolean }).ok === false) {
+    return formulaRuntimeErrorOutput(metadata, requestedMode, `Freeze pane status is unavailable for ${sheetName}.`, result);
+  }
+  const fingerprint = (result as { fingerprint?: unknown }).fingerprint ?? result;
+  const freezePanes = freezePanesFromFingerprint(fingerprint);
+  const readable = freezePanes.readable !== false;
+  const frozen = freezePanes.frozen === true;
+  return {
+    status: "SUCCESS",
+    mode: requestedMode,
+    workbookContextId: metadata.workbookContextId,
+    summary: readable
+      ? frozen
+        ? freezePaneSummary(sheetName, freezePanes)
+        : `No frozen panes are active on ${sheetName}.`
+      : "Freeze pane status cannot be read from the current Excel host API path.",
+    answer: {
+      kind: "freeze_panes_status",
+      source: "runtime_style_fingerprint",
+      sheetName,
+      ...freezePanes,
+      canApplyFreezePanes: true
+    },
+    metrics: { source: "runtime_style_fingerprint" },
+    proof: sheetName ? [{ sheetName, range: range ?? "A1", label: "freeze panes status target sheet" }] : [],
+    resourceLinks: [contextResource(metadata.workbookContextId)],
+    nextAction: "answer_now",
+    warnings: readable ? [] : ["Current freeze pane split was not readable through the live Office.js capture path; ask to set or unfreeze panes if you want a deterministic change."]
+  };
+}
+
+function isFreezePaneStatusQuestion(input: AgentRunInput): boolean {
+  const request = freezePaneQuestionText(input).toLowerCase();
+  return /\b(which|what|where|show|tell|check|read|inspect|current|currently|is|are|has|have|status)\b/.test(request)
+    && /\b(freeze|frozen)\b/.test(request)
+    && /\b(panes?|rows?|columns?|cols?|header|top|first)\b/.test(request);
+}
+
+function freezePaneQuestionText(input: AgentRunInput): string {
+  const intent: Record<string, unknown> = isRecord(input.intent) ? input.intent : {};
+  return [
+    input.request,
+    typeof intent.reason === "string" ? intent.reason : undefined,
+    ...(Array.isArray(intent.targetHints) ? intent.targetHints.filter((hint: unknown): hint is string => typeof hint === "string") : [])
+  ].filter((part): part is string => typeof part === "string" && part.trim().length > 0).join(" ");
+}
+
+function freezePanesFromFingerprint(fingerprint: unknown): Record<string, unknown> {
+  const record = isRecord(fingerprint) ? fingerprint : {};
+  const dimensions = isRecord(record.dimensions) ? record.dimensions : {};
+  const freezePanes = isRecord(dimensions.freezePanes) ? dimensions.freezePanes : {};
+  return freezePanesFromDimension(freezePanes);
+}
+
+function freezePaneSummary(sheetName: string, freezePanes: Record<string, unknown>): string {
+  const columns = typeof freezePanes.columns === "number" ? freezePanes.columns : undefined;
+  const rows = typeof freezePanes.rows === "number" ? freezePanes.rows : undefined;
+  const lastFrozenColumn = typeof freezePanes.lastFrozenColumn === "string" ? freezePanes.lastFrozenColumn : undefined;
+  const firstUnfrozenColumn = typeof freezePanes.firstUnfrozenColumn === "string" ? freezePanes.firstUnfrozenColumn : undefined;
+  const parts: string[] = [];
+  if (columns !== undefined && columns > 0) {
+    parts.push(lastFrozenColumn && firstUnfrozenColumn
+      ? `columns A:${lastFrozenColumn} are frozen; first unfrozen column is ${firstUnfrozenColumn}`
+      : `${columns} column(s) are frozen`);
+  }
+  if (rows !== undefined && rows > 0) {
+    parts.push(`rows 1:${rows} are frozen; first unfrozen row is ${rows + 1}`);
+  }
+  return parts.length > 0
+    ? `Freeze panes on ${sheetName}: ${parts.join("; ")}.`
+    : `Freeze panes are active on ${sheetName}.`;
+}
+
 function workbookOverviewAnswer(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> | undefined {
   const intent = workbookOverviewIntent(input);
   if (!hasWorkbookOverviewIntent(intent)) {
@@ -6483,6 +7143,12 @@ function detailLevelAnswerOutput(metadata: WorkbookMetadata, input: AgentRunInpu
   if (input.detailLevel === "sheet_summary") {
     return sheetSummaryDetailOutput(metadata, input, requestedMode);
   }
+  if (input.detailLevel === "style_overview") {
+    return undefined;
+  }
+  if (input.detailLevel === "workbook_design_overview") {
+    return undefined;
+  }
   if (input.detailLevel === "full_table" && !isExplicitFullDataRequest(input.request)) {
     const output = sheetSummaryDetailOutput(metadata, input, requestedMode);
     return {
@@ -6499,6 +7165,327 @@ function sheetOverviewAnswerOutput(metadata: WorkbookMetadata, input: AgentRunIn
     return undefined;
   }
   return sheetSummaryDetailOutput(metadata, input, requestedMode);
+}
+
+function workbookDesignOverviewAnswerOutput(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> | undefined {
+  const action = intentAction(input);
+  if (action && action !== "workbook_design_overview") {
+    return undefined;
+  }
+  if (action !== "workbook_design_overview" && input.detailLevel !== "workbook_design_overview" && !isWorkbookDesignOverviewRequest(input.request)) {
+    return undefined;
+  }
+  const target = resolveWorkbookDesignTarget(metadata, input);
+  if (!target) {
+    return {
+      status: "NEEDS_INPUT",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      summary: "Workbook design overview needs a target sheet or table.",
+      answer: {
+        kind: "workbook_design_overview_needs_target",
+        source: "cached_metadata",
+        candidateSheets: metadata.sheets.filter((sheet) => sheet.usedRange || sheet.headers.length > 0 || sheet.tableIds.length > 0).slice(0, 8).map((sheet) => ({
+          sheetName: sheet.name,
+          kind: sheet.kind,
+          usedRange: sheet.usedRange
+        }))
+      },
+      proof: [],
+      resourceLinks: [contextResource(metadata.workbookContextId)],
+      nextAction: "ask_user",
+      warnings: ["Select a sheet/table or provide target.sheetName before requesting a workbook design overview."]
+    };
+  }
+  const { sheet, table, range, columns } = target;
+  const detected = detectVisualReadabilityStructure(metadata, sheet, range);
+  const visualColumns = inferVisualReadabilityColumns(metadata, sheet, detected);
+  const relatedSheets = workbookDesignRelatedSheets(metadata, sheet, columns);
+  const columnRecommendations = columns.map((column) => workbookDesignColumnRecommendation(metadata, sheet, column, relatedSheets));
+  const dropdownCount = columnRecommendations.filter((column) => column.recommendedBehavior === "dropdown_list").length;
+  const lookupCount = columnRecommendations.filter((column) => column.lookupRecommendation !== undefined).length;
+  const formatCount = columnRecommendations.filter((column) => column.formatRecommendation !== undefined).length;
+  const answer = stripUndefinedRecord({
+    kind: "workbook_design_overview",
+    source: "cached_metadata_semantic_design",
+    workbook: { name: metadata.workbook.name, sheetCount: metadata.workbook.sheetCount },
+    sheet: { name: sheet.name, kind: sheet.kind, usedRange: sheet.usedRange, rowCount: sheet.rowCount, columnCount: sheet.columnCount },
+    table: table ? { name: table.name, range: table.range, headerRange: table.headerRange, dataRange: table.dataRange, columnCount: table.columns.length } : undefined,
+    target: { sheetName: sheet.name, range, tableName: table?.name },
+    dataState: workbookDesignDataState(sheet, table),
+    inspectionPolicy: {
+      valuesRead: false,
+      fullReadCellCount: 0,
+      guidance: "Use this overview for template/design recommendations. Do not broad-read empty data rows just to infer column roles; use targeted validation/reference workflows only after the user chooses a recommendation."
+    },
+    relatedSheets,
+    columnRecommendations,
+    groupSuggestions: suggestedColumnGroups(visualColumns, detected),
+    summary: {
+      columnCount: columns.length,
+      formatRecommendations: formatCount,
+      dropdownCandidates: dropdownCount,
+      lookupCandidates: lookupCount
+    },
+    nextWorkflows: workbookDesignNextWorkflows(dropdownCount, lookupCount)
+  });
+  return {
+    status: "SUCCESS",
+    mode: requestedMode,
+    workbookContextId: metadata.workbookContextId,
+    summary: `Returned workbook design overview for ${sheet.name}!${range}: ${columns.length} column recommendation(s), ${dropdownCount} dropdown candidate(s), ${lookupCount} lookup/reference candidate(s).`,
+    answer,
+    metrics: { source: "cached_metadata_semantic_design", fullReadCellCount: 0, internalReadCount: 0, columnCount: columns.length, relatedSheetCount: relatedSheets.length },
+    proof: [{ sheetName: sheet.name, range, label: "workbook design overview" }],
+    resourceLinks: [contextResource(metadata.workbookContextId)],
+    nextAction: "answer_now",
+    warnings: []
+  };
+}
+
+function isWorkbookDesignOverviewRequest(requestText: string): boolean {
+  if (isExplicitFullDataRequest(requestText)) {
+    return false;
+  }
+  if (/\b(style|styling|visual|readability|font|fonts|color|colors|border|borders|fills?|theme|header)\b/i.test(requestText)) {
+    return false;
+  }
+  const asksDesign = /\b(workbook|sheet|table|column[-\s]?by[-\s]?column|columns?)\b/i.test(requestText)
+    && /\b(design|data\s+entry|template|dropdown|lookup|reference|validation|column[-\s]?by[-\s]?column)\b/i.test(requestText)
+    && /\b(review|recommend|decide|should\s+be|for\s+each|each\s+column|every\s+column|column[-\s]?by[-\s]?column)\b/i.test(requestText);
+  const asksColumnTypes = /\b(free\s+text|date|money|number|id|code|dropdown|lookup|reference)\b/i.test(requestText)
+    && /\b(each|per|every|columns?|sheet|table)\b/i.test(requestText);
+  return asksDesign || asksColumnTypes;
+}
+
+function resolveWorkbookDesignTarget(metadata: WorkbookMetadata, input: AgentRunInput): { sheet: WorkbookMetadata["sheets"][number]; table?: TableMetadata; range: string; columns: ColumnMetadata[] } | undefined {
+  const targetSheetName = stringValue(input.target?.sheetName)
+    ?? stringValue(input.target?.entity)
+    ?? findMentionedSheet(metadata, input)?.name
+    ?? (requestMentionsActiveSheet(input.request) ? metadata.workbook.activeSheet : undefined)
+    ?? metadata.workbook.activeSheet;
+  const sheet = targetSheetName
+    ? metadata.sheets.find((candidate) => sameText(candidate.name, targetSheetName))
+    : undefined;
+  if (!sheet) {
+    return undefined;
+  }
+  const tableName = stringValue(input.target?.tableName);
+  const table = (tableName ? metadata.tables.find((candidate) => sameText(candidate.name, tableName) && sameText(candidate.sheetName, sheet.name)) : undefined)
+    ?? metadata.tables.find((candidate) => sameText(candidate.sheetName, sheet.name));
+  const bestHeader = sheet.headers.slice().sort((left, right) => right.confidence - left.confidence)[0];
+  const columns = table?.columns && table.columns.length > 0 ? table.columns : bestHeader?.columns ?? [];
+  const range = stripSheetName(input.target?.range ?? table?.range ?? bestHeader?.range ?? sheet.usedRange ?? "A1:A1");
+  return { sheet, ...(table ? { table } : {}), range, columns };
+}
+
+function workbookDesignDataState(sheet: WorkbookMetadata["sheets"][number], table?: TableMetadata) {
+  const rowCount = sheet.rowCount ?? rowCountFromAddress(sheet.usedRange) ?? rowCountFromAddress(table?.range);
+  const tableDataRows = rowCountFromAddress(table?.dataRange);
+  const looksTemplateLike = Boolean(table && (tableDataRows ?? 0) >= 20);
+  return stripUndefinedRecord({
+    kind: looksTemplateLike ? "template_or_structured_table" : sheet.kind === "template" ? "template" : "metadata_only",
+    rowCount,
+    tableDataRows,
+    recommendation: looksTemplateLike
+      ? "Treat the sheet as a template/structured table for design review. Infer from headers and related sheets; avoid repeated data-row reads unless the user asks for actual values."
+      : "Metadata is enough for initial design recommendations; sample values are optional proof, not required for column role decisions."
+  });
+}
+
+function rowCountFromAddress(address: string | undefined): number | undefined {
+  if (!address) return undefined;
+  const parsed = tryParseA1Address(stripSheetName(address));
+  return parsed ? parsed.endRow - parsed.startRow + 1 : undefined;
+}
+
+function workbookDesignRelatedSheets(metadata: WorkbookMetadata, sheet: WorkbookMetadata["sheets"][number], columns: ColumnMetadata[]): Array<{ sheetName: string; kind: string; usedRange?: string; confidence: number; reasons: string[] }> {
+  const targetHeaders = new Set(columns.map((column) => normalizeHeaderName(column.name)).filter(Boolean));
+  const targetTokens = new Set(columns.flatMap((column) => workbookDesignHeaderTokens(column.name)));
+  return metadata.sheets
+    .filter((candidate) => candidate.name !== sheet.name)
+    .map((candidate) => {
+      const candidateColumns = candidate.headers.flatMap((header) => header.columns);
+      const exactOverlap = candidateColumns.filter((column) => targetHeaders.has(normalizeHeaderName(column.name))).length;
+      const tokenOverlap = candidateColumns.flatMap((column) => workbookDesignHeaderTokens(column.name)).filter((token) => targetTokens.has(token)).length;
+      const nameScore = workbookDesignSheetNameScore(candidate.name, columns);
+      const kindScore = candidate.kind === "lookup" ? 2 : candidate.kind === sheet.kind ? 1 : 0;
+      const score = exactOverlap * 3 + Math.min(tokenOverlap, 4) + nameScore + kindScore;
+      const reasons = [
+        exactOverlap > 0 ? `${exactOverlap} matching header(s)` : undefined,
+        tokenOverlap > 0 ? `${Math.min(tokenOverlap, 4)} related header token(s)` : undefined,
+        nameScore > 0 ? "sheet name matches a column domain" : undefined,
+        candidate.kind === "lookup" ? "lookup sheet" : undefined
+      ].filter((reason): reason is string => Boolean(reason));
+      return { candidate, score, reasons };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score || left.candidate.name.localeCompare(right.candidate.name))
+    .slice(0, 8)
+    .map((entry) => stripUndefinedRecord({
+      sheetName: entry.candidate.name,
+      kind: entry.candidate.kind,
+      usedRange: entry.candidate.usedRange,
+      confidence: Math.max(0.35, Math.min(0.95, entry.score / 10)),
+      reasons: entry.reasons
+    }) as { sheetName: string; kind: string; usedRange?: string; confidence: number; reasons: string[] });
+}
+
+function workbookDesignSheetNameScore(sheetName: string, columns: ColumnMetadata[]): number {
+  const normalizedSheet = normalizeComparableText(sheetName);
+  let score = 0;
+  for (const column of columns) {
+    const normalized = normalizeComparableText(column.name);
+    if ((/customer|ลูกค้า/.test(normalized) && /customer|ลูกค้า/.test(normalizedSheet))
+      || (/driver|truck|คนขับ|ทะเบียน/.test(normalized) && /driver|truck|รถ|คนขับ/.test(normalizedSheet))
+      || (/booking|บุ๊ค|จอง/.test(normalized) && /booking|บุ๊ค|จอง/.test(normalizedSheet))) {
+      score += 4;
+    }
+  }
+  return score;
+}
+
+function workbookDesignHeaderTokens(value: string): string[] {
+  return normalizeComparableText(value)
+    .split(/[^a-z0-9ก-๙]+/i)
+    .filter((token) => token.length >= 3)
+    .slice(0, 8);
+}
+
+function workbookDesignColumnRecommendation(metadata: WorkbookMetadata, sheet: WorkbookMetadata["sheets"][number], column: ColumnMetadata, relatedSheets: ReturnType<typeof workbookDesignRelatedSheets>) {
+  const header = column.name;
+  const normalized = normalizeComparableText(header);
+  const role = visualColumnRole(column);
+  const lookup = workbookDesignLookupRecommendation(metadata, column, relatedSheets);
+  const dropdown = workbookDesignDropdownRecommendation(column, lookup);
+  const behavior = lookup ? "lookup_reference" : dropdown ? "dropdown_list" : workbookDesignBehavior(column, role, normalized);
+  return stripUndefinedRecord({
+    column: column.letter,
+    header,
+    currentInferredType: column.inferredType,
+    role,
+    recommendedBehavior: behavior,
+    formatRecommendation: workbookDesignFormatRecommendation(column, role, normalized),
+    dropdownRecommendation: dropdown,
+    lookupRecommendation: lookup,
+    applySafety: lookup ? "separate_preview_required" : dropdown ? "validation_bucket_or_separate_preview" : "safe_visual_formatting",
+    rationale: workbookDesignColumnRationale(column, role, behavior)
+  });
+}
+
+function workbookDesignBehavior(column: ColumnMetadata, role: string, normalized: string): string {
+  if (role === "date") return "date";
+  if (role === "money" || role === "number") return "number_money";
+  if (role === "id" || /เลข|number|no|code|id|ทะเบียน|phone|โทร|tax|ภาษี/.test(normalized)) return "id_text_code";
+  if (role === "status" || role === "category") return "dropdown_list";
+  return "free_text";
+}
+
+function workbookDesignFormatRecommendation(column: ColumnMetadata, role: string, normalized: string) {
+  if (role === "date" || /วันที่|date/.test(normalized)) {
+    return { type: "date", numberFormat: "dd/mm/yyyy", reason: "Date-like header should sort/filter as dates." };
+  }
+  if (role === "money" || role === "number" || /ราคา|ยอด|ค่า|ภาษี|amount|price|fee|tax|total|net|gross/.test(normalized)) {
+    return { type: "money", numberFormat: "#,##0.00", reason: "Money-like columns should align right and use a consistent numeric format." };
+  }
+  if (role === "id" || /เลข|booking|บุ๊ค|no|number|code|id|ทะเบียน|phone|โทร|tax id|เลขประจำตัว/.test(normalized)) {
+    return { type: "text_code", numberFormat: "@", reason: "Identifiers should stay text so leading zeros, hyphens, and registration codes are preserved." };
+  }
+  return undefined;
+}
+
+function workbookDesignDropdownRecommendation(column: ColumnMetadata, lookup: unknown) {
+  if (lookup) {
+    return undefined;
+  }
+  const normalized = normalizeComparableText(column.name);
+  if (/สถานะ|status|state|stage/.test(normalized)) {
+    return {
+      source: "suggested_static_options",
+      options: /จ่าย|payment|paid/.test(normalized) ? ["ยังไม่จ่าย", "จ่ายแล้ว", "รอตรวจสอบ"] : ["รอดำเนินการ", "กำลังดำเนินการ", "เสร็จแล้ว", "ยกเลิก"],
+      nextWorkflow: { intentAction: "write_data_validation", mode: "preview_update" }
+    };
+  }
+  if (/container size|ขนาดตู้/.test(normalized)) {
+    return {
+      source: "suggested_static_options",
+      options: ["20GP", "40GP", "40HQ"],
+      nextWorkflow: { intentAction: "write_data_validation", mode: "preview_update" }
+    };
+  }
+  if (/type|category|ประเภท/.test(normalized)) {
+    return {
+      source: "needs_source_or_existing_values",
+      options: [],
+      nextWorkflow: { intentAction: "read_data_validation", mode: "answer" }
+    };
+  }
+  return undefined;
+}
+
+function workbookDesignLookupRecommendation(metadata: WorkbookMetadata, column: ColumnMetadata, relatedSheets: ReturnType<typeof workbookDesignRelatedSheets>) {
+  const normalized = normalizeComparableText(column.name);
+  const target = relatedSheets.find((sheet) => {
+      const sheetName = normalizeComparableText(sheet.sheetName);
+      return (/ลูกค้า|customer/.test(normalized) && /customer|ลูกค้า/.test(sheetName))
+        || (/booking|บุ๊ค|จอง/.test(normalized) && /booking|บุ๊ค|จอง/.test(sheetName))
+        || (/driver|truck|คนขับ|ทะเบียน/.test(normalized) && /driver|truck|รถ|คนขับ/.test(sheetName))
+      || (sheet.kind === "lookup" && workbookDesignRelatedSheetHasHeader(metadata, sheet.sheetName, column.name));
+  });
+  if (!target) {
+    return undefined;
+  }
+  const targetSheet = metadata.sheets.find((sheet) => sheet.name === target.sheetName);
+  const keyColumn = workbookDesignLookupKeyColumn(targetSheet, column);
+  return stripUndefinedRecord({
+    sourceSheetName: target.sheetName,
+    sourceRange: target.usedRange,
+    keyColumn,
+    confidence: target.confidence,
+    nextWorkflow: { intentAction: "write_data_validation", mode: "preview_update", note: "Preview dropdown/source-list or lookup formula separately before applying." },
+    reason: `${column.name} appears related to ${target.sheetName}; use that sheet as the source of truth instead of free text when possible.`
+  });
+}
+
+function workbookDesignRelatedSheetHasHeader(metadata: WorkbookMetadata, sheetName: string, header: string): boolean {
+  const normalized = normalizeHeaderName(header);
+  if (!normalized) return false;
+  const sheet = metadata.sheets.find((candidate) => candidate.name === sheetName);
+  return Boolean(sheet?.headers.some((entry) => entry.columns.some((column) => normalizeHeaderName(column.name) === normalized)));
+}
+
+function workbookDesignLookupKeyColumn(sheet: WorkbookMetadata["sheets"][number] | undefined, sourceColumn: ColumnMetadata): string | undefined {
+  const normalizedSource = normalizeComparableText(sourceColumn.name);
+  const columns = sheet?.headers.flatMap((header) => header.columns) ?? [];
+  const preferred = columns.find((column) => {
+    const normalized = normalizeComparableText(column.name);
+    return (/customer|ลูกค้า/.test(normalizedSource) && /customer|ลูกค้า|ชื่อ/.test(normalized))
+      || (/booking|บุ๊ค/.test(normalizedSource) && /booking|บุ๊ค|เลข/.test(normalized))
+      || (/driver|truck|คนขับ|ทะเบียน/.test(normalizedSource) && /driver|truck|คนขับ|ทะเบียน|ชื่อ/.test(normalized));
+  }) ?? columns[0];
+  return preferred ? `${preferred.letter}:${preferred.name}` : undefined;
+}
+
+function workbookDesignColumnRationale(column: ColumnMetadata, role: string, behavior: string): string {
+  if (behavior === "lookup_reference") return "Header matches a related lookup/source sheet.";
+  if (behavior === "dropdown_list") return "Header is status/category-like and should use controlled values.";
+  if (behavior === "date") return "Header and metadata indicate a date column.";
+  if (behavior === "number_money") return "Header and metadata indicate money/number values.";
+  if (behavior === "id_text_code") return "Identifier-like values should be preserved as text.";
+  return column.importance !== undefined && column.importance >= 0.85 ? `High-importance ${role} column; keep easy to scan.` : "No strong controlled-value or lookup signal; keep manual text entry.";
+}
+
+function workbookDesignNextWorkflows(dropdownCount: number, lookupCount: number) {
+  const workflows: Array<Record<string, unknown>> = [
+    { intentAction: "improve_visual_readability", mode: "preview_update", purpose: "Apply safe visual formatting, widths, alignment, filters, and number formats." }
+  ];
+  if (dropdownCount > 0) {
+    workflows.push({ intentAction: "write_data_validation", mode: "preview_update", purpose: "Preview dropdown/data-validation rules for selected columns." });
+  }
+  if (lookupCount > 0) {
+    workflows.push({ intentAction: "derive_values", mode: "preview_update", purpose: "Preview lookup/reference formulas or source-list behavior separately." });
+  }
+  return workflows;
 }
 
 function semanticIndexDetailOutput(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> {
@@ -8361,9 +9348,333 @@ function styleSummaryFromFingerprint(fingerprint: unknown) {
     borders: dimensions.borders,
     rowHeights: dimensions.rowHeights,
     columnWidths: dimensions.columnWidths,
+    freezePanes: dimensions.freezePanes,
     conditionalFormatting: dimensions.conditionalFormatting,
     dataValidation: dimensions.dataValidation
   };
+}
+
+function isStyleOverviewRequest(request: string): boolean {
+  if (/\bstyle\s+summar(y|ies)\b/i.test(request) || /\bread\b.{0,20}\bstyles?\b/i.test(request)) {
+    return false;
+  }
+  return /\b(style|styling|formatting|visual|readability|design)\b/i.test(request)
+    && /\b(overview|summary|review|inspect|look|suggest|recommend|improve|better|standardi[sz]e|best practice)\b/i.test(request);
+}
+
+function styleOverviewFromMetadata(metadata: WorkbookMetadata, sheetName: string, range: string, styleSummary: ReturnType<typeof styleSummaryFromFingerprint>) {
+  const sheet = metadata.sheets.find((candidate) => sameText(candidate.name, sheetName));
+  const tables = metadata.tables.filter((table) => sameText(table.sheetName, sheetName));
+  const primaryTable = tables.find((table) => rangeOverlapsLoose(table.range, range)) ?? tables[0];
+  const detected = detectVisualReadabilityStructure(metadata, sheet ?? {
+    id: `sheet:${sheetName}`,
+    index: 0,
+    name: sheetName,
+    kind: "unknown",
+    usedRange: range,
+    tableIds: [],
+    sectionIds: [],
+    summaryBlockIds: [],
+    formulaRegionIds: [],
+    headers: [],
+    isHidden: false
+  } as WorkbookMetadata["sheets"][number], range);
+  const columns = sheet ? inferVisualReadabilityColumns(metadata, sheet, detected) : columnsFromTable(primaryTable);
+  const columnGroups = suggestedColumnGroups(columns, detected);
+  const groupedHeaderSuggestion = groupedHeaderSuggestionFromColumns(detected, columnGroups);
+  const freezePanes = freezePaneOverview(styleSummary.freezePanes);
+  return stripUndefinedRecord({
+    kind: "style_overview",
+    source: "cached_metadata_and_style_fingerprint",
+    sheetName,
+    range,
+    freezePanes,
+    table: primaryTable ? stripUndefinedRecord({
+      name: primaryTable.name,
+      range: primaryTable.range,
+      headerRange: primaryTable.headerRange,
+      dataRange: primaryTable.dataRange,
+      columnCount: primaryTable.columns.length
+    }) : undefined,
+    detected: stripUndefinedRecord({
+      headerRow: detected.headerRow,
+      headerRange: detected.headerRange,
+      dataRange: detected.dataRange,
+      tableRanges: detected.tableRanges,
+      hasFilter: detected.hasFilter,
+      confidence: detected.confidence
+    }),
+    currentStyle: stripUndefinedRecord({
+      header: styleOverviewHeaderStyle(styleSummary),
+      fills: compactStyleDimension(styleSummary.fills),
+      fonts: compactStyleDimension(styleSummary.fonts),
+      borders: compactStyleDimension(styleSummary.borders),
+      alignment: compactStyleDimension(styleSummary.alignment),
+      rowHeights: compactStyleDimension(styleSummary.rowHeights),
+      columnWidths: compactStyleDimension(styleSummary.columnWidths),
+      freezePanes,
+      numberFormats: compactStyleDimension(styleSummary.numberFormats),
+      conditionalFormatting: compactStyleDimension(styleSummary.conditionalFormatting),
+      dataValidation: compactStyleDimension(styleSummary.dataValidation)
+    }),
+    columnRoles: columns.slice(0, 32).map((column) => stripUndefinedRecord({
+      column: column.column,
+      header: column.header,
+      role: column.role,
+      inferredType: column.inferredType,
+      confidence: column.confidence,
+      freezePane: freezePaneColumnAnnotation(column.column, freezePanes)
+    })),
+    columnGroupSuggestions: columnGroups,
+    groupedHeaderSuggestion,
+    recommendations: styleOverviewRecommendations(groupedHeaderSuggestion, columns, styleSummary),
+    recommendedWorkflow: groupedHeaderSuggestion
+      ? { intentAction: "grouped_header", mode: "preview_update", requiresConfirmation: true }
+      : { intentAction: "improve_visual_readability", mode: "preview_update", requiresConfirmation: true }
+  });
+}
+
+function freezePaneOverview(rawFreezePanes: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(rawFreezePanes)) {
+    return undefined;
+  }
+  const freezePanes = freezePanesFromDimension(rawFreezePanes);
+  const readable = freezePanes.readable !== false;
+  const frozen = freezePanes.frozen === true;
+  return stripUndefinedRecord({
+    readable,
+    frozen,
+    rows: numericRecordValue(freezePanes, "rows"),
+    columns: numericRecordValue(freezePanes, "columns"),
+    lastFrozenRow: numericRecordValue(freezePanes, "lastFrozenRow"),
+    firstUnfrozenRow: numericRecordValue(freezePanes, "firstUnfrozenRow"),
+    lastFrozenColumn: stringRecordValue(freezePanes, "lastFrozenColumn"),
+    firstUnfrozenColumn: stringRecordValue(freezePanes, "firstUnfrozenColumn"),
+    summary: readable
+      ? frozen
+        ? freezePaneSummary("this sheet", freezePanes).replace(/^Freeze panes on this sheet: /, "")
+        : "No frozen panes are active."
+      : stringRecordValue(freezePanes, "message")
+  });
+}
+
+function freezePaneColumnAnnotation(column: string, freezePanes: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!freezePanes || freezePanes.readable === false) {
+    return undefined;
+  }
+  const columnIndex = columnToNumber(column);
+  if (!Number.isFinite(columnIndex) || columnIndex <= 0) {
+    return undefined;
+  }
+  const frozenColumnCount = numericRecordValue(freezePanes, "columns") ?? 0;
+  const lastFrozenColumn = stringRecordValue(freezePanes, "lastFrozenColumn");
+  const firstUnfrozenColumn = stringRecordValue(freezePanes, "firstUnfrozenColumn");
+  return stripUndefinedRecord({
+    isFrozen: frozenColumnCount > 0 && columnIndex <= frozenColumnCount,
+    isLastFrozenColumn: lastFrozenColumn !== undefined && sameText(column, lastFrozenColumn),
+    isFirstUnfrozenColumn: firstUnfrozenColumn !== undefined && sameText(column, firstUnfrozenColumn)
+  });
+}
+
+function freezePanesFromDimension(freezePanes: Record<string, unknown>): Record<string, unknown> {
+  if (freezePanes.readable !== true && freezePanes.frozen !== true && freezePanes.frozen !== false) {
+    return {
+      ...freezePanes,
+      readable: false,
+      message: "Freeze pane location was not captured by the loaded Excel taskpane."
+    };
+  }
+  return freezePanes;
+}
+
+function numericRecordValue(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stringRecordValue(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function columnsFromTable(table: TableMetadata | undefined): VisualReadabilityColumnRole[] {
+  return table?.columns.map((column) => ({
+    column: column.letter,
+    header: column.name,
+    role: visualColumnRole(column),
+    inferredType: column.inferredType,
+    confidence: Math.max(0.45, Math.min(0.98, column.importance ?? 0.7)),
+    signals: visualColumnSignals(column)
+  })) ?? [];
+}
+
+function rangeOverlapsLoose(left: string | undefined, right: string | undefined): boolean {
+  if (!left || !right) return false;
+  return rangesOverlapAddresses(stripSheetName(left), stripSheetName(right));
+}
+
+function styleOverviewHeaderStyle(styleSummary: ReturnType<typeof styleSummaryFromFingerprint>) {
+  return stripUndefinedRecord({
+    fills: firstStyleCells(styleSummary.fills, "fillColor"),
+    fonts: firstStyleCells(styleSummary.fonts, "fontBold"),
+    alignment: firstStyleCells(styleSummary.alignment, "horizontalAlignment"),
+    borders: compactStyleDimension(styleSummary.borders)
+  });
+}
+
+function firstStyleCells(dimension: unknown, key: string) {
+  if (!isRecord(dimension)) return undefined;
+  const cells = isRecord(dimension.cells) || Array.isArray(dimension.cells) ? dimension.cells : undefined;
+  if (!Array.isArray(cells)) return undefined;
+  return cells.filter((cell) => isRecord(cell) && cell.rowIndex === 0 && cell[key] !== undefined).slice(0, 8);
+}
+
+function suggestedColumnGroups(columns: VisualReadabilityColumnRole[], detected: VisualReadabilityDetectedStructure): Array<{ label: string; startColumn: string; endColumn: string; columns: string[]; role: string; fillColor: string; headerFillColor: string }> {
+  const palette = [
+    { fillColor: "#1A3C6E", headerFillColor: "#D9EAF7" },
+    { fillColor: "#0F6B78", headerFillColor: "#D7EEF2" },
+    { fillColor: "#548235", headerFillColor: "#E2EFDA" },
+    { fillColor: "#C65911", headerFillColor: "#FCE4D6" },
+    { fillColor: "#8064A2", headerFillColor: "#EDE7F6" },
+    { fillColor: "#666666", headerFillColor: "#E7E6E6" }
+  ];
+  return visualColumnGroups(columns, detected).map((group, index) => {
+    const role = normalizeComparableText(group.label).replace(/\s+/g, "_") || "group";
+    const color = palette[index % palette.length]!;
+    return {
+      label: group.label,
+      startColumn: group.startColumn,
+      endColumn: group.endColumn,
+      columns: columnsInSpan(columns, group.startColumn, group.endColumn),
+      role,
+      fillColor: color.fillColor,
+      headerFillColor: color.headerFillColor
+    };
+  });
+}
+
+function groupedHeaderGroupsFromInput(input: AgentRunInput, columns: VisualReadabilityColumnRole[], detected: VisualReadabilityDetectedStructure): Array<{ label: string; startColumn: string; endColumn: string; fillColor: string; headerFillColor: string }> {
+  const values = input.values as Record<string, unknown> | undefined;
+  const groupedHeader = isRecord(values?.groupedHeader) ? values.groupedHeader as Record<string, unknown> : values;
+  const rawGroups = Array.isArray(groupedHeader?.groups) ? groupedHeader.groups : undefined;
+  const inferred = suggestedColumnGroups(columns, detected);
+  if (!rawGroups) {
+    return inferred.map(({ label, startColumn, endColumn, fillColor, headerFillColor }) => ({ label, startColumn, endColumn, fillColor, headerFillColor }));
+  }
+  return rawGroups.flatMap((raw, index) => {
+    if (!isRecord(raw)) return [];
+    const columnSpan = groupedHeaderColumnSpan(raw);
+    const startColumn = stringValue(raw.startColumn ?? raw.start ?? raw.from ?? raw.column ?? columnSpan?.startColumn);
+    const endColumn = stringValue(raw.endColumn ?? raw.end ?? raw.to ?? raw.column ?? columnSpan?.endColumn ?? startColumn);
+    const label = stringValue(raw.label ?? raw.name ?? raw.title) ?? inferred[index]?.label;
+    if (!startColumn || !endColumn || !label) return [];
+    return [{
+      label,
+      startColumn: startColumn.toUpperCase(),
+      endColumn: endColumn.toUpperCase(),
+      fillColor: colorString(raw.fillColor ?? raw.color) ?? inferred[index]?.fillColor ?? "#1A3C6E",
+      headerFillColor: colorString(raw.headerFillColor ?? raw.bodyFillColor ?? raw.lightFillColor) ?? inferred[index]?.headerFillColor ?? "#D9EAF7"
+    }];
+  });
+}
+
+function groupedHeaderColumnSpan(raw: Record<string, unknown>): { startColumn: string; endColumn: string } | undefined {
+  const columns = Array.isArray(raw.columns)
+    ? raw.columns.map((column) => stringValue(column)).filter((column): column is string => Boolean(column && /^[A-Z]+$/i.test(column.trim())))
+    : [];
+  if (columns.length > 0) {
+    const indexes = columns.map((column) => columnToNumber(column.trim().toUpperCase())).filter((index) => Number.isFinite(index));
+    if (indexes.length > 0) {
+      return { startColumn: columnLetter(Math.min(...indexes) - 1), endColumn: columnLetter(Math.max(...indexes) - 1) };
+    }
+  }
+  const range = stringValue(raw.range ?? raw.address);
+  if (!range) {
+    return undefined;
+  }
+  const normalized = stripSheetName(range).replace(/\$/g, "").trim();
+  const parsed = tryParseA1Address(normalized);
+  if (parsed) {
+    return { startColumn: columnLetter(parsed.startColumn - 1), endColumn: columnLetter(parsed.endColumn - 1) };
+  }
+  const columnRange = /^([A-Z]+)\s*(?::|-|\bto\b)\s*([A-Z]+)$/i.exec(normalized);
+  const rangeStart = columnRange?.[1];
+  const rangeEnd = columnRange?.[2];
+  if (rangeStart && rangeEnd) {
+    return { startColumn: rangeStart.toUpperCase(), endColumn: rangeEnd.toUpperCase() };
+  }
+  return undefined;
+}
+
+function groupedHeaderRowHeight(input: AgentRunInput, defaultHeight: number, key = "groupRowHeight"): number {
+  const values = input.values as Record<string, unknown> | undefined;
+  const groupedHeader = isRecord(values?.groupedHeader) ? values.groupedHeader as Record<string, unknown> : values;
+  return numberValue(groupedHeader?.[key]) ?? defaultHeight;
+}
+
+function columnsInSpan(columns: VisualReadabilityColumnRole[], startColumn: string, endColumn: string): string[] {
+  const start = columnToNumber(startColumn);
+  const end = columnToNumber(endColumn);
+  return columns
+    .filter((column) => {
+      const current = columnToNumber(column.column);
+      return current >= start && current <= end;
+    })
+    .map((column) => column.column);
+}
+
+function groupedHeaderSuggestionFromColumns(detected: VisualReadabilityDetectedStructure, groups: ReturnType<typeof suggestedColumnGroups>) {
+  const multiColumnGroups = groups.filter((group) => columnToNumber(group.endColumn) > columnToNumber(group.startColumn));
+  if (!detected.headerRange || groups.length < 2 || groups.reduce((total, group) => total + group.columns.length, 0) < 6 || multiColumnGroups.length === 0) {
+    return undefined;
+  }
+  return {
+    kind: "grouped_header_suggestion",
+    targetHeaderRange: detected.headerRange,
+    levels: 1,
+    insertAboveHeader: true,
+    styleExistingHeader: true,
+    requiresStructuralPreview: true,
+    defaultApplyBehavior: "suggest_only",
+    groups: groups.map((group) => ({
+      label: group.label,
+      startColumn: group.startColumn,
+      endColumn: group.endColumn,
+      fillColor: group.fillColor,
+      headerFillColor: group.headerFillColor,
+      merge: columnToNumber(group.endColumn) > columnToNumber(group.startColumn)
+    })),
+    operationsNeeded: ["insert_rows", "write_values_many", "merge_range", "write_styles_many"]
+  };
+}
+
+function styleOverviewRecommendations(groupedHeaderSuggestion: unknown, columns: VisualReadabilityColumnRole[], styleSummary: ReturnType<typeof styleSummaryFromFingerprint>) {
+  const recommendations: Array<Record<string, unknown>> = [];
+  if (groupedHeaderSuggestion) {
+    recommendations.push({
+      id: "grouped_header",
+      category: "structural_style",
+      title: "Add a grouped visual header above the table header.",
+      applySafety: "preview_required"
+    });
+  }
+  if (columns.length >= 8) {
+    recommendations.push({
+      id: "freeze_header",
+      category: "layout_format",
+      title: "Freeze the header area for wide-sheet scanning.",
+      applySafety: "opt_in"
+    });
+  }
+  if (styleSummary.truncated) {
+    recommendations.push({
+      id: "style_sample_limited",
+      category: "inspection",
+      title: "Style sampling was compact; inspect a smaller header/body range before high-fidelity template repair.",
+      applySafety: "read_only"
+    });
+  }
+  return recommendations;
 }
 
 function styleWarnings(result: unknown): string[] {
@@ -8622,7 +9933,40 @@ function styleFromInput(input: AgentRunInput): NonNullable<RangeSnapshot["style"
   const structured = normalizeStyleRecord(values?.style);
   const flattened = normalizeStyleRecord(values);
   const requested = styleFromRequest(input.request);
-  return { ...requested, ...flattened, ...structured };
+  const style = { ...requested, ...flattened, ...structured };
+  if (isGroupedHeaderStyleRequest(input) && !hasExplicitFillColor(input, flattened, structured) && style.fillColor === "#D9EAF7") {
+    return {
+      ...style,
+      fillColor: "#1A3C6E",
+      fontColor: "#FFFFFF",
+      fontBold: true,
+      horizontalAlignment: "center"
+    };
+  }
+  return style;
+}
+
+function defaultFormatRangeStyle(input: AgentRunInput): NonNullable<RangeSnapshot["style"]> {
+  const base: NonNullable<RangeSnapshot["style"]> = {
+    fillColor: "#D9EAF7",
+    fontColor: "#1F2937",
+    fontBold: true,
+    horizontalAlignment: "center"
+  };
+  if (isGroupedHeaderStyleRequest(input)) {
+    return {
+      ...base,
+      fillColor: "#1A3C6E",
+      fontColor: "#FFFFFF"
+    };
+  }
+  return base;
+}
+
+function hasExactFormatRangeTarget(input: AgentRunInput): boolean {
+  return typeof input.target?.range === "string"
+    || typeof input.target?.address === "string"
+    || (typeof input.target?.row === "number" && Number.isInteger(input.target.row) && input.target.row > 0);
 }
 
 function normalizeStyleRecord(value: unknown): NonNullable<RangeSnapshot["style"]> {
@@ -8650,7 +9994,7 @@ function normalizeStyleRecord(value: unknown): NonNullable<RangeSnapshot["style"
   const rowHeight = numberValue(record.rowHeight);
   if (rowHeight !== undefined) style.rowHeight = rowHeight;
   const columnWidth = numberValue(record.columnWidth);
-  if (columnWidth !== undefined) style.columnWidth = columnWidth;
+  if (columnWidth !== undefined) style.columnWidth = agentColumnWidthToOfficeWidth(columnWidth);
   const borders = record.borders && typeof record.borders === "object"
     ? record.borders as NonNullable<RangeSnapshot["style"]>["borders"]
     : undefined;
@@ -8658,6 +10002,20 @@ function normalizeStyleRecord(value: unknown): NonNullable<RangeSnapshot["style"
     style.borders = borders;
   }
   return style;
+}
+
+function agentColumnWidthToOfficeWidth(width: number): number {
+  if (!Number.isFinite(width) || width <= 0) {
+    return width;
+  }
+  if (width > 60) {
+    return width;
+  }
+
+  const maxDigitPixelWidth = 7;
+  const padding = Math.trunc(128 / maxDigitPixelWidth);
+  const pixels = Math.trunc(((256 * width + padding) / 256) * maxDigitPixelWidth);
+  return Math.round(pixels * 0.75 * 100) / 100;
 }
 
 function styleFromRequest(request: string): NonNullable<RangeSnapshot["style"]> {
@@ -8689,6 +10047,37 @@ function styleFromRequest(request: string): NonNullable<RangeSnapshot["style"]> 
       ? { borders: { style: "continuous" as const, weight: "thin" as const } }
       : {})
   };
+}
+
+function isGroupedHeaderStyleRequest(input: AgentRunInput): boolean {
+  const request = input.request.toLowerCase();
+  const targetRange = stripSheetName(input.target?.range ?? input.target?.address ?? "");
+  return /\b(grouped|grouping|category|top)\s+(?:header|headers|row)|\bheader\s+(?:group|grouping|category)|\brow\s*1\b/i.test(request)
+    || /^A1(?::[A-Z]+1)?$/i.test(targetRange);
+}
+
+function hasExplicitFillColor(
+  input: AgentRunInput,
+  flattened: NonNullable<RangeSnapshot["style"]>,
+  structured: NonNullable<RangeSnapshot["style"]>
+): boolean {
+  return flattened.fillColor !== undefined
+    || structured.fillColor !== undefined
+    || (/\b(fill|background|highlight|turn|make|set|color|colour|dark|darker|light|lighter|blue|black|white|red|green|yellow|orange|purple|gray|grey|#[0-9a-f]{6})\b/i.test(input.request)
+      && colorFromText(input.request.toLowerCase(), ["fill", "background", "highlight", "turn", "make", "set", "color", "colour"]) !== undefined);
+}
+
+function groupedHeaderStyleWarnings(input: AgentRunInput, style: NonNullable<RangeSnapshot["style"]>): string[] {
+  if (!isGroupedHeaderStyleRequest(input)) {
+    return [];
+  }
+  if (style.fillColor === "#1A3C6E" && /\b(match|same|row\s*2|actual\s+header|column\s+header)\b/i.test(input.request)) {
+    return ["Grouped header row styling was kept darker than the actual column header row so row 1 remains visually distinct from row 2."];
+  }
+  if (style.fillColor === "#D9EAF7") {
+    return ["Grouped header row is using the same light fill as the actual column header row; use a darker fill such as #1A3C6E to keep the hierarchy distinct."];
+  }
+  return [];
 }
 
 function colorString(value: unknown): string | undefined {
@@ -8748,6 +10137,43 @@ function booleanValue(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function dataValidationEntriesFromInput(
+  workbookId: WorkbookId,
+  input: AgentRunInput,
+  defaultValidation: Extract<ExcelOperation, { kind: "range.write_data_validation" }>["validation"]
+): Array<{
+  target: A1Range;
+  validation: Extract<ExcelOperation, { kind: "range.write_data_validation" }>["validation"];
+}> {
+  const values = input.values as Record<string, unknown> | undefined;
+  const rawInput = input as unknown as Record<string, unknown>;
+  const rawEntries = Array.isArray(values?.entries)
+    ? values.entries
+    : Array.isArray(rawInput.entries)
+      ? rawInput.entries as unknown[]
+      : [];
+  const entries: Array<{
+    target: A1Range;
+    validation: Extract<ExcelOperation, { kind: "range.write_data_validation" }>["validation"];
+  }> = [];
+  for (const rawEntry of rawEntries) {
+    if (!rawEntry || typeof rawEntry !== "object") {
+      continue;
+    }
+    const entry = rawEntry as Record<string, unknown>;
+    const sheetName = stringValue(entry.sheetName ?? input.target?.sheetName ?? values?.sheetName);
+    const address = stringValue(entry.address ?? entry.range);
+    if (!sheetName || !address) {
+      continue;
+    }
+    entries.push({
+      target: { workbookId, sheetName, address: unqualifiedAddress(address) },
+      validation: dataValidationFromRecord(entry, defaultValidation)
+    });
+  }
+  return entries;
+}
+
 function dataValidationFromInput(input: AgentRunInput): Extract<ExcelOperation, { kind: "range.write_data_validation" }>["validation"] | undefined {
   const values = input.values as Record<string, unknown> | undefined;
   const validation = values?.validation && typeof values.validation === "object" ? values.validation as Record<string, unknown> : undefined;
@@ -8766,6 +10192,41 @@ function dataValidationFromInput(input: AgentRunInput): Extract<ExcelOperation, 
     inCellDropDown: booleanValue(validation?.inCellDropDown ?? values?.inCellDropDown) ?? true,
     ignoreBlanks: booleanValue(validation?.ignoreBlanks ?? values?.ignoreBlanks) ?? true
   };
+}
+
+function dataValidationFromRecord(
+  record: Record<string, unknown>,
+  fallback: Extract<ExcelOperation, { kind: "range.write_data_validation" }>["validation"]
+): Extract<ExcelOperation, { kind: "range.write_data_validation" }>["validation"] {
+  const validation = record.validation && typeof record.validation === "object" ? record.validation as Record<string, unknown> : undefined;
+  const source = validation?.source ?? validation?.formula1 ?? record.source ?? record.options ?? record.allowedValues ?? fallback.source;
+  const options = Array.isArray(source)
+    ? source.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
+    : typeof source === "string"
+      ? source.split(",").map((item) => item.trim()).filter(Boolean)
+      : fallback.source;
+  const next: Extract<ExcelOperation, { kind: "range.write_data_validation" }>["validation"] = {
+    type: "list",
+    source: options
+  };
+  const inCellDropDown = booleanValue(validation?.inCellDropDown ?? record.inCellDropDown) ?? fallback.inCellDropDown;
+  if (inCellDropDown !== undefined) next.inCellDropDown = inCellDropDown;
+  const ignoreBlanks = booleanValue(validation?.ignoreBlanks ?? record.ignoreBlanks) ?? fallback.ignoreBlanks;
+  if (ignoreBlanks !== undefined) next.ignoreBlanks = ignoreBlanks;
+  const prompt = validation?.prompt && typeof validation.prompt === "object"
+    ? validation.prompt as Extract<ExcelOperation, { kind: "range.write_data_validation" }>["validation"]["prompt"]
+    : fallback.prompt;
+  if (prompt !== undefined) next.prompt = prompt;
+  const errorAlert = validation?.errorAlert && typeof validation.errorAlert === "object"
+    ? validation.errorAlert as Extract<ExcelOperation, { kind: "range.write_data_validation" }>["validation"]["errorAlert"]
+    : fallback.errorAlert;
+  if (errorAlert !== undefined) next.errorAlert = errorAlert;
+  return next;
+}
+
+function unqualifiedAddress(address: string): string {
+  const bangIndex = address.lastIndexOf("!");
+  return bangIndex >= 0 ? address.slice(bangIndex + 1) : address;
 }
 
 function optionsFromRequest(request: string): string[] {
@@ -8869,11 +10330,13 @@ function normalizeStyleDimension(value: unknown): StyleDimension | undefined {
 }
 
 function styleEntriesFromInput(
+  metadata: WorkbookMetadata,
   workbookId: WorkbookId,
   input: AgentRunInput
 ): Array<{ target: A1Range; style: Extract<ExcelOperation, { kind: "range.write_styles" }>["style"] }> {
   const values = input.values as Record<string, unknown> | undefined;
-  const rawEntries = values?.entries;
+  const rawInput = input as unknown as Record<string, unknown>;
+  const rawEntries = firstArrayValue(values?.entries, values?.patches, rawInput.entries, rawInput.patches);
   const entries: Array<{ target: A1Range; style: Extract<ExcelOperation, { kind: "range.write_styles" }>["style"] }> = [];
   if (Array.isArray(rawEntries)) {
     for (const rawEntry of rawEntries) {
@@ -8881,23 +10344,144 @@ function styleEntriesFromInput(
         continue;
       }
       const entry = rawEntry as Record<string, unknown>;
-      const sheetName = stringValue(entry.sheetName);
-      const address = stringValue(entry.address ?? entry.range);
+      const target = entry.target && typeof entry.target === "object" ? entry.target as Record<string, unknown> : {};
+      const sheetName = stringValue(entry.sheetName ?? target.sheetName ?? input.target?.sheetName ?? values?.sheetName);
+      const rawAddress = stringValue(entry.address ?? entry.range ?? target.address ?? target.range);
       const style = entry.style && typeof entry.style === "object"
         ? normalizeStyleRecord(entry.style)
-        : normalizeStyleRecord(entry);
+        : normalizeStyleRecord(styleLikeValuePatchCell(entry) ?? entry);
+      const address = sheetName && rawAddress ? normalizeStyleTargetAddress(metadata, sheetName, rawAddress) : undefined;
       if (sheetName && address && Object.keys(style).length > 0) {
         entries.push({ target: { workbookId, sheetName, address }, style });
       }
     }
   }
   const sheetName = stringValue(input.target?.sheetName ?? values?.sheetName);
-  const address = stringValue(input.target?.range ?? values?.address ?? values?.range);
+  const rawAddress = stringValue(input.target?.range ?? input.target?.address ?? values?.address ?? values?.range);
+  const address = sheetName && rawAddress ? normalizeStyleTargetAddress(metadata, sheetName, rawAddress) : undefined;
   const style = normalizeStyleRecord(values?.style ?? values);
   if (entries.length === 0 && sheetName && address && Object.keys(style).length > 0) {
     entries.push({ target: { workbookId, sheetName, address }, style });
   }
   return entries;
+}
+
+function mergeEntriesFromInput(
+  metadata: WorkbookMetadata,
+  workbookId: WorkbookId,
+  input: AgentRunInput
+): Array<{ target: A1Range; style?: Extract<ExcelOperation, { kind: "range.write_styles" }>["style"] }> {
+  const values = input.values as Record<string, unknown> | undefined;
+  const rawInput = input as unknown as Record<string, unknown>;
+  const rawEntries = firstArrayValue(values?.mergeRanges, values?.merges, values?.entries, rawInput.mergeRanges, rawInput.merges, rawInput.entries);
+  const entries: Array<{ target: A1Range; style?: Extract<ExcelOperation, { kind: "range.write_styles" }>["style"] }> = [];
+  if (Array.isArray(rawEntries)) {
+    for (const rawEntry of rawEntries) {
+      if (!rawEntry || typeof rawEntry !== "object") {
+        continue;
+      }
+      const entry = rawEntry as Record<string, unknown>;
+      const target = entry.target && typeof entry.target === "object" ? entry.target as Record<string, unknown> : {};
+      const sheetName = stringValue(entry.sheetName ?? target.sheetName ?? input.target?.sheetName ?? values?.sheetName);
+      const rawAddress = stringValue(entry.address ?? entry.range ?? target.address ?? target.range);
+      const style = entry.style && typeof entry.style === "object"
+        ? normalizeStyleRecord(entry.style)
+        : normalizeStyleRecord(styleLikeValuePatchCell(entry) ?? entry);
+      const address = sheetName && rawAddress ? stripSheetName(rawAddress).trim() : undefined;
+      if (sheetName && address) {
+        entries.push({
+          target: { workbookId, sheetName, address },
+          ...(Object.keys(style).length > 0 ? { style } : {})
+        });
+      }
+    }
+  }
+  const sheetName = stringValue(input.target?.sheetName ?? values?.sheetName);
+  const rawAddress = stringValue(input.target?.range ?? input.target?.address ?? values?.address ?? values?.range);
+  if (entries.length === 0 && sheetName && rawAddress) {
+    const style = normalizeStyleRecord(values?.style ?? values);
+    entries.push({
+      target: { workbookId, sheetName, address: stripSheetName(rawAddress).trim() },
+      ...(Object.keys(style).length > 0 ? { style } : {})
+    });
+  }
+  return entries;
+}
+
+function mergeEntriesFromStyleEntries(
+  entries: Array<{ target: A1Range; style: Extract<ExcelOperation, { kind: "range.write_styles" }>["style"] }>
+): Array<{ target: A1Range }> {
+  return entries
+    .filter((entry) => isMultiCellRange(entry.target.address))
+    .map((entry) => ({ target: entry.target }));
+}
+
+function isMultiCellRange(address: string): boolean {
+  const parsed = tryParseA1Address(stripSheetName(address));
+  return Boolean(parsed && (parsed.endRow > parsed.startRow || parsed.endColumn > parsed.startColumn));
+}
+
+function shouldMergeRangesFromRequest(input: AgentRunInput): boolean {
+  return /\bmerge(?:d|s)?\b/i.test(input.request);
+}
+
+function hasMergeBatchInput(input: AgentRunInput): boolean {
+  const values = input.values as Record<string, unknown> | undefined;
+  const rawInput = input as unknown as Record<string, unknown>;
+  return shouldMergeRangesFromRequest(input)
+    && (Array.isArray(values?.mergeRanges)
+      || Array.isArray(values?.merges)
+      || Array.isArray(rawInput.mergeRanges)
+      || Array.isArray(rawInput.merges));
+}
+
+function defaultStyleForMergeRequest(input: AgentRunInput): Extract<ExcelOperation, { kind: "range.write_styles" }>["style"] {
+  if (!/\b(center|centered|centre|centred|middle|align|alignment)\b/i.test(input.request)) {
+    return {};
+  }
+  return {
+    horizontalAlignment: "center",
+    verticalAlignment: "center",
+    wrapText: true
+  };
+}
+
+function styleLikeValuePatchCell(entry: Record<string, unknown>): unknown {
+  const values = entry.values;
+  if (!Array.isArray(values) || values.length !== 1 || !Array.isArray(values[0]) || values[0].length !== 1) {
+    return undefined;
+  }
+  const cell = values[0][0];
+  if (!cell || typeof cell !== "object" || Array.isArray(cell)) {
+    return undefined;
+  }
+  const style = normalizeStyleRecord(cell);
+  return Object.keys(style).length > 0 ? cell : undefined;
+}
+
+function hasStyleBatchInput(input: AgentRunInput): boolean {
+  const values = input.values as Record<string, unknown> | undefined;
+  const rawInput = input as unknown as Record<string, unknown>;
+  return Array.isArray(values?.entries)
+    || Array.isArray(values?.patches)
+    || Array.isArray(rawInput.entries)
+    || Array.isArray(rawInput.patches);
+}
+
+function firstArrayValue(...values: unknown[]): unknown[] | undefined {
+  return values.find((value): value is unknown[] => Array.isArray(value));
+}
+
+function normalizeStyleTargetAddress(metadata: WorkbookMetadata, sheetName: string, address: string): string {
+  const normalized = stripSheetName(address).trim();
+  const wholeColumn = /^([A-Z]+):\1$/i.exec(normalized);
+  if (!wholeColumn) {
+    return normalized;
+  }
+  const used = tryParseA1Address(stripSheetName(usedRangeForSheet(metadata, sheetName)));
+  const endRow = Math.max(1, used?.endRow ?? 1);
+  const column = wholeColumn[1]!.toUpperCase();
+  return `${column}1:${column}${endRow}`;
 }
 
 function rangeMetadataMethodForAction(action: AgentIntentAction | undefined): string | undefined {
@@ -8923,6 +10507,124 @@ function rangeMetadataMethodForAction(action: AgentIntentAction | undefined): st
     default:
       return undefined;
   }
+}
+
+function hasRangeMetadataReadIntent(input: AgentRunInput): boolean {
+  return rangeMetadataMethodForAction(intentAction(input) ?? inferredRangeMetadataReadAction(input)) !== undefined;
+}
+
+function inferredRangeMetadataReadAction(input: AgentRunInput): AgentIntentAction | undefined {
+  const request = input.request.toLowerCase();
+  const readVerb = /\b(read|show|check|inspect|review|tell|what|which|whether|does|do|has|have|list|find)\b/.test(request);
+  if (readVerb && /\b(data\s+validation|validation|dropdown|drop\s*down|select\s+list|selection\s+list|allowed values?)\b/.test(request)) {
+    return "read_data_validation";
+  }
+  if (readVerb && /\b(conditional\s+format|conditional\s+formatting)\b/.test(request)) {
+    return "read_conditional_formatting";
+  }
+  if (readVerb && /\b(merged cells?|merge ranges?|merged ranges?)\b/.test(request)) {
+    return "read_merged_cells";
+  }
+  if (readVerb && /\b(hyperlinks?|links?)\b/.test(request)) {
+    return "read_hyperlinks";
+  }
+  if (readVerb && /\b(comments?)\b/.test(request)) {
+    return "read_comments";
+  }
+  if (readVerb && /\b(notes?)\b/.test(request)) {
+    return "read_notes";
+  }
+  return undefined;
+}
+
+function shouldSummarizeGroupedHeader(input: AgentRunInput): boolean {
+  const request = input.request.toLowerCase();
+  const readVerb = /\b(read|show|check|inspect|review|tell|what|which|summari[sz]e|examine|look(?:\s+at)?)\b/.test(request);
+  return readVerb
+    && /\bgroup(?:ed)?\s+headers?\b|\bheader\s+groups?\b|\bmerged\s+headers?\b/.test(request)
+    && !/\b(apply|update|change|set|make|merge\s+these|preview|fix|create|insert|delete|remove)\b/.test(request);
+}
+
+function groupedHeaderSummaryRange(metadata: WorkbookMetadata, sheetName: string, normalizedRange: string, input: AgentRunInput): string {
+  const explicitRange = stringValue(input.target?.range ?? input.target?.address);
+  if (explicitRange && isSingleRowRange(explicitRange)) {
+    return stripSheetName(explicitRange);
+  }
+  const requestedRow = numberValue(/\brow\s*(\d+)\b/i.exec(input.request)?.[1]) ?? 1;
+  const parsed = tryParseA1Address(stripSheetName(normalizedRange))
+    ?? tryParseA1Address(stripSheetName(usedRangeForSheet(metadata, sheetName)));
+  if (!parsed) {
+    return `A${requestedRow}:XFD${requestedRow}`;
+  }
+  return `${numberToColumn(parsed.startColumn)}${requestedRow}:${numberToColumn(parsed.endColumn)}${requestedRow}`;
+}
+
+function isSingleRowRange(address: string): boolean {
+  const parsed = tryParseA1Address(stripSheetName(address));
+  return Boolean(parsed && parsed.startRow === parsed.endRow);
+}
+
+function mergedRangesFromMetadataResult(result: unknown): string[] {
+  const data = result && typeof result === "object" ? (result as Record<string, unknown>).data : undefined;
+  if (!data || typeof data !== "object") {
+    return [];
+  }
+  const record = data as Record<string, unknown>;
+  if (record.isNullObject === true) {
+    return [];
+  }
+  const address = stringValue(record.address);
+  if (!address) {
+    return [];
+  }
+  return address
+    .split(/\s*,\s*/)
+    .map((part) => stripSheetName(part).replace(/\$/g, "").trim())
+    .filter((part) => part.length > 0);
+}
+
+function groupedHeaderSpansFromSnapshot(headerRange: string, snapshot: RangeSnapshot | undefined, mergedRanges: string[]) {
+  return mergedRanges.map((range) => ({
+    range,
+    label: groupedHeaderLabelForRange(headerRange, snapshot, range),
+    merged: true
+  }));
+}
+
+function groupedHeaderUnmergedLabels(headerRange: string, snapshot: RangeSnapshot | undefined, mergedRanges: string[]) {
+  const parsedHeader = tryParseA1Address(stripSheetName(headerRange));
+  if (!parsedHeader) {
+    return [];
+  }
+  const covered = new Set<number>();
+  for (const range of mergedRanges) {
+    const parsed = tryParseA1Address(stripSheetName(range));
+    if (!parsed) continue;
+    for (let column = parsed.startColumn; column <= parsed.endColumn; column += 1) {
+      covered.add(column);
+    }
+  }
+  const textRow = (snapshot?.text ?? snapshot?.values ?? [])[0] ?? [];
+  const labels: Array<{ cell: string; label: unknown; merged: false }> = [];
+  for (let column = parsedHeader.startColumn; column <= parsedHeader.endColumn; column += 1) {
+    if (covered.has(column)) continue;
+    const offset = column - parsedHeader.startColumn;
+    const value = textRow[offset];
+    if (value !== undefined && value !== null && String(value).trim().length > 0) {
+      labels.push({ cell: `${numberToColumn(column)}${parsedHeader.startRow}`, label: value, merged: false });
+    }
+  }
+  return labels;
+}
+
+function groupedHeaderLabelForRange(headerRange: string, snapshot: RangeSnapshot | undefined, range: string): unknown {
+  const parsedHeader = tryParseA1Address(stripSheetName(headerRange));
+  const parsedRange = tryParseA1Address(stripSheetName(range));
+  if (!parsedHeader || !parsedRange) {
+    return undefined;
+  }
+  const offset = parsedRange.startColumn - parsedHeader.startColumn;
+  return (snapshot?.text?.[0]?.[offset] ?? snapshot?.values?.[0]?.[offset]) as unknown;
 }
 
 function searchResultHasNoMatches(result: unknown): boolean {
@@ -9315,6 +11017,80 @@ function normalizeOperationRange(metadata: WorkbookMetadata, sheetName: string, 
     return `${columnOnly[1].toUpperCase()}1:${columnOnly[2].toUpperCase()}${rowCount}`;
   }
   return range;
+}
+
+function structuralRangeOperationKind(
+  input: AgentRunInput,
+  resolved: Extract<AgentTargetResolution, { ok: true }>,
+  requestedKind: RangeStructuralOperationKind
+): RangeStructuralOperationKind {
+  if (!isRowColumnStructuralKind(requestedKind)) {
+    return requestedKind;
+  }
+  const requestedRow = requestMentionsStructuralRows(input.request) || input.target?.row !== undefined;
+  const requestedColumn = requestMentionsStructuralColumns(input.request) || input.target?.column !== undefined;
+  const shape = structuralAddressShape(input.target?.range ?? input.target?.address ?? resolved.range);
+  if (requestedRow && !requestedColumn) {
+    return requestedKind.includes("insert") ? "range.insert_rows" : "range.delete_rows";
+  }
+  if (requestedColumn && !requestedRow) {
+    return requestedKind.includes("insert") ? "range.insert_columns" : "range.delete_columns";
+  }
+  if (shape === "row" && requestedKind.endsWith("_columns")) {
+    return requestedKind.includes("insert") ? "range.insert_rows" : "range.delete_rows";
+  }
+  if (shape === "column" && requestedKind.endsWith("_rows")) {
+    return requestedKind.includes("insert") ? "range.insert_columns" : "range.delete_columns";
+  }
+  return requestedKind;
+}
+
+function intentStructuralOperationKind(input: AgentRunInput): RangeStructuralOperationKind | undefined {
+  switch (input.intent?.action) {
+    case "insert_rows":
+      return "range.insert_rows";
+    case "delete_rows":
+      return "range.delete_rows";
+    case "insert_columns":
+      return "range.insert_columns";
+    case "delete_columns":
+      return "range.delete_columns";
+    default:
+      return undefined;
+  }
+}
+
+function isRowColumnStructuralKind(kind: RangeStructuralOperationKind): boolean {
+  return kind === "range.insert_rows" || kind === "range.delete_rows" || kind === "range.insert_columns" || kind === "range.delete_columns";
+}
+
+function requestMentionsStructuralRows(request: string): boolean {
+  return /\b(?:insert|delete|remove|drop)\b.*\brows?\b|\brows?\b.*\b(?:insert|delete|remove|drop)\b|\b(?:this|selected|active|current)\s+row\b/i.test(request);
+}
+
+function requestMentionsStructuralColumns(request: string): boolean {
+  return /\b(?:insert|delete|remove|drop)\b.*\b(?:cols?|columns?)\b|\b(?:cols?|columns?)\b.*\b(?:insert|delete|remove|drop)\b|\b(?:this|selected|active|current)\s+col(?:umn)?\b/i.test(request);
+}
+
+function structuralAddressShape(address: string): "row" | "column" | undefined {
+  const normalized = stripSheetName(address).replace(/\$/g, "").replace(/\s+/g, "").toUpperCase();
+  if (/^\d+:\d+$/.test(normalized)) {
+    return "row";
+  }
+  if (/^[A-Z]+:[A-Z]+$/.test(normalized)) {
+    return "column";
+  }
+  const parsed = tryParseA1Address(normalized);
+  if (!parsed) {
+    return undefined;
+  }
+  if (parsed.startRow === parsed.endRow && parsed.startColumn !== parsed.endColumn) {
+    return "row";
+  }
+  if (parsed.startColumn === parsed.endColumn && parsed.startRow !== parsed.endRow) {
+    return "column";
+  }
+  return undefined;
 }
 
 interface SimilarRowRange {
@@ -9841,6 +11617,29 @@ function tableFromResolution(metadata: WorkbookMetadata, resolved: Extract<Agent
   }
   return metadata.tables.find((table) => table.id === resolved.candidate.id)
     ?? metadata.tables.find((table) => table.sheetName === resolved.sheetName && table.range === resolved.range);
+}
+
+function explicitlyRequestedTable(metadata: WorkbookMetadata, input: AgentRunInput): TableMetadata | undefined {
+  if (!/\btables?\b/i.test(input.request) && !input.target?.tableName) {
+    return undefined;
+  }
+  const requestedName = input.target?.tableName ? normalizeComparableText(input.target.tableName) : undefined;
+  const request = normalizeComparableText(input.request);
+  return metadata.tables.find((table) => {
+    const name = normalizeComparableText(table.name ?? table.id);
+    return name !== "" && (requestedName === name || request.includes(name));
+  });
+}
+
+function requestExplicitlyNamesTable(input: AgentRunInput, table: TableMetadata): boolean {
+  if (input.target?.tableName) {
+    return normalizeComparableText(input.target.tableName) === normalizeComparableText(table.name ?? table.id);
+  }
+  if (!/\btables?\b/i.test(input.request)) {
+    return false;
+  }
+  const name = normalizeComparableText(table.name ?? table.id);
+  return name !== "" && normalizeComparableText(input.request).includes(name);
 }
 
 function tableRowUpdatesFromInput(input: AgentRunInput): TableUpdateRowsRequest["rows"] {
@@ -10422,6 +12221,26 @@ function minimalAnswerForBudget(answer: unknown, continuation: AgentRunOutput["c
   if (typed.kind === "style_reference_candidates") {
     return compactStyleReferenceCandidatesAnswer(typed, continuation?.resultUri, continuation?.fullResultUri);
   }
+  if (typed.kind === "style_overview") {
+    return compactStyleOverviewAnswer(typed, continuation?.resultUri, continuation?.fullResultUri);
+  }
+  if (typed.kind === "grouped_header_summary") {
+    return stripUndefinedRecord({
+      kind: typed.kind,
+      sheetName: typed.sheetName,
+      range: typed.range,
+      mergedRangeCount: typed.mergedRangeCount,
+      mergeStatus: typed.mergeStatus,
+      spans: Array.isArray(typed.spans) ? typed.spans.slice(0, 12) : undefined,
+      unmergedLabels: Array.isArray(typed.unmergedLabels) ? typed.unmergedLabels.slice(0, 12) : undefined,
+      resultUri: typed.resultUri ?? continuation?.resultUri,
+      fullResultUri: typed.fullResultUri ?? continuation?.fullResultUri,
+      resource: continuation?.resultUri ?? (workbookContextId ? contextResource(String(workbookContextId)).uri : undefined)
+    });
+  }
+  if (typed.kind === "workbook_design_overview") {
+    return compactWorkbookDesignOverviewAnswer(typed, continuation?.resultUri, continuation?.fullResultUri);
+  }
   if (typed.kind === "visual_readability_preview") {
     return compactVisualReadabilityPreviewAnswer(typed, continuation?.resultUri, continuation?.fullResultUri);
   }
@@ -10828,6 +12647,12 @@ function compactAnswerForResponseMode(answer: unknown, responseMode: AgentRespon
   }
   if (kind === "style_summary") {
     return compactStyleSummaryAnswer(typed, resultUri, fullResultUri);
+  }
+  if (kind === "style_overview") {
+    return compactStyleOverviewAnswer(typed, resultUri, fullResultUri);
+  }
+  if (kind === "workbook_design_overview") {
+    return compactWorkbookDesignOverviewAnswer(typed, resultUri, fullResultUri);
   }
   if (kind === "similar_rows") {
     return compactSimilarRowsAnswer(typed, resultUri, fullResultUri);
@@ -11432,6 +13257,59 @@ function compactStyleSummaryAnswer(answer: Record<string, unknown>, resultUri?: 
   });
 }
 
+function compactStyleOverviewAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  const groupedHeaderSuggestion = answer.groupedHeaderSuggestion && typeof answer.groupedHeaderSuggestion === "object"
+    ? answer.groupedHeaderSuggestion as Record<string, unknown>
+    : undefined;
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    source: answer.source,
+    sheetName: answer.sheetName,
+    range: answer.range,
+    freezePanes: answer.freezePanes,
+    table: answer.table,
+    detected: answer.detected,
+    currentStyle: answer.currentStyle,
+    columnRoles: Array.isArray(answer.columnRoles) ? answer.columnRoles.slice(0, 16) : undefined,
+    columnGroupSuggestions: Array.isArray(answer.columnGroupSuggestions) ? answer.columnGroupSuggestions.slice(0, 8) : undefined,
+    groupedHeaderSuggestion: groupedHeaderSuggestion ? stripUndefinedRecord({
+      kind: groupedHeaderSuggestion.kind,
+      targetHeaderRange: groupedHeaderSuggestion.targetHeaderRange,
+      levels: groupedHeaderSuggestion.levels,
+      insertAboveHeader: groupedHeaderSuggestion.insertAboveHeader,
+      styleExistingHeader: groupedHeaderSuggestion.styleExistingHeader,
+      requiresStructuralPreview: groupedHeaderSuggestion.requiresStructuralPreview,
+      defaultApplyBehavior: groupedHeaderSuggestion.defaultApplyBehavior,
+      groups: Array.isArray(groupedHeaderSuggestion.groups) ? groupedHeaderSuggestion.groups.slice(0, 8) : undefined,
+      operationsNeeded: groupedHeaderSuggestion.operationsNeeded
+    }) : undefined,
+    recommendations: Array.isArray(answer.recommendations) ? answer.recommendations.slice(0, 8) : undefined,
+    recommendedWorkflow: answer.recommendedWorkflow,
+    resultUri,
+    fullResultUri
+  });
+}
+
+function compactWorkbookDesignOverviewAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    source: answer.source,
+    workbook: answer.workbook,
+    sheet: answer.sheet,
+    table: answer.table,
+    target: answer.target,
+    dataState: answer.dataState,
+    inspectionPolicy: answer.inspectionPolicy,
+    relatedSheets: Array.isArray(answer.relatedSheets) ? answer.relatedSheets.slice(0, 6) : undefined,
+    columnRecommendations: Array.isArray(answer.columnRecommendations) ? answer.columnRecommendations.slice(0, 40) : undefined,
+    groupSuggestions: Array.isArray(answer.groupSuggestions) ? answer.groupSuggestions.slice(0, 8) : undefined,
+    summary: answer.summary,
+    nextWorkflows: Array.isArray(answer.nextWorkflows) ? answer.nextWorkflows.slice(0, 5) : undefined,
+    resultUri,
+    fullResultUri
+  });
+}
+
 function compactStyleDimension(value: unknown): unknown {
   if (!value || typeof value !== "object") {
     return value;
@@ -11467,6 +13345,10 @@ function compactVisualReadabilityPreviewAnswer(answer: Record<string, unknown>, 
   const visualPlan = answer.visualPlan && typeof answer.visualPlan === "object" ? answer.visualPlan as Record<string, unknown> : undefined;
   const detected = answer.detected && typeof answer.detected === "object" ? answer.detected as Record<string, unknown> : undefined;
   const rules = Array.isArray(visualPlan?.rules) ? visualPlan.rules as Array<Record<string, unknown>> : [];
+  const ruleIds = Array.isArray(visualPlan?.ruleIds)
+    ? visualPlan.ruleIds.filter((id) => typeof id === "string").slice(0, 32)
+    : rules.slice(0, 32).map((rule) => rule.id).filter((id) => typeof id === "string");
+  const groupedHeaderSuggestion = answer.groupedHeaderSuggestion && typeof answer.groupedHeaderSuggestion === "object" ? answer.groupedHeaderSuggestion as Record<string, unknown> : undefined;
   return stripUndefinedRecord({
     kind: answer.kind,
     action: answer.action,
@@ -11489,12 +13371,20 @@ function compactVisualReadabilityPreviewAnswer(answer: Record<string, unknown>, 
       confidence: detected.confidence
     }) : undefined,
     columnRoles: Array.isArray(answer.columnRoles) ? answer.columnRoles.slice(0, 12) : undefined,
+    groupedHeaderSuggestion: groupedHeaderSuggestion ? stripUndefinedRecord({
+      kind: groupedHeaderSuggestion.kind,
+      targetHeaderRange: groupedHeaderSuggestion.targetHeaderRange,
+      requiresStructuralPreview: groupedHeaderSuggestion.requiresStructuralPreview,
+      defaultApplyBehavior: groupedHeaderSuggestion.defaultApplyBehavior,
+      groups: Array.isArray(groupedHeaderSuggestion.groups) ? groupedHeaderSuggestion.groups.slice(0, 8) : undefined,
+      operationsNeeded: groupedHeaderSuggestion.operationsNeeded
+    }) : undefined,
     visualPlan: visualPlan ? stripUndefinedRecord({
       compilerStatus: visualPlan.compilerStatus,
       summary: visualPlan.summary,
       counts: visualPlan.counts,
       ruleScopes: visualPlan.ruleScopes,
-      ruleIds: rules.slice(0, 32).map((rule) => rule.id).filter((id) => typeof id === "string"),
+      ruleIds,
       validationSuggestions: Array.isArray(visualPlan.validationSuggestions) ? visualPlan.validationSuggestions.slice(0, 6) : undefined,
       formulaSuggestions: Array.isArray(visualPlan.formulaSuggestions) ? visualPlan.formulaSuggestions.slice(0, 6) : undefined,
       referenceStyleSuggestions: Array.isArray(visualPlan.referenceStyleSuggestions) ? visualPlan.referenceStyleSuggestions.slice(0, 6) : undefined,
@@ -12081,6 +13971,59 @@ function workbookLocalConfigOptionsFromInput(input: AgentRunInput): { includePer
   return typeof values?.includePermissions === "boolean" ? { includePermissions: values.includePermissions } : {};
 }
 
+function permissionUpdateFromInput(input: AgentRunInput, workbookId: WorkbookId): Partial<PermissionState> {
+  const values = input.values ?? {};
+  const nested = typeof values.permissions === "object" && values.permissions !== null && !Array.isArray(values.permissions)
+    ? values.permissions as Record<string, unknown>
+    : {};
+  const valueFor = (key: keyof PermissionState | "scopeToWorkbook") => nested[key] ?? values[key];
+  const update: Partial<PermissionState> = {};
+  const allowWrites = booleanValue(valueFor("allowWrites"));
+  if (allowWrites !== undefined) update.allowWrites = allowWrites;
+  const allowDestructiveActions = booleanValue(valueFor("allowDestructiveActions"));
+  if (allowDestructiveActions !== undefined) update.allowDestructiveActions = allowDestructiveActions;
+  const allowWorkbookActions = booleanValue(valueFor("allowWorkbookActions"));
+  if (allowWorkbookActions !== undefined) update.allowWorkbookActions = allowWorkbookActions;
+  const allowMacroExecution = booleanValue(valueFor("allowMacroExecution"));
+  if (allowMacroExecution !== undefined) update.allowMacroExecution = allowMacroExecution;
+  const requireConfirmationFor = destructiveLevelsFromUnknown(valueFor("requireConfirmationFor"));
+  if (requireConfirmationFor) update.requireConfirmationFor = requireConfirmationFor;
+  const scope = permissionScopeFromUnknown(valueFor("scope"));
+  if (scope) {
+    update.scope = scope;
+  } else if (booleanValue(valueFor("scopeToWorkbook")) === true) {
+    update.scope = { workbookId };
+  }
+  return update;
+}
+
+function destructiveLevelsFromUnknown(value: unknown): PermissionState["requireConfirmationFor"] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const levels = value.filter((item): item is PermissionState["requireConfirmationFor"][number] =>
+    item === "none" || item === "values" || item === "format" || item === "structure" || item === "workbook"
+  );
+  return [...new Set(levels)];
+}
+
+function permissionScopeFromUnknown(value: unknown): PermissionState["scope"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const scope: PermissionState["scope"] = {};
+  const scopedWorkbookId = stringValue(record.workbookId);
+  if (scopedWorkbookId) scope.workbookId = scopedWorkbookId as WorkbookId;
+  if (Array.isArray(record.sheetNames) && record.sheetNames.every((item) => typeof item === "string")) {
+    scope.sheetNames = [...record.sheetNames];
+  }
+  if (Array.isArray(record.regionNames) && record.regionNames.every((item) => typeof item === "string")) {
+    scope.regionNames = [...record.regionNames];
+  }
+  return Object.keys(scope).length > 0 ? scope : undefined;
+}
+
 function workbookLocalConfigImportRequestFromInput(metadata: WorkbookMetadata, input: AgentRunInput): WorkbookLocalConfigImportRequest | undefined {
   const values = input.values as Record<string, unknown> | undefined;
   const config = values?.config;
@@ -12544,7 +14487,7 @@ function broadMutationNeedsScopeOutput(
 ): Omit<AgentRunOutput, "telemetry"> | undefined {
   const targetCells = cellCountFromAddress(resolved.range) ?? 0;
   const writeCells = matrixCellCount(matrix);
-  const backendSideAction = ["transform_values", "derive_values", "settle_reconciliation"].includes(intentAction(input) ?? "");
+  const backendSideAction = ["transform_values", "derive_values", "settle_reconciliation", "grouped_header"].includes(intentAction(input) ?? "");
   if (!isPotentialBroadMutationRequest(input) || backendSideAction || targetCells < 500 || writeCells >= targetCells) {
     return undefined;
   }
@@ -12577,7 +14520,7 @@ function broadMutationExplicitTargetNeedsScopeOutput(
   const sheetName = input.target?.sheetName;
   const range = input.target?.range;
   const targetCells = typeof range === "string" ? cellCountFromAddress(range) : undefined;
-  const backendSideAction = ["transform_values", "derive_values", "settle_reconciliation"].includes(intentAction(input) ?? "");
+  const backendSideAction = ["transform_values", "derive_values", "settle_reconciliation", "grouped_header"].includes(intentAction(input) ?? "");
   if (!isPotentialBroadMutationRequest(input) || backendSideAction || !sheetName || !range || targetCells === undefined || targetCells < 500) {
     return undefined;
   }
@@ -13031,6 +14974,13 @@ function shouldPreviewReplaceStyledTable(input: AgentRunInput): boolean {
   );
 }
 
+function shouldPreviewGroupedHeader(input: AgentRunInput): boolean {
+  const values = input.values as Record<string, unknown> | undefined;
+  return Boolean(values?.groupedHeader)
+    || /\b(?:grouped?|multi[-\s]?level|two[-\s]?layer|2[-\s]?layer|higher[-\s]?level)\b/i.test(input.request)
+      && /\b(?:headers?|heading|column groups?|merge|merged|band|bands?)\b/i.test(input.request);
+}
+
 function replaceStyledTablePlanFromInput(metadata: WorkbookMetadata, input: AgentRunInput): {
   sheetName: string;
   writeRange: string;
@@ -13074,7 +15024,7 @@ function replaceStyledTablePlanFromInput(metadata: WorkbookMetadata, input: Agen
     values: matrix,
     preserveFormats: true
   });
-  if (values?.autofit !== false) {
+  if (shouldAutofitReplacementColumns(input, values)) {
     operations.push({
       kind: "range.autofit_columns",
       operationId: makeId<OperationId>("op"),
@@ -13096,6 +15046,14 @@ function replaceStyledTablePlanFromInput(metadata: WorkbookMetadata, input: Agen
     ...styleCopies.map((request) => ({ sheetName: request.targetSheetName, ...(request.targetAddress ? { range: request.targetAddress } : {}), after: `copied style dimensions from ${request.sourceSheetName}` }))
   ];
   return { sheetName, writeRange, matrix, clearRanges, operations, styleCopies, changes };
+}
+
+function shouldAutofitReplacementColumns(input: AgentRunInput, values: Record<string, unknown> | undefined): boolean {
+  const explicit = booleanValue(values?.autofit ?? values?.autoFit ?? values?.autofitColumns ?? values?.autoFitColumns);
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  return /\b(?:autofit|auto\s*fit)\b/i.test(input.request);
 }
 
 function clearRangesFromReplaceInput(metadata: WorkbookMetadata, input: AgentRunInput, sheetName: string, writeRange: string): string[] {
@@ -13937,6 +15895,8 @@ type VisualReadabilityStyleDepth = "basic" | "standard" | "comprehensive";
 type VisualReadabilityDensity = "compact" | "comfortable" | "presentation";
 type VisualReadabilityPresentationMode = "working_sheet" | "print_ready" | "executive_report";
 type VisualReadabilitySheetType = "generic_table" | "tabular_data" | "record_tracker" | "numeric_report" | "input_template" | "summary_report" | "mixed_template" | "unknown";
+type VisualReadabilitySuggestionBucket = "layout" | "validation" | "reference_style" | "formula_helpers" | "structure" | "freeze_panes" | "print_settings";
+type VisualReadabilityStylePreservationMode = "protected_regions" | "strict" | "none";
 
 interface VisualReadabilityDetectedStructure {
   sheetName: string;
@@ -13952,6 +15912,7 @@ interface VisualReadabilityDetectedStructure {
   hiddenColumns: string[];
   protectedRanges: string[];
   existingStyleRanges: string[];
+  protectedStyleRanges: string[];
   formulaColumns: string[];
   formulaRanges: string[];
   totalRows: number[];
@@ -14070,6 +16031,7 @@ interface VisualReadabilityPreservationContext {
   mergedRanges: string[];
   hiddenColumns: string[];
   existingStyleRanges: string[];
+  protectedStyleRanges: string[];
   existingConditionalFormattingRanges: string[];
 }
 
@@ -14079,11 +16041,14 @@ function visualReadabilityOptionsFromInput(input: AgentRunInput): {
   density: VisualReadabilityDensity;
   preserveFormulas: boolean;
   preserveExistingStyle: boolean;
+  stylePreservationMode: VisualReadabilityStylePreservationMode;
   allowValidationSuggestions: boolean;
   allowFormulaSuggestions: boolean;
   allowReplaceConditionalFormatting: boolean;
   allowReplaceDataValidation: boolean;
   allowInsertRowsOrColumns: boolean;
+  applySuggestionBuckets: VisualReadabilitySuggestionBucket[];
+  freezePanes?: { rows?: number; columns?: number };
   referenceStyle?: VisualReadabilityReferenceStyleOption;
   presentationMode?: VisualReadabilityPresentationMode;
 } {
@@ -14094,17 +16059,23 @@ function visualReadabilityOptionsFromInput(input: AgentRunInput): {
   const optionValue = (key: string) => nested[key] ?? values[key];
   const referenceStyle = visualReadabilityReferenceStyle(optionValue("referenceStyle") ?? values.referenceStyle);
   const presentationMode = visualReadabilityPresentationMode(optionValue("presentationMode"));
+  const applySuggestionBuckets = visualReadabilitySuggestionBuckets(optionValue("applySuggestionBuckets"));
+  const freezePanes = visualReadabilityFreezePanes(optionValue("freezePanes"), optionValue("freezeRows"), optionValue("freezeColumns"), input.request);
+  const preserveExistingStyle = optionValue("preserveExistingStyle");
   return {
     styleDepth: visualReadabilityStyleDepth(optionValue("styleDepth")),
     profile: stringValue(optionValue("profile")) ?? "auto",
     density: visualReadabilityDensity(optionValue("density")),
     preserveFormulas: booleanValue(optionValue("preserveFormulas")) ?? true,
-    preserveExistingStyle: booleanValue(optionValue("preserveExistingStyle")) ?? true,
+    preserveExistingStyle: booleanValue(preserveExistingStyle) ?? true,
+    stylePreservationMode: visualReadabilityStylePreservationMode(optionValue("stylePreservationMode"), preserveExistingStyle),
     allowValidationSuggestions: booleanValue(optionValue("allowValidationSuggestions")) ?? false,
     allowFormulaSuggestions: booleanValue(optionValue("allowFormulaSuggestions")) ?? false,
     allowReplaceConditionalFormatting: booleanValue(optionValue("allowReplaceConditionalFormatting")) ?? false,
     allowReplaceDataValidation: booleanValue(optionValue("allowReplaceDataValidation")) ?? false,
     allowInsertRowsOrColumns: booleanValue(optionValue("allowInsertRowsOrColumns")) ?? false,
+    applySuggestionBuckets,
+    ...(freezePanes ? { freezePanes } : {}),
     ...(referenceStyle ? { referenceStyle } : {}),
     ...(presentationMode ? { presentationMode } : {})
   };
@@ -14171,60 +16142,94 @@ function compileVisualReadabilityOperations(
   workbookId: WorkbookId,
   sheetName: string,
   rules: VisualReadabilityRule[],
-  options: { preserveExistingStyle: boolean; allowReplaceConditionalFormatting: boolean; preservation: VisualReadabilityPreservationContext }
+  validationSuggestions: VisualReadabilityValidationSuggestion[],
+  options: {
+    preserveExistingStyle: boolean;
+    stylePreservationMode: VisualReadabilityStylePreservationMode;
+    allowReplaceConditionalFormatting: boolean;
+    allowReplaceDataValidation: boolean;
+    applySuggestionBuckets: VisualReadabilitySuggestionBucket[];
+    preservation: VisualReadabilityPreservationContext;
+  }
 ): VisualReadabilityCompiledOperationSet {
   const styleEntries: Array<{ target: A1Range; style: NonNullable<RangeSnapshot["style"]>; preserveValues: true }> = [];
   const numberFormatEntries: Array<{ target: A1Range; numberFormat: string[][]; preserveValues: true }> = [];
   const operations: ExcelOperation[] = [];
   const skipped: VisualReadabilityCompiledOperationSet["skipped"] = [];
   const targetFor = (rule: VisualReadabilityRule): A1Range => ({ workbookId, sheetName, address: rule.target });
+  const bucketEnabled = (bucket: VisualReadabilitySuggestionBucket) => options.applySuggestionBuckets.includes(bucket);
+  const freezePanes: { rows?: number; columns?: number; reasons: string[] } = { reasons: [] };
   for (const rule of rules) {
-    const preservationSkip = visualRulePreservationSkip(rule, options);
+    const retargetedRule = visualRuleWithPreservationSafeTarget(rule, options);
+    if (!retargetedRule) {
+      skipped.push({ ruleId: rule.id, target: rule.target, reason: "Target is fully inside a protected summary/template style area and was skipped." });
+      continue;
+    }
+    const preservationSkip = visualRulePreservationSkip(retargetedRule, options);
     if (preservationSkip) {
       skipped.push(preservationSkip);
       continue;
     }
-    if (rule.kind === "width") {
-      const width = visualRuleWidth(rule.value);
+    if (retargetedRule.kind === "width") {
+      const width = visualRuleWidth(retargetedRule.value);
       if (width === undefined) {
-        skipped.push({ ruleId: rule.id, target: rule.target, reason: "Width rule did not include a supported width value." });
+        skipped.push({ ruleId: retargetedRule.id, target: retargetedRule.target, reason: "Width rule did not include a supported width value." });
       } else {
-        styleEntries.push({ target: targetFor(rule), style: { columnWidth: width }, preserveValues: true });
+        styleEntries.push({ target: targetFor(retargetedRule), style: { columnWidth: width }, preserveValues: true });
       }
       continue;
     }
-    if (rule.kind === "alignment") {
-      const alignment = visualRuleAlignment(rule.value);
+    if (retargetedRule.kind === "alignment") {
+      const alignment = visualRuleAlignment(retargetedRule.value);
       if (Object.keys(alignment).length === 0) {
-        skipped.push({ ruleId: rule.id, target: rule.target, reason: "Alignment rule did not include supported alignment values." });
+        skipped.push({ ruleId: retargetedRule.id, target: retargetedRule.target, reason: "Alignment rule did not include supported alignment values." });
       } else {
-        styleEntries.push({ target: targetFor(rule), style: alignment, preserveValues: true });
+        styleEntries.push({ target: targetFor(retargetedRule), style: alignment, preserveValues: true });
       }
       continue;
     }
-    if (rule.kind === "number_format") {
-      const format = stringValue(rule.value);
-      const matrix = format ? repeatedNumberFormatMatrix(rule.target, format) : undefined;
+    if (retargetedRule.kind === "wrap") {
+      if (!bucketEnabled("layout")) {
+        skipped.push({ ruleId: retargetedRule.id, target: retargetedRule.target, reason: "Wrap text is actionable through the layout bucket; no layout bucket was requested." });
+      } else {
+        styleEntries.push({ target: targetFor(retargetedRule), style: { wrapText: booleanValue(retargetedRule.value) ?? true }, preserveValues: true });
+      }
+      continue;
+    }
+    if (retargetedRule.kind === "height") {
+      const rowHeight = visualRuleHeight(retargetedRule.value);
+      if (!bucketEnabled("layout")) {
+        skipped.push({ ruleId: retargetedRule.id, target: retargetedRule.target, reason: "Row height is actionable through the layout bucket; no layout bucket was requested." });
+      } else if (rowHeight === undefined) {
+        skipped.push({ ruleId: retargetedRule.id, target: retargetedRule.target, reason: "Height rule did not include a supported row height value." });
+      } else {
+        styleEntries.push({ target: targetFor(retargetedRule), style: { rowHeight }, preserveValues: true });
+      }
+      continue;
+    }
+    if (retargetedRule.kind === "number_format") {
+      const format = stringValue(retargetedRule.value);
+      const matrix = format ? repeatedNumberFormatMatrix(retargetedRule.target, format) : undefined;
       if (!matrix) {
-        skipped.push({ ruleId: rule.id, target: rule.target, reason: "Number-format rule did not include a supported format or bounded target." });
+        skipped.push({ ruleId: retargetedRule.id, target: retargetedRule.target, reason: "Number-format rule did not include a supported format or bounded target." });
       } else {
-        numberFormatEntries.push({ target: targetFor(rule), numberFormat: matrix, preserveValues: true });
+        numberFormatEntries.push({ target: targetFor(retargetedRule), numberFormat: matrix, preserveValues: true });
       }
       continue;
     }
-    if (rule.kind === "fill" || rule.kind === "font" || rule.kind === "border") {
-      if (rule.scope === "conditional_range") {
-        const conditionalRule = visualConditionalFormattingRule(rule);
+    if (retargetedRule.kind === "fill" || retargetedRule.kind === "font" || retargetedRule.kind === "border") {
+      if (retargetedRule.scope === "conditional_range") {
+        const conditionalRule = visualConditionalFormattingRule(retargetedRule);
         if (!conditionalRule) {
-          skipped.push({ ruleId: rule.id, target: rule.target, reason: "Conditional rule could not be expressed as a custom formula." });
+          skipped.push({ ruleId: retargetedRule.id, target: retargetedRule.target, reason: "Conditional rule could not be expressed as a custom formula." });
         } else if (options.preserveExistingStyle && !options.allowReplaceConditionalFormatting) {
           operations.push({
             kind: "range.write_conditional_formatting",
             operationId: makeId<OperationId>("op"),
             workbookId,
             destructiveLevel: "format",
-            reason: rule.reason,
-            target: targetFor(rule),
+            reason: retargetedRule.reason,
+            target: targetFor(retargetedRule),
             rule: conditionalRule
           });
         } else {
@@ -14233,33 +16238,79 @@ function compileVisualReadabilityOperations(
             operationId: makeId<OperationId>("op"),
             workbookId,
             destructiveLevel: "format",
-            reason: rule.reason,
-            target: targetFor(rule),
+            reason: retargetedRule.reason,
+            target: targetFor(retargetedRule),
             rule: conditionalRule
           });
         }
       } else {
-        const style = visualRuleStyle(rule);
+        const style = visualRuleStyle(retargetedRule);
         if (Object.keys(style).length === 0) {
-          skipped.push({ ruleId: rule.id, target: rule.target, reason: "Style rule did not include supported style properties." });
+          skipped.push({ ruleId: retargetedRule.id, target: retargetedRule.target, reason: "Style rule did not include supported style properties." });
         } else {
-          styleEntries.push({ target: targetFor(rule), style, preserveValues: true });
+          styleEntries.push({ target: targetFor(retargetedRule), style, preserveValues: true });
         }
       }
       continue;
     }
-    if (rule.kind === "filter") {
-      operations.push({
-        kind: "range.apply_autofilter",
-        operationId: makeId<OperationId>("op"),
-        workbookId,
-        destructiveLevel: "format",
-        reason: rule.reason,
-        target: targetFor(rule)
+    if (retargetedRule.kind === "filter") {
+      skipped.push({
+        ruleId: retargetedRule.id,
+        target: retargetedRule.target,
+        reason: "Filter affordance is already provided by the detected Excel table and was preserved without reapplying worksheet AutoFilter."
       });
       continue;
     }
-    skipped.push({ ruleId: rule.id, target: rule.target, reason: `${rule.kind} is preview-only until a matching workbook operation is available.` });
+    if (retargetedRule.kind === "freeze") {
+      if (!bucketEnabled("freeze_panes")) {
+        skipped.push({ ruleId: retargetedRule.id, target: retargetedRule.target, reason: "Freeze panes are actionable through the freeze_panes bucket; no freeze_panes bucket was requested." });
+      } else {
+        const freeze = visualRuleFreezePanes(retargetedRule.value);
+        if (!freeze) {
+          skipped.push({ ruleId: retargetedRule.id, target: retargetedRule.target, reason: "Freeze rule did not include supported row or column counts." });
+        } else {
+          if (freeze.rows !== undefined) freezePanes.rows = freeze.rows;
+          if (freeze.columns !== undefined) freezePanes.columns = freeze.columns;
+          freezePanes.reasons.push(retargetedRule.reason);
+        }
+      }
+      continue;
+    }
+    skipped.push({ ruleId: retargetedRule.id, target: retargetedRule.target, reason: `${retargetedRule.kind} is preview-only until a matching workbook operation is available.` });
+  }
+  if (bucketEnabled("validation")) {
+    for (const suggestion of validationSuggestions) {
+      if (suggestion.existingValidation === "preserved" && !options.allowReplaceDataValidation) {
+        skipped.push({ ruleId: suggestion.id, target: suggestion.target, reason: "Existing data validation on the target is preserved by default." });
+        continue;
+      }
+      operations.push({
+        kind: "range.write_data_validation",
+        operationId: makeId<OperationId>("op"),
+        workbookId,
+        destructiveLevel: "format",
+        reason: suggestion.reason,
+        target: { workbookId, sheetName, address: suggestion.target },
+        validation: {
+          type: "list",
+          source: suggestion.source,
+          inCellDropDown: true,
+          ignoreBlanks: true
+        }
+      });
+    }
+  }
+  if (freezePanes.rows !== undefined || freezePanes.columns !== undefined) {
+    operations.push({
+      kind: "sheet.freeze_panes",
+      operationId: makeId<OperationId>("op"),
+      workbookId,
+      destructiveLevel: "format",
+      reason: freezePanes.reasons.join(" "),
+      sheetName,
+      ...(freezePanes.rows !== undefined ? { rows: freezePanes.rows } : {}),
+      ...(freezePanes.columns !== undefined ? { columns: freezePanes.columns } : {})
+    });
   }
   if (styleEntries.length > 0) {
     operations.unshift({
@@ -14284,7 +16335,7 @@ function compileVisualReadabilityOperations(
   return { operations, skipped };
 }
 
-function visualRulePreservationSkip(rule: VisualReadabilityRule, options: { preserveExistingStyle: boolean; allowReplaceConditionalFormatting: boolean; preservation: VisualReadabilityPreservationContext }): { ruleId: string; target: string; reason: string } | undefined {
+function visualRulePreservationSkip(rule: VisualReadabilityRule, options: { preserveExistingStyle: boolean; stylePreservationMode: VisualReadabilityStylePreservationMode; allowReplaceConditionalFormatting: boolean; preservation: VisualReadabilityPreservationContext }): { ruleId: string; target: string; reason: string } | undefined {
   if (visualTargetOverlapsAny(rule.target, options.preservation.protectedRanges)) {
     return { ruleId: rule.id, target: rule.target, reason: "Target overlaps a protected range and was skipped." };
   }
@@ -14294,13 +16345,83 @@ function visualRulePreservationSkip(rule: VisualReadabilityRule, options: { pres
   if (options.preservation.hiddenColumns.some((column) => column !== "sheet" && visualRuleTouchesColumn(rule.target, column))) {
     return { ruleId: rule.id, target: rule.target, reason: "Target overlaps hidden columns and was skipped." };
   }
-  if (options.preserveExistingStyle && visualTargetOverlapsAny(rule.target, options.preservation.existingStyleRanges)) {
-    return { ruleId: rule.id, target: rule.target, reason: "Target overlaps an existing styled summary/template area and was skipped." };
+  if (rule.kind === "filter" || rule.kind === "freeze") {
+    return undefined;
+  }
+  if (options.preserveExistingStyle && options.stylePreservationMode !== "none") {
+    const preservedStyleRanges = options.stylePreservationMode === "strict"
+      ? uniqueDefined([...options.preservation.existingStyleRanges, ...options.preservation.protectedStyleRanges])
+      : options.preservation.protectedStyleRanges;
+    if (visualTargetOverlapsAny(rule.target, preservedStyleRanges)) {
+      return { ruleId: rule.id, target: rule.target, reason: "Target overlaps a protected summary/template style area and was skipped." };
+    }
   }
   if (rule.scope === "conditional_range" && options.preserveExistingStyle && !options.allowReplaceConditionalFormatting && visualTargetOverlapsAny(rule.target, options.preservation.existingConditionalFormattingRanges)) {
     return { ruleId: rule.id, target: rule.target, reason: "Existing conditional formatting on the target is preserved by default." };
   }
   return undefined;
+}
+
+function visualRuleWithPreservationSafeTarget(
+  rule: VisualReadabilityRule,
+  options: {
+    preserveExistingStyle: boolean;
+    stylePreservationMode: VisualReadabilityStylePreservationMode;
+    preservation: VisualReadabilityPreservationContext;
+  }
+): VisualReadabilityRule | undefined {
+  if (!options.preserveExistingStyle || options.stylePreservationMode === "none") {
+    return rule;
+  }
+  if (rule.kind === "filter" || rule.kind === "freeze") {
+    return rule;
+  }
+  const protectedStyleRanges = options.stylePreservationMode === "strict"
+    ? uniqueDefined([...options.preservation.existingStyleRanges, ...options.preservation.protectedStyleRanges])
+    : options.preservation.protectedStyleRanges;
+  const safeTarget = visualTargetExcludingLeadingProtectedRows(rule.target, protectedStyleRanges);
+  return safeTarget ? { ...rule, target: safeTarget } : undefined;
+}
+
+function visualTargetExcludingLeadingProtectedRows(target: string, protectedRanges: string[]): string | undefined {
+  const parsedTarget = tryParseA1Address(stripSheetName(target));
+  if (!parsedTarget) {
+    return target;
+  }
+  let startRow = parsedTarget.startRow;
+  for (const protectedRange of protectedRanges) {
+    const parsedProtected = tryParseA1Address(stripSheetName(protectedRange));
+    if (!parsedProtected || !rangesOverlapAddresses(addressFromBounds(startRow, parsedTarget.startColumn, parsedTarget.endRow - startRow + 1, parsedTarget.endColumn - parsedTarget.startColumn + 1), stripSheetName(protectedRange))) {
+      continue;
+    }
+    const coversTargetStartColumns = parsedProtected.startColumn <= parsedTarget.startColumn && parsedProtected.endColumn >= parsedTarget.endColumn;
+    const startsBeforeOrAtTarget = parsedProtected.startRow <= startRow;
+    if (coversTargetStartColumns && startsBeforeOrAtTarget && parsedProtected.endRow >= startRow) {
+      startRow = parsedProtected.endRow + 1;
+    }
+  }
+  if (startRow > parsedTarget.endRow) {
+    return undefined;
+  }
+  return addressFromBounds(startRow, parsedTarget.startColumn, parsedTarget.endRow - startRow + 1, parsedTarget.endColumn - parsedTarget.startColumn + 1);
+}
+
+function visualReadabilityZeroOperationWarnings(skipped: VisualReadabilityCompiledOperationSet["skipped"]): string[] {
+  if (skipped.length === 0) {
+    return ["No apply-ready visual operations were produced."];
+  }
+  const reasons = skipped.map((entry) => entry.reason).join(" ");
+  const warnings: string[] = ["No apply-ready visual operations were produced; do not apply this preview."];
+  if (/protected/.test(reasons)) {
+    warnings.push("Some rules were blocked by protected or template-style areas.");
+  }
+  if (/bucket/.test(reasons)) {
+    warnings.push("Some rules require an explicit opt-in suggestion bucket such as layout, validation, or freeze_panes.");
+  }
+  if (/unsupported|preview-only|operation schema/.test(reasons)) {
+    warnings.push("Some rules are preview-only because no supported workbook operation exists for them yet.");
+  }
+  return warnings;
 }
 
 function visualTargetOverlapsAny(target: string, ranges: string[]): boolean {
@@ -14329,6 +16450,28 @@ function visualRuleWidth(value: unknown): number | undefined {
   }
   const record = value as Record<string, unknown>;
   return numberValue(record.preferred ?? record.max ?? record.min);
+}
+
+function visualRuleHeight(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  return numberValue(record.preferred ?? record.height ?? record.max ?? record.min);
+}
+
+function visualRuleFreezePanes(value: unknown): { rows?: number; columns?: number } | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const rows = visualFreezeCount(record.rows ?? record.rowCount ?? record.row);
+  const columns = visualFreezeCount(record.columns ?? record.columnCount ?? record.column);
+  const freeze = stripUndefinedRecord({ rows, columns }) as { rows?: number; columns?: number };
+  return freeze.rows !== undefined || freeze.columns !== undefined ? freeze : undefined;
 }
 
 function visualRuleAlignment(value: unknown): NonNullable<RangeSnapshot["style"]> {
@@ -14469,6 +16612,91 @@ function visualReadabilityPresentationMode(value: unknown): VisualReadabilityPre
   return undefined;
 }
 
+function visualReadabilityStylePreservationMode(value: unknown, preserveExistingStyle: unknown): VisualReadabilityStylePreservationMode {
+  const raw = stringValue(value)?.toLowerCase().replace(/[\s-]+/g, "_");
+  if (raw === "protected_regions" || raw === "strict" || raw === "none") {
+    return raw;
+  }
+  if (booleanValue(preserveExistingStyle) === false) {
+    return "none";
+  }
+  return "protected_regions";
+}
+
+function visualReadabilitySuggestionBuckets(value: unknown): VisualReadabilitySuggestionBucket[] {
+  const rawValues = Array.isArray(value) ? value : typeof value === "string" ? value.split(/[, ]+/) : [];
+  const allowed = new Set<VisualReadabilitySuggestionBucket>(["layout", "validation", "reference_style", "formula_helpers", "structure", "freeze_panes", "print_settings"]);
+  const buckets: VisualReadabilitySuggestionBucket[] = [];
+  for (const raw of rawValues) {
+    const normalized = stringValue(raw)?.trim().toLowerCase().replace(/[-\s]+/g, "_") as VisualReadabilitySuggestionBucket | undefined;
+    if (normalized && allowed.has(normalized) && !buckets.includes(normalized)) {
+      buckets.push(normalized);
+    }
+  }
+  return buckets;
+}
+
+function visualReadabilityFreezePanes(value: unknown, rowValue: unknown, columnValue: unknown, request: string): { rows?: number; columns?: number } | undefined {
+  const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const rows = visualFreezeCount(record.rows ?? record.rowCount ?? record.row ?? rowValue);
+  const columns = visualFreezeCount(record.columns ?? record.columnCount ?? record.column ?? columnValue);
+  const inferredColumns = columns ?? visualFreezeColumnCountFromRequest(request);
+  const inferredRows = rows ?? visualFreezeRowCountFromRequest(request);
+  const freezePanes = stripUndefinedRecord({ rows: inferredRows, columns: inferredColumns }) as { rows?: number; columns?: number };
+  return freezePanes.rows !== undefined || freezePanes.columns !== undefined ? freezePanes : undefined;
+}
+
+function freezePanesFromInput(input: AgentRunInput): { rows?: number; columns?: number } | undefined {
+  if (/\bunfreeze\b|\bremove\b.*\bfreeze|\bclear\b.*\bfreeze/i.test(input.request)) {
+    return { rows: 0, columns: 0 };
+  }
+  const values = input.values as Record<string, unknown> | undefined;
+  const nested = values?.freezePanes && typeof values.freezePanes === "object" && !Array.isArray(values.freezePanes)
+    ? values.freezePanes as Record<string, unknown>
+    : {};
+  return visualReadabilityFreezePanes(
+    values?.freezePanes,
+    nested.rows ?? nested.rowCount ?? nested.row ?? values?.freezeRows ?? values?.rows,
+    nested.columns ?? nested.columnCount ?? nested.column ?? values?.freezeColumns ?? values?.columns,
+    input.request
+  );
+}
+
+function freezePanesSheetName(metadata: WorkbookMetadata, input: AgentRunInput): string | undefined {
+  const requested = stringValue(input.target?.sheetName);
+  if (requested && !sameText(requested, "active") && !sameText(requested, "active_sheet")) {
+    return metadata.sheets.find((sheet) => sameText(sheet.name, requested))?.name ?? requested;
+  }
+  return metadata.workbook.activeSheet ?? metadata.sheets[0]?.name;
+}
+
+function visualFreezeCount(value: unknown): number | undefined {
+  if (value === true) return 1;
+  if (value === false) return 0;
+  const count = numberValue(value);
+  return count !== undefined && Number.isFinite(count) && count >= 0 ? Math.floor(count) : undefined;
+}
+
+function visualFreezeColumnCountFromRequest(request: string): number | undefined {
+  const lower = request.toLowerCase();
+  const firstColumn = /\bfreeze\b.*\b(?:first\s+)?(?:col|column)\b/.test(lower) || /\bfreeze\b.*\bcolumn\s+a\b/.test(lower);
+  if (!firstColumn) {
+    return undefined;
+  }
+  const count = /\bfreeze\b.*\bfirst\s+(\d+)\s+(?:cols?|columns?)\b/.exec(lower)?.[1];
+  return count ? Number.parseInt(count, 10) : 1;
+}
+
+function visualFreezeRowCountFromRequest(request: string): number | undefined {
+  const lower = request.toLowerCase();
+  const firstRow = /\bfreeze\b.*\b(?:first\s+|top\s+)?row\b/.test(lower) || /\bfreeze\b.*\bheader\b/.test(lower);
+  if (!firstRow) {
+    return undefined;
+  }
+  const count = /\bfreeze\b.*\b(?:first|top)\s+(\d+)\s+rows?\b/.exec(lower)?.[1];
+  return count ? Number.parseInt(count, 10) : 1;
+}
+
 function visualReadabilityReferenceStyle(value: unknown): VisualReadabilityReferenceStyleOption | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -14517,10 +16745,11 @@ function compileVisualReadabilityPlan(
     });
   }
   if (detected.dataRange && detected.hasFilter) {
+    const filterTarget = visualFilterTarget(detected);
     rules.push({
       id: "layout.filter",
       scope: "table",
-      target: detected.dataRange,
+      target: filterTarget,
       kind: "filter",
       value: { enabled: true },
       risk: "low",
@@ -14528,14 +16757,37 @@ function compileVisualReadabilityPlan(
     });
   }
   if (detected.headerRow !== undefined) {
+    const freezeRows = options.freezePanes?.rows ?? detected.headerRow;
     rules.push({
       id: "layout.freeze_header",
       scope: "sheet",
       target: sheet.name,
       kind: "freeze",
-      value: { row: detected.headerRow },
+      value: { rows: freezeRows },
       risk: "low",
       reason: "Keep the detected header row visible while scrolling."
+    });
+  }
+  if (options.freezePanes?.columns !== undefined) {
+    rules.push({
+      id: "layout.freeze_columns",
+      scope: "sheet",
+      target: sheet.name,
+      kind: "freeze",
+      value: { columns: options.freezePanes.columns },
+      risk: "low",
+      reason: `Keep the first ${options.freezePanes.columns} column(s) visible while scrolling.`
+    });
+  }
+  if (options.freezePanes?.rows !== undefined && detected.headerRow === undefined) {
+    rules.push({
+      id: "layout.freeze_rows",
+      scope: "sheet",
+      target: sheet.name,
+      kind: "freeze",
+      value: { rows: options.freezePanes.rows },
+      risk: "low",
+      reason: `Keep the first ${options.freezePanes.rows} row(s) visible while scrolling.`
     });
   }
 
@@ -14659,7 +16911,7 @@ function compileVisualReadabilityPlan(
     summary: visualPlanSummary(sheetType, options, counts),
     counts,
     ruleScopes,
-    rules: rules.slice(0, 40),
+    rules: rules.slice(0, 200),
     validationSuggestions,
     formulaSuggestions,
     referenceStyleSuggestions,
@@ -14697,11 +16949,11 @@ function visualReadabilityTheme(density: VisualReadabilityDensity) {
 }
 
 function shouldCompileVisualValidationSuggestions(options: ReturnType<typeof visualReadabilityOptionsFromInput>): boolean {
-  return options.styleDepth === "comprehensive" || options.allowValidationSuggestions;
+  return options.styleDepth === "comprehensive" || options.allowValidationSuggestions || options.applySuggestionBuckets.includes("validation");
 }
 
 function shouldCompileVisualFormulaSuggestions(options: ReturnType<typeof visualReadabilityOptionsFromInput>): boolean {
-  return options.styleDepth === "comprehensive" || options.allowFormulaSuggestions;
+  return options.styleDepth === "comprehensive" || options.allowFormulaSuggestions || options.applySuggestionBuckets.includes("formula_helpers");
 }
 
 function compileVisualValidationSuggestions(detected: VisualReadabilityDetectedStructure, columns: VisualReadabilityColumnRole[]): VisualReadabilityValidationSuggestion[] {
@@ -14759,6 +17011,10 @@ function compileVisualFormulaSuggestions(detected: VisualReadabilityDetectedStru
     });
   }
   return suggestions.slice(0, 6);
+}
+
+function visualFilterTarget(detected: VisualReadabilityDetectedStructure): string {
+  return detected.tableRanges[0] ?? detected.usedRange ?? detected.headerRange ?? detected.dataRange ?? detected.sheetName;
 }
 
 function compileVisualReferenceStyleSuggestions(
@@ -14907,12 +17163,12 @@ function visualAlignmentForRole(role: string): { horizontalAlignment: string; ve
 
 function visualNumberFormatForRole(role: string): string | undefined {
   if (role === "date") return "dd/mm/yyyy";
-  if (role === "money" || role === "number") return "#,##0";
+  if (role === "money" || role === "number") return "#,##0.00";
   return undefined;
 }
 
 function columnTargetFromDetected(detected: VisualReadabilityDetectedStructure, column: string): string {
-  const parsed = detected.usedRange ? tryParseA1Address(stripSheetName(detected.usedRange)) : undefined;
+  const parsed = detected.dataRange ? tryParseA1Address(stripSheetName(detected.dataRange)) : detected.usedRange ? tryParseA1Address(stripSheetName(detected.usedRange)) : undefined;
   return parsed ? `${column}${parsed.startRow}:${column}${parsed.endRow}` : `${column}:${column}`;
 }
 
@@ -14927,7 +17183,7 @@ function visualColumnGroups(columns: VisualReadabilityColumnRole[], detected: Vi
       groups.push({ label, columns: [column] });
     }
   }
-  const parsed = detected.usedRange ? tryParseA1Address(stripSheetName(detected.usedRange)) : undefined;
+  const parsed = detected.dataRange ? tryParseA1Address(stripSheetName(detected.dataRange)) : detected.usedRange ? tryParseA1Address(stripSheetName(detected.usedRange)) : undefined;
   return groups
     .filter((group) => group.columns.length > 0)
     .map((group) => {
@@ -14987,6 +17243,14 @@ function visualRuleAfterSummary(rule: VisualReadabilityRule): string {
 
 function detectVisualReadabilityStructure(metadata: WorkbookMetadata, sheet: WorkbookMetadata["sheets"][number], targetRange?: string): VisualReadabilityDetectedStructure {
   const sheetTables = metadata.tables.filter((table) => table.sheetName === sheet.name);
+  const firstTable = sheetTables[0];
+  const firstTableRange = firstTable?.range ? tryParseA1Address(stripSheetName(firstTable.range)) : undefined;
+  const firstTableHeaderRange = firstTable?.headerRange ? stripSheetName(firstTable.headerRange) : undefined;
+  const firstTableHeader = firstTableHeaderRange ? tryParseA1Address(firstTableHeaderRange) : undefined;
+  const inferredTableHeaderRange = firstTableRange ? addressFromBounds(firstTableRange.startRow, firstTableRange.startColumn, 1, firstTableRange.endColumn - firstTableRange.startColumn + 1) : undefined;
+  const inferredTableDataRange = firstTableRange && firstTableRange.endRow > firstTableRange.startRow
+    ? addressFromBounds(firstTableRange.startRow + 1, firstTableRange.startColumn, firstTableRange.endRow - firstTableRange.startRow, firstTableRange.endColumn - firstTableRange.startColumn + 1)
+    : undefined;
   const bestHeader = [
     ...sheet.headers,
     ...sheetTables.flatMap((table) => table.headerRange ? [{
@@ -14998,19 +17262,24 @@ function detectVisualReadabilityStructure(metadata: WorkbookMetadata, sheet: Wor
       confidence: 0.95
     } satisfies HeaderMetadata] : [])
   ].sort((left, right) => right.confidence - left.confidence)[0];
-  const firstTable = sheetTables[0];
   const usedRange = targetRange ?? sheet.usedRange;
   const used = usedRange ? tryParseA1Address(stripSheetName(usedRange)) : undefined;
-  const headerRow = bestHeader?.row ?? (firstTable ? tryParseA1Address(stripSheetName(firstTable.range))?.startRow : undefined);
-  const headerRange = bestHeader?.range ?? (firstTable ? addressFromBounds(headerRow ?? 1, tryParseA1Address(stripSheetName(firstTable.range))?.startColumn ?? 1, 1, firstTable.columns.length) : undefined);
-  const dataRange = firstTable?.dataRange ?? (used && headerRow !== undefined && used.endRow > headerRow
+  const bestHeaderParsed = bestHeader?.range ? tryParseA1Address(stripSheetName(bestHeader.range)) : undefined;
+  const bestHeaderLooksLikeWholeTable = Boolean(bestHeaderParsed && firstTableRange && rangesOverlapAddresses(stripSheetName(bestHeader!.range), stripSheetName(firstTable!.range)) && (bestHeaderParsed.endRow - bestHeaderParsed.startRow) >= 1);
+  const headerRow = firstTableHeader?.startRow
+    ?? (firstTableRange ? firstTableRange.startRow : undefined)
+    ?? (bestHeaderLooksLikeWholeTable ? bestHeaderParsed?.startRow : bestHeader?.row);
+  const headerRange = firstTableHeaderRange
+    ?? inferredTableHeaderRange
+    ?? (bestHeaderLooksLikeWholeTable && bestHeaderParsed ? addressFromBounds(bestHeaderParsed.startRow, bestHeaderParsed.startColumn, 1, bestHeaderParsed.endColumn - bestHeaderParsed.startColumn + 1) : bestHeader?.range);
+  const dataRange = inferredTableDataRange ?? firstTable?.dataRange ?? (used && headerRow !== undefined && used.endRow > headerRow
     ? addressFromBounds(headerRow + 1, used.startColumn, used.endRow - headerRow, used.endColumn - used.startColumn + 1)
     : usedRange);
   const formulaColumns = uniqueDefined([
     ...columnsForVisualReadability(metadata, sheet, { headerRange, dataRange }).filter((column) => column.inferredType === "formula" || column.role === "formula").map((column) => column.letter),
     ...metadata.formulaRegions.filter((region) => region.sheetName === sheet.name).flatMap((region) => columnsFromAddress(region.range))
   ]);
-  const existingStyleRanges = uniqueDefined([
+  const protectedStyleRanges = uniqueDefined([
     ...metadata.summaryBlocks.filter((block) => block.sheetName === sheet.name).map((block) => block.range),
     ...metadata.sections.filter((section) => section.sheetName === sheet.name && (section.kind === "summary" || section.kind === "metadata")).map((section) => section.range)
   ]);
@@ -15027,7 +17296,8 @@ function detectVisualReadabilityStructure(metadata: WorkbookMetadata, sheet: Wor
     hiddenRows: [],
     hiddenColumns: sheet.isHidden ? ["sheet"] : [],
     protectedRanges: [],
-    existingStyleRanges,
+    existingStyleRanges: protectedStyleRanges,
+    protectedStyleRanges,
     formulaColumns,
     formulaRanges: metadata.formulaRegions.filter((region) => region.sheetName === sheet.name).map((region) => region.range),
     totalRows: [],
@@ -15061,14 +17331,15 @@ function columnsForVisualReadability(metadata: WorkbookMetadata, sheet: Workbook
 }
 
 function visualColumnRole(column: ColumnMetadata): string {
+  const normalized = normalizeComparableText(column.name);
   if (column.inferredType === "formula" || column.role === "formula") return "formula_output";
-  if (column.inferredType === "currency" || column.role === "amount") return "money";
-  if (column.inferredType === "date" || column.role === "date") return "date";
-  if (column.inferredType === "status" || column.role === "status" || /\b(status|state|stage)\b/i.test(column.name)) return "status";
-  if (column.role === "note" || /\b(note|comment|description|detail)\b/i.test(column.name)) return "notes";
-  if (column.role === "identifier" || /\b(id|no\.?|number|code)\b/i.test(column.name)) return "id";
-  if (column.role === "vendor" || column.role === "account") return "entity";
-  if (column.role === "category" || /\b(type|category|priority|owner)\b/i.test(column.name)) return "category";
+  if (column.inferredType === "currency" || column.role === "amount" || /ราคา|ยอด|ค่า|รวม|สุทธิ|ภาษี|amount|price|cost|fee|total|net|tax|revenue|payment|paid|balance/.test(normalized)) return "money";
+  if (column.inferredType === "date" || column.role === "date" || /วันที่|วัน|date/.test(normalized)) return "date";
+  if (column.inferredType === "status" || column.role === "status" || /\b(status|state|stage)\b/i.test(column.name) || /สถานะ/.test(normalized)) return "status";
+  if (column.role === "note" || /\b(note|comment|description|detail)\b/i.test(column.name) || /หมายเหตุ|รายละเอียด/.test(normalized)) return "notes";
+  if (column.role === "identifier" || /\b(id|no\.?|number|code)\b/i.test(column.name) || /เลข|รหัส|ทะเบียน|โค้ด|booking|บุ๊ค|บุก|phone|โทร|tax/.test(normalized)) return "id";
+  if (column.role === "vendor" || column.role === "account" || /ลูกค้า|customer|vendor|supplier|account|ผู้รับเหมา/.test(normalized)) return "entity";
+  if (column.role === "category" || /\b(type|category|priority|owner)\b/i.test(column.name) || /ประเภท|หมวด/.test(normalized)) return "category";
   if (column.inferredType === "number") return "number";
   return "unknown";
 }

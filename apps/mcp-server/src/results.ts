@@ -14,7 +14,6 @@ export function jsonResult(value: unknown) {
 export function agentJsonResult(value: AgentRunOutput) {
   const jsonSafeValue = JSON.parse(JSON.stringify(value)) as AgentRunOutput;
   const structuredContent = compactStructuredAgentResult(jsonSafeValue);
-  const resourceLinks = Array.isArray(jsonSafeValue.resourceLinks) ? jsonSafeValue.resourceLinks : [];
   return {
     content: [
       {
@@ -22,15 +21,7 @@ export function agentJsonResult(value: AgentRunOutput) {
         text: compactAgentResultText(structuredContent)
       }
     ],
-    structuredContent,
-    resources: resourceLinks
-      .filter((resource) => typeof resource?.uri === "string")
-      .map((resource) => ({
-        uri: resource.uri,
-        name: resource.name ?? resource.uri,
-        description: resource.description,
-        mimeType: resource.mimeType ?? "application/json"
-      }))
+    structuredContent
   };
 }
 

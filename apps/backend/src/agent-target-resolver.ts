@@ -66,6 +66,8 @@ interface CandidateScore {
 }
 
 const A1_RANGE_PATTERN = /\b\$?[A-Z]{1,3}\$?\d+(?:\s*:\s*\$?[A-Z]{1,3}\$?\d+)?\b/i;
+const ROW_RANGE_PATTERN = /\b(?:rows?\s+(\d{1,7})(?:\s*(?::|to|through|-)\s*(\d{1,7}))?|(\d{1,7})(?:\s*(?::|to|through|-)\s*(\d{1,7}))?\s+rows?)\b/i;
+const COLUMN_RANGE_PATTERN = /\b(?:cols?|columns?)\s+([A-Z]{1,3})(?:\s*(?::|to|through|-)\s*([A-Z]{1,3}))?\b/i;
 
 export type AgentTargetResolution = {
   ok: true;
@@ -234,7 +236,7 @@ function canonicalSheetFromExplicitTarget(candidates: AgentCandidate[] | undefin
 }
 
 function resolveExplicitSheetRangeTarget(metadata: WorkbookMetadata, input: AgentRunInput): Extract<AgentTargetResolution, { ok: true }> | undefined {
-  const range = input.target?.range;
+  const range = targetRange(input);
   if (!range) {
     return undefined;
   }
@@ -265,6 +267,16 @@ function resolveExplicitSheetRangeTarget(metadata: WorkbookMetadata, input: Agen
     sheetName: canonical.sheetName,
     range: address
   };
+}
+
+function targetRange(input: AgentRunInput): string | undefined {
+  if (input.target?.range ?? input.target?.address) {
+    return input.target.range ?? input.target.address;
+  }
+  if (typeof input.target?.row === "number" && Number.isInteger(input.target.row) && input.target.row > 0) {
+    return `${input.target.row}:${input.target.row}`;
+  }
+  return undefined;
 }
 
 function splitSheetQualifiedAddress(address: string): { sheetName: string; range: string } | undefined {
@@ -354,14 +366,17 @@ function resolveExactAgentTarget(
       return exactSourceResolution({ ...sheetSource, range: parsedReference.range }, options);
     }
   }
-  const sheetHeaderBlock = resolveExactSheetHeaderBlock(metadata, input.request, options);
-  if (sheetHeaderBlock) {
-    return sheetHeaderBlock;
+  const sheetRangeMention = resolveMentionedSheetRange(metadata, input.request, options);
+  if (sheetRangeMention) {
+    return sheetRangeMention;
   }
-
   const mentionedTable = resolveMentionedTable(metadata, input.request, options);
   if (mentionedTable) {
     return mentionedTable;
+  }
+  const sheetHeaderBlock = resolveExactSheetHeaderBlock(metadata, input.request, options);
+  if (sheetHeaderBlock) {
+    return sheetHeaderBlock;
   }
 
   const mentionedNamedRegion = resolveMentionedNamedRegion(metadata, input.request, options);
@@ -450,14 +465,18 @@ function resolveSelectedTarget(
       warnings: ["Reload or reopen the OpenWorkbook Local taskpane if Excel is connected, then select a cell/range in Excel and retry the request."]
     };
   }
-  const range = requestMentionsSelectedColumn(request) ? selectedColumnRange(metadata, selection) : selection.address;
+  const range = requestMentionsSelectedColumn(request)
+    ? selectedColumnRange(metadata, selection)
+    : requestMentionsSelectedRow(request)
+      ? selectedRowRange(selection)
+      : selection.address;
   return exactSourceResolution({
     kind: "range",
     id: "selection:active",
-    label: requestMentionsSelectedColumn(request) ? "selected column" : selection.isSingleCell ? "selected cell" : "selected range",
+    label: requestMentionsSelectedColumn(request) ? "selected column" : requestMentionsSelectedRow(request) ? "selected row" : selection.isSingleCell ? "selected cell" : "selected range",
     sheetName: selection.sheetName,
     range,
-    searchValues: ["selected", "selection", "active cell", "current cell", "selected range", "selected column"]
+    searchValues: ["selected", "selection", "active cell", "current cell", "selected range", "selected column", "selected row"]
   }, options);
 }
 
@@ -608,11 +627,22 @@ function selectedCellNeighborhoodRange(metadata: WorkbookMetadata, selection: No
 }
 
 function requestMentionsSelection(request: string): boolean {
-  return /\b(selection|highlighted|active cell|current cell|this cell|this range|this column|selected (?:cell|range|col(?:umn)?)|active column|current column)\b/i.test(request);
+  return /\b(selection|highlighted|active cell|current cell|this cell|this range|this column|this row|selected (?:cell|range|row|col(?:umn)?)|active column|active row|current column|current row)\b/i.test(request);
 }
 
 function requestMentionsSelectedColumn(request: string): boolean {
   return /\b(this|selected|active|current)\s+col(?:umn)?\b/i.test(request);
+}
+
+function requestMentionsSelectedRow(request: string): boolean {
+  return /\b(this|selected|active|current)\s+row\b/i.test(request);
+}
+
+function selectedRowRange(selection: NonNullable<WorkbookMetadata["selection"]>): string {
+  if (!selection.isSingleCell) {
+    return selection.address;
+  }
+  return `${selection.startCell.row}:${selection.startCell.row}`;
 }
 
 function selectedColumnRange(metadata: WorkbookMetadata, selection: NonNullable<WorkbookMetadata["selection"]>): string {
@@ -834,6 +864,28 @@ function resolveMentionedTable(
   return undefined;
 }
 
+function resolveMentionedSheetRange(
+  metadata: WorkbookMetadata,
+  request: string,
+  options: { requireRange: boolean; kindFilter?: Set<AgentCandidate["kind"]> }
+): AgentTargetResolution | undefined {
+  const matches = metadata.sheets
+    .filter((sheet) => requestMentionsSheet(request, sheet.name))
+    .map((sheet) => ({ sheet, range: parseRangeForSheetRequest(request, sheet.name) }))
+    .filter((entry): entry is { sheet: WorkbookMetadata["sheets"][number]; range: string } => Boolean(entry.range));
+  if (matches.length !== 1 || !matches[0]) {
+    return undefined;
+  }
+  return exactSourceResolution({
+    kind: "range",
+    id: `range:${matches[0].sheet.name}:${matches[0].range}`,
+    label: `${matches[0].sheet.name}!${matches[0].range}`,
+    sheetName: matches[0].sheet.name,
+    range: matches[0].range,
+    searchValues: [matches[0].sheet.name, matches[0].range]
+  }, options);
+}
+
 function toCandidate(source: CandidateSource, confidence: number | CandidateScore): AgentCandidate {
   const score = typeof confidence === "number" ? { confidence, matchedTargetHint: false } : confidence;
   const boundedConfidence = Number(Math.min(1, Math.max(0, score.confidence)).toFixed(3));
@@ -935,7 +987,7 @@ function semanticRoleForSheetKind(kind: WorkbookMetadata["sheets"][number]["kind
 }
 
 function parseSheetRangeReference(request: string): { sheetName: string; range: string } | undefined {
-  const a1Pattern = /(\$?[A-Z]{1,3}\$?\d+(?:\s*:\s*\$?[A-Z]{1,3}\$?\d+)?|\$?[A-Z]{1,3}\s*:\s*\$?[A-Z]{1,3})/i;
+  const a1Pattern = /(\$?[A-Z]{1,3}\$?\d+(?:\s*:\s*\$?[A-Z]{1,3}\$?\d+)?|\$?[A-Z]{1,3}\s*:\s*\$?[A-Z]{1,3}|\d{1,7}\s*:\s*\d{1,7})/i;
   const quoted = new RegExp(`['"]([^'"]+)['"]!\\s*${a1Pattern.source}`, "i").exec(request);
   if (quoted?.[1] && quoted[2]) {
     return { sheetName: quoted[1], range: normalizeA1Range(quoted[2]) };
@@ -960,7 +1012,43 @@ function parseRangeForSheetRequest(request: string, sheetName: string): string |
   if (explicit?.[1]) {
     return normalizeA1Range(explicit[1]);
   }
+  const rowRange = explicitRowRangeForSheetRequest(request);
+  if (rowRange) {
+    return rowRange;
+  }
+  const columnRange = explicitColumnRangeForSheetRequest(request);
+  if (columnRange) {
+    return columnRange;
+  }
   return undefined;
+}
+
+function explicitRowRangeForSheetRequest(request: string): string | undefined {
+  if (!/\brows?\b/i.test(request)) {
+    return undefined;
+  }
+  const match = ROW_RANGE_PATTERN.exec(request);
+  const startText = match?.[1] ?? match?.[3];
+  const endText = match?.[2] ?? match?.[4] ?? startText;
+  if (!startText) {
+    return undefined;
+  }
+  const start = Number(startText);
+  const end = Number(endText);
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start <= 0 || end <= 0) {
+    return undefined;
+  }
+  return `${Math.min(start, end)}:${Math.max(start, end)}`;
+}
+
+function explicitColumnRangeForSheetRequest(request: string): string | undefined {
+  const match = COLUMN_RANGE_PATTERN.exec(request);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  const start = match[1].toUpperCase();
+  const end = (match[2] ?? match[1]).toUpperCase();
+  return `${start}:${end}`;
 }
 
 function resolveExactSheetHeaderBlock(

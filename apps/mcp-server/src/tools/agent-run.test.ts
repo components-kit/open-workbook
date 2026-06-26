@@ -19,8 +19,13 @@ describe("excel.agent.run MCP schema", () => {
     expect(AGENT_INTENT_ACTIONS).toContain("find_similar_rows");
     expect(AGENT_INTENT_ACTIONS).toContain("read_formulas");
     expect(AGENT_INTENT_ACTIONS).toContain("improve_visual_readability");
+    expect(AGENT_INTENT_ACTIONS).toContain("workbook_design_overview");
+    expect(AGENT_INTENT_ACTIONS).toContain("get_permissions");
+    expect(AGENT_INTENT_ACTIONS).toContain("set_permissions");
+    expect(AGENT_INTENT_ACTIONS).toContain("allow_destructive_actions");
     expect(AGENT_DETAIL_LEVELS).toContain("full_table");
     expect(AGENT_DETAIL_LEVELS).toContain("semantic_index");
+    expect(AGENT_DETAIL_LEVELS).toContain("workbook_design_overview");
   });
 
   it("exposes semantic and workflow telemetry fields in the output schema", () => {
