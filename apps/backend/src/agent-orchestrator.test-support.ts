@@ -26,6 +26,7 @@ export class FakeAgentRuntime {
   omitOkOnWrite = false;
   batchResultOverride: unknown | undefined;
   snapshotRangesOverride: unknown | undefined;
+  mutateFormulaReadsAfterWrite = false;
   validationResult: any;
   lastBatchOperations: BatchRequest["operations"] = [];
   lastBatchRequest: BatchRequest | undefined;
@@ -38,6 +39,15 @@ export class FakeAgentRuntime {
   collaborationStatus: any;
   failStyleCopyOnCall: number | undefined;
   workbookContentVersion = 0;
+  permissionState = {
+    allowWrites: true,
+    allowDestructiveActions: false,
+    allowWorkbookActions: false,
+    allowMacroExecution: false,
+    requireConfirmationFor: [],
+    scope: {},
+    lockedRegions: []
+  };
 
   sessions = { getActive: () => ({ activeWorkbook }) };
 
@@ -125,6 +135,29 @@ export class FakeAgentRuntime {
     return { ok: true, info: { workbook: activeWorkbook, sheetCount: sheets.length } };
   }
 
+  getPermissions() {
+    this.recordRuntimeCall("permissions.get");
+    return { ok: true, permissions: this.permissionState };
+  }
+
+  setPermissions(update: any) {
+    this.recordRuntimeCall("permissions.set");
+    this.permissionState = {
+      ...this.permissionState,
+      ...update,
+      scope: update.scope ?? this.permissionState.scope,
+      lockedRegions: update.lockedRegions ?? this.permissionState.lockedRegions,
+      requireConfirmationFor: update.requireConfirmationFor ?? this.permissionState.requireConfirmationFor
+    };
+    return this.getPermissions();
+  }
+
+  allowDestructiveActions(allow: boolean) {
+    this.recordRuntimeCall("permissions.allow_destructive_actions");
+    this.permissionState = { ...this.permissionState, allowDestructiveActions: allow };
+    return this.getPermissions();
+  }
+
   async closeWorkbook(requestWorkbookId: any, closeBehavior?: any) {
     this.recordRuntimeCall("workbook.close");
     return { ok: true, workbookId: requestWorkbookId, closeBehavior };
@@ -176,6 +209,16 @@ export class FakeAgentRuntime {
 
   async readRangeMetadata(method: string, request: any) {
     this.recordRuntimeCall(method);
+    if (method === "range.read_merged_cells") {
+      return {
+        ok: true,
+        method,
+        request,
+        data: request.sheetName === "Invoices" && request.address === "A1:O1"
+          ? { address: "Invoices!A1:B1,Invoices!C1:F1,Invoices!G1:N1", areaCount: 3, cellCount: 14, isNullObject: false }
+          : { address: request.address, areaCount: 0, cellCount: 0, isNullObject: true }
+      };
+    }
     if (method === "range.read_data_validation") {
       return {
         ok: true,
@@ -301,7 +344,7 @@ export class FakeAgentRuntime {
           operationId: operation.operationId,
           snapshot: {
             values: valuesFor(sheetName, address),
-            formulas: formulasFor(sheetName, address),
+            formulas: this.formulasForRead(sheetName, address),
             text: valuesFor(sheetName, address).map((row) => row.map((value) => value === null || value === undefined ? "" : String(value))),
             numberFormat: numberFormatsFor(sheetName, address),
             style: { fillColor: "#FFFFFF", fontName: "Calibri", fontSize: 11 }
@@ -325,6 +368,14 @@ export class FakeAgentRuntime {
       warnings: [],
       telemetry: { cellsWritten: 1 }
     };
+  }
+
+  private formulasForRead(sheetName: string, address: string) {
+    const formulas = formulasFor(sheetName, address);
+    if (!this.mutateFormulaReadsAfterWrite || this.writeBatchCount === 0) {
+      return formulas;
+    }
+    return formulas.map((row) => row.map((formula, index) => formula && index === 0 ? `${formula}+0` : formula));
   }
 
   async snapshotRanges(requestWorkbookId: WorkbookId, ranges: Array<{ workbookId?: WorkbookId; sheetName: string; address: string }>) {
@@ -526,7 +577,7 @@ export class FakeAgentRuntime {
 
   async getStyleFingerprint(request: any) {
     this.recordRuntimeCall("style.get_fingerprint");
-    return { ok: true, fingerprint: { workbookId: request.workbookId, sheetName: request.sheetName, address: request.address ?? "A1:B20", dimensions: { fills: { hash: "fills" }, fonts: { hash: "fonts" } }, warnings: [] } };
+    return { ok: true, fingerprint: { workbookId: request.workbookId, sheetName: request.sheetName, address: request.address ?? "A1:B20", dimensions: { fills: { hash: "fills" }, fonts: { hash: "fonts" }, freezePanes: { readable: true, frozen: true, rows: 2, columns: 3, lastFrozenColumn: "C", firstUnfrozenColumn: "D", lastFrozenRow: 2, firstUnfrozenRow: 3 } }, warnings: [] } };
   }
 
   async compareStyleFingerprints(request: any) {
@@ -1200,6 +1251,12 @@ export function selectionInfo(sheetName: string, address: string, position = { r
 }
 
 function valuesFor(sheetName: string, address: string) {
+  if (sheetName === "Invoices") {
+    if (address === "A1:O1") {
+      return [["สถานะ", "", "ข้อมูลการจอง", "", "", "", "ค่าใช้จ่าย", "", "", "", "", "", "", "", "งานจ้างช่วง"]];
+    }
+    return [["สถานะ", "", "ข้อมูลการจอง", "", "", "", "ค่าใช้จ่าย", "", "", "", "", "", "", "", "งานจ้างช่วง"]];
+  }
   if (sheetName === "Vendor Propose") {
     const rows = [
       ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "Reference Diesel Rate : 37.50 THB/liter"],

@@ -27,6 +27,6 @@ describe("add-in runtime version", () => {
     };
 
     expect(getRuntimeCapabilities().engine.version).toBe(OPEN_WORKBOOK_VERSION);
-    expect(getRuntimeCapabilities().engine.taskpaneBundleVersion).toBe("20260622-9");
+    expect(getRuntimeCapabilities().engine.taskpaneBundleVersion).toBe("20260626-3");
   });
 });

@@ -18,8 +18,14 @@ describe("excel.agent.run MCP schema", () => {
     expect(AGENT_INTENT_ACTIONS).toContain("format_diagnostics");
     expect(AGENT_INTENT_ACTIONS).toContain("find_similar_rows");
     expect(AGENT_INTENT_ACTIONS).toContain("read_formulas");
+    expect(AGENT_INTENT_ACTIONS).toContain("improve_visual_readability");
+    expect(AGENT_INTENT_ACTIONS).toContain("workbook_design_overview");
+    expect(AGENT_INTENT_ACTIONS).toContain("get_permissions");
+    expect(AGENT_INTENT_ACTIONS).toContain("set_permissions");
+    expect(AGENT_INTENT_ACTIONS).toContain("allow_destructive_actions");
     expect(AGENT_DETAIL_LEVELS).toContain("full_table");
     expect(AGENT_DETAIL_LEVELS).toContain("semantic_index");
+    expect(AGENT_DETAIL_LEVELS).toContain("workbook_design_overview");
   });
 
   it("exposes semantic and workflow telemetry fields in the output schema", () => {
@@ -172,6 +178,10 @@ describe("excel.agent.run MCP schema", () => {
     expect(combined).toContain("Reconciliation Note");
     expect(combined).toContain("Detail Notes");
     expect(combined).toContain("transform_sheets");
+    expect(combined).toContain("improve_visual_readability");
+    expect(combined).toContain("values.visualReadability");
+    expect(combined).toContain("comprehensive validation/formula suggestions remain preview-only");
+    expect(combined).toContain("do not apply dropdowns, formulas, inserted rows/columns, or summary blocks through the visual styling apply path");
     expect(combined).toContain("do not fetch full source/target columns");
     expect(combined).not.toContain("use `excel.agent.run` with `mode: \"preview_update\"` and then `mode: \"apply_update\"` for scoped value edits");
     expect(combined).not.toContain("group related range value edits with `values.patches` in one `preview_update`");

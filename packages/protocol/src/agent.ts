@@ -64,6 +64,8 @@ export const AGENT_DETAIL_LEVELS = [
   "workbook_summary",
   "semantic_index",
   "sheet_summary",
+  "style_overview",
+  "workbook_design_overview",
   "table_sample",
   "full_table"
 ] as const;
@@ -77,6 +79,7 @@ export interface AgentRunTarget {
   sheetName?: string;
   tableName?: string;
   range?: string;
+  address?: string;
   row?: number;
   column?: string;
   entity?: string;
@@ -96,6 +99,9 @@ export const AGENT_INTENT_ACTIONS = [
   "embed_local_config",
   "read_embedded_local_config",
   "import_embedded_local_config",
+  "get_permissions",
+  "set_permissions",
+  "allow_destructive_actions",
   "close_workbook",
   "prepare_session",
   "create_formula_sheet",
@@ -132,6 +138,10 @@ export const AGENT_INTENT_ACTIONS = [
   "find_similar_rows",
   "analyze_reference_sheet",
   "find_style_references",
+  "style_overview",
+  "workbook_design_overview",
+  "grouped_header",
+  "improve_visual_readability",
   "transform_values",
   "derive_values",
   "settle_reconciliation",
@@ -223,6 +233,7 @@ export const AGENT_INTENT_ACTIONS = [
   "unprotect_sheet",
   "clear_sheet",
   "set_sheet_tab_color",
+  "freeze_panes",
   "autofit",
   "autofit_rows",
   "copy_template_sheet",
@@ -293,6 +304,7 @@ export interface AgentRunInput {
       target: AgentRunTarget;
       values?: unknown[][];
       rows?: unknown[][];
+      style?: Record<string, unknown>;
       reason?: string;
     }>;
   };

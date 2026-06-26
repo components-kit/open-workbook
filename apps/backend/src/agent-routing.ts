@@ -138,6 +138,7 @@ function routeAgentWorkflow(
   if (action === "read_values") return workflow("range.read", intent?.confidence ?? 0.85, "Structured value read action.", "sampled_allowed", "targeted_read");
   if (action === "read_formulas" || action === "read_formula_patterns" || action === "explain_formula") return workflow("range.read", intent?.confidence ?? 0.9, "Structured formula inspection action.", "sampled_allowed", "targeted_read");
   if (action === "find_similar_rows") return workflow("range.read", intent?.confidence ?? 0.88, "Structured similar-row reference search action.", "sampled_allowed", "targeted_read");
+  if (action === "improve_visual_readability") return workflow("mutation.preview", intent?.confidence ?? 0.9, "Structured visual readability preview action.", "sampled_allowed", "preview_only");
   if (action && modeForIntentAction(action) === "preview_update") return workflow("mutation.preview", intent?.confidence ?? 0.9, "Structured mutation action.", "sampled_allowed", "preview_only");
 
   const lower = request.toLowerCase();

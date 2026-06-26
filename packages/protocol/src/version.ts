@@ -1,1 +1,1 @@
-export const OPEN_WORKBOOK_VERSION = "0.1.24";
+export const OPEN_WORKBOOK_VERSION = "0.1.25";

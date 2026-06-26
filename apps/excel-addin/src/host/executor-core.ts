@@ -88,7 +88,7 @@ interface ExecutionCounters {
 
 const ENGINE_NAME = "office-js-addin";
 const ENGINE_VERSION = OPEN_WORKBOOK_VERSION;
-const TASKPANE_BUNDLE_VERSION = "20260622-9";
+const TASKPANE_BUNDLE_VERSION = "20260626-3";
 const CHUNK_CELL_LIMIT = 50_000;
 const OPEN_WORKBOOK_CUSTOM_XML_NAMESPACE = "https://open-workbook.dev/schema/local-config/1";
 const EXCEL_API_VERSIONS = ["1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13", "1.14", "1.15", "1.16", "1.17"] as const;
@@ -977,17 +977,31 @@ export async function reorderTableColumns(request: TableReorderColumnsRequest): 
     }
 
     const tableRange = table.getRange();
-    tableRange.load("rowCount,columnCount");
+    tableRange.load("rowCount,columnCount,formulasR1C1");
     await context.sync();
+
+    const sourceColumns = Array.from({ length: tableRange.columnCount }, (_, columnIndex) => tableRange.getColumn(columnIndex));
+    for (const column of sourceColumns) {
+      column.format.load("columnWidth");
+    }
+    await context.sync();
+
+    const originalFormulasR1C1 = cloneMatrix((tableRange as unknown as { formulasR1C1?: unknown[][] }).formulasR1C1 ?? []);
+    const reorderedFormulasR1C1 = reorderMatrixColumns(originalFormulasR1C1, sourceIndexes, tableRange.rowCount, tableRange.columnCount);
+    const reorderedColumnWidths = sourceIndexes.map((sourceIndex) => sourceColumns[sourceIndex]?.format.columnWidth);
 
     const scratchSheet = context.workbook.worksheets.add(`__owb_reorder_${Date.now().toString(36)}`);
     const originalRange = scratchSheet.getRangeByIndexes(0, 0, tableRange.rowCount, tableRange.columnCount);
-    const reorderedRange = scratchSheet.getRangeByIndexes(0, tableRange.columnCount + 1, tableRange.rowCount, tableRange.columnCount);
     originalRange.copyFrom(tableRange, Excel.RangeCopyType.all);
     for (const [targetIndex, sourceIndex] of sourceIndexes.entries()) {
-      reorderedRange.getColumn(targetIndex).copyFrom(originalRange.getColumn(sourceIndex), Excel.RangeCopyType.all);
+      tableRange.getColumn(targetIndex).copyFrom(originalRange.getColumn(sourceIndex), Excel.RangeCopyType.all);
     }
-    tableRange.copyFrom(reorderedRange, Excel.RangeCopyType.all);
+    (tableRange as unknown as { formulasR1C1: unknown[][] }).formulasR1C1 = reorderedFormulasR1C1;
+    for (const [targetIndex, width] of reorderedColumnWidths.entries()) {
+      if (typeof width === "number" && Number.isFinite(width)) {
+        tableRange.getColumn(targetIndex).format.columnWidth = width;
+      }
+    }
     scratchSheet.delete();
 
     const reloaded = loadTableInfoObjects(table);
@@ -1307,7 +1321,14 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
             break;
           }
           case "range.write_data_validation": {
-            applyDataValidation(getRange(context, operation.target), operation.validation);
+            const entries = operation.entries?.length
+              ? operation.entries
+              : operation.target
+                ? [{ target: operation.target, validation: operation.validation }]
+                : [];
+            for (const entry of entries) {
+              applyDataValidation(getRange(context, entry.target), entry.validation);
+            }
             counters.cellsWritten += payload.compiled.estimatedCellsTouched;
             break;
           }
@@ -1387,7 +1408,7 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
           }
           case "range.reorder_columns": {
             await reorderRangeColumns(context, operation.target, operation.columnOrder);
-            counters.syncCount += 1;
+            counters.syncCount += 2;
             counters.cellsWritten += payload.compiled.estimatedCellsTouched;
             break;
           }
@@ -1557,6 +1578,10 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
             context.workbook.worksheets.getItem(operation.sheetName).tabColor = operation.color;
             break;
           }
+          case "sheet.freeze_panes": {
+            applyFreezePanes(context.workbook.worksheets.getItem(operation.sheetName), operation);
+            break;
+          }
           case "template.create_sheet_from_template": {
             const warning = applyTemplateSheetOperation(context, operation, payload.templateSources ?? []);
             if (warning) {
@@ -1708,7 +1733,9 @@ export async function captureStyleFingerprint(request: StyleFingerprintRequest):
   return Excel.run(async (context) => {
     const worksheet = context.workbook.worksheets.getItem(request.sheetName);
     const range = request.address ? worksheet.getRange(stripSheetName(request.address)) : worksheet.getUsedRangeOrNullObject();
+    const freezeLocation = getFreezePanesLocationOrNullObject(worksheet);
     range.load("address, rowCount, columnCount, numberFormat");
+    freezeLocation?.load("address, rowIndex, columnIndex, rowCount, columnCount");
     range.format.load("rowHeight, columnWidth, horizontalAlignment, verticalAlignment, wrapText");
     range.format.fill.load("color");
     range.format.font.load("name, size, color, bold, italic, underline");
@@ -1850,9 +1877,7 @@ export async function captureStyleFingerprint(request: StyleFingerprintRequest):
         dataValidation: {
           note: "Use excel.range.read_data_validation for detailed rule inspection."
         },
-        freezePanes: {
-          note: "Office.js freeze pane capture is tracked as a layout capability."
-        },
+        freezePanes: freezePanesSummary(freezeLocation),
         printSettings: {
           note: "Office.js print setting capture is tracked as a layout capability."
         },
@@ -1866,6 +1891,52 @@ export async function captureStyleFingerprint(request: StyleFingerprintRequest):
       warnings
     };
   });
+}
+
+function getFreezePanesLocationOrNullObject(worksheet: Excel.Worksheet): Excel.Range | undefined {
+  const freezePanes = (worksheet as unknown as { freezePanes?: { getLocationOrNullObject?: () => Excel.Range } }).freezePanes;
+  return freezePanes?.getLocationOrNullObject?.();
+}
+
+function freezePanesSummary(location: Excel.Range | undefined): Record<string, unknown> {
+  if (!location) {
+    return {
+      readable: false,
+      message: "Office.js freeze panes API is unavailable in this host."
+    };
+  }
+  if ((location as unknown as { isNullObject?: boolean }).isNullObject) {
+    return {
+      readable: true,
+      frozen: false,
+      rows: 0,
+      columns: 0
+    };
+  }
+  const rows = typeof location.rowCount === "number" && Number.isFinite(location.rowCount) ? Math.max(0, location.rowCount) : undefined;
+  const columns = typeof location.columnCount === "number" && Number.isFinite(location.columnCount) ? Math.max(0, location.columnCount) : undefined;
+  return {
+    readable: true,
+    frozen: true,
+    address: stripSheetName(location.address),
+    rowIndex: location.rowIndex,
+    columnIndex: location.columnIndex,
+    ...(rows !== undefined ? { rows } : {}),
+    ...(columns !== undefined ? { columns } : {}),
+    ...(columns !== undefined && columns > 0 ? { lastFrozenColumn: columnLetterFromIndex(columns - 1), firstUnfrozenColumn: columnLetterFromIndex(columns) } : {}),
+    ...(rows !== undefined && rows > 0 ? { lastFrozenRow: rows, firstUnfrozenRow: rows + 1 } : {})
+  };
+}
+
+function columnLetterFromIndex(index: number): string {
+  let value = Math.floor(index) + 1;
+  let label = "";
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    label = String.fromCharCode(65 + remainder) + label;
+    value = Math.floor((value - 1) / 26);
+  }
+  return label;
 }
 
 export async function copyStyleDimensions(request: StyleCopyRequest): Promise<StyleCopyResponse> {
@@ -2955,10 +3026,10 @@ function restoreRangeSnapshot(
     range.format.font.italic = style.fontItalic;
   }
   if (style.horizontalAlignment) {
-    range.format.horizontalAlignment = style.horizontalAlignment as Excel.HorizontalAlignment;
+    range.format.horizontalAlignment = toHorizontalAlignment(style.horizontalAlignment);
   }
   if (style.verticalAlignment) {
-    range.format.verticalAlignment = style.verticalAlignment as Excel.VerticalAlignment;
+    range.format.verticalAlignment = toVerticalAlignment(style.verticalAlignment);
   }
   if (style.rowHeight !== undefined) {
     range.format.rowHeight = style.rowHeight;
@@ -2988,20 +3059,114 @@ function applyRangeStyle(range: Excel.Range, style: NonNullable<RangeSnapshot["s
     range.format.font.italic = style.fontItalic;
   }
   if (style.horizontalAlignment) {
-    range.format.horizontalAlignment = style.horizontalAlignment as Excel.HorizontalAlignment;
+    range.format.horizontalAlignment = toHorizontalAlignment(style.horizontalAlignment);
   }
   if (style.verticalAlignment) {
-    range.format.verticalAlignment = style.verticalAlignment as Excel.VerticalAlignment;
+    range.format.verticalAlignment = toVerticalAlignment(style.verticalAlignment);
   }
   if (style.rowHeight !== undefined) {
     range.format.rowHeight = style.rowHeight;
   }
   if (style.columnWidth !== undefined) {
-    range.format.columnWidth = style.columnWidth;
+    range.format.columnWidth = agentColumnWidthToOfficeWidth(style.columnWidth);
+  }
+  if (style.wrapText !== undefined) {
+    (range.format as unknown as { wrapText?: boolean }).wrapText = style.wrapText;
   }
   if (style.borders !== undefined) {
     applyRangeBorders(range, style.borders);
   }
+}
+
+function agentColumnWidthToOfficeWidth(width: number): number {
+  if (!Number.isFinite(width) || width <= 0) {
+    return width;
+  }
+  if (width > 60) {
+    return width;
+  }
+
+  // Agents and users talk about Excel column widths in UI "character" units
+  // (for example, width 15). Office.js applies RangeFormat.columnWidth in
+  // physical width units, so convert the common UI scale before assigning.
+  const maxDigitPixelWidth = 7;
+  const padding = Math.trunc(128 / maxDigitPixelWidth);
+  const pixels = Math.trunc(((256 * width + padding) / 256) * maxDigitPixelWidth);
+  return Math.round(pixels * 0.75 * 100) / 100;
+}
+
+function toHorizontalAlignment(value: string): Excel.HorizontalAlignment {
+  const normalized = value.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  const enumValues = Excel.HorizontalAlignment as unknown as Record<string, Excel.HorizontalAlignment | undefined>;
+  switch (normalized) {
+    case "center":
+    case "centre":
+    case "centered":
+    case "centred":
+      return enumValues.center ?? ("Center" as Excel.HorizontalAlignment);
+    case "left":
+      return enumValues.left ?? ("Left" as Excel.HorizontalAlignment);
+    case "right":
+      return enumValues.right ?? ("Right" as Excel.HorizontalAlignment);
+    case "fill":
+      return enumValues.fill ?? ("Fill" as Excel.HorizontalAlignment);
+    case "justify":
+      return enumValues.justify ?? ("Justify" as Excel.HorizontalAlignment);
+    case "distributed":
+      return enumValues.distributed ?? ("Distributed" as Excel.HorizontalAlignment);
+    case "general":
+      return enumValues.general ?? ("General" as Excel.HorizontalAlignment);
+    default:
+      return value as Excel.HorizontalAlignment;
+  }
+}
+
+function toVerticalAlignment(value: string): Excel.VerticalAlignment {
+  const normalized = value.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  const enumValues = Excel.VerticalAlignment as unknown as Record<string, Excel.VerticalAlignment | undefined>;
+  switch (normalized) {
+    case "center":
+    case "centre":
+    case "middle":
+    case "centered":
+    case "centred":
+      return enumValues.center ?? ("Center" as Excel.VerticalAlignment);
+    case "top":
+      return enumValues.top ?? ("Top" as Excel.VerticalAlignment);
+    case "bottom":
+      return enumValues.bottom ?? ("Bottom" as Excel.VerticalAlignment);
+    case "justify":
+      return enumValues.justify ?? ("Justify" as Excel.VerticalAlignment);
+    case "distributed":
+      return enumValues.distributed ?? ("Distributed" as Excel.VerticalAlignment);
+    default:
+      return value as Excel.VerticalAlignment;
+  }
+}
+
+function applyFreezePanes(
+  worksheet: Excel.Worksheet,
+  operation: Extract<ExcelOperation, { kind: "sheet.freeze_panes" }>
+): void {
+  const freezePanes = (worksheet as unknown as { freezePanes?: { freezeAt?: (range: Excel.Range) => void; freezeRows?: (count: number) => void; freezeColumns?: (count: number) => void; unfreeze?: () => void } }).freezePanes;
+  if (!freezePanes) {
+    throw new Error("Office.js freeze panes API is unavailable in this host.");
+  }
+  const rows = Math.max(0, Math.floor(operation.rows ?? 0));
+  const columns = Math.max(0, Math.floor(operation.columns ?? 0));
+  if (rows > 0 && columns > 0) {
+    freezePanes.freezeAt?.(worksheet.getRangeByIndexes(rows, columns, 1, 1));
+    return;
+  }
+  if (rows > 0) {
+    freezePanes.freezeRows?.(rows);
+    return;
+  }
+  if (columns > 0) {
+    freezePanes.freezeColumns?.(columns);
+    return;
+  }
+  freezePanes.unfreeze?.();
 }
 
 function applyDataValidation(
@@ -3078,7 +3243,7 @@ async function reorderRangeColumns(
   columnOrder: Array<string | number>
 ): Promise<void> {
   const range = getRange(context, target);
-  range.load("rowCount,columnCount");
+  range.load("rowCount,columnCount,formulasR1C1");
   await context.sync();
 
   const sourceIndexes = resolveColumnOrder(columnOrder, range.columnCount);
@@ -3086,15 +3251,42 @@ async function reorderRangeColumns(
     throw new Error("Column order must resolve to every column in the target range exactly once.");
   }
 
+  const sourceColumns = Array.from({ length: range.columnCount }, (_, columnIndex) => range.getColumn(columnIndex));
+  for (const column of sourceColumns) {
+    column.format.load("columnWidth");
+  }
+  await context.sync();
+
+  const originalFormulasR1C1 = cloneMatrix((range as unknown as { formulasR1C1?: unknown[][] }).formulasR1C1 ?? []);
+  const reorderedFormulasR1C1 = reorderMatrixColumns(originalFormulasR1C1, sourceIndexes, range.rowCount, range.columnCount);
+  const reorderedColumnWidths = sourceIndexes.map((sourceIndex) => sourceColumns[sourceIndex]?.format.columnWidth);
+
   const scratchSheet = context.workbook.worksheets.add(`__owb_reorder_${Date.now().toString(36)}`);
   const originalRange = scratchSheet.getRangeByIndexes(0, 0, range.rowCount, range.columnCount);
-  const reorderedRange = scratchSheet.getRangeByIndexes(0, range.columnCount + 1, range.rowCount, range.columnCount);
   originalRange.copyFrom(range, Excel.RangeCopyType.all);
   for (const [targetIndex, sourceIndex] of sourceIndexes.entries()) {
-    reorderedRange.getColumn(targetIndex).copyFrom(originalRange.getColumn(sourceIndex), Excel.RangeCopyType.all);
+    range.getColumn(targetIndex).copyFrom(originalRange.getColumn(sourceIndex), Excel.RangeCopyType.all);
   }
-  range.copyFrom(reorderedRange, Excel.RangeCopyType.all);
+  (range as unknown as { formulasR1C1: unknown[][] }).formulasR1C1 = reorderedFormulasR1C1;
+  for (const [targetIndex, width] of reorderedColumnWidths.entries()) {
+    if (typeof width === "number" && Number.isFinite(width)) {
+      range.getColumn(targetIndex).format.columnWidth = width;
+    }
+  }
   scratchSheet.delete();
+}
+
+function reorderMatrixColumns(matrix: unknown[][], sourceIndexes: number[], rowCount: number, columnCount: number): unknown[][] {
+  return Array.from({ length: rowCount }, (_, rowIndex) =>
+    Array.from({ length: columnCount }, (_, targetIndex) => {
+      const sourceIndex = sourceIndexes[targetIndex] ?? targetIndex;
+      return matrix[rowIndex]?.[sourceIndex] ?? null;
+    })
+  );
+}
+
+function cloneMatrix(matrix: unknown[][]): unknown[][] {
+  return matrix.map((row) => [...row]);
 }
 
 function resolveColumnOrder(columnOrder: Array<string | number>, columnCount: number): number[] {

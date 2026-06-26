@@ -25,7 +25,8 @@ describe("agent workflow routing", () => {
     ["read_style_summary", "style.inspect", "targeted_read"],
     ["format_diagnostics", "format.diagnostics", "targeted_read"],
     ["find_target", "semantic_index.find", "metadata_only"],
-    ["write_values", "mutation.preview", "preview_only"]
+    ["write_values", "mutation.preview", "preview_only"],
+    ["improve_visual_readability", "mutation.preview", "preview_only"]
   ] as const)("prefers structured intent action %s for workflow routing", (action, workflowRoute, readPolicy) => {
     const route = routeAgentRequest("Thai or mixed language request", "auto", {
       source: "caller_structured",

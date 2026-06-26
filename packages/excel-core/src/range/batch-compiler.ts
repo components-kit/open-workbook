@@ -106,7 +106,11 @@ function getOperationTargets(operation: ExcelOperation): A1Range[] {
     case "range.unmerge":
     case "range.restore_snapshot":
     case "range.reorder_columns":
-      return [operation.target];
+      return operation.kind === "range.write_data_validation" && operation.entries?.length
+        ? operation.entries.map((entry) => entry.target)
+        : operation.target
+          ? [operation.target]
+          : [];
     case "range.write_values_many":
       return operation.entries.map((entry) => entry.target);
     case "range.write_number_formats_many":
@@ -148,6 +152,7 @@ function getOperationTargets(operation: ExcelOperation): A1Range[] {
     case "sheet.unprotect":
     case "sheet.clear":
     case "sheet.set_tab_color":
+    case "sheet.freeze_panes":
       return [];
     default:
       return [];

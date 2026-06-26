@@ -3,7 +3,7 @@ import type { AgentRunOutput } from "@components-kit/open-workbook-protocol";
 import { agentJsonResult } from "./results.js";
 
 describe("MCP result rendering", () => {
-  it("keeps text compact while preserving structured content and resources", () => {
+  it("keeps text compact while preserving structured content and resource links", () => {
     const output: AgentRunOutput = {
       status: "SUCCESS",
       mode: "answer",
@@ -68,7 +68,7 @@ describe("MCP result rendering", () => {
     expect((result.structuredContent.telemetry as any).routeReasons).toBeUndefined();
     expect((result.structuredContent.telemetry as any).workflowReasons).toBeUndefined();
     expect((result.structuredContent.telemetry as any).semanticIndexStatus).toBeUndefined();
-    expect(result.resources).toEqual([
+    expect(result.structuredContent.resourceLinks).toEqual([
       {
         uri: "excel://agent/results/agentres_1",
         name: "agent result",

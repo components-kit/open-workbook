@@ -23,7 +23,7 @@ describe("Office.js batch executor production operations", () => {
         reason: "Style header",
         target: range("Sales", "A1:E1"),
         preserveValues: true,
-        style: { fillColor: "#000000", fontColor: "#FFFFFF", fontBold: true, horizontalAlignment: "center" }
+        style: { fillColor: "#000000", fontColor: "#FFFFFF", fontBold: true, horizontalAlignment: "center", columnWidth: 15 }
       },
       {
         kind: "range.write_styles_many",
@@ -80,14 +80,15 @@ describe("Office.js batch executor production operations", () => {
     expect(result.ok).toBe(true);
     expect(result.warnings).toEqual([]);
     expect(result.diffSummary?.destructiveLevel).toBe("structure");
-    expect(result.telemetry).toMatchObject({ syncCount: 2, rangeCount: compiled.targetFingerprints.length, warningCount: 0 });
-    expect(fixture.syncCount).toBe(2);
+    expect(result.telemetry).toMatchObject({ syncCount: 3, rangeCount: compiled.targetFingerprints.length, warningCount: 0 });
+    expect(fixture.syncCount).toBe(3);
     expect(fixture.calls).toEqual(expect.arrayContaining([
       { type: "getRange", sheetName: "Sales", address: "A1:E1" },
       { type: "style", address: "A1:E1", property: "fill.color", value: "#000000" },
       { type: "style", address: "A1:E1", property: "font.color", value: "#FFFFFF" },
       { type: "style", address: "A1:E1", property: "font.bold", value: true },
-      { type: "style", address: "A1:E1", property: "horizontalAlignment", value: "center" },
+      { type: "style", address: "A1:E1", property: "horizontalAlignment", value: "Center" },
+      { type: "style", address: "A1:E1", property: "columnWidth", value: 78.75 },
       { type: "insert", address: "F:F", shift: "right" },
       { type: "dataValidation.rule", address: "E2:E6", source: "Open,Reviewed,Closed" },
       { type: "conditionalFormats.add", address: "A2:E6", formatType: "custom" },
@@ -96,7 +97,18 @@ describe("Office.js batch executor production operations", () => {
       { type: "conditionalStyle", address: "A2:E6", property: "font.bold", value: true }
     ]));
     expect(fixture.calls.some((call) => call.type === "worksheet.add" && call.sheetName.startsWith("__owb_reorder_"))).toBe(true);
-    expect(fixture.calls.some((call) => call.type === "copyFrom" && call.address === "A1:B6" && String(call.source).includes("__owb_reorder_"))).toBe(true);
+    expect(fixture.calls.some((call) => call.type === "copyFrom" && call.address === "A1:B6:col0" && String(call.source).includes("__owb_reorder_"))).toBe(true);
+    expect(fixture.calls.some((call) => call.type === "copyFrom" && call.address === "A1:B6:col1" && String(call.source).includes("__owb_reorder_"))).toBe(true);
+    expect(fixture.calls).toContainEqual({
+      type: "set",
+      address: "A1:B6",
+      property: "formulasR1C1",
+      value: expect.arrayContaining([
+        ["=A1:B6_R1C2", "=A1:B6_R1C1"]
+      ])
+    });
+    expect(fixture.calls).toContainEqual({ type: "style", address: "A1:B6:col0", property: "columnWidth", value: 18 });
+    expect(fixture.calls).toContainEqual({ type: "style", address: "A1:B6:col1", property: "columnWidth", value: 12 });
     expect(fixture.calls.some((call) => call.type === "worksheet.delete" && String(call.sheetName).includes("__owb_reorder_"))).toBe(true);
   });
 
@@ -196,6 +208,7 @@ describe("Office.js batch executor production operations", () => {
       op({ kind: "sheet.unprotect", sheetName: "Ops", password: "secret" }),
       op({ kind: "sheet.clear", sheetName: "Ops", applyTo: "contents" }),
       op({ kind: "sheet.set_tab_color", sheetName: "Ops", color: "#00B050" }),
+      op({ kind: "sheet.freeze_panes", sheetName: "Ops", columns: 1 }),
       op({ kind: "template.create_sheet_from_template", templateId: "template_ops" as any, newSheetName: "From Template", clearDataRegions: true }),
       op({ kind: "sheet.delete", sheetName: "Ops Clean" })
     ];
@@ -237,6 +250,7 @@ describe("Office.js batch executor production operations", () => {
       { type: "worksheet.unprotect", sheetName: "Ops", password: "secret" },
       { type: "getUsedRangeOrNullObject", sheetName: "Ops" },
       { type: "worksheet.tabColor", sheetName: "Ops", value: "#00B050" },
+      { type: "freezePanes.freezeColumns", sheetName: "Ops", count: 1 },
       { type: "worksheet.delete", sheetName: "Ops Clean" }
     ]));
   });
@@ -334,6 +348,7 @@ const BEHAVIOR_COVERED_OPERATION_KINDS = new Set([
   "sheet.unprotect",
   "sheet.clear",
   "sheet.set_tab_color",
+  "sheet.freeze_panes",
   "workbook.calculate",
   "workbook.save",
   "template.create_sheet_from_template"
@@ -432,6 +447,12 @@ class FakeWorksheet {
     protect: (options: unknown, password?: string) => this.fixture.calls.push({ type: "worksheet.protect", sheetName: this.name, options, password }),
     unprotect: (password?: string) => this.fixture.calls.push({ type: "worksheet.unprotect", sheetName: this.name, password })
   };
+  readonly freezePanes = {
+    freezeRows: (count: number) => this.fixture.calls.push({ type: "freezePanes.freezeRows", sheetName: this.name, count }),
+    freezeColumns: (count: number) => this.fixture.calls.push({ type: "freezePanes.freezeColumns", sheetName: this.name, count }),
+    freezeAt: (range: FakeRange) => this.fixture.calls.push({ type: "freezePanes.freezeAt", sheetName: this.name, address: range.address }),
+    unfreeze: () => this.fixture.calls.push({ type: "freezePanes.unfreeze", sheetName: this.name })
+  };
 
   constructor(private readonly fixture: ExcelFixture, private sheetName: string) {}
 
@@ -517,6 +538,16 @@ class FakeRange {
     this.fixture.calls.push({ type: "set", address: this.address, property: "formulas", value });
   }
 
+  get formulasR1C1() {
+    return Array.from({ length: this.rowCount }, (_, rowIndex) =>
+      Array.from({ length: this.columnCount }, (_, columnIndex) => `=${this.address}_R${rowIndex + 1}C${columnIndex + 1}`)
+    );
+  }
+
+  set formulasR1C1(value: unknown[][]) {
+    this.fixture.calls.push({ type: "set", address: this.address, property: "formulasR1C1", value });
+  }
+
   set numberFormat(value: unknown[][]) {
     this.fixture.calls.push({ type: "set", address: this.address, property: "numberFormat", value });
   }
@@ -582,12 +613,29 @@ class FakeRangeFormat {
     };
   }
 
+  load(propertyPath: string) {
+    this.fixture.calls.push({ type: "format.load", address: this.address, propertyPath });
+  }
+
   set horizontalAlignment(value: string) {
     this.fixture.calls.push({ type: "style", address: this.address, property: "horizontalAlignment", value });
   }
 
   set verticalAlignment(value: string) {
     this.fixture.calls.push({ type: "style", address: this.address, property: "verticalAlignment", value });
+  }
+
+  set wrapText(value: boolean) {
+    this.fixture.calls.push({ type: "style", address: this.address, property: "wrapText", value });
+  }
+
+  set columnWidth(value: number) {
+    this.fixture.calls.push({ type: "style", address: this.address, property: "columnWidth", value });
+  }
+
+  get columnWidth() {
+    const columnIndex = /:col(\d+)$/.exec(this.address)?.[1];
+    return columnIndex === undefined ? 12 : 12 + Number(columnIndex) * 6;
   }
 
   autofitColumns() {

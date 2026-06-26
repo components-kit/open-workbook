@@ -43,6 +43,7 @@ export type PendingAgentAction =
   | { kind: "batch"; operations: ExcelOperation[] }
   | { kind: "style.copy_dimensions_many"; requests: StyleCopyRequest[] }
   | { kind: "workflow.replace_styled_table"; operations: ExcelOperation[]; styleCopies: StyleCopyRequest[] }
+  | { kind: "visual_readability.apply"; operations: ExcelOperation[]; request: { workbookId: WorkbookId; sheetName: string; formulaRanges: string[]; ruleCount: number; skippedRuleCount: number } }
   | { kind: "table.append_rows"; request: TableAppendRowsRequest }
   | { kind: "table.update_rows"; request: TableUpdateRowsRequest }
   | { kind: "table.create"; request: TableCreateRequest }
@@ -125,6 +126,7 @@ export interface PendingAgentOperation {
   workbookContextId: string;
   workbookId: WorkbookId;
   action: PendingAgentAction;
+  workflowKind?: string;
   changes: NonNullable<AgentRunOutput["changes"]>;
   createdAt: number;
   summary: string;

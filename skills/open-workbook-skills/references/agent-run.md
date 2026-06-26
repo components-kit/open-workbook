@@ -51,6 +51,63 @@ Use `preview_update` for non-trivial mutations, broad edits, table appends, temp
 
 Formula writes, formula repairs, and broad formula-like derivations are preview/apply workflows with validation. Use `derive_values` with `formula_like` for row-aware calculations such as Payment Variance = Actual Amount - Cash Amount so the backend scans source/target columns and returns bounded source/before/after examples. When a full range should receive the same relative A1 formula pattern, use `write_formulas` with the full target range and one `values.formula`, for example `=H2-G2` on `I2:I244`; do not create a row-per-formula array unless the backend asks for it.
 
+For styling review or "what would make this easier to read?" requests, use `mode: "answer"` with `intent.action: "style_overview"` or `detailLevel: "style_overview"` first. It returns current style context, column-role groups, grouped-header suggestions, and safe next workflow hints without full data-row reads.
+
+For workbook design review requests such as "for each column decide free text/date/money/ID/dropdown/lookup" or "look at other sheets and recommend how this table should behave", use one `mode: "answer"` call with `intent.action: "workbook_design_overview"`. It returns the target shape, column-by-column behavior recommendations, date/money/text formats, dropdown candidates, lookup/reference candidates, related-sheet hints, and next workflows from cached metadata. Do not read Customer, Bookings, Drivers, or empty table rows manually before this overview. After the user chooses a recommendation, use the targeted workflow it names, such as `write_data_validation`, `derive_values`, or `improve_visual_readability`.
+
+For broad readability/styling requests such as "make this cleaner", "make this easier to read", "office-ready", "highlight important issues", or "format this table", use `mode: "preview_update"` with `intent.action: "improve_visual_readability"`. Put options under `values.visualReadability`; use `styleDepth: "standard"` by default, `basic` for fast low-risk cleanup, and `comprehensive` only when the user wants deeper suggestions. The backend compiles column-first layout, width, alignment, number-format, grouping, formula/error highlight, and optional validation/formula suggestions. Style preservation defaults to `stylePreservationMode: "protected_regions"` so summary/template areas and grouped header bands stay guarded while ordinary table body styling, widths, alignment, and date/money formats can still be improved; use `"strict"` only when the user asks to preserve every existing style, and `"none"` for explicit redesign. Use `applySuggestionBuckets` to opt into actionable suggestions: `["layout"]` for wrap/row-height style writes, `["validation"]` for dropdown validation writes, and `["freeze_panes"]` for freeze rows/columns. Grouped headers are suggested for wide tables by default; to apply inserted group rows, merged labels, and matching header colors, use `mode: "preview_update"` with `intent.action: "grouped_header"` and optional `values.groupedHeader.groups`. Prefer groups shaped as `{ "label": "...", "startColumn": "A", "endColumn": "B" }`; `{ "columns": ["A", "B"] }` and `{ "range": "A:B" }` are accepted. For freeze column requests, include `freezePanes: { "columns": 1 }` or use a clear request like "freeze first column". Use `referenceStyle` for "make this look like that sheet" previews and `presentationMode` for print/export suggestions. Apply only when `nextAction` is `call_apply_update`, `operationCount > 0`, and the returned `operationId`/`confirmationToken` match the preview. If `operationCount` is `0` or `nextAction` is `answer_now`, do not call `apply_update` and do not decompose the styling into primitive `format_range` calls; explain the skipped reasons and ask for the supported next workflow. Never continue a new grouped-header preview with an `operationId` from an older visual-readability preview. Formula helpers, structure changes, reference-style layout cues, and print settings remain separate confirmed workflows or preview-only until their host capability is available.
+
+Grouped headers are structural. If apply returns `DESTRUCTIVE_ACTION_BLOCKED` or `PERMISSION_DENIED`, ask for user approval to allow structure changes, then call:
+
+```json
+{
+  "intent": { "action": "set_permissions" },
+  "values": {
+    "permissions": {
+      "allowWrites": true,
+      "allowDestructiveActions": true,
+      "scopeToWorkbook": true,
+      "requireConfirmationFor": []
+    }
+  }
+}
+```
+
+After the permission update succeeds, create a fresh grouped_header preview and apply that fresh operation; do not retry a stale failed preview.
+
+Visual styling safety: comprehensive validation/formula suggestions remain preview-only unless the user chooses an explicit bucket or separate workflow; do not apply dropdowns, formulas, inserted rows/columns, or summary blocks through the visual styling apply path.
+
+OpenCode prompt examples:
+
+```text
+Use open-workbook. Inspect the active sheet with a style overview first, without reading every data cell. Suggest visual readability improvements including grouped headers, one consistent palette, safe widths, alignment, filters, number formats, and highlights. Do not apply yet.
+```
+
+```text
+Preview a grouped_header workflow for this sheet. Add a higher-level grouped header row above the existing column headers, merge group labels, and use matching group colors. Wait for approval before apply_update.
+```
+
+```json
+{
+  "mode": "preview_update",
+  "intent": { "action": "grouped_header" },
+  "target": { "sheetName": "Invoices", "tableName": "InvoicesTable" },
+  "values": {
+    "stylePreservationMode": "none",
+    "groupedHeader": {
+      "groups": [
+        { "label": "สถานะ", "startColumn": "A", "endColumn": "B" },
+        { "label": "ข้อมูลงาน", "startColumn": "C", "endColumn": "E" }
+      ]
+    }
+  }
+}
+```
+
+```text
+Apply the safe visual readability preview in one apply_update. Include opt-in buckets layout, validation, and freeze_panes only if they were present in the preview.
+```
+
 Only call `apply_update` with the returned `operationId` and `confirmationToken`. If the backend reports stale context, target drift, ambiguity, missing permission, an active lock, or validation failure, stop and create a fresh preview or ask the user for direction.
 
 If `auto` returns `taskOutcome: "apply_complete"`, stop and report the applied change. If `auto` returns `taskOutcome: "preview_ready"` or `nextAction: "call_apply_update"`, ask the user once unless the user's configuration/instruction already permits applying previews, then call one `apply_update` with the returned `operationId` and `confirmationToken`.
