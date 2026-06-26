@@ -112,6 +112,7 @@ export const AGENT_ACTION_REGISTRY: AgentActionDefinition[] = [
   { kind: "style.copy_dimensions_many", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "workflow.replace_styled_table", risk: "destructive", previewRequired: true, confirmationRequired: true },
   { kind: "style.repair_consistency", risk: "safe_format", previewRequired: true, confirmationRequired: true },
+  { kind: "visual_readability.apply", risk: "safe_format", previewRequired: true, confirmationRequired: true },
   { kind: "clean.transform", risk: "broad_range_write", previewRequired: true, confirmationRequired: true },
   { kind: "clean.transform_many", risk: "broad_range_write", previewRequired: true, confirmationRequired: true }
 ];
@@ -160,6 +161,7 @@ export function riskForOperationKind(
     | "style.copy_dimensions_many"
     | "workflow.replace_styled_table"
     | "style.repair_consistency"
+    | "visual_readability.apply"
     | "clean.transform"
     | "clean.transform_many"
     | "workbook.snapshot"

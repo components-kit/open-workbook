@@ -132,6 +132,7 @@ export const AGENT_INTENT_ACTIONS = [
   "find_similar_rows",
   "analyze_reference_sheet",
   "find_style_references",
+  "improve_visual_readability",
   "transform_values",
   "derive_values",
   "settle_reconciliation",

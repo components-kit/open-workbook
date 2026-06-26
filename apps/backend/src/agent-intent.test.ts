@@ -17,4 +17,15 @@ describe("agent intent normalization", () => {
     expect(filter.accepted).toBe(true);
     expect(filter.action).toBe("filter_range");
   });
+
+  it("accepts improve_visual_readability as a high-level structured action", () => {
+    const intent = normalizeAgentIntent({
+      request: "Make this sheet easier to read",
+      intent: { action: "improve_visual_readability" }
+    });
+
+    expect(intent.accepted).toBe(true);
+    expect(intent.action).toBe("improve_visual_readability");
+    expect(intent.rejectedReason).toBeUndefined();
+  });
 });

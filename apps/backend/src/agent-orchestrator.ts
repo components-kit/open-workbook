@@ -70,7 +70,7 @@ import { findAgentCandidates, resolveAgentReadTarget, resolveAgentUpdateTarget, 
 import type { RuntimeService } from "./runtime-service.js";
 import { classifyAgentActionRisk, type AgentOperationRisk } from "./agent-action-policy.js";
 import { routeAgentRequest, type IntentRoute } from "./agent-routing.js";
-import { isAgentIntentAction, normalizeAgentIntent, type AgentIntentAction, type NormalizedAgentIntent } from "./agent-intent.js";
+import { isAgentIntentAction, modeForIntentAction, normalizeAgentIntent, type AgentIntentAction, type NormalizedAgentIntent } from "./agent-intent.js";
 import { findAgentActionHandler, type AgentActionHandlerDefinition, type AgentActionHandlerId } from "./agent-action-handlers.js";
 import { buildSemanticWorkbookIndex } from "./semantic-workbook-index.js";
 
@@ -433,7 +433,7 @@ export class AgentOrchestrator {
         const sectionAnswer = sectionAnswerOutput(metadata, input, mode);
         return finish(sectionAnswer ?? this.findOutput(metadata, input, mode), cacheHit);
       }
-      if (effectiveMode === "preview_update" && isReadOnlyInspectionRequest(input.request) && !hasStructuredMutationPayload(input)) {
+      if (effectiveMode === "preview_update" && isReadOnlyInspectionRequest(input.request) && !hasStructuredMutationPayload(input) && (intent.action === undefined || modeForIntentAction(intent.action) !== "preview_update")) {
         internalCallCount += 1;
         const answerInput: AgentRunInput = { ...input, mode: "answer" };
         return finish(await this.answerOutput(metadata, answerInput, "answer", runMetrics), cacheHit);
@@ -2825,6 +2825,9 @@ export class AgentOrchestrator {
     if (action === "replace_range_with_styled_table" || shouldPreviewReplaceStyledTable(input)) {
       return this.previewReplaceStyledTable(metadata, input, requestedMode);
     }
+    if (action === "improve_visual_readability") {
+      return this.previewVisualReadability(metadata, input, requestedMode);
+    }
     const workbookLevelHandler = findAgentActionHandler(input, action, false);
     if (workbookLevelHandler) {
       return this.previewActionHandler(metadata, input, requestedMode, workbookLevelHandler);
@@ -2840,6 +2843,100 @@ export class AgentOrchestrator {
       return this.previewActionHandler(metadata, input, requestedMode, targetLevelHandler, normalizedResolved);
     }
     return undefined;
+  }
+
+  private previewVisualReadability(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> {
+    const options = visualReadabilityOptionsFromInput(input);
+    const requestedSheetName = input.target?.sheetName;
+    const fallbackSheetName = metadata.workbook.activeSheet ?? metadata.sheets[0]?.name;
+    const sheetName = requestedSheetName && !sameText(requestedSheetName, "active") && !sameText(requestedSheetName, "active_sheet")
+      ? requestedSheetName
+      : fallbackSheetName;
+    const sheet = metadata.sheets.find((candidate) => sameText(candidate.name, sheetName)) ?? metadata.sheets.find((candidate) => sameText(candidate.name, fallbackSheetName));
+    if (!sheet) {
+      return {
+        status: "NEEDS_INPUT",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: "Visual readability preview needs a target sheet.",
+        candidates: findAgentCandidates(metadata, input).slice(0, 5),
+        proof: [],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "ask_user",
+        warnings: ["Provide target.sheetName or prepare a workbook context with an active sheet."]
+      };
+    }
+    const range = input.target?.range ?? sheet.usedRange;
+    const detected = detectVisualReadabilityStructure(metadata, sheet, range);
+    const detectionFailure = visualReadabilityDetectionFailure(metadata, requestedMode, sheet.name, range, detected);
+    if (detectionFailure) {
+      return detectionFailure;
+    }
+    const columnRoles = inferVisualReadabilityColumns(metadata, sheet, detected);
+    const sheetType = inferVisualReadabilitySheetType(sheet, columnRoles);
+    const resolvedProfile = options.profile === "auto" ? profileForVisualSheetType(sheetType) : options.profile;
+    const visualPlan = compileVisualReadabilityPlan(metadata, sheet, detected, columnRoles, { ...options, profile: resolvedProfile }, sheetType);
+    const compiledOperations = compileVisualReadabilityOperations(metadata.workbook.workbookId as WorkbookId, sheet.name, visualPlan.rules, {
+      preserveExistingStyle: options.preserveExistingStyle,
+      allowReplaceConditionalFormatting: options.allowReplaceConditionalFormatting,
+      preservation: detected
+    });
+    const formulaRanges = visualReadabilityFormulaCheckRanges(detected);
+    const pending = this.createPendingOperation(metadata, {
+      action: {
+        kind: "visual_readability.apply",
+        operations: compiledOperations.operations,
+        request: {
+          workbookId: metadata.workbook.workbookId as WorkbookId,
+          sheetName: sheet.name,
+          formulaRanges,
+          ruleCount: visualPlan.counts.totalRules,
+          skippedRuleCount: compiledOperations.skipped.length
+        }
+      },
+      changes: visualPlan.previewExamples.length > 0
+        ? visualPlan.previewExamples.map((example) => ({ sheetName: sheet.name, range: example.range, before: example.before, after: example.after }))
+        : [{ sheetName: sheet.name, ...(range ? { range } : {}), after: "visual readability compiled preview; no workbook styles will be changed yet" }],
+      summary: `Prepared visual readability preview for ${sheet.name}.`
+    });
+    return {
+      status: "PREVIEW_READY",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      operationId: pending.operationId,
+      confirmationToken: pending.confirmationToken,
+      summary: pending.summary,
+      answer: {
+        kind: "visual_readability_preview",
+        action: "improve_visual_readability",
+        sheetName: sheet.name,
+        ...(range ? { range } : {}),
+        defaults: stripUndefinedRecord({ ...options, profile: resolvedProfile }),
+        detected,
+        columnRoles,
+        sheetType,
+        visualPlan: {
+          ...visualPlan,
+          operationId: pending.operationId,
+          risk: pending.risk,
+          operationCount: compiledOperations.operations.length,
+          skipped: compiledOperations.skipped,
+          preservation: {
+            formulas: options.preserveFormulas ? "preserved" : "not_checked",
+            formulaRanges,
+            existingStyle: options.preserveExistingStyle ? "preserved" : "not_checked"
+          }
+        }
+      },
+      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched", workflowKind: "visual_readability_preview", groupedOperationCount: visualPlan.counts.totalRules, operationCount: compiledOperations.operations.length, skippedRuleCount: compiledOperations.skipped.length },
+      changes: pending.changes,
+      proof: range ? [{ sheetName: sheet.name, range, label: "visual readability target" }] : [],
+      resourceLinks: [operationResource(String(pending.operationId))],
+      nextAction: "call_apply_update",
+      warnings: compiledOperations.skipped.length > 0
+        ? [`Compiled ${compiledOperations.operations.length} safe visual operation(s). ${compiledOperations.skipped.length} rule(s) are preview-only because the current operation schema does not support them or preservation settings skipped them.`]
+        : [`Compiled ${compiledOperations.operations.length} safe visual operation(s) for apply.`]
+    };
   }
 
   private async previewTransformValues(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Promise<Omit<AgentRunOutput, "telemetry">> {
@@ -5476,7 +5573,7 @@ export class AgentOrchestrator {
     const validation = !applyFailed ? await this.runtime.validateWorkbook({ workbookId: pending.workbookId }) : undefined;
     const issueCount = validation?.issues?.length ?? 0;
     const validationFailed = validation?.ok === false;
-    const resultRecord = result as { transactionId?: string; backups?: string[]; rollbackAvailable?: boolean; telemetry?: unknown; warnings?: unknown[]; results?: unknown[]; error?: unknown };
+    const resultRecord = result as { transactionId?: string; backups?: string[]; rollbackAvailable?: boolean; telemetry?: unknown; warnings?: unknown[]; results?: unknown[]; error?: unknown; formulaPreservation?: unknown };
     const resultWarnings = Array.isArray(resultRecord.warnings) ? resultRecord.warnings.map(operationWarningMessage) : [];
     const errorWarning = applyErrorMessage(resultRecord.error);
     const invalidated = applyFailed ? { invalidatedContextIds: [] as string[], invalidatedResourceUris: [] as string[] } : this.invalidateWorkbookContext(pending.workbookContextId);
@@ -5502,6 +5599,7 @@ export class AgentOrchestrator {
         partialFailure: applyFailed && Array.isArray(resultRecord.results) && resultRecord.results.some((step) => Boolean(step) && typeof step === "object" && (step as { ok?: unknown }).ok !== false),
         operationRisk: pending.risk,
         telemetry: resultRecord.telemetry,
+        ...(resultRecord.formulaPreservation !== undefined ? { formulaPreservation: resultRecord.formulaPreservation } : {}),
         ...(applyFailed && resultRecord.results !== undefined ? { stepResults: resultRecord.results } : {})
       },
       metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
@@ -5568,6 +5666,8 @@ export class AgentOrchestrator {
         return this.applyReplaceStyledTableWorkflow(pending.workbookId, pending.action.operations, pending.action.styleCopies, operationId);
       case "style.repair_consistency":
         return this.runtime.repairStyleFromTemplate(pending.action.request);
+      case "visual_readability.apply":
+        return this.applyVisualReadabilityPlan(pending, operationId);
       case "clean.transform":
         return this.applyCleanMutation(pending.action.action, pending.action.request);
       case "clean.transform_many":
@@ -5633,6 +5733,82 @@ export class AgentOrchestrator {
       case "region.fill":
         return this.runtime.fillRegion(pending.action.request);
     }
+  }
+
+  private async applyVisualReadabilityPlan(pending: NonNullable<ReturnType<AgentOperationStore["get"]>>, operationId: string) {
+    if (pending.action.kind !== "visual_readability.apply") {
+      return { ok: false, warnings: ["Internal visual readability apply received the wrong operation kind."] };
+    }
+    const { request, operations } = pending.action;
+    const before = await this.readVisualFormulaSnapshot(request.workbookId, request.sheetName, request.formulaRanges, `${operationId}:before`);
+    if (before.ok === false) {
+      return before.result;
+    }
+    const applied = await this.runtime.applyBatch({ workbookId: request.workbookId, operations, mode: "apply", idempotencyKey: `agent:${operationId}:visual_readability` });
+    const appliedRecord = applied && typeof applied === "object" ? applied as unknown as Record<string, unknown> : {};
+    if (appliedRecord.ok === false) {
+      return applied;
+    }
+    const after = await this.readVisualFormulaSnapshot(request.workbookId, request.sheetName, request.formulaRanges, `${operationId}:after`);
+    if (after.ok === false) {
+      return after.result;
+    }
+    const formulaDiff = compareVisualFormulaSnapshots(before.snapshot, after.snapshot);
+    const appliedWarnings = Array.isArray(appliedRecord.warnings) ? appliedRecord.warnings.filter((warning): warning is string => typeof warning === "string") : [];
+    const formulaWarning = formulaDiff.changedCount > 0
+      ? `Formula preservation failed: ${formulaDiff.changedCount} formula cell(s) changed during visual readability apply.`
+      : undefined;
+    return {
+      ...appliedRecord,
+      ok: appliedRecord.ok !== false && formulaDiff.changedCount === 0,
+      warnings: formulaWarning ? [...appliedWarnings, formulaWarning] : appliedWarnings,
+      formulaPreservation: {
+        checkedRanges: request.formulaRanges,
+        formulasChecked: formulaDiff.checkedCount,
+        formulasChanged: formulaDiff.changedCount,
+        unchanged: formulaDiff.changedCount === 0
+      },
+      telemetry: {
+        ...(appliedRecord.telemetry && typeof appliedRecord.telemetry === "object" ? appliedRecord.telemetry as Record<string, unknown> : {}),
+        visualReadabilityApply: true,
+        visualReadabilityRuleCount: request.ruleCount,
+        visualReadabilitySkippedRuleCount: request.skippedRuleCount,
+        formulasChecked: formulaDiff.checkedCount,
+        formulasChanged: formulaDiff.changedCount
+      }
+    };
+  }
+
+  private async readVisualFormulaSnapshot(workbookId: WorkbookId, sheetName: string, formulaRanges: string[], idempotencyKey: string): Promise<
+    | { ok: true; snapshot: Map<string, string> }
+    | { ok: false; result: { ok: false; warnings: string[]; telemetry: Record<string, unknown> } }
+  > {
+    if (formulaRanges.length === 0) {
+      return { ok: true, snapshot: new Map() };
+    }
+    const operations: ExcelOperation[] = formulaRanges.map((address) => ({
+      kind: "range.read_full",
+      operationId: makeId<OperationId>("op"),
+      workbookId,
+      destructiveLevel: "none",
+      reason: "Verify visual readability formula preservation.",
+      target: { workbookId, sheetName, address },
+      facets: ["formulas"],
+      includeFormulas: true
+    }));
+    const result = await this.runtime.applyBatch({ workbookId, operations, mode: "validate", idempotencyKey });
+    const record = result && typeof result === "object" ? result as unknown as Record<string, unknown> : {};
+    if (record.ok === false) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          warnings: ["Could not read formulas for visual readability preservation check."],
+          telemetry: { visualReadabilityApply: true, formulaPreservationReadFailed: true }
+        }
+      };
+    }
+    return { ok: true, snapshot: visualFormulaSnapshotFromBatchResult(formulaRanges, result) };
   }
 
   private async applyStyleCopyRequests(requests: StyleCopyRequest[], operationId: string) {
@@ -10246,6 +10422,9 @@ function minimalAnswerForBudget(answer: unknown, continuation: AgentRunOutput["c
   if (typed.kind === "style_reference_candidates") {
     return compactStyleReferenceCandidatesAnswer(typed, continuation?.resultUri, continuation?.fullResultUri);
   }
+  if (typed.kind === "visual_readability_preview") {
+    return compactVisualReadabilityPreviewAnswer(typed, continuation?.resultUri, continuation?.fullResultUri);
+  }
   if (typed.kind === "reference_sheet_analysis") {
     return stripUndefinedRecord({
       kind: typed.kind,
@@ -10664,6 +10843,9 @@ function compactAnswerForResponseMode(answer: unknown, responseMode: AgentRespon
   }
   if (kind === "formula_patterns") {
     return compactFormulaPatternsAnswer(typed, responseMode, resultUri, fullResultUri);
+  }
+  if (kind === "visual_readability_preview") {
+    return compactVisualReadabilityPreviewAnswer(typed, resultUri, fullResultUri);
   }
   return compactGenericAnswer(typed, resultUri, fullResultUri);
 }
@@ -11279,6 +11461,55 @@ function compactStyleDimension(value: unknown): unknown {
     }
   }
   return Object.keys(compact).length > 0 ? compact : { truncated: true, fullBytes: Buffer.byteLength(full) };
+}
+
+function compactVisualReadabilityPreviewAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  const visualPlan = answer.visualPlan && typeof answer.visualPlan === "object" ? answer.visualPlan as Record<string, unknown> : undefined;
+  const detected = answer.detected && typeof answer.detected === "object" ? answer.detected as Record<string, unknown> : undefined;
+  const rules = Array.isArray(visualPlan?.rules) ? visualPlan.rules as Array<Record<string, unknown>> : [];
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    action: answer.action,
+    sheetName: answer.sheetName,
+    range: answer.range,
+    defaults: answer.defaults,
+    sheetType: answer.sheetType,
+    detected: detected ? stripUndefinedRecord({
+      sheetName: detected.sheetName,
+      usedRange: detected.usedRange,
+      headerRow: detected.headerRow,
+      headerRange: detected.headerRange,
+      dataRange: detected.dataRange,
+      tableRanges: detected.tableRanges,
+      hasFilter: detected.hasFilter,
+      hasFreezePane: detected.hasFreezePane,
+      formulaColumns: detected.formulaColumns,
+      existingStyleRanges: detected.existingStyleRanges,
+      detectionSource: detected.detectionSource,
+      confidence: detected.confidence
+    }) : undefined,
+    columnRoles: Array.isArray(answer.columnRoles) ? answer.columnRoles.slice(0, 12) : undefined,
+    visualPlan: visualPlan ? stripUndefinedRecord({
+      compilerStatus: visualPlan.compilerStatus,
+      summary: visualPlan.summary,
+      counts: visualPlan.counts,
+      ruleScopes: visualPlan.ruleScopes,
+      ruleIds: rules.slice(0, 32).map((rule) => rule.id).filter((id) => typeof id === "string"),
+      validationSuggestions: Array.isArray(visualPlan.validationSuggestions) ? visualPlan.validationSuggestions.slice(0, 6) : undefined,
+      formulaSuggestions: Array.isArray(visualPlan.formulaSuggestions) ? visualPlan.formulaSuggestions.slice(0, 6) : undefined,
+      referenceStyleSuggestions: Array.isArray(visualPlan.referenceStyleSuggestions) ? visualPlan.referenceStyleSuggestions.slice(0, 6) : undefined,
+      printSuggestions: Array.isArray(visualPlan.printSuggestions) ? visualPlan.printSuggestions.slice(0, 6) : undefined,
+      previewExamples: Array.isArray(visualPlan.previewExamples) ? visualPlan.previewExamples.slice(0, 5) : undefined,
+      theme: visualPlan.theme,
+      operationId: visualPlan.operationId,
+      operationCount: visualPlan.operationCount,
+      skipped: Array.isArray(visualPlan.skipped) ? visualPlan.skipped.slice(0, 8) : undefined,
+      risk: visualPlan.risk,
+      preservation: visualPlan.preservation
+    }) : undefined,
+    resultUri,
+    fullResultUri
+  });
 }
 
 function compactGenericAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
@@ -13700,6 +13931,1197 @@ function columnMatchesHint(column: ColumnMetadata, hint: string): boolean {
 
 function sameText(left: unknown, right: unknown): boolean {
   return typeof left === "string" && typeof right === "string" && left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
+type VisualReadabilityStyleDepth = "basic" | "standard" | "comprehensive";
+type VisualReadabilityDensity = "compact" | "comfortable" | "presentation";
+type VisualReadabilityPresentationMode = "working_sheet" | "print_ready" | "executive_report";
+type VisualReadabilitySheetType = "generic_table" | "tabular_data" | "record_tracker" | "numeric_report" | "input_template" | "summary_report" | "mixed_template" | "unknown";
+
+interface VisualReadabilityDetectedStructure {
+  sheetName: string;
+  usedRange?: string;
+  headerRow?: number;
+  headerRange?: string;
+  dataRange?: string;
+  tableRanges: string[];
+  hasFilter: boolean;
+  hasFreezePane: boolean;
+  mergedRanges: string[];
+  hiddenRows: number[];
+  hiddenColumns: string[];
+  protectedRanges: string[];
+  existingStyleRanges: string[];
+  formulaColumns: string[];
+  formulaRanges: string[];
+  totalRows: number[];
+  subtotalRows: number[];
+  existingConditionalFormattingRanges: string[];
+  existingDataValidationRanges: string[];
+  detectionSource: "metadata";
+  confidence: number;
+}
+
+interface VisualReadabilityColumnRole {
+  column: string;
+  header: string;
+  role: string;
+  inferredType: string;
+  confidence: number;
+  signals: string[];
+}
+
+type VisualRuleScope = "sheet" | "table" | "group" | "column" | "conditional_range" | "row" | "cell";
+type VisualRuleKind = "font" | "fill" | "border" | "alignment" | "number_format" | "width" | "height" | "wrap" | "freeze" | "filter";
+
+interface VisualReadabilityRule {
+  id: string;
+  scope: VisualRuleScope;
+  target: string;
+  kind: VisualRuleKind;
+  value: unknown;
+  risk: "low" | "medium" | "high";
+  reason: string;
+}
+
+interface VisualReadabilityValidationSuggestion {
+  id: string;
+  target: string;
+  source: string[];
+  risk: "medium" | "high";
+  reason: string;
+  existingValidation: "preserved" | "not_detected";
+}
+
+interface VisualReadabilityFormulaSuggestion {
+  id: string;
+  suggestedColumnAfter: string;
+  formulaName: string;
+  formulaExample: string;
+  risk: "medium" | "high";
+  reason: string;
+}
+
+interface VisualReadabilityReferenceStyleOption {
+  sheetName: string;
+  adaptToTargetStructure: boolean;
+  preserveTargetValues: boolean;
+  preserveFormulas: boolean;
+}
+
+interface VisualReadabilityReferenceStyleSuggestion {
+  id: string;
+  referenceSheetName: string;
+  target: string;
+  pattern: string;
+  risk: "medium" | "high";
+  reason: string;
+  preserveTargetValues: true;
+  preserveFormulas: boolean;
+}
+
+interface VisualReadabilityPrintSuggestion {
+  id: string;
+  target: string;
+  setting: string;
+  value: string;
+  presentationMode: VisualReadabilityPresentationMode;
+  risk: "medium" | "high";
+  reason: string;
+}
+
+interface VisualReadabilityPlanPreview {
+  compilerStatus: "preview_compiled_apply_pending";
+  summary: string[];
+  counts: {
+    totalRules: number;
+    layoutChanges: number;
+    groupRules: number;
+    columnRules: number;
+    conditionalRules: number;
+    rowRules: number;
+    cellRules: number;
+    validationSuggestions: number;
+    formulaSuggestions: number;
+    referenceStyleSuggestions: number;
+    printSuggestions: number;
+  };
+  ruleScopes: Record<VisualRuleScope, number>;
+  rules: VisualReadabilityRule[];
+  validationSuggestions: VisualReadabilityValidationSuggestion[];
+  formulaSuggestions: VisualReadabilityFormulaSuggestion[];
+  referenceStyleSuggestions: VisualReadabilityReferenceStyleSuggestion[];
+  printSuggestions: VisualReadabilityPrintSuggestion[];
+  previewExamples: Array<{ range: string; before: string; after: string; ruleId: string }>;
+  theme: {
+    name: string;
+    font: { family: string; bodySize: number; headerSize: number };
+    density: VisualReadabilityDensity;
+  };
+}
+
+interface VisualReadabilityCompiledOperationSet {
+  operations: ExcelOperation[];
+  skipped: Array<{ ruleId: string; target: string; reason: string }>;
+}
+
+interface VisualReadabilityPreservationContext {
+  protectedRanges: string[];
+  mergedRanges: string[];
+  hiddenColumns: string[];
+  existingStyleRanges: string[];
+  existingConditionalFormattingRanges: string[];
+}
+
+function visualReadabilityOptionsFromInput(input: AgentRunInput): {
+  styleDepth: VisualReadabilityStyleDepth;
+  profile: string;
+  density: VisualReadabilityDensity;
+  preserveFormulas: boolean;
+  preserveExistingStyle: boolean;
+  allowValidationSuggestions: boolean;
+  allowFormulaSuggestions: boolean;
+  allowReplaceConditionalFormatting: boolean;
+  allowReplaceDataValidation: boolean;
+  allowInsertRowsOrColumns: boolean;
+  referenceStyle?: VisualReadabilityReferenceStyleOption;
+  presentationMode?: VisualReadabilityPresentationMode;
+} {
+  const values = input.values ?? {};
+  const nested = typeof values.visualReadability === "object" && values.visualReadability !== null && !Array.isArray(values.visualReadability)
+    ? values.visualReadability as Record<string, unknown>
+    : {};
+  const optionValue = (key: string) => nested[key] ?? values[key];
+  const referenceStyle = visualReadabilityReferenceStyle(optionValue("referenceStyle") ?? values.referenceStyle);
+  const presentationMode = visualReadabilityPresentationMode(optionValue("presentationMode"));
+  return {
+    styleDepth: visualReadabilityStyleDepth(optionValue("styleDepth")),
+    profile: stringValue(optionValue("profile")) ?? "auto",
+    density: visualReadabilityDensity(optionValue("density")),
+    preserveFormulas: booleanValue(optionValue("preserveFormulas")) ?? true,
+    preserveExistingStyle: booleanValue(optionValue("preserveExistingStyle")) ?? true,
+    allowValidationSuggestions: booleanValue(optionValue("allowValidationSuggestions")) ?? false,
+    allowFormulaSuggestions: booleanValue(optionValue("allowFormulaSuggestions")) ?? false,
+    allowReplaceConditionalFormatting: booleanValue(optionValue("allowReplaceConditionalFormatting")) ?? false,
+    allowReplaceDataValidation: booleanValue(optionValue("allowReplaceDataValidation")) ?? false,
+    allowInsertRowsOrColumns: booleanValue(optionValue("allowInsertRowsOrColumns")) ?? false,
+    ...(referenceStyle ? { referenceStyle } : {}),
+    ...(presentationMode ? { presentationMode } : {})
+  };
+}
+
+function visualReadabilityDetectionFailure(
+  metadata: WorkbookMetadata,
+  requestedMode: AgentRunMode,
+  sheetName: string,
+  range: string | undefined,
+  detected: VisualReadabilityDetectedStructure
+): Omit<AgentRunOutput, "telemetry"> | undefined {
+  if (detected.hiddenColumns.includes("sheet")) {
+    return {
+      status: "VALIDATION_FAILED",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      summary: `Visual readability preview blocked ${sheetName} because the sheet is hidden.`,
+      proof: range ? [{ sheetName, range, label: "hidden visual readability target" }] : [],
+      resourceLinks: [contextResource(metadata.workbookContextId)],
+      nextAction: "ask_user",
+      warnings: ["Unhide the sheet or explicitly target a visible sheet before applying visual readability styling."]
+    };
+  }
+  const targetCellCount = range ? cellCountFromAddress(stripSheetName(range)) : undefined;
+  if (targetCellCount !== undefined && targetCellCount > 200_000) {
+    return {
+      status: "VALIDATION_FAILED",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      summary: `Visual readability preview blocked ${sheetName}${range ? `!${range}` : ""} because the target is too large for a safe first-pass style plan.`,
+      proof: range ? [{ sheetName, range, label: "oversized visual readability target" }] : [],
+      resourceLinks: [contextResource(metadata.workbookContextId)],
+      nextAction: "ask_user",
+      warnings: ["Retry with a smaller table/range or select the header and data range to style."]
+    };
+  }
+  if (!detected.headerRange || detected.headerRow === undefined) {
+    return {
+      status: "NEEDS_INPUT",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      summary: "Could not confidently detect a header row for visual readability styling.",
+      proof: range ? [{ sheetName, range, label: "ambiguous visual readability target" }] : [],
+      resourceLinks: [contextResource(metadata.workbookContextId)],
+      nextAction: "ask_user",
+      warnings: [
+        "Select the table/header range and retry, or provide target.range with the header row included.",
+        "No visual styling operations were prepared."
+      ]
+    };
+  }
+  return undefined;
+}
+
+function visualReadabilityFormulaCheckRanges(detected: VisualReadabilityDetectedStructure): string[] {
+  const ranges = detected.formulaRanges.length > 0
+    ? detected.formulaRanges
+    : detected.formulaColumns.map((column) => columnTargetFromDetected(detected, column));
+  return uniqueDefined(ranges).slice(0, 12);
+}
+
+function compileVisualReadabilityOperations(
+  workbookId: WorkbookId,
+  sheetName: string,
+  rules: VisualReadabilityRule[],
+  options: { preserveExistingStyle: boolean; allowReplaceConditionalFormatting: boolean; preservation: VisualReadabilityPreservationContext }
+): VisualReadabilityCompiledOperationSet {
+  const styleEntries: Array<{ target: A1Range; style: NonNullable<RangeSnapshot["style"]>; preserveValues: true }> = [];
+  const numberFormatEntries: Array<{ target: A1Range; numberFormat: string[][]; preserveValues: true }> = [];
+  const operations: ExcelOperation[] = [];
+  const skipped: VisualReadabilityCompiledOperationSet["skipped"] = [];
+  const targetFor = (rule: VisualReadabilityRule): A1Range => ({ workbookId, sheetName, address: rule.target });
+  for (const rule of rules) {
+    const preservationSkip = visualRulePreservationSkip(rule, options);
+    if (preservationSkip) {
+      skipped.push(preservationSkip);
+      continue;
+    }
+    if (rule.kind === "width") {
+      const width = visualRuleWidth(rule.value);
+      if (width === undefined) {
+        skipped.push({ ruleId: rule.id, target: rule.target, reason: "Width rule did not include a supported width value." });
+      } else {
+        styleEntries.push({ target: targetFor(rule), style: { columnWidth: width }, preserveValues: true });
+      }
+      continue;
+    }
+    if (rule.kind === "alignment") {
+      const alignment = visualRuleAlignment(rule.value);
+      if (Object.keys(alignment).length === 0) {
+        skipped.push({ ruleId: rule.id, target: rule.target, reason: "Alignment rule did not include supported alignment values." });
+      } else {
+        styleEntries.push({ target: targetFor(rule), style: alignment, preserveValues: true });
+      }
+      continue;
+    }
+    if (rule.kind === "number_format") {
+      const format = stringValue(rule.value);
+      const matrix = format ? repeatedNumberFormatMatrix(rule.target, format) : undefined;
+      if (!matrix) {
+        skipped.push({ ruleId: rule.id, target: rule.target, reason: "Number-format rule did not include a supported format or bounded target." });
+      } else {
+        numberFormatEntries.push({ target: targetFor(rule), numberFormat: matrix, preserveValues: true });
+      }
+      continue;
+    }
+    if (rule.kind === "fill" || rule.kind === "font" || rule.kind === "border") {
+      if (rule.scope === "conditional_range") {
+        const conditionalRule = visualConditionalFormattingRule(rule);
+        if (!conditionalRule) {
+          skipped.push({ ruleId: rule.id, target: rule.target, reason: "Conditional rule could not be expressed as a custom formula." });
+        } else if (options.preserveExistingStyle && !options.allowReplaceConditionalFormatting) {
+          operations.push({
+            kind: "range.write_conditional_formatting",
+            operationId: makeId<OperationId>("op"),
+            workbookId,
+            destructiveLevel: "format",
+            reason: rule.reason,
+            target: targetFor(rule),
+            rule: conditionalRule
+          });
+        } else {
+          operations.push({
+            kind: "range.write_conditional_formatting",
+            operationId: makeId<OperationId>("op"),
+            workbookId,
+            destructiveLevel: "format",
+            reason: rule.reason,
+            target: targetFor(rule),
+            rule: conditionalRule
+          });
+        }
+      } else {
+        const style = visualRuleStyle(rule);
+        if (Object.keys(style).length === 0) {
+          skipped.push({ ruleId: rule.id, target: rule.target, reason: "Style rule did not include supported style properties." });
+        } else {
+          styleEntries.push({ target: targetFor(rule), style, preserveValues: true });
+        }
+      }
+      continue;
+    }
+    if (rule.kind === "filter") {
+      operations.push({
+        kind: "range.apply_autofilter",
+        operationId: makeId<OperationId>("op"),
+        workbookId,
+        destructiveLevel: "format",
+        reason: rule.reason,
+        target: targetFor(rule)
+      });
+      continue;
+    }
+    skipped.push({ ruleId: rule.id, target: rule.target, reason: `${rule.kind} is preview-only until a matching workbook operation is available.` });
+  }
+  if (styleEntries.length > 0) {
+    operations.unshift({
+      kind: "range.write_styles_many",
+      operationId: makeId<OperationId>("op"),
+      workbookId,
+      destructiveLevel: "format",
+      reason: "Apply visual readability style rules.",
+      entries: styleEntries
+    });
+  }
+  if (numberFormatEntries.length > 0) {
+    operations.push({
+      kind: "range.write_number_formats_many",
+      operationId: makeId<OperationId>("op"),
+      workbookId,
+      destructiveLevel: "format",
+      reason: "Apply visual readability number formats.",
+      entries: numberFormatEntries
+    });
+  }
+  return { operations, skipped };
+}
+
+function visualRulePreservationSkip(rule: VisualReadabilityRule, options: { preserveExistingStyle: boolean; allowReplaceConditionalFormatting: boolean; preservation: VisualReadabilityPreservationContext }): { ruleId: string; target: string; reason: string } | undefined {
+  if (visualTargetOverlapsAny(rule.target, options.preservation.protectedRanges)) {
+    return { ruleId: rule.id, target: rule.target, reason: "Target overlaps a protected range and was skipped." };
+  }
+  if (visualTargetOverlapsAny(rule.target, options.preservation.mergedRanges)) {
+    return { ruleId: rule.id, target: rule.target, reason: "Target overlaps merged cells and was skipped." };
+  }
+  if (options.preservation.hiddenColumns.some((column) => column !== "sheet" && visualRuleTouchesColumn(rule.target, column))) {
+    return { ruleId: rule.id, target: rule.target, reason: "Target overlaps hidden columns and was skipped." };
+  }
+  if (options.preserveExistingStyle && visualTargetOverlapsAny(rule.target, options.preservation.existingStyleRanges)) {
+    return { ruleId: rule.id, target: rule.target, reason: "Target overlaps an existing styled summary/template area and was skipped." };
+  }
+  if (rule.scope === "conditional_range" && options.preserveExistingStyle && !options.allowReplaceConditionalFormatting && visualTargetOverlapsAny(rule.target, options.preservation.existingConditionalFormattingRanges)) {
+    return { ruleId: rule.id, target: rule.target, reason: "Existing conditional formatting on the target is preserved by default." };
+  }
+  return undefined;
+}
+
+function visualTargetOverlapsAny(target: string, ranges: string[]): boolean {
+  const normalizedTarget = stripSheetName(target);
+  if (!tryParseA1Address(normalizedTarget)) {
+    return false;
+  }
+  return ranges.some((range) => {
+    const normalizedRange = stripSheetName(range);
+    return tryParseA1Address(normalizedRange) ? rangesOverlapAddresses(normalizedTarget, normalizedRange) : false;
+  });
+}
+
+function visualRuleTouchesColumn(target: string, column: string): boolean {
+  const parsed = tryParseA1Address(stripSheetName(target));
+  const columnIndex = columnToNumber(column);
+  return parsed ? parsed.startColumn <= columnIndex && parsed.endColumn >= columnIndex : new RegExp(`^${column}(?:\\d|:|$)`, "i").test(stripSheetName(target));
+}
+
+function visualRuleWidth(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  return numberValue(record.preferred ?? record.max ?? record.min);
+}
+
+function visualRuleAlignment(value: unknown): NonNullable<RangeSnapshot["style"]> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  const record = value as Record<string, unknown>;
+  const style: NonNullable<RangeSnapshot["style"]> = {};
+  const horizontalAlignment = stringValue(record.horizontalAlignment);
+  if (horizontalAlignment) style.horizontalAlignment = horizontalAlignment;
+  const verticalAlignment = stringValue(record.verticalAlignment);
+  if (verticalAlignment) style.verticalAlignment = verticalAlignment;
+  return style;
+}
+
+function visualRuleStyle(rule: VisualReadabilityRule): NonNullable<RangeSnapshot["style"]> {
+  if (!rule.value || typeof rule.value !== "object") {
+    return {};
+  }
+  const record = rule.value as Record<string, unknown>;
+  const style: NonNullable<RangeSnapshot["style"]> = {};
+  const fillColor = colorString(record.fillColor);
+  if (fillColor) style.fillColor = fillColor;
+  const fontColor = colorString(record.fontColor);
+  if (fontColor) style.fontColor = fontColor;
+  const fontBold = booleanValue(record.fontBold);
+  if (fontBold !== undefined) style.fontBold = fontBold;
+  const fontName = stringValue(record.fontName);
+  if (fontName) style.fontName = fontName;
+  const fontSize = numberValue(record.fontSize);
+  if (fontSize !== undefined) style.fontSize = fontSize;
+  const borders = visualRuleBorders(record);
+  if (borders) style.borders = borders;
+  return style;
+}
+
+function visualRuleBorders(record: Record<string, unknown>): NonNullable<RangeSnapshot["style"]>["borders"] | undefined {
+  const borders: Record<string, unknown> = {};
+  for (const edge of ["edgeTop", "edgeBottom", "edgeLeft", "edgeRight", "insideHorizontal", "insideVertical"]) {
+    const value = record[edge];
+    if (value && typeof value === "object") {
+      borders[edge] = value;
+    }
+  }
+  return Object.keys(borders).length > 0 ? borders as NonNullable<RangeSnapshot["style"]>["borders"] : undefined;
+}
+
+function repeatedNumberFormatMatrix(address: string, format: string): string[][] | undefined {
+  const parsed = tryParseA1Address(stripSheetName(address));
+  if (!parsed) {
+    return undefined;
+  }
+  const rows = parsed.endRow - parsed.startRow + 1;
+  const columns = parsed.endColumn - parsed.startColumn + 1;
+  if (rows < 1 || columns < 1 || rows * columns > 20_000) {
+    return undefined;
+  }
+  return Array.from({ length: rows }, () => Array.from({ length: columns }, () => format));
+}
+
+function visualConditionalFormattingRule(rule: VisualReadabilityRule): Extract<ExcelOperation, { kind: "range.write_conditional_formatting" }>["rule"] | undefined {
+  const parsed = tryParseA1Address(stripSheetName(rule.target));
+  if (!parsed) {
+    return undefined;
+  }
+  const column = visualRuleColumnFromId(rule.id);
+  if (!column) {
+    return undefined;
+  }
+  const firstRow = parsed.startRow;
+  const fillColor = rule.value && typeof rule.value === "object" ? colorString((rule.value as Record<string, unknown>).fillColor) : undefined;
+  const style: NonNullable<RangeSnapshot["style"]> = { fillColor: fillColor ?? "#FFF2CC" };
+  const formula = rule.id.includes("formula_error")
+    ? `=ISERROR($${column}${firstRow})`
+    : `=AND(COUNTA($${numberToColumn(parsed.startColumn)}${firstRow}:$${numberToColumn(parsed.endColumn)}${firstRow})>0,$${column}${firstRow}="")`;
+  return { type: "custom", formula, style };
+}
+
+function visualRuleColumnFromId(ruleId: string): string | undefined {
+  const match = /^(?:column|conditional)\.([A-Z]+)\./.exec(ruleId);
+  return match?.[1];
+}
+
+function visualFormulaSnapshotFromBatchResult(formulaRanges: string[], result: unknown): Map<string, string> {
+  const snapshot = new Map<string, string>();
+  const record = result && typeof result === "object" ? result as Record<string, unknown> : {};
+  const entries = Array.isArray(record.readData)
+    ? record.readData
+    : Array.isArray(record.data)
+      ? record.data
+      : [];
+  for (const [rangeIndex, entry] of entries.entries()) {
+    const entryRecord = entry && typeof entry === "object" ? entry as Record<string, unknown> : {};
+    const formulas = entryRecord.snapshot && typeof entryRecord.snapshot === "object" && Array.isArray((entryRecord.snapshot as Record<string, unknown>).formulas)
+      ? (entryRecord.snapshot as { formulas: unknown[][] }).formulas
+      : [];
+    const range = formulaRanges[rangeIndex] ?? `range_${rangeIndex}`;
+    for (const [rowIndex, row] of formulas.entries()) {
+      if (!Array.isArray(row)) {
+        continue;
+      }
+      for (const [columnIndex, value] of row.entries()) {
+        if (typeof value === "string" && value.length > 0) {
+          snapshot.set(`${range}:${rowIndex}:${columnIndex}`, value);
+        }
+      }
+    }
+  }
+  return snapshot;
+}
+
+function compareVisualFormulaSnapshots(before: Map<string, string>, after: Map<string, string>): { checkedCount: number; changedCount: number } {
+  const keys = new Set([...before.keys(), ...after.keys()]);
+  let changedCount = 0;
+  for (const key of keys) {
+    if (before.get(key) !== after.get(key)) {
+      changedCount += 1;
+    }
+  }
+  return { checkedCount: keys.size, changedCount };
+}
+
+function visualReadabilityStyleDepth(value: unknown): VisualReadabilityStyleDepth {
+  const raw = stringValue(value)?.toLowerCase();
+  return raw === "basic" || raw === "comprehensive" ? raw : "standard";
+}
+
+function visualReadabilityDensity(value: unknown): VisualReadabilityDensity {
+  const raw = stringValue(value)?.toLowerCase();
+  return raw === "compact" || raw === "presentation" ? raw : "comfortable";
+}
+
+function visualReadabilityPresentationMode(value: unknown): VisualReadabilityPresentationMode | undefined {
+  const raw = stringValue(value)?.toLowerCase();
+  if (raw === "working_sheet" || raw === "print_ready" || raw === "executive_report") {
+    return raw;
+  }
+  return undefined;
+}
+
+function visualReadabilityReferenceStyle(value: unknown): VisualReadabilityReferenceStyleOption | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const sheetName = stringValue(record.sheetName ?? record.sheet ?? record.referenceSheetName ?? record.referenceSheet);
+  if (!sheetName) {
+    return undefined;
+  }
+  return {
+    sheetName,
+    adaptToTargetStructure: booleanValue(record.adaptToTargetStructure) ?? true,
+    preserveTargetValues: booleanValue(record.preserveTargetValues) ?? true,
+    preserveFormulas: booleanValue(record.preserveFormulas) ?? true
+  };
+}
+
+function compileVisualReadabilityPlan(
+  metadata: WorkbookMetadata,
+  sheet: WorkbookMetadata["sheets"][number],
+  detected: VisualReadabilityDetectedStructure,
+  columns: VisualReadabilityColumnRole[],
+  options: ReturnType<typeof visualReadabilityOptionsFromInput>,
+  sheetType: VisualReadabilitySheetType
+): VisualReadabilityPlanPreview {
+  const theme = visualReadabilityTheme(options.density);
+  const rules: VisualReadabilityRule[] = [];
+  if (detected.headerRange) {
+    rules.push({
+      id: "layout.header_style",
+      scope: "row",
+      target: detected.headerRange,
+      kind: "fill",
+      value: { fillColor: theme.fills.header, fontBold: true, fontColor: theme.colors.headerText, borderBottom: theme.borders.headerBottom },
+      risk: "low",
+      reason: "Apply calm header styling to create visual hierarchy."
+    });
+    rules.push({
+      id: "layout.header_alignment",
+      scope: "row",
+      target: detected.headerRange,
+      kind: "alignment",
+      value: { verticalAlignment: "Center" },
+      risk: "low",
+      reason: "Keep header labels vertically centered."
+    });
+  }
+  if (detected.dataRange && detected.hasFilter) {
+    rules.push({
+      id: "layout.filter",
+      scope: "table",
+      target: detected.dataRange,
+      kind: "filter",
+      value: { enabled: true },
+      risk: "low",
+      reason: "Preserve or enable filter affordance for table scanning."
+    });
+  }
+  if (detected.headerRow !== undefined) {
+    rules.push({
+      id: "layout.freeze_header",
+      scope: "sheet",
+      target: sheet.name,
+      kind: "freeze",
+      value: { row: detected.headerRow },
+      risk: "low",
+      reason: "Keep the detected header row visible while scrolling."
+    });
+  }
+
+  for (const column of columns) {
+    const target = columnTargetFromDetected(detected, column.column);
+    const width = visualWidthForRole(column.role);
+    rules.push({
+      id: `column.${column.column}.width`,
+      scope: "column",
+      target,
+      kind: "width",
+      value: width,
+      risk: "low",
+      reason: `Set ${column.header || column.column} width from role ${column.role}.`
+    });
+    rules.push({
+      id: `column.${column.column}.alignment`,
+      scope: "column",
+      target,
+      kind: "alignment",
+      value: visualAlignmentForRole(column.role),
+      risk: "low",
+      reason: `Align ${column.header || column.column} from role ${column.role}.`
+    });
+    const numberFormat = visualNumberFormatForRole(column.role);
+    if (numberFormat) {
+      rules.push({
+        id: `column.${column.column}.number_format`,
+        scope: "column",
+        target,
+        kind: "number_format",
+        value: numberFormat,
+        risk: "low",
+        reason: `Normalize ${column.header || column.column} display format.`
+      });
+    }
+    if (column.role === "notes") {
+      rules.push({
+        id: `column.${column.column}.wrap`,
+        scope: "column",
+        target,
+        kind: "wrap",
+        value: true,
+        risk: "low",
+        reason: "Wrap long notes or descriptions without changing values."
+      });
+    }
+    if (column.role === "formula_output") {
+      rules.push({
+        id: `column.${column.column}.formula_fill`,
+        scope: "column",
+        target,
+        kind: "fill",
+        value: { fillColor: theme.fills.formula },
+        risk: "low",
+        reason: "Distinguish calculated formula output from input cells."
+      });
+    }
+  }
+
+  if (options.styleDepth !== "basic") {
+    for (const group of visualColumnGroups(columns, detected)) {
+      rules.push({
+        id: `group.${normalizeOperationName(group.label)}.${group.startColumn}_${group.endColumn}`,
+        scope: "group",
+        target: group.target,
+        kind: "border",
+        value: { edgeLeft: theme.borders.groupSeparator, fillColor: theme.fills.group },
+        risk: "low",
+        reason: `Softly separate ${group.label} columns.`
+      });
+    }
+    for (const column of columns.filter((candidate) => ["date", "entity", "status"].includes(candidate.role)).slice(0, 4)) {
+      rules.push({
+        id: `conditional.${column.column}.missing_required`,
+        scope: "conditional_range",
+        target: detected.dataRange ?? columnTargetFromDetected(detected, column.column),
+        kind: "fill",
+        value: { condition: `${column.column} is blank on nonblank record rows`, fillColor: theme.fills.warning },
+        risk: "low",
+        reason: `Highlight missing likely-required ${column.header || column.column} values.`
+      });
+    }
+    for (const formulaColumn of detected.formulaColumns.slice(0, 4)) {
+      rules.push({
+        id: `conditional.${formulaColumn}.formula_error`,
+        scope: "conditional_range",
+        target: detected.dataRange ?? columnTargetFromDetected(detected, formulaColumn),
+        kind: "fill",
+        value: { condition: `${formulaColumn} contains an Excel error`, fillColor: theme.fills.danger },
+        risk: "low",
+        reason: "Highlight formula errors without replacing formulas."
+      });
+    }
+  }
+
+  const validationSuggestions = shouldCompileVisualValidationSuggestions(options)
+    ? compileVisualValidationSuggestions(detected, columns)
+    : [];
+  const formulaSuggestions = shouldCompileVisualFormulaSuggestions(options)
+    ? compileVisualFormulaSuggestions(detected, columns)
+    : [];
+  const referenceStyleSuggestions = compileVisualReferenceStyleSuggestions(metadata, sheet, detected, columns, options);
+  const printSuggestions = compileVisualPrintSuggestions(detected, options, sheetType);
+  const ruleScopes = countVisualRuleScopes(rules);
+  const counts = {
+    totalRules: rules.length,
+    layoutChanges: rules.filter((rule) => rule.scope === "sheet" || rule.scope === "table" || rule.id.startsWith("layout.")).length,
+    groupRules: ruleScopes.group,
+    columnRules: ruleScopes.column,
+    conditionalRules: ruleScopes.conditional_range,
+    rowRules: ruleScopes.row,
+    cellRules: ruleScopes.cell,
+    validationSuggestions: validationSuggestions.length,
+    formulaSuggestions: formulaSuggestions.length,
+    referenceStyleSuggestions: referenceStyleSuggestions.length,
+    printSuggestions: printSuggestions.length
+  };
+  return {
+    compilerStatus: "preview_compiled_apply_pending",
+    summary: visualPlanSummary(sheetType, options, counts),
+    counts,
+    ruleScopes,
+    rules: rules.slice(0, 40),
+    validationSuggestions,
+    formulaSuggestions,
+    referenceStyleSuggestions,
+    printSuggestions,
+    previewExamples: rules.slice(0, 8).map((rule) => ({
+      range: rule.target,
+      before: "current workbook formatting",
+      after: visualRuleAfterSummary(rule),
+      ruleId: rule.id
+    })),
+    theme: {
+      name: "office_clean",
+      font: theme.font,
+      density: options.density
+    }
+  };
+}
+
+function visualReadabilityTheme(density: VisualReadabilityDensity) {
+  return {
+    font: { family: "Calibri", bodySize: density === "compact" ? 10 : 11, headerSize: density === "presentation" ? 12 : 11 },
+    colors: { headerText: "#1F2937" },
+    fills: {
+      header: "#D9EAF7",
+      group: "#F3F6FA",
+      formula: "#EEF2FF",
+      warning: "#FFF2CC",
+      danger: "#FCE4D6"
+    },
+    borders: {
+      headerBottom: { style: "continuous", weight: "thin", color: "#8EA9DB" },
+      groupSeparator: { style: "continuous", weight: "thin", color: "#B7C9E2" }
+    }
+  };
+}
+
+function shouldCompileVisualValidationSuggestions(options: ReturnType<typeof visualReadabilityOptionsFromInput>): boolean {
+  return options.styleDepth === "comprehensive" || options.allowValidationSuggestions;
+}
+
+function shouldCompileVisualFormulaSuggestions(options: ReturnType<typeof visualReadabilityOptionsFromInput>): boolean {
+  return options.styleDepth === "comprehensive" || options.allowFormulaSuggestions;
+}
+
+function compileVisualValidationSuggestions(detected: VisualReadabilityDetectedStructure, columns: VisualReadabilityColumnRole[]): VisualReadabilityValidationSuggestion[] {
+  return columns
+    .filter((column) => column.role === "status" || column.role === "category")
+    .slice(0, 6)
+    .map((column) => ({
+      id: `validation.${column.column}.dropdown`,
+      target: columnTargetFromDetected(detected, column.column),
+      source: visualValidationOptionsForRole(column.role, column.header),
+      risk: "medium",
+      reason: `Suggest a dropdown for ${column.header || column.column}; preview only and not applied by visual styling.`,
+      existingValidation: detected.existingDataValidationRanges.some((range) => rangesOverlapAddresses(stripSheetName(range), stripSheetName(columnTargetFromDetected(detected, column.column)))) ? "preserved" : "not_detected"
+    }));
+}
+
+function visualValidationOptionsForRole(role: string, header: string): string[] {
+  const normalized = normalizeHeaderName(header);
+  if (role === "status") {
+    if (/\b(payment|invoice|billing)\b/i.test(normalized)) {
+      return ["Open", "Paid", "Overdue", "Disputed"];
+    }
+    return ["Open", "In Progress", "Blocked", "Done"];
+  }
+  if (/\bpriority\b/i.test(normalized)) {
+    return ["Low", "Medium", "High", "Critical"];
+  }
+  return ["Option 1", "Option 2", "Option 3"];
+}
+
+function compileVisualFormulaSuggestions(detected: VisualReadabilityDetectedStructure, columns: VisualReadabilityColumnRole[]): VisualReadabilityFormulaSuggestion[] {
+  const suggestions: VisualReadabilityFormulaSuggestion[] = [];
+  const dateColumn = columns.find((column) => column.role === "date");
+  const statusColumn = columns.find((column) => column.role === "status");
+  const lastColumn = columns[columns.length - 1]?.column ?? columnsFromAddress(detected.usedRange ?? detected.headerRange ?? "A1:A1").at(-1) ?? "A";
+  if (dateColumn && statusColumn) {
+    suggestions.push({
+      id: "formula.overdue_flag",
+      suggestedColumnAfter: lastColumn,
+      formulaName: "Overdue flag",
+      formulaExample: `=AND($${dateColumn.column}2<TODAY(),$${statusColumn.column}2<>"Done")`,
+      risk: "medium",
+      reason: "Could add an overdue helper column, but formula insertion requires separate confirmation."
+    });
+  }
+  const moneyColumns = columns.filter((column) => column.role === "money" || column.role === "number");
+  if (moneyColumns.length >= 2) {
+    suggestions.push({
+      id: "formula.variance",
+      suggestedColumnAfter: lastColumn,
+      formulaName: "Variance",
+      formulaExample: `=$${moneyColumns[0]!.column}2-$${moneyColumns[1]!.column}2`,
+      risk: "medium",
+      reason: "Could add a variance calculation, but formulas are not inserted by visual styling."
+    });
+  }
+  return suggestions.slice(0, 6);
+}
+
+function compileVisualReferenceStyleSuggestions(
+  metadata: WorkbookMetadata,
+  sheet: WorkbookMetadata["sheets"][number],
+  detected: VisualReadabilityDetectedStructure,
+  columns: VisualReadabilityColumnRole[],
+  options: ReturnType<typeof visualReadabilityOptionsFromInput>
+): VisualReadabilityReferenceStyleSuggestion[] {
+  const reference = options.referenceStyle;
+  if (!reference) {
+    return [];
+  }
+  const referenceSheet = metadata.sheets.find((candidate) => sameText(candidate.name, reference.sheetName));
+  if (!referenceSheet) {
+    return [{
+      id: "reference_style.sheet_not_found",
+      referenceSheetName: reference.sheetName,
+      target: detected.usedRange ?? sheet.name,
+      pattern: "reference sheet lookup",
+      risk: "high",
+      reason: "Reference style sheet was not found, so no style patterns will be adapted.",
+      preserveTargetValues: true,
+      preserveFormulas: reference.preserveFormulas
+    }];
+  }
+  const referenceHeader = referenceSheet.headers.sort((left, right) => right.confidence - left.confidence)[0];
+  const suggestions: VisualReadabilityReferenceStyleSuggestion[] = [];
+  if (referenceHeader?.range && detected.headerRange) {
+    suggestions.push({
+      id: "reference_style.header",
+      referenceSheetName: referenceSheet.name,
+      target: detected.headerRange,
+      pattern: "header fill, font, and bottom border",
+      risk: "medium",
+      reason: `Adapt header styling from ${referenceSheet.name} to the detected target header without copying values.`,
+      preserveTargetValues: true,
+      preserveFormulas: reference.preserveFormulas
+    });
+  }
+  if (reference.adaptToTargetStructure && columns.length > 0) {
+    suggestions.push({
+      id: "reference_style.columns_by_role",
+      referenceSheetName: referenceSheet.name,
+      target: detected.usedRange ?? detected.headerRange ?? sheet.name,
+      pattern: "column widths, alignment, and number formats by semantic role",
+      risk: "medium",
+      reason: `Map style patterns from ${referenceSheet.name} by column role so extra or missing target columns are handled safely.`,
+      preserveTargetValues: true,
+      preserveFormulas: reference.preserveFormulas
+    });
+  }
+  if (referenceSheet.kind === sheet.kind || referenceSheet.columnCount === sheet.columnCount) {
+    suggestions.push({
+      id: "reference_style.layout",
+      referenceSheetName: referenceSheet.name,
+      target: detected.usedRange ?? sheet.name,
+      pattern: "freeze panes, filters, and table layout cues",
+      risk: "medium",
+      reason: `Reuse compatible layout cues from ${referenceSheet.name}; this remains preview-only in visual readability apply.`,
+      preserveTargetValues: true,
+      preserveFormulas: reference.preserveFormulas
+    });
+  }
+  return suggestions.slice(0, 6);
+}
+
+function compileVisualPrintSuggestions(
+  detected: VisualReadabilityDetectedStructure,
+  options: ReturnType<typeof visualReadabilityOptionsFromInput>,
+  sheetType: VisualReadabilitySheetType
+): VisualReadabilityPrintSuggestion[] {
+  const mode = options.presentationMode;
+  if (!mode || mode === "working_sheet") {
+    return [];
+  }
+  const target = detected.usedRange ?? detected.headerRange ?? detected.sheetName;
+  const orientation = sheetType === "numeric_report" || sheetType === "summary_report" || (detected.usedRange && columnsFromAddress(detected.usedRange).length > 8)
+    ? "landscape"
+    : "portrait";
+  const suggestions: VisualReadabilityPrintSuggestion[] = [
+    {
+      id: "print.orientation",
+      target,
+      setting: "orientation",
+      value: orientation,
+      presentationMode: mode,
+      risk: "medium",
+      reason: "Suggest page orientation for print/export readability; visual apply does not change print settings."
+    },
+    {
+      id: "print.fit_to_width",
+      target,
+      setting: "fitToWidth",
+      value: "1 page wide",
+      presentationMode: mode,
+      risk: "medium",
+      reason: "Suggest fitting the report to one page wide for sharing."
+    }
+  ];
+  if (detected.headerRange) {
+    suggestions.push({
+      id: "print.repeat_header",
+      target: detected.headerRange,
+      setting: "repeatRows",
+      value: `row ${detected.headerRow ?? 1}`,
+      presentationMode: mode,
+      risk: "medium",
+      reason: "Suggest repeating the detected header row when printed or exported."
+    });
+  }
+  if (mode === "executive_report") {
+    suggestions.push({
+      id: "print.hide_gridlines",
+      target,
+      setting: "showGridlines",
+      value: "false",
+      presentationMode: mode,
+      risk: "medium",
+      reason: "Suggest hiding gridlines for cleaner executive presentation output."
+    });
+  }
+  return suggestions.slice(0, 6);
+}
+
+function visualWidthForRole(role: string): { min: number; max: number } {
+  switch (role) {
+    case "date": return { min: 12, max: 14 };
+    case "entity": return { min: 18, max: 30 };
+    case "money": return { min: 12, max: 16 };
+    case "number": return { min: 10, max: 14 };
+    case "status": return { min: 12, max: 18 };
+    case "notes": return { min: 28, max: 50 };
+    case "id": return { min: 10, max: 16 };
+    case "category": return { min: 12, max: 20 };
+    default: return { min: 12, max: 24 };
+  }
+}
+
+function visualAlignmentForRole(role: string): { horizontalAlignment: string; verticalAlignment: string } {
+  if (role === "money" || role === "number") return { horizontalAlignment: "Right", verticalAlignment: "Center" };
+  if (role === "date" || role === "status" || role === "category") return { horizontalAlignment: "Center", verticalAlignment: "Center" };
+  if (role === "notes") return { horizontalAlignment: "Left", verticalAlignment: "Top" };
+  return { horizontalAlignment: "Left", verticalAlignment: "Center" };
+}
+
+function visualNumberFormatForRole(role: string): string | undefined {
+  if (role === "date") return "dd/mm/yyyy";
+  if (role === "money" || role === "number") return "#,##0";
+  return undefined;
+}
+
+function columnTargetFromDetected(detected: VisualReadabilityDetectedStructure, column: string): string {
+  const parsed = detected.usedRange ? tryParseA1Address(stripSheetName(detected.usedRange)) : undefined;
+  return parsed ? `${column}${parsed.startRow}:${column}${parsed.endRow}` : `${column}:${column}`;
+}
+
+function visualColumnGroups(columns: VisualReadabilityColumnRole[], detected: VisualReadabilityDetectedStructure): Array<{ label: string; startColumn: string; endColumn: string; target: string }> {
+  const groups: Array<{ label: string; columns: VisualReadabilityColumnRole[] }> = [];
+  for (const column of columns) {
+    const label = visualGroupLabel(column.role);
+    const last = groups[groups.length - 1];
+    if (last?.label === label) {
+      last.columns.push(column);
+    } else {
+      groups.push({ label, columns: [column] });
+    }
+  }
+  const parsed = detected.usedRange ? tryParseA1Address(stripSheetName(detected.usedRange)) : undefined;
+  return groups
+    .filter((group) => group.columns.length > 0)
+    .map((group) => {
+      const startColumn = group.columns[0]!.column;
+      const endColumn = group.columns[group.columns.length - 1]!.column;
+      return {
+        label: group.label,
+        startColumn,
+        endColumn,
+        target: parsed ? `${startColumn}${parsed.startRow}:${endColumn}${parsed.endRow}` : `${startColumn}:${endColumn}`
+      };
+    });
+}
+
+function visualGroupLabel(role: string): string {
+  if (role === "date") return "Dates";
+  if (role === "money" || role === "number" || role === "formula_output") return "Metrics";
+  if (role === "status") return "Status";
+  if (role === "notes") return "Notes";
+  return "Record Info";
+}
+
+function countVisualRuleScopes(rules: VisualReadabilityRule[]): Record<VisualRuleScope, number> {
+  return {
+    sheet: rules.filter((rule) => rule.scope === "sheet").length,
+    table: rules.filter((rule) => rule.scope === "table").length,
+    group: rules.filter((rule) => rule.scope === "group").length,
+    column: rules.filter((rule) => rule.scope === "column").length,
+    conditional_range: rules.filter((rule) => rule.scope === "conditional_range").length,
+    row: rules.filter((rule) => rule.scope === "row").length,
+    cell: rules.filter((rule) => rule.scope === "cell").length
+  };
+}
+
+function visualPlanSummary(sheetType: VisualReadabilitySheetType, options: ReturnType<typeof visualReadabilityOptionsFromInput>, counts: VisualReadabilityPlanPreview["counts"]): string[] {
+  return [
+    `Detected ${sheetType} and selected ${options.profile} profile.`,
+    `Compiled ${counts.totalRules} ${options.styleDepth} visual readability rule(s).`,
+    "Supported safe operations are apply-ready; risky or unsupported rules remain skipped or preview-only."
+  ];
+}
+
+function visualRuleAfterSummary(rule: VisualReadabilityRule): string {
+  switch (rule.kind) {
+    case "width": return "role-based width";
+    case "alignment": return "role-based alignment";
+    case "number_format": return `number format ${String(rule.value)}`;
+    case "filter": return "filters enabled or preserved";
+    case "freeze": return "freeze header suggestion";
+    case "border": return "soft grouping border/fill";
+    case "wrap": return "wrapped long text";
+    case "fill": return rule.scope === "conditional_range" ? "conditional highlight rule" : "calm fill styling";
+    case "font": return "font styling";
+    case "height": return "row height";
+  }
+}
+
+function detectVisualReadabilityStructure(metadata: WorkbookMetadata, sheet: WorkbookMetadata["sheets"][number], targetRange?: string): VisualReadabilityDetectedStructure {
+  const sheetTables = metadata.tables.filter((table) => table.sheetName === sheet.name);
+  const bestHeader = [
+    ...sheet.headers,
+    ...sheetTables.flatMap((table) => table.headerRange ? [{
+      id: `${table.id}:header`,
+      sheetName: table.sheetName,
+      row: tryParseA1Address(stripSheetName(table.headerRange))?.startRow ?? tryParseA1Address(stripSheetName(table.range))?.startRow ?? 1,
+      range: table.headerRange,
+      columns: table.columns,
+      confidence: 0.95
+    } satisfies HeaderMetadata] : [])
+  ].sort((left, right) => right.confidence - left.confidence)[0];
+  const firstTable = sheetTables[0];
+  const usedRange = targetRange ?? sheet.usedRange;
+  const used = usedRange ? tryParseA1Address(stripSheetName(usedRange)) : undefined;
+  const headerRow = bestHeader?.row ?? (firstTable ? tryParseA1Address(stripSheetName(firstTable.range))?.startRow : undefined);
+  const headerRange = bestHeader?.range ?? (firstTable ? addressFromBounds(headerRow ?? 1, tryParseA1Address(stripSheetName(firstTable.range))?.startColumn ?? 1, 1, firstTable.columns.length) : undefined);
+  const dataRange = firstTable?.dataRange ?? (used && headerRow !== undefined && used.endRow > headerRow
+    ? addressFromBounds(headerRow + 1, used.startColumn, used.endRow - headerRow, used.endColumn - used.startColumn + 1)
+    : usedRange);
+  const formulaColumns = uniqueDefined([
+    ...columnsForVisualReadability(metadata, sheet, { headerRange, dataRange }).filter((column) => column.inferredType === "formula" || column.role === "formula").map((column) => column.letter),
+    ...metadata.formulaRegions.filter((region) => region.sheetName === sheet.name).flatMap((region) => columnsFromAddress(region.range))
+  ]);
+  const existingStyleRanges = uniqueDefined([
+    ...metadata.summaryBlocks.filter((block) => block.sheetName === sheet.name).map((block) => block.range),
+    ...metadata.sections.filter((section) => section.sheetName === sheet.name && (section.kind === "summary" || section.kind === "metadata")).map((section) => section.range)
+  ]);
+  return {
+    sheetName: sheet.name,
+    ...(usedRange ? { usedRange } : {}),
+    ...(headerRow !== undefined ? { headerRow } : {}),
+    ...(headerRange ? { headerRange } : {}),
+    ...(dataRange ? { dataRange } : {}),
+    tableRanges: sheetTables.map((table) => table.range),
+    hasFilter: sheetTables.length > 0,
+    hasFreezePane: false,
+    mergedRanges: [],
+    hiddenRows: [],
+    hiddenColumns: sheet.isHidden ? ["sheet"] : [],
+    protectedRanges: [],
+    existingStyleRanges,
+    formulaColumns,
+    formulaRanges: metadata.formulaRegions.filter((region) => region.sheetName === sheet.name).map((region) => region.range),
+    totalRows: [],
+    subtotalRows: [],
+    existingConditionalFormattingRanges: [],
+    existingDataValidationRanges: [],
+    detectionSource: "metadata",
+    confidence: bestHeader ? bestHeader.confidence : firstTable ? 0.9 : usedRange ? 0.65 : 0.35
+  };
+}
+
+function inferVisualReadabilityColumns(metadata: WorkbookMetadata, sheet: WorkbookMetadata["sheets"][number], detected: VisualReadabilityDetectedStructure): VisualReadabilityColumnRole[] {
+  return columnsForVisualReadability(metadata, sheet, detected).map((column) => ({
+    column: column.letter,
+    header: column.name,
+    role: visualColumnRole(column),
+    inferredType: column.inferredType,
+    confidence: Math.max(0.45, Math.min(0.98, column.importance ?? 0.7)),
+    signals: visualColumnSignals(column)
+  }));
+}
+
+function columnsForVisualReadability(metadata: WorkbookMetadata, sheet: WorkbookMetadata["sheets"][number], detected: { headerRange?: string | undefined; dataRange?: string | undefined }): ColumnMetadata[] {
+  const tableColumns = metadata.tables.find((table) => table.sheetName === sheet.name && (!detected.dataRange || table.dataRange === detected.dataRange || table.range === detected.dataRange))?.columns
+    ?? metadata.tables.find((table) => table.sheetName === sheet.name)?.columns;
+  if (tableColumns && tableColumns.length > 0) {
+    return tableColumns;
+  }
+  const headerColumns = sheet.headers.sort((left, right) => right.confidence - left.confidence)[0]?.columns;
+  return headerColumns ?? [];
+}
+
+function visualColumnRole(column: ColumnMetadata): string {
+  if (column.inferredType === "formula" || column.role === "formula") return "formula_output";
+  if (column.inferredType === "currency" || column.role === "amount") return "money";
+  if (column.inferredType === "date" || column.role === "date") return "date";
+  if (column.inferredType === "status" || column.role === "status" || /\b(status|state|stage)\b/i.test(column.name)) return "status";
+  if (column.role === "note" || /\b(note|comment|description|detail)\b/i.test(column.name)) return "notes";
+  if (column.role === "identifier" || /\b(id|no\.?|number|code)\b/i.test(column.name)) return "id";
+  if (column.role === "vendor" || column.role === "account") return "entity";
+  if (column.role === "category" || /\b(type|category|priority|owner)\b/i.test(column.name)) return "category";
+  if (column.inferredType === "number") return "number";
+  return "unknown";
+}
+
+function visualColumnSignals(column: ColumnMetadata): string[] {
+  return [
+    column.name ? "header_text" : undefined,
+    column.inferredType !== "unknown" ? `type_${column.inferredType}` : undefined,
+    column.role && column.role !== "unknown" ? `role_${column.role}` : undefined,
+    column.importance !== undefined && column.importance >= 0.9 ? "high_importance" : undefined
+  ].filter((signal): signal is string => signal !== undefined);
+}
+
+function inferVisualReadabilitySheetType(sheet: WorkbookMetadata["sheets"][number], columns: VisualReadabilityColumnRole[]): VisualReadabilitySheetType {
+  const roles = new Set(columns.map((column) => column.role));
+  const moneyCount = columns.filter((column) => column.role === "money" || column.role === "number").length;
+  if (sheet.kind === "summary") return "summary_report";
+  if (sheet.kind === "template") return "input_template";
+  if (roles.has("status") && (roles.has("date") || roles.has("entity"))) return "record_tracker";
+  if (moneyCount >= 2 || roles.has("formula_output")) return "numeric_report";
+  if (columns.length >= 3) return "tabular_data";
+  return sheet.usedRange ? "generic_table" : "unknown";
+}
+
+function profileForVisualSheetType(sheetType: VisualReadabilitySheetType): string {
+  switch (sheetType) {
+    case "tabular_data":
+      return "tabular_data";
+    case "record_tracker":
+      return "record_tracker";
+    case "numeric_report":
+      return "numeric_report";
+    case "input_template":
+      return "input_template";
+    case "summary_report":
+      return "summary_report";
+    default:
+      return "office_clean";
+  }
+}
+
+function columnsFromAddress(address: string): string[] {
+  const parsed = tryParseA1Address(stripSheetName(address));
+  if (!parsed) return [];
+  const columns: string[] = [];
+  for (let column = parsed.startColumn; column <= parsed.endColumn; column += 1) {
+    columns.push(numberToColumn(column));
+  }
+  return columns;
+}
+
+function uniqueDefined(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => typeof value === "string" && value.length > 0))];
 }
 
 function shouldDeriveAsFormula(input: AgentRunInput): boolean {

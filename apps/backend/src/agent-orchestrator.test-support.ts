@@ -26,6 +26,7 @@ export class FakeAgentRuntime {
   omitOkOnWrite = false;
   batchResultOverride: unknown | undefined;
   snapshotRangesOverride: unknown | undefined;
+  mutateFormulaReadsAfterWrite = false;
   validationResult: any;
   lastBatchOperations: BatchRequest["operations"] = [];
   lastBatchRequest: BatchRequest | undefined;
@@ -301,7 +302,7 @@ export class FakeAgentRuntime {
           operationId: operation.operationId,
           snapshot: {
             values: valuesFor(sheetName, address),
-            formulas: formulasFor(sheetName, address),
+            formulas: this.formulasForRead(sheetName, address),
             text: valuesFor(sheetName, address).map((row) => row.map((value) => value === null || value === undefined ? "" : String(value))),
             numberFormat: numberFormatsFor(sheetName, address),
             style: { fillColor: "#FFFFFF", fontName: "Calibri", fontSize: 11 }
@@ -325,6 +326,14 @@ export class FakeAgentRuntime {
       warnings: [],
       telemetry: { cellsWritten: 1 }
     };
+  }
+
+  private formulasForRead(sheetName: string, address: string) {
+    const formulas = formulasFor(sheetName, address);
+    if (!this.mutateFormulaReadsAfterWrite || this.writeBatchCount === 0) {
+      return formulas;
+    }
+    return formulas.map((row) => row.map((formula, index) => formula && index === 0 ? `${formula}+0` : formula));
   }
 
   async snapshotRanges(requestWorkbookId: WorkbookId, ranges: Array<{ workbookId?: WorkbookId; sheetName: string; address: string }>) {

@@ -574,7 +574,7 @@
       "xlsxAssertions": true,
       "shouldMutateWorkbook": true,
       "mustNotReadFullWorkbook": true,
-      "previewAnswerKind": "formula_preview",
+      "previewAnswerKind": "formula_update_preview",
       "hostMethods": ["operation.execute_batch"],
       "operationKinds": ["range.write_formulas"],
       "cellFormulas": [

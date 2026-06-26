@@ -156,6 +156,35 @@ async function main() {
     assert(appendApplied.status === "SUCCESS", "table append apply should succeed");
     assert(addin.workbook.table("TransactionsArchive").info().rowCount === 4, "fake add-in table should have one appended row");
 
+    const visualValuesBefore = addin.workbook.sheet("Data").snapshot({ workbookId, sheetName: "Data", address: "A1:D4" }).values;
+    const visualPreview = await agentRun(mcp, {
+      request: "Make the Data sheet easier to read",
+      mode: "preview_update",
+      workbookContextId: refreshed.workbookContextId,
+      intent: { action: "improve_visual_readability" },
+      target: { sheetName: "Data" },
+      values: { visualReadability: { styleDepth: "standard" } }
+    }, agentOutputSchema);
+    assert(visualPreview.status === "PREVIEW_READY", "visual readability should return a preview");
+    assert(visualPreview.answer?.kind === "visual_readability_preview", "visual readability should return compact preview answer");
+    assert(visualPreview.metrics?.operationCount > 0, "visual readability preview should compile safe operations");
+    assert(visualPreview.metrics?.groupedOperationCount > 0, "visual readability preview should report grouped rule counts");
+    assert(visualPreview.changes?.some((change) => change.after === "role-based alignment"), "visual readability preview should include compact column-rule examples");
+    const visualApplied = await agentRun(mcp, {
+      request: "Apply visual readability preview",
+      mode: "apply_update",
+      operationId: visualPreview.operationId,
+      confirmationToken: visualPreview.confirmationToken
+    }, agentOutputSchema);
+    assert(visualApplied.status === "SUCCESS", "visual readability apply should succeed");
+    const visualBatch = [...addin.calls].reverse().find((call) => call.method === "operation.execute_batch" && call.params?.request?.idempotencyKey?.includes("visual_readability"));
+    assert(visualBatch, "visual readability apply should execute one batch through the add-in");
+    const visualKinds = visualBatch.params.request.operations.map((operation) => operation.kind);
+    assert(visualKinds.some((kind) => kind === "range.write_styles_many"), "visual readability batch should include grouped style writes");
+    assert(visualKinds.every((kind) => kind !== "range.write_values" && kind !== "range.write_formulas"), "visual readability batch must not write values or formulas");
+    const visualValuesAfter = addin.workbook.sheet("Data").snapshot({ workbookId, sheetName: "Data", address: "A1:D4" }).values;
+    assert(JSON.stringify(visualValuesAfter) === JSON.stringify(visualValuesBefore), "visual readability apply must not change cell values");
+
     const preview = await agentRun(mcp, {
       request: "Update Data B2",
       mode: "preview_update",

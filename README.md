@@ -169,6 +169,8 @@ Agents call `excel.agent.run` with natural language plus optional structured fie
 
 The backend keeps verbose workbook context local and returns compact proof, resource links, telemetry, warnings, and next actions. Caller LLMs may provide canonical `intent.action`, `intent.targetHints`, explicit `target`, and structured `values`, but the backend still owns ambiguity checks, stale-context checks, permissions, locks, backups, validation, and rollback metadata.
 
+For broad styling/readability work, agents should use `intent.action: "improve_visual_readability"` with `mode: "preview_update"` rather than issuing many primitive style calls. Options live under `values.visualReadability`; standard mode compiles safe column-first layout/formatting/highlight rules, comprehensive mode can include preview-only validation/formula suggestions, `referenceStyle` can preview adaptation from another sheet, and `presentationMode` can preview print/export suggestions. Apply still requires `apply_update` with the returned operation token and only applies safe visual operations.
+
 With the shared daemon, multiple MCP sessions get distinct trusted agent identities. `status` and `prepare` include compact collaboration summaries for active agents, open tasks, locks, queued/applying transactions, conflicts, and recent events.
 
 ## Common Commands

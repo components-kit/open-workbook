@@ -3,6 +3,442 @@ import { AgentOrchestrator } from "./agent-orchestrator.js";
 import { FakeAgentRuntime, createCachedMetadata, selectionInfo, sheets, workbookId } from "./agent-orchestrator.test-support.js";
 
 describe("AgentOrchestrator Preview Apply Safety", () => {
+  it("previews and applies visual readability safe operations through the update lifecycle", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Make this sheet easier to read",
+        mode: "preview_update",
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Data" },
+        values: {
+          visualReadability: {
+            styleDepth: "standard",
+            profile: "auto",
+            density: "comfortable",
+            preserveFormulas: true,
+            preserveExistingStyle: true
+          }
+        }
+      });
+      const applied = await agent.run({
+        request: "Apply visual readability preview",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect(preview.operationId).toBeTruthy();
+      expect(preview.confirmationToken).toBeTruthy();
+      expect((preview.answer as any).kind).toBe("visual_readability_preview");
+      expect((preview.answer as any).defaults).toEqual({
+        styleDepth: "standard",
+        profile: "record_tracker",
+        density: "comfortable",
+        preserveFormulas: true,
+        preserveExistingStyle: true,
+        allowValidationSuggestions: false,
+        allowFormulaSuggestions: false,
+        allowReplaceConditionalFormatting: false,
+        allowReplaceDataValidation: false,
+        allowInsertRowsOrColumns: false
+      });
+      expect((preview.answer as any).detected).toMatchObject({
+        sheetName: "Data",
+        usedRange: "A1:D4",
+        headerRow: 1,
+        dataRange: "A2:D4",
+        tableRanges: ["A1:D4"],
+        hasFilter: true,
+        detectionSource: "metadata"
+      });
+      expect((preview.answer as any).columnRoles.map((column: any) => [column.column, column.header, column.role])).toEqual([
+        ["A", "Date", "date"],
+        ["B", "Account", "entity"],
+        ["C", "Amount", "money"],
+        ["D", "Status", "status"]
+      ]);
+      expect((preview.answer as any).sheetType).toBe("record_tracker");
+      const visualPlan = (preview.answer as any).visualPlan;
+      expect(visualPlan.compilerStatus).toBe("preview_compiled_apply_pending");
+      expect(visualPlan.counts.totalRules).toBeGreaterThan(0);
+      expect(visualPlan.counts.columnRules).toBeGreaterThan(0);
+      expect(visualPlan.counts.groupRules).toBeGreaterThan(0);
+      expect(visualPlan.counts.conditionalRules).toBeGreaterThan(0);
+      expect(visualPlan.ruleScopes.column).toBeGreaterThan(0);
+      expect(visualPlan.operationCount).toBeGreaterThan(0);
+      expect(visualPlan.skipped.map((skip: any) => skip.ruleId)).toContain("layout.freeze_header");
+      expect(visualPlan.ruleIds).toEqual(expect.arrayContaining([
+        "layout.header_style",
+        "layout.filter",
+        "column.A.width",
+        "column.C.number_format",
+        "conditional.D.missing_required"
+      ]));
+      expect(preview.changes.length).toBeGreaterThan(0);
+      expect(preview.resourceLinks.map((link) => link.uri)).toContain(`excel://agent/operations/${preview.operationId}`);
+      expect(preview.warnings.join(" ")).toContain("safe visual operation");
+      expect(applied.status).toBe("SUCCESS");
+      expect((applied.answer as any).kind).toBe("apply_update_result");
+      expect((applied.answer as any).ok).toBe(true);
+      expect(runtime.lastBatchOperations.map((operation) => operation.kind)).toEqual([
+        "range.write_styles_many",
+        "range.apply_autofilter",
+        "range.write_conditional_formatting",
+        "range.write_conditional_formatting",
+        "range.write_conditional_formatting",
+        "range.write_number_formats_many"
+      ]);
+      expect(runtime.lastBatchOperations.some((operation) => operation.kind === "range.write_values" || operation.kind === "range.write_formulas")).toBe(false);
+      const styleOperation = runtime.lastBatchOperations.find((operation) => operation.kind === "range.write_styles_many") as any;
+      expect(styleOperation.entries.every((entry: any) => entry.preserveValues === true)).toBe(true);
+      const numberFormatOperation = runtime.lastBatchOperations.find((operation) => operation.kind === "range.write_number_formats_many") as any;
+      expect(numberFormatOperation.entries.every((entry: any) => entry.preserveValues === true)).toBe(true);
+      expect(runtime.lastBatchOperations.filter((operation) => operation.kind === "range.write_conditional_formatting").map((operation: any) => operation.rule.formula)).toEqual(expect.arrayContaining([
+        '=AND(COUNTA($A2:$D2)>0,$A2="")',
+        '=AND(COUNTA($A2:$D2)>0,$D2="")'
+      ]));
+      expect(runtime.writeBatchCount).toBe(1);
+    });
+
+  it("keeps basic visual readability previews to layout and column rules", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Make this sheet easier to read",
+        mode: "preview_update",
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Data" },
+        values: {
+          visualReadability: {
+            styleDepth: "basic"
+          }
+        }
+      });
+
+      const visualPlan = (preview.answer as any).visualPlan;
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect(visualPlan.compilerStatus).toBe("preview_compiled_apply_pending");
+      expect(visualPlan.counts.totalRules).toBeGreaterThan(0);
+      expect(visualPlan.counts.columnRules).toBeGreaterThan(0);
+      expect(visualPlan.counts.groupRules).toBe(0);
+      expect(visualPlan.counts.conditionalRules).toBe(0);
+      expect(visualPlan.operationCount).toBeGreaterThan(0);
+      expect(visualPlan.ruleIds).toEqual(expect.arrayContaining([
+        "layout.header_style",
+        "column.A.width",
+        "column.C.number_format"
+      ]));
+      expect(visualPlan.ruleIds.some((ruleId: string) => ruleId.startsWith("group."))).toBe(false);
+      expect(visualPlan.ruleIds.some((ruleId: string) => ruleId.startsWith("conditional."))).toBe(false);
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
+  it("keeps comprehensive visual readability validation and formula suggestions preview-only", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Run a comprehensive visual readability update and include suggestions",
+        mode: "preview_update",
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Data" },
+        values: {
+          visualReadability: {
+            styleDepth: "comprehensive"
+          }
+        }
+      });
+      const applied = await agent.run({
+        request: "Apply visual readability preview",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      const visualPlan = (preview.answer as any).visualPlan;
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect(visualPlan.counts.validationSuggestions).toBeGreaterThan(0);
+      expect(visualPlan.counts.formulaSuggestions).toBeGreaterThan(0);
+      expect(visualPlan.validationSuggestions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "validation.D.dropdown", risk: "medium", existingValidation: "not_detected" })
+      ]));
+      expect(visualPlan.formulaSuggestions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "formula.overdue_flag", risk: "medium" })
+      ]));
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations.some((operation) => operation.kind === "range.write_data_validation" || operation.kind === "range.write_formulas")).toBe(false);
+    });
+
+  it("keeps visual readability reference-style adaptation preview-only", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Make Apr 2026 look like May 2026 without changing formulas",
+        mode: "preview_update",
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Apr 2026" },
+        values: {
+          visualReadability: {
+            referenceStyle: {
+              sheet: "May 2026",
+              adaptToTargetStructure: true,
+              preserveTargetValues: true,
+              preserveFormulas: true
+            }
+          }
+        }
+      });
+      const applied = await agent.run({
+        request: "Apply visual readability preview",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      const visualPlan = (preview.answer as any).visualPlan;
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).defaults.referenceStyle).toMatchObject({
+        sheetName: "May 2026",
+        adaptToTargetStructure: true,
+        preserveTargetValues: true,
+        preserveFormulas: true
+      });
+      expect(visualPlan.counts.referenceStyleSuggestions).toBeGreaterThan(0);
+      expect(visualPlan.referenceStyleSuggestions).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: "reference_style.header",
+          referenceSheetName: "May 2026",
+          preserveTargetValues: true,
+          preserveFormulas: true
+        }),
+        expect.objectContaining({ id: "reference_style.columns_by_role" })
+      ]));
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations.some((operation) => operation.kind === "range.write_values" || operation.kind === "range.write_formulas")).toBe(false);
+    });
+
+  it("keeps visual readability print and presentation suggestions preview-only", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Make Apr 2026 print ready",
+        mode: "preview_update",
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Apr 2026" },
+        values: {
+          visualReadability: {
+            presentationMode: "print_ready"
+          }
+        }
+      });
+      const applied = await agent.run({
+        request: "Apply visual readability preview",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      const visualPlan = (preview.answer as any).visualPlan;
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).defaults.presentationMode).toBe("print_ready");
+      expect(visualPlan.counts.printSuggestions).toBeGreaterThan(0);
+      expect(visualPlan.printSuggestions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "print.orientation", value: "landscape" }),
+        expect.objectContaining({ id: "print.fit_to_width" }),
+        expect.objectContaining({ id: "print.repeat_header", target: "A1:AG1" })
+      ]));
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations.every((operation) => !String(operation.kind).includes("print"))).toBe(true);
+    });
+
+  it("verifies formula preservation when applying visual readability to formula ranges", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_visual_formula_preservation");
+      metadata.formulaRegions = [{ id: "formula:apr-payment-variance", sheetName: "Apr 2026", range: "I2:I244", formulaCount: 243 }];
+      agent.metadataCache.set(metadata);
+
+      const preview = await agent.run({
+        request: "Make Apr 2026 easier to read",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Apr 2026" }
+      });
+      const applied = await agent.run({
+        request: "Apply visual readability preview",
+        mode: "apply_update",
+        workbookContextId: metadata.workbookContextId,
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).visualPlan.preservation.formulaRanges).toEqual(["I2:I244"]);
+      expect(applied.status).toBe("SUCCESS");
+      expect((applied.answer as any).formulaPreservation).toMatchObject({
+        checkedRanges: ["I2:I244"],
+        formulasChanged: 0,
+        unchanged: true
+      });
+      expect((applied.answer as any).formulaPreservation.formulasChecked).toBeGreaterThan(0);
+      expect((applied.answer as any).telemetry).toMatchObject({ visualReadabilityApply: true, formulasChanged: 0 });
+      expect(runtime.readBatchCount).toBe(2);
+      expect(runtime.writeBatchCount).toBe(1);
+      expect(runtime.lastWriteOperations.some((operation) => operation.kind === "range.write_values" || operation.kind === "range.write_formulas")).toBe(false);
+    });
+
+  it("fails visual readability apply when formula preservation changes are detected", async () => {
+      const runtime = new FakeAgentRuntime();
+      runtime.mutateFormulaReadsAfterWrite = true;
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_visual_formula_preservation_failure");
+      metadata.formulaRegions = [{ id: "formula:apr-payment-variance", sheetName: "Apr 2026", range: "I2:I244", formulaCount: 243 }];
+      agent.metadataCache.set(metadata);
+
+      const preview = await agent.run({
+        request: "Make Apr 2026 easier to read",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Apr 2026" }
+      });
+      const applied = await agent.run({
+        request: "Apply visual readability preview",
+        mode: "apply_update",
+        workbookContextId: metadata.workbookContextId,
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect(applied.status).toBe("VALIDATION_FAILED");
+      expect((applied.answer as any).formulaPreservation).toMatchObject({
+        checkedRanges: ["I2:I244"],
+        unchanged: false
+      });
+      expect((applied.answer as any).formulaPreservation.formulasChanged).toBeGreaterThan(0);
+      expect(applied.warnings.join(" ")).toContain("Formula preservation failed");
+    });
+
+  it("asks for a header range when visual readability structure is ambiguous", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Make this report easier to read",
+        mode: "preview_update",
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Report" }
+      });
+
+      expect(preview.status).toBe("NEEDS_INPUT");
+      expect(preview.summary).toContain("Could not confidently detect a header row");
+      expect(preview.nextAction).toBe("ask_user");
+      expect(preview.warnings.join(" ")).toContain("No visual styling operations were prepared");
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
+  it("blocks oversized visual readability targets before compiling operations", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Make this huge sheet easier to read",
+        mode: "preview_update",
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Data", range: "A1:XFD200" }
+      });
+
+      expect(preview.status).toBe("VALIDATION_FAILED");
+      expect(preview.summary).toContain("target is too large");
+      expect(preview.nextAction).toBe("ask_user");
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
+  it("blocks visual readability on hidden sheets by default", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_visual_hidden_sheet");
+      metadata.sheets.push({
+        id: "sheet:hidden",
+        name: "Hidden Data",
+        index: 99,
+        usedRange: "A1:B4",
+        rowCount: 4,
+        columnCount: 2,
+        isHidden: true,
+        kind: "transaction",
+        headers: [{
+          id: "header:hidden",
+          sheetName: "Hidden Data",
+          row: 1,
+          range: "A1:B1",
+          confidence: 0.95,
+          columns: [
+            { name: "Date", normalizedName: "date", inferredType: "date", role: "date", importance: 0.9, index: 0, letter: "A" },
+            { name: "Status", normalizedName: "status", inferredType: "status", role: "status", importance: 0.9, index: 1, letter: "B" }
+          ]
+        }],
+        tableIds: [],
+        sectionIds: [],
+        summaryBlockIds: [],
+        formulaRegionIds: []
+      });
+      agent.metadataCache.set(metadata);
+
+      const preview = await agent.run({
+        request: "Make hidden data easier to read",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Hidden Data" }
+      });
+
+      expect(preview.status).toBe("VALIDATION_FAILED");
+      expect(preview.summary).toContain("sheet is hidden");
+      expect(preview.nextAction).toBe("ask_user");
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
+  it("skips visual readability rules that overlap existing styled summary areas", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_visual_existing_style");
+      metadata.summaryBlocks.push({
+        id: "summary:data-title",
+        sheetName: "Data",
+        range: "A1:D1",
+        labels: ["Transactions"],
+        confidence: 0.95
+      });
+      agent.metadataCache.set(metadata);
+
+      const preview = await agent.run({
+        request: "Make Data easier to read",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "improve_visual_readability" },
+        target: { sheetName: "Data" }
+      });
+      const visualPlan = (preview.answer as any).visualPlan;
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).detected.existingStyleRanges).toEqual(["A1:D1"]);
+      expect(visualPlan.skipped).toEqual(expect.arrayContaining([
+        expect.objectContaining({ ruleId: "layout.header_style", reason: expect.stringContaining("existing styled summary/template area") }),
+        expect.objectContaining({ ruleId: "layout.header_alignment", reason: expect.stringContaining("existing styled summary/template area") })
+      ]));
+      expect(visualPlan.operationCount).toBeGreaterThan(0);
+      expect(preview.changes.some((change) => change.range === "A1:D1")).toBe(true);
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
   it("requires structured values for write previews even when request text includes rows", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
