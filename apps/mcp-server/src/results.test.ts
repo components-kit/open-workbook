@@ -3,6 +3,52 @@ import type { AgentRunOutput } from "@components-kit/open-workbook-protocol";
 import { agentJsonResult } from "./results.js";
 
 describe("MCP result rendering", () => {
+  it("marks workbook summaries as complete so clients do not chase full resources", () => {
+    const output: AgentRunOutput = {
+      status: "SUCCESS",
+      mode: "answer",
+      workbookContextId: "wbctx_summary",
+      summary: "Returned workbook summary for RFQ.xlsx from cached metadata.",
+      answer: {
+        kind: "workbook_summary",
+        source: "cached_metadata",
+        workbook: { workbookId: "RFQ.xlsx", name: "RFQ.xlsx", sheetCount: 2 },
+        sheetCount: 2,
+        tableCount: 0,
+        namedRangeCount: 0,
+        sheets: [
+          { name: "Vendor Propose", usedRange: "B2:K10" },
+          { name: "Term condition", usedRange: "A3:F21" }
+        ]
+      },
+      proof: [{ sheetName: "Vendor Propose", range: "B2:K10", label: "used range" }],
+      resourceLinks: [],
+      nextAction: "answer_now",
+      taskOutcome: "final_answer",
+      finalAnswer: "Workbook summary: 2 sheets, 0 tables.",
+      agentInstruction: "This workbook summary is complete for an overview request. Answer now from cached metadata; do not fetch fullResultUri, chunk-read sheets, or call low-level MCP resources unless the user asks for all raw rows or exact cell values.",
+      maxRecommendedFollowupCalls: 0,
+      warnings: [],
+      telemetry: {
+        internalCallCount: 1,
+        payloadBytes: 900,
+        estimatedTokens: 225,
+        elapsedMs: 2,
+        cacheHit: true
+      }
+    };
+
+    const result = agentJsonResult(output);
+    const text = result.content[0]?.text ?? "";
+
+    expect(text).toContain("taskOutcome: final_answer");
+    expect(text).toContain("maxRecommendedFollowupCalls: 0");
+    expect(text).toContain("summary is complete from cached metadata");
+    expect(text).toContain("do not fetch fullResultUri");
+    expect(text).not.toContain("excel.agent.run continuation.fullResultUri");
+    expect((result.structuredContent.answer as any).kind).toBe("workbook_summary");
+  });
+
   it("keeps text compact while preserving structured content and resource links", () => {
     const output: AgentRunOutput = {
       status: "SUCCESS",

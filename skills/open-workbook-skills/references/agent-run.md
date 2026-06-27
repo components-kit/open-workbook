@@ -29,6 +29,8 @@ Structured intent is a hint, not a bypass. The backend still resolves ambiguity,
 
 Use `detailLevel: "semantic_index"` when you need a compact role-aware workbook map before choosing a sheet, table, template, form region, formula region, or style target. Use `workbook_summary` and `sheet_summary` for overview questions. Do not request table samples or full tables for broad context questions.
 
+For overview questions such as "what is this workbook/file?", "look into this Excel file", or "summarize this workbook", one `mode: "answer"` call with `detailLevel: "workbook_summary"` or `detailLevel: "sheet_summary"` is normally the whole workflow. If the response has `nextAction: "answer_now"` or `maxRecommendedFollowupCalls: 0`, answer immediately. Do not follow `resourceLinks`, fetch `fullResultUri`, chunk-read sheets, list MCP resources, or call low-level resource reads unless the user explicitly asks for all raw rows, every value, or exact cell contents.
+
 For exact formula questions, pass `intent.action: "read_formulas"` with the exact target when known. This covers "is this a formula?", "raw formula", "show formula", and "formula in I165". Do not infer formula existence from displayed values or numbers alone; use returned formula/status proof.
 
 ## Multilingual Requests
@@ -45,7 +47,7 @@ Do not rely on deterministic English keyword parsing for every language. The cal
 
 ## Preview And Apply
 
-Use `auto` for small explicit value edits that the user already asked you to make. Leave `autoApply` unset unless the user asks for preview-only behavior; if the user says "ask before editing", "show preview first", or similar, set `autoApply: false`. Once workbook write access is allowed for the session, do not ask the user to confirm every small exact edit.
+Use `auto` for small explicit value edits that the user already asked you to make. Include `intent.action: "write_values"`, an explicit `target`, and structured `values`; leave `autoApply` unset unless the user asks for preview-only behavior. If the user says "ask before editing", "show preview first", or similar, set `autoApply: false`. Once workbook write access is allowed for the session, do not ask the user to confirm every small exact edit. If `auto` returns `taskOutcome: "apply_complete"` or `maxRecommendedFollowupCalls: 0`, report the returned proof and stop.
 
 Use `preview_update` for non-trivial mutations, broad edits, table appends, template actions, workbook lifecycle operations, backup lifecycle changes, or anything the user may want to review.
 

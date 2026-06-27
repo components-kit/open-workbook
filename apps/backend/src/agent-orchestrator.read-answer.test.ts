@@ -542,6 +542,17 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect((workbookSummary.answer as any).kind).toBe("workbook_summary");
       expect((sheetSummary.answer as any).kind).toBe("sheet_summary");
       expect((sheetSummary.answer as any).sheet.name).toBe("Data");
+      expect(workbookSummary.nextAction).toBe("answer_now");
+      expect(workbookSummary.taskOutcome).toBe("final_answer");
+      expect(workbookSummary.maxRecommendedFollowupCalls).toBe(0);
+      expect(workbookSummary.agentInstruction).toContain("complete for an overview request");
+      expect(workbookSummary.agentInstruction).toContain("do not fetch fullResultUri");
+      expect((workbookSummary.answer as any).fullResultUri).toBeUndefined();
+      expect(workbookSummary.continuation?.fullResultUri).toBeUndefined();
+      expect(workbookSummary.resourceLinks.some((resource) => resource.uri.startsWith("excel://agent/results/"))).toBe(false);
+      expect(sheetSummary.nextAction).toBe("answer_now");
+      expect(sheetSummary.maxRecommendedFollowupCalls).toBe(0);
+      expect(sheetSummary.agentInstruction).toContain("chunk-read the sheet");
       expect(workbookSummary.telemetry.metadataDetailLevel).toBe("structure");
       expect(sheetSummary.telemetry.cacheHit).toBe(true);
       expect(runtime.readBatchCount).toBe(0);

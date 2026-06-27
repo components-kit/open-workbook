@@ -54,12 +54,16 @@ After Excel opens the add-in, useful default-surface calls are:
 excel.agent.run mode=status request="Check Open Workbook status"
 excel.agent.run mode=prepare request="Prepare workbook context"
 excel.agent.run mode=find request="Find the sheet or table I need"
-excel.agent.run mode=answer request="Summarize the active workbook"
+excel.agent.run mode=answer detailLevel=workbook_summary request="Summarize the active workbook"
 excel.agent.run mode=answer request="Compare January and February"
-excel.agent.run mode=preview_update request="Change Sales!E2 to Reviewed"
+excel.agent.run mode=auto intent.action=write_values target.sheetName=Sales target.range=E2 values.values=[["Reviewed"]] request="Change Sales!E2 to Reviewed"
 excel.agent.run mode=apply_update request="Apply the previewed update"
 excel.agent.run mode=operation_status request="Check a pending operation" operationId="..."
 ```
+
+For workbook overview prompts such as "what is this file?", "look into this workbook", or "summarize the workbook", use `detailLevel=workbook_summary` or `detailLevel=sheet_summary` and stop when the response says `nextAction=answer_now` or `maxRecommendedFollowupCalls=0`. Do not fetch `fullResultUri`, chunk-read sheets, list MCP resources, or call low-level resource reads unless the user explicitly asks for all raw rows or exact cell values.
+
+For small exact value edits the user already requested, prefer `mode=auto` with `intent.action=write_values`, explicit `target`, and structured `values`. Safe scoped edits can return `taskOutcome=apply_complete` in one call; report the proof and stop. Use `preview_update` only when the user asks to review first, the target/value is ambiguous, or the edit is broad, formula/style/table/structural, or otherwise risky.
 
 For direct range writes, send the cell values in the structured `values` field, not only in the request text:
 

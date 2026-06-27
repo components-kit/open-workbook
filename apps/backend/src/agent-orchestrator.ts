@@ -7090,6 +7090,10 @@ function workbookOverviewAnswer(metadata: WorkbookMetadata, input: AgentRunInput
     proof: metadata.sheets.slice(0, 5).flatMap((sheet) => sheet.usedRange ? [{ sheetName: sheet.name, range: sheet.usedRange, label: "used range" }] : []),
     resourceLinks: [contextResource(metadata.workbookContextId), semanticIndexResource(metadata.workbookContextId)],
     nextAction: "answer_now",
+    taskOutcome: "final_answer",
+    finalAnswer: workbookOverviewSummary(metadata, intent, blankSheets.length),
+    agentInstruction: "This workbook overview is complete for a summary request. Answer now from cached metadata; do not fetch fullResultUri, chunk-read sheets, or call low-level MCP resources unless the user asks for all raw rows or exact cell values.",
+    maxRecommendedFollowupCalls: 0,
     warnings: []
   };
 }
@@ -7549,6 +7553,9 @@ function workbookSummaryDetailOutput(metadata: WorkbookMetadata, requestedMode: 
     proof: metadata.sheets.slice(0, 5).flatMap((sheet) => sheet.usedRange ? [{ sheetName: sheet.name, range: sheet.usedRange, label: "used range" }] : []),
     resourceLinks: [contextResource(metadata.workbookContextId), semanticIndexResource(metadata.workbookContextId)],
     nextAction: "answer_now",
+    taskOutcome: "final_answer",
+    agentInstruction: "This workbook summary is complete for an overview request. Answer now from cached metadata; do not fetch fullResultUri, chunk-read sheets, or call low-level MCP resources unless the user asks for all raw rows or exact cell values.",
+    maxRecommendedFollowupCalls: 0,
     warnings: []
   };
 }
@@ -7602,6 +7609,9 @@ function sheetSummaryDetailOutput(metadata: WorkbookMetadata, input: AgentRunInp
     proof: sheet.usedRange ? [{ sheetName: sheet.name, range: sheet.usedRange, label: "used range" }] : [],
     resourceLinks: [contextResource(metadata.workbookContextId)],
     nextAction: "answer_now",
+    taskOutcome: "final_answer",
+    agentInstruction: "This sheet summary is complete for an overview request. Answer now from cached metadata; do not fetch fullResultUri, chunk-read the sheet, or call low-level MCP resources unless the user asks for all raw rows or exact cell values.",
+    maxRecommendedFollowupCalls: 0,
     warnings: metadata.detailLevel === "sampled" ? [] : ["Sheet sections and formula regions are richer after sampled metadata is available."]
   };
 }
@@ -12599,6 +12609,9 @@ function answerNeedsResultResource(answer: unknown): boolean {
   const text = JSON.stringify(answer);
   const typed = answer as Record<string, unknown>;
   if (typed.kind === "match_update_preview" || typed.kind === "match_update_result" || typed.kind === "match_update_no_match" || typed.kind === "exact_search_rows" || typed.kind === "exact_search_no_match") {
+    return false;
+  }
+  if (typed.kind === "workbook_summary" || typed.kind === "workbook_overview" || typed.kind === "sheet_summary") {
     return false;
   }
   return text.length > 2_000

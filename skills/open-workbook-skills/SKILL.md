@@ -35,6 +35,8 @@ The backend owns primitive Excel capabilities, compact reads, batches, plans, va
 
 `excel://...` result handles returned by Open Workbook are internal MCP/Open Workbook handles, not web URLs. Never use Webfetch, browser fetch, curl, or HTTP tooling for `resultUri`, `fullResultUri`, or `resourceLinks`. If hidden detail is genuinely required, call `excel.agent.run` once with `continuation.fullResultUri` or paste the `excel://...` handle in the `request`.
 
+For "what is this workbook/file?", "summarize this workbook", "look into this Excel file", and similar overview requests, make one `excel.agent.run` call with `mode: "answer"` and `detailLevel: "workbook_summary"` or `detailLevel: "sheet_summary"`. When the response says `nextAction: "answer_now"` or `maxRecommendedFollowupCalls: 0`, answer the user immediately. Do not fetch `fullResultUri`, chunk-read worksheets, list MCP resources, or call low-level resource reads unless the user explicitly asks for all raw rows, every value, or exact cell contents.
+
 ## Structured Intent
 
 When the caller LLM can infer routing, pass structured fields alongside the natural request:
@@ -117,7 +119,7 @@ For reads, start with a bounded `answer` call on the selected range. For mutatio
 ## Safety Rules
 
 - Never bypass permissions, scoped locks, snapshots, backups, fingerprints, Office.js execution, validation, transaction records, or rollback metadata for mutations.
-- For small explicit value edits the user already asked you to make, use `mode: "auto"` and leave `autoApply` unset. Once workbook write access is allowed for the session, do not ask the user to confirm every small exact edit. Use `autoApply: false` or `preview_update` when the user asks to review first, the edit is broad/risky, or the backend says preview is required.
+- For small explicit value edits the user already asked you to make, use `mode: "auto"`, `intent.action: "write_values"`, an explicit `target`, and structured `values`; leave `autoApply` unset. Once workbook write access is allowed for the session, do not ask the user to confirm every small exact edit. If `auto` returns `taskOutcome: "apply_complete"` or `maxRecommendedFollowupCalls: 0`, report the proof and stop. Use `autoApply: false` or `preview_update` when the user asks to review first, the edit is broad/risky/ambiguous, or the backend says preview is required.
 - Never write cell-by-cell loops. Batch values, formulas, number formats, and styles as narrow 2D matrices or grouped patches.
 - For broad column transforms, row-aware derivations, or batch sheet renames, use `transform_values`, `derive_values`, or `transform_sheets`; do not fetch full source/target columns or issue sheet-by-sheet calls when the backend can compile one plan.
 - For formula-related tasks, preserve formula proof in the response. Do not ask for `fullResultUri` for ordinary exact formula checks when `read_formulas` returns formula/status proof inline.

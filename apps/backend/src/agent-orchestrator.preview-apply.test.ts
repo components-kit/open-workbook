@@ -1808,6 +1808,50 @@ Data rows:
       expect(runtime.writeBatchCount).toBe(1);
     });
 
+  it("auto-applies exact OpenCode price edits without a human confirmation turn", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_vendor_price_auto");
+      metadata.sheets.push({
+        id: "sheet:Vendor Propose",
+        name: "Vendor Propose",
+        index: 99,
+        usedRange: "B2:K10",
+        rowCount: 10,
+        columnCount: 11,
+        kind: "unknown",
+        headers: [],
+        tableIds: [],
+        sectionIds: [],
+        summaryBlockIds: [],
+        formulaRegionIds: []
+      });
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "ผมต้องการเสนอราคาที่ 6100",
+        mode: "auto",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "write_values" },
+        target: { sheetName: "Vendor Propose", range: "J4" },
+        values: { values: [[6100]] }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.taskOutcome).toBe("apply_complete");
+      expect(result.nextAction).toBe("answer_now");
+      expect(result.maxRecommendedFollowupCalls).toBe(0);
+      expect(result.confirmationToken).toBeUndefined();
+      expect(result.telemetry.autoApplied).toBe(true);
+      expect(result.telemetry.safetyDecision).toBe("auto_apply:scoped_value_edit");
+      expect(runtime.writeBatchCount).toBe(1);
+      expect(runtime.lastBatchOperations[0]).toMatchObject({
+        kind: "range.write_values",
+        target: { sheetName: "Vendor Propose", address: "J4" },
+        values: [[6100]]
+      });
+    });
+
   it("allows callers to opt out of auto-apply for scoped auto value edits", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);

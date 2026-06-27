@@ -317,6 +317,9 @@ function compactDataAvailabilityText(value: AgentRunOutput): string | undefined 
     return undefined;
   }
   const typed = answer as Record<string, unknown>;
+  if (typed.kind === "workbook_summary" || typed.kind === "workbook_overview" || typed.kind === "sheet_summary") {
+    return "data: summary is complete from cached metadata; do not fetch full detail unless the user asks for all raw rows or exact cell values";
+  }
   const exactRows = countMatrixRows(typed.values) ?? countMatrixRows(typed.rows) ?? countSparseRows(typed.sparseRows);
   if (exactRows !== undefined) {
     return `data: ${exactRows} exact row${exactRows === 1 ? "" : "s"} inline in structuredContent`;
