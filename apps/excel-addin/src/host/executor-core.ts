@@ -3179,12 +3179,25 @@ async function applyDataValidation(
   }
   let syncCount = 0;
   const rawSource = Array.isArray(validation.source) ? validation.source.join(",") : validation.source;
-  const source = await normalizeDataValidationListSourceForOffice(context, rawSource);
-  syncCount += source.syncCount;
+  const reference = parseDataValidationSourceRange(rawSource);
+  applyDataValidationRule(range, validation, reference?.formula ?? rawSource);
+  if (reference) {
+    await context.sync();
+    syncCount += 1;
+  }
+  return syncCount;
+}
+
+function applyDataValidationRule(
+  range: Excel.Range,
+  validation: Extract<ExcelOperation, { kind: "range.write_data_validation" }>["validation"],
+  source: string
+): void {
+  range.dataValidation.clear();
   range.dataValidation.rule = {
     list: {
       inCellDropDown: validation.inCellDropDown ?? true,
-      source: source.value
+      source
     }
   };
   range.dataValidation.ignoreBlanks = validation.ignoreBlanks ?? true;
@@ -3206,37 +3219,6 @@ async function applyDataValidation(
     if (validation.errorAlert.style !== undefined) errorAlert.style = validation.errorAlert.style as Excel.DataValidationAlertStyle;
     range.dataValidation.errorAlert = errorAlert;
   }
-  return syncCount;
-}
-
-async function normalizeDataValidationListSourceForOffice(
-  context: Excel.RequestContext,
-  source: string
-): Promise<{ value: string; syncCount: number }> {
-  const reference = parseDataValidationSourceRange(source);
-  if (!reference) {
-    return { value: source, syncCount: 0 };
-  }
-
-  const name = `owb_dv_ref_${stableNameSuffix(reference.formula)}`;
-  const item = context.workbook.names.getItemOrNullObject(name);
-  item.load("isNullObject,formula");
-  await context.sync();
-
-  if (item.isNullObject) {
-    const sourceRange = context.workbook.worksheets.getItem(reference.sheetName).getRange(reference.address);
-    const created = context.workbook.names.add(name, sourceRange, "Open Workbook data validation source");
-    created.visible = false;
-    await context.sync();
-    return { value: `=${name}`, syncCount: 2 };
-  } else if (item.formula !== reference.formula) {
-    item.formula = reference.formula;
-    item.visible = false;
-    await context.sync();
-    return { value: `=${name}`, syncCount: 2 };
-  }
-
-  return { value: `=${name}`, syncCount: 1 };
 }
 
 function parseDataValidationSourceRange(source: string): { formula: string; sheetName: string; address: string } | undefined {
@@ -3255,15 +3237,6 @@ function parseDataValidationSourceRange(source: string): { formula: string; shee
     ? `=${sheet}!${address}`
     : `='${sheet.replace(/'/g, "''")}'!${address}`;
   return { formula, sheetName: sheet, address };
-}
-
-function stableNameSuffix(value: string): string {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(36);
 }
 
 function applyConditionalFormatting(

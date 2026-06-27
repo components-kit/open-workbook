@@ -90,6 +90,7 @@ describe("Office.js batch executor production operations", () => {
       { type: "style", address: "A1:E1", property: "horizontalAlignment", value: "Center" },
       { type: "style", address: "A1:E1", property: "columnWidth", value: 78.75 },
       { type: "insert", address: "F:F", shift: "right" },
+      { type: "dataValidation.clear", address: "E2:E6" },
       { type: "dataValidation.rule", address: "E2:E6", source: "Open,Reviewed,Closed" },
       { type: "conditionalFormats.add", address: "A2:E6", formatType: "custom" },
       { type: "conditionalRule", address: "A2:E6", formula: '=$E2="Open"' },
@@ -112,7 +113,7 @@ describe("Office.js batch executor production operations", () => {
     expect(fixture.calls.some((call) => call.type === "worksheet.delete" && String(call.sheetName).includes("__owb_reorder_"))).toBe(true);
   });
 
-  it("uses a workbook named range for cross-sheet data validation list sources", async () => {
+  it("clears existing validation before applying cross-sheet data validation list sources", async () => {
     const fixture = installExcelFixture();
     const operations: ExcelOperation[] = [
       {
@@ -131,21 +132,13 @@ describe("Office.js batch executor production operations", () => {
     const result = await executeBatch({ request, compiled });
 
     expect(result.ok).toBe(true);
-    expect(result.telemetry.syncCount).toBe(3);
-    expect(fixture.syncCount).toBe(3);
-    expect(fixture.calls).toContainEqual({ type: "names.getItemOrNullObject", name: expect.stringMatching(/^owb_dv_/) });
-    expect(fixture.calls).toContainEqual({
-      type: "names.add",
-      name: expect.stringMatching(/^owb_dv_ref_/),
-      reference: "$B$2:$B$28",
-      referenceSheetName: "Dropdown Lists",
-      comment: "Open Workbook data validation source"
-    });
-    expect(fixture.calls).toContainEqual({ type: "namedItem.visible", name: expect.stringMatching(/^owb_dv_ref_/), value: false });
+    expect(result.telemetry.syncCount).toBe(2);
+    expect(fixture.syncCount).toBe(2);
+    expect(fixture.calls).toContainEqual({ type: "dataValidation.clear", address: "E2:E244" });
     expect(fixture.calls).toContainEqual({
       type: "dataValidation.rule",
       address: "E2:E244",
-      source: expect.stringMatching(/^=owb_dv_ref_/)
+      source: "='Dropdown Lists'!$B$2:$B$28"
     });
   });
 
@@ -744,6 +737,10 @@ class FakeRangeFormat {
 
 class FakeDataValidation {
   constructor(private readonly fixture: ExcelFixture, private readonly address: string) {}
+
+  clear() {
+    this.fixture.calls.push({ type: "dataValidation.clear", address: this.address });
+  }
 
   set rule(value: { list?: { source?: string } }) {
     this.fixture.calls.push({ type: "dataValidation.rule", address: this.address, source: value.list?.source });
