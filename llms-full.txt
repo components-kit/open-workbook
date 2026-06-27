@@ -781,6 +781,8 @@ The backend owns primitive Excel capabilities, compact reads, batches, plans, va
 
 `excel://...` result handles returned by Open Workbook are internal MCP/Open Workbook handles, not web URLs. Never use Webfetch, browser fetch, curl, or HTTP tooling for `resultUri`, `fullResultUri`, or `resourceLinks`. If hidden detail is genuinely required, call `excel.agent.run` once with `continuation.fullResultUri` or paste the `excel://...` handle in the `request`.
 
+For "what is this workbook/file?", "summarize this workbook", "look into this Excel file", and similar overview requests, make one `excel.agent.run` call with `mode: "answer"` and `detailLevel: "workbook_summary"` or `detailLevel: "sheet_summary"`. When the response says `nextAction: "answer_now"` or `maxRecommendedFollowupCalls: 0`, answer the user immediately. Do not fetch `fullResultUri`, chunk-read worksheets, list MCP resources, or call low-level resource reads unless the user explicitly asks for all raw rows, every value, or exact cell contents.
+
 ## Structured Intent
 
 When the caller LLM can infer routing, pass structured fields alongside the natural request:
@@ -863,7 +865,7 @@ For reads, start with a bounded `answer` call on the selected range. For mutatio
 ## Safety Rules
 
 - Never bypass permissions, scoped locks, snapshots, backups, fingerprints, Office.js execution, validation, transaction records, or rollback metadata for mutations.
-- For small explicit value edits the user already asked you to make, use `mode: "auto"` and leave `autoApply` unset. Once workbook write access is allowed for the session, do not ask the user to confirm every small exact edit. Use `autoApply: false` or `preview_update` when the user asks to review first, the edit is broad/risky, or the backend says preview is required.
+- For small explicit value edits the user already asked you to make, use `mode: "auto"`, `intent.action: "write_values"`, an explicit `target`, and structured `values`; leave `autoApply` unset. Once workbook write access is allowed for the session, do not ask the user to confirm every small exact edit. If `auto` returns `taskOutcome: "apply_complete"` or `maxRecommendedFollowupCalls: 0`, report the proof and stop. Use `autoApply: false` or `preview_update` when the user asks to review first, the edit is broad/risky/ambiguous, or the backend says preview is required.
 - Never write cell-by-cell loops. Batch values, formulas, number formats, and styles as narrow 2D matrices or grouped patches.
 - For broad column transforms, row-aware derivations, or batch sheet renames, use `transform_values`, `derive_values`, or `transform_sheets`; do not fetch full source/target columns or issue sheet-by-sheet calls when the backend can compile one plan.
 - For formula-related tasks, preserve formula proof in the response. Do not ask for `fullResultUri` for ordinary exact formula checks when `read_formulas` returns formula/status proof inline.
@@ -923,6 +925,8 @@ Structured intent is a hint, not a bypass. The backend still resolves ambiguity,
 
 Use `detailLevel: "semantic_index"` when you need a compact role-aware workbook map before choosing a sheet, table, template, form region, formula region, or style target. Use `workbook_summary` and `sheet_summary` for overview questions. Do not request table samples or full tables for broad context questions.
 
+For overview questions such as "what is this workbook/file?", "look into this Excel file", or "summarize this workbook", one `mode: "answer"` call with `detailLevel: "workbook_summary"` or `detailLevel: "sheet_summary"` is normally the whole workflow. If the response has `nextAction: "answer_now"` or `maxRecommendedFollowupCalls: 0`, answer immediately. Do not follow `resourceLinks`, fetch `fullResultUri`, chunk-read sheets, list MCP resources, or call low-level resource reads unless the user explicitly asks for all raw rows, every value, or exact cell contents.
+
 For exact formula questions, pass `intent.action: "read_formulas"` with the exact target when known. This covers "is this a formula?", "raw formula", "show formula", and "formula in I165". Do not infer formula existence from displayed values or numbers alone; use returned formula/status proof.
 
 ## Multilingual Requests
@@ -939,7 +943,7 @@ Do not rely on deterministic English keyword parsing for every language. The cal
 
 ## Preview And Apply
 
-Use `auto` for small explicit value edits that the user already asked you to make. Leave `autoApply` unset unless the user asks for preview-only behavior; if the user says "ask before editing", "show preview first", or similar, set `autoApply: false`. Once workbook write access is allowed for the session, do not ask the user to confirm every small exact edit.
+Use `auto` for small explicit value edits that the user already asked you to make. Include `intent.action: "write_values"`, an explicit `target`, and structured `values`; leave `autoApply` unset unless the user asks for preview-only behavior. If the user says "ask before editing", "show preview first", or similar, set `autoApply: false`. Once workbook write access is allowed for the session, do not ask the user to confirm every small exact edit. If `auto` returns `taskOutcome: "apply_complete"` or `maxRecommendedFollowupCalls: 0`, report the returned proof and stop.
 
 Use `preview_update` for non-trivial mutations, broad edits, table appends, template actions, workbook lifecycle operations, backup lifecycle changes, or anything the user may want to review.
 
@@ -3240,12 +3244,16 @@ After Excel opens the add-in, useful default-surface calls are:
 excel.agent.run mode=status request="Check Open Workbook status"
 excel.agent.run mode=prepare request="Prepare workbook context"
 excel.agent.run mode=find request="Find the sheet or table I need"
-excel.agent.run mode=answer request="Summarize the active workbook"
+excel.agent.run mode=answer detailLevel=workbook_summary request="Summarize the active workbook"
 excel.agent.run mode=answer request="Compare January and February"
-excel.agent.run mode=preview_update request="Change Sales!E2 to Reviewed"
+excel.agent.run mode=auto intent.action=write_values target.sheetName=Sales target.range=E2 values.values=[["Reviewed"]] request="Change Sales!E2 to Reviewed"
 excel.agent.run mode=apply_update request="Apply the previewed update"
 excel.agent.run mode=operation_status request="Check a pending operation" operationId="..."
 ```
+
+For workbook overview prompts such as "what is this file?", "look into this workbook", or "summarize the workbook", use `detailLevel=workbook_summary` or `detailLevel=sheet_summary` and stop when the response says `nextAction=answer_now` or `maxRecommendedFollowupCalls=0`. Do not fetch `fullResultUri`, chunk-read sheets, list MCP resources, or call low-level resource reads unless the user explicitly asks for all raw rows or exact cell values.
+
+For small exact value edits the user already requested, prefer `mode=auto` with `intent.action=write_values`, explicit `target`, and structured `values`. Safe scoped edits can return `taskOutcome=apply_complete` in one call; report the proof and stop. Use `preview_update` only when the user asks to review first, the target/value is ambiguous, or the edit is broad, formula/style/table/structural, or otherwise risky.
 
 For direct range writes, send the cell values in the structured `values` field, not only in the request text:
 
