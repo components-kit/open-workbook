@@ -3213,23 +3213,24 @@ async function normalizeDataValidationListSourceForOffice(
   context: Excel.RequestContext,
   source: string
 ): Promise<{ value: string; syncCount: number }> {
-  const formula = dataValidationSourceRangeFormula(source);
-  if (!formula) {
+  const reference = parseDataValidationSourceRange(source);
+  if (!reference) {
     return { value: source, syncCount: 0 };
   }
 
-  const name = `owb_dv_${stableNameSuffix(formula)}`;
+  const name = `owb_dv_ref_${stableNameSuffix(reference.formula)}`;
   const item = context.workbook.names.getItemOrNullObject(name);
   item.load("isNullObject,formula");
   await context.sync();
 
   if (item.isNullObject) {
-    const created = context.workbook.names.add(name, formula, "Open Workbook data validation source");
+    const sourceRange = context.workbook.worksheets.getItem(reference.sheetName).getRange(reference.address);
+    const created = context.workbook.names.add(name, sourceRange, "Open Workbook data validation source");
     created.visible = false;
     await context.sync();
     return { value: `=${name}`, syncCount: 2 };
-  } else if (item.formula !== formula) {
-    item.formula = formula;
+  } else if (item.formula !== reference.formula) {
+    item.formula = reference.formula;
     item.visible = false;
     await context.sync();
     return { value: `=${name}`, syncCount: 2 };
@@ -3238,7 +3239,7 @@ async function normalizeDataValidationListSourceForOffice(
   return { value: `=${name}`, syncCount: 1 };
 }
 
-function dataValidationSourceRangeFormula(source: string): string | undefined {
+function parseDataValidationSourceRange(source: string): { formula: string; sheetName: string; address: string } | undefined {
   const trimmed = source.trim();
   const formulaBody = trimmed.startsWith("=") ? trimmed.slice(1).trim() : trimmed;
   const match = /^(?:'((?:[^']|'')+)'|([^'!]+))!(\$?[A-Z]{1,3}\$?\d+:\$?[A-Z]{1,3}\$?\d+)$/i.exec(formulaBody);
@@ -3250,10 +3251,10 @@ function dataValidationSourceRangeFormula(source: string): string | undefined {
   if (!sheet) {
     return undefined;
   }
-  if (!/[\s()[\]{}.,]/u.test(sheet)) {
-    return `=${sheet}!${address}`;
-  }
-  return `='${sheet.replace(/'/g, "''")}'!${address}`;
+  const formula = !/[\s()[\]{}.,]/u.test(sheet)
+    ? `=${sheet}!${address}`
+    : `='${sheet.replace(/'/g, "''")}'!${address}`;
+  return { formula, sheetName: sheet, address };
 }
 
 function stableNameSuffix(value: string): string {

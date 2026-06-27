@@ -136,15 +136,16 @@ describe("Office.js batch executor production operations", () => {
     expect(fixture.calls).toContainEqual({ type: "names.getItemOrNullObject", name: expect.stringMatching(/^owb_dv_/) });
     expect(fixture.calls).toContainEqual({
       type: "names.add",
-      name: expect.stringMatching(/^owb_dv_/),
-      reference: "='Dropdown Lists'!$B$2:$B$28",
+      name: expect.stringMatching(/^owb_dv_ref_/),
+      reference: "$B$2:$B$28",
+      referenceSheetName: "Dropdown Lists",
       comment: "Open Workbook data validation source"
     });
-    expect(fixture.calls).toContainEqual({ type: "namedItem.visible", name: expect.stringMatching(/^owb_dv_/), value: false });
+    expect(fixture.calls).toContainEqual({ type: "namedItem.visible", name: expect.stringMatching(/^owb_dv_ref_/), value: false });
     expect(fixture.calls).toContainEqual({
       type: "dataValidation.rule",
       address: "E2:E244",
-      source: expect.stringMatching(/^=owb_dv_/)
+      source: expect.stringMatching(/^=owb_dv_ref_/)
     });
   });
 
@@ -470,12 +471,23 @@ class FakeNamedItemCollection {
     return this.items.get(name) ?? new FakeNamedItem(this.fixture, name, "", true);
   }
 
-  add(name: string, reference: string, comment?: string) {
-    this.fixture.calls.push({ type: "names.add", name, reference, comment });
-    const item = new FakeNamedItem(this.fixture, name, reference, false);
+  add(name: string, reference: string | FakeRange, comment?: string) {
+    const formula = typeof reference === "string" ? reference : `=${quoteSheetName(reference.sheetName)}!${reference.address}`;
+    this.fixture.calls.push({
+      type: "names.add",
+      name,
+      reference: typeof reference === "string" ? reference : reference.address,
+      ...(typeof reference === "string" ? {} : { referenceSheetName: reference.sheetName }),
+      comment
+    });
+    const item = new FakeNamedItem(this.fixture, name, formula, false);
     this.items.set(name, item);
     return item;
   }
+}
+
+function quoteSheetName(sheetName: string): string {
+  return /[\s()[\]{}.,]/u.test(sheetName) ? `'${sheetName.replace(/'/g, "''")}'` : sheetName;
 }
 
 class FakeNamedItem {
@@ -557,13 +569,13 @@ class FakeWorksheet {
 
   getRange(address: string) {
     this.fixture.calls.push({ type: "getRange", sheetName: this.name, address });
-    return new FakeRange(this.fixture, address);
+    return new FakeRange(this.fixture, address, undefined, undefined, false, this.name);
   }
 
   getRangeByIndexes(rowIndex: number, columnIndex: number, rowCount: number, columnCount: number) {
     const address = `${this.name}:${rowIndex}:${columnIndex + columnCount}`;
     this.fixture.calls.push({ type: "getRangeByIndexes", sheetName: this.name, rowIndex, columnIndex, rowCount, columnCount });
-    return new FakeRange(this.fixture, address, rowCount, columnCount);
+    return new FakeRange(this.fixture, address, rowCount, columnCount, false, this.name);
   }
 
   delete() {
@@ -581,7 +593,7 @@ class FakeWorksheet {
 
   getUsedRangeOrNullObject() {
     this.fixture.calls.push({ type: "getUsedRangeOrNullObject", sheetName: this.name });
-    return new FakeRange(this.fixture, `${this.name}:used`, undefined, undefined, this.fixture.emptyUsedRangeSheets.has(this.name));
+    return new FakeRange(this.fixture, `${this.name}:used`, undefined, undefined, this.fixture.emptyUsedRangeSheets.has(this.name), this.name);
   }
 }
 
@@ -601,7 +613,8 @@ class FakeRange {
     readonly address: string,
     readonly rowCount = rangeShape(address).rowCount,
     readonly columnCount = rangeShape(address).columnCount,
-    readonly isNullObject = false
+    readonly isNullObject = false,
+    readonly sheetName = "Sheet1"
   ) {
     this.format = new FakeRangeFormat(fixture, address);
     this.dataValidation = new FakeDataValidation(fixture, address);
