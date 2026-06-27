@@ -1327,7 +1327,7 @@ export async function executeBatch(payload: AddinExecuteBatchRequest): Promise<O
                 ? [{ target: operation.target, validation: operation.validation }]
                 : [];
             for (const entry of entries) {
-              applyDataValidation(getRange(context, entry.target), entry.validation);
+              counters.syncCount += await applyDataValidation(context, getRange(context, entry.target), entry.validation);
             }
             counters.cellsWritten += payload.compiled.estimatedCellsTouched;
             break;
@@ -3169,18 +3169,22 @@ function applyFreezePanes(
   freezePanes.unfreeze?.();
 }
 
-function applyDataValidation(
+async function applyDataValidation(
+  context: Excel.RequestContext,
   range: Excel.Range,
   validation: Extract<ExcelOperation, { kind: "range.write_data_validation" }>["validation"]
-): void {
+): Promise<number> {
   if (validation.type !== "list") {
     throw new Error(`Unsupported data validation type: ${validation.type}`);
   }
-  const source = Array.isArray(validation.source) ? validation.source.join(",") : validation.source;
+  let syncCount = 0;
+  const rawSource = Array.isArray(validation.source) ? validation.source.join(",") : validation.source;
+  const source = await normalizeDataValidationListSourceForOffice(context, rawSource);
+  syncCount += source.syncCount;
   range.dataValidation.rule = {
     list: {
       inCellDropDown: validation.inCellDropDown ?? true,
-      source
+      source: source.value
     }
   };
   range.dataValidation.ignoreBlanks = validation.ignoreBlanks ?? true;
@@ -3202,6 +3206,63 @@ function applyDataValidation(
     if (validation.errorAlert.style !== undefined) errorAlert.style = validation.errorAlert.style as Excel.DataValidationAlertStyle;
     range.dataValidation.errorAlert = errorAlert;
   }
+  return syncCount;
+}
+
+async function normalizeDataValidationListSourceForOffice(
+  context: Excel.RequestContext,
+  source: string
+): Promise<{ value: string; syncCount: number }> {
+  const formula = dataValidationSourceRangeFormula(source);
+  if (!formula) {
+    return { value: source, syncCount: 0 };
+  }
+
+  const name = `owb_dv_${stableNameSuffix(formula)}`;
+  const item = context.workbook.names.getItemOrNullObject(name);
+  item.load("isNullObject,formula");
+  await context.sync();
+
+  if (item.isNullObject) {
+    const created = context.workbook.names.add(name, formula, "Open Workbook data validation source");
+    created.visible = false;
+    await context.sync();
+    return { value: `=${name}`, syncCount: 2 };
+  } else if (item.formula !== formula) {
+    item.formula = formula;
+    item.visible = false;
+    await context.sync();
+    return { value: `=${name}`, syncCount: 2 };
+  }
+
+  return { value: `=${name}`, syncCount: 1 };
+}
+
+function dataValidationSourceRangeFormula(source: string): string | undefined {
+  const trimmed = source.trim();
+  const formulaBody = trimmed.startsWith("=") ? trimmed.slice(1).trim() : trimmed;
+  const match = /^(?:'((?:[^']|'')+)'|([^'!]+))!(\$?[A-Z]{1,3}\$?\d+:\$?[A-Z]{1,3}\$?\d+)$/i.exec(formulaBody);
+  if (!match) {
+    return undefined;
+  }
+  const sheet = (match[1] !== undefined ? match[1].replace(/''/g, "'") : match[2] ?? "").trim();
+  const address = match[3] ?? "";
+  if (!sheet) {
+    return undefined;
+  }
+  if (!/[\s()[\]{}.,]/u.test(sheet)) {
+    return `=${sheet}!${address}`;
+  }
+  return `='${sheet.replace(/'/g, "''")}'!${address}`;
+}
+
+function stableNameSuffix(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function applyConditionalFormatting(

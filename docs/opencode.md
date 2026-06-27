@@ -65,6 +65,8 @@ For workbook overview prompts such as "what is this file?", "look into this work
 
 For small exact value edits the user already requested, prefer `mode=auto` with `intent.action=write_values`, explicit `target`, and structured `values`. Safe scoped edits can return `taskOutcome=apply_complete` in one call; report the proof and stop. Use `preview_update` only when the user asks to review first, the target/value is ambiguous, or the edit is broad, formula/style/table/structural, or otherwise risky.
 
+For dropdown option questions, call `intent.action=read_data_validation` once on the selected/current column or exact target. When the answer kind is `data_validation_summary`, answer from the inline validation metadata/options and stop; do not fetch `fullResultUri`, chunk-read sheets, list MCP resources, or read raw rows unless the user explicitly asks for raw audit metadata. If the user asks to read values from a source-list sheet such as `Dropdown Lists`, read the actual cell values with `read_values`/targeted range read; do not treat the sheet name itself as validation intent. To add a missing option, update the returned source-list cell/range with `mode=auto` when bounded; for inline comma-list validation, use one `preview_update intent.action=write_data_validation` with existing options plus the new option, then one `apply_update`.
+
 For direct range writes, send the cell values in the structured `values` field, not only in the request text:
 
 ```text

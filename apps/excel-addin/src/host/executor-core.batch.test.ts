@@ -112,6 +112,42 @@ describe("Office.js batch executor production operations", () => {
     expect(fixture.calls.some((call) => call.type === "worksheet.delete" && String(call.sheetName).includes("__owb_reorder_"))).toBe(true);
   });
 
+  it("uses a workbook named range for cross-sheet data validation list sources", async () => {
+    const fixture = installExcelFixture();
+    const operations: ExcelOperation[] = [
+      {
+        kind: "range.write_data_validation",
+        operationId: "op_validation_source_range",
+        workbookId,
+        destructiveLevel: "format",
+        reason: "Point transaction type dropdown at source list",
+        target: range("May 2026", "E2:E244"),
+        validation: { type: "list", source: "Dropdown Lists!$B$2:$B$28", inCellDropDown: true }
+      }
+    ];
+    const request: BatchRequest = { workbookId, mode: "apply", operations };
+    const compiled = new BatchCompiler({ now: () => "2026-06-21T00:00:00.000Z" }).compile(request);
+
+    const result = await executeBatch({ request, compiled });
+
+    expect(result.ok).toBe(true);
+    expect(result.telemetry.syncCount).toBe(3);
+    expect(fixture.syncCount).toBe(3);
+    expect(fixture.calls).toContainEqual({ type: "names.getItemOrNullObject", name: expect.stringMatching(/^owb_dv_/) });
+    expect(fixture.calls).toContainEqual({
+      type: "names.add",
+      name: expect.stringMatching(/^owb_dv_/),
+      reference: "='Dropdown Lists'!$B$2:$B$28",
+      comment: "Open Workbook data validation source"
+    });
+    expect(fixture.calls).toContainEqual({ type: "namedItem.visible", name: expect.stringMatching(/^owb_dv_/), value: false });
+    expect(fixture.calls).toContainEqual({
+      type: "dataValidation.rule",
+      address: "E2:E244",
+      source: expect.stringMatching(/^=owb_dv_/)
+    });
+  });
+
   it("returns an explicit warning for host-limited operations instead of silent success", async () => {
     installExcelFixture();
     const operations: ExcelOperation[] = [
@@ -407,6 +443,7 @@ class FakeContext {
 
 class FakeWorkbook {
   readonly worksheets: FakeWorksheets;
+  readonly names: FakeNamedItemCollection;
   readonly application = {
     suspendApiCalculationUntilNextSync: () => undefined,
     suspendScreenUpdatingUntilNextSync: () => undefined,
@@ -415,10 +452,55 @@ class FakeWorkbook {
 
   constructor(private readonly fixture: ExcelFixture) {
     this.worksheets = new FakeWorksheets(fixture);
+    this.names = new FakeNamedItemCollection(fixture);
   }
 
   save(behavior?: string) {
     this.fixture.calls.push({ type: "workbook.save", behavior });
+  }
+}
+
+class FakeNamedItemCollection {
+  private readonly items = new Map<string, FakeNamedItem>();
+
+  constructor(private readonly fixture: ExcelFixture) {}
+
+  getItemOrNullObject(name: string) {
+    this.fixture.calls.push({ type: "names.getItemOrNullObject", name });
+    return this.items.get(name) ?? new FakeNamedItem(this.fixture, name, "", true);
+  }
+
+  add(name: string, reference: string, comment?: string) {
+    this.fixture.calls.push({ type: "names.add", name, reference, comment });
+    const item = new FakeNamedItem(this.fixture, name, reference, false);
+    this.items.set(name, item);
+    return item;
+  }
+}
+
+class FakeNamedItem {
+  constructor(
+    private readonly fixture: ExcelFixture,
+    readonly name: string,
+    private currentFormula: string,
+    readonly isNullObject = false
+  ) {}
+
+  load(propertyPath: string) {
+    this.fixture.calls.push({ type: "namedItem.load", name: this.name, propertyPath });
+  }
+
+  get formula() {
+    return this.currentFormula;
+  }
+
+  set formula(value: string) {
+    this.fixture.calls.push({ type: "namedItem.formula", name: this.name, value });
+    this.currentFormula = value;
+  }
+
+  set visible(value: boolean) {
+    this.fixture.calls.push({ type: "namedItem.visible", name: this.name, value });
   }
 }
 

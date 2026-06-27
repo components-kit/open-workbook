@@ -658,7 +658,17 @@ describe("AgentOrchestrator Read Answer Routing", () => {
 
       expect(result.status).toBe("SUCCESS");
       expect(runtime.runtimeMethodCalls["range.read_data_validation"]).toBe(1);
-      expect((result.answer as any).result.data.rules[0].source).toEqual(["Open", "Closed", "Pending"]);
+      expect((result.answer as any)).toMatchObject({
+        kind: "data_validation_summary",
+        sheetName: "Data",
+        range: "D1:D4",
+        options: ["Open", "Closed", "Pending"],
+        optionCount: 3,
+        sourceComplete: true
+      });
+      expect(result.taskOutcome).toBe("final_answer");
+      expect(result.maxRecommendedFollowupCalls).toBe(0);
+      expect(result.agentInstruction).toContain("do not fetch fullResultUri");
     });
 
   it("routes natural dropdown inspection to data-validation metadata without reading values", async () => {
@@ -673,11 +683,221 @@ describe("AgentOrchestrator Read Answer Routing", () => {
 
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any)).toMatchObject({
-        kind: "range_metadata",
-        method: "range.read_data_validation"
+        kind: "data_validation_summary",
+        method: "range.read_data_validation",
+        options: ["Open", "Closed", "Pending"],
+        sourceComplete: true
       });
       expect(runtime.runtimeMethodCalls["range.read_data_validation"]).toBe(1);
       expect(result.telemetry.fullReadCellCount).toBe(0);
+    });
+
+  it("reads values from a sheet named Dropdown Lists without treating the sheet name as validation intent", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_dropdown_list_values");
+      metadata.sheets = [
+        ...metadata.sheets,
+        {
+          id: "sheet:Dropdown Lists",
+          name: "Dropdown Lists",
+          index: 9,
+          usedRange: "A1:B29",
+          rowCount: 29,
+          columnCount: 2,
+          kind: "reference",
+          headers: [],
+          tableIds: [],
+          sectionIds: [],
+          summaryBlockIds: [],
+          formulaRegionIds: []
+        }
+      ];
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Read all values in column B of the Dropdown Lists sheet, from B1 downwards. Show me the full list of all transaction types listed.",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        target: { sheetName: "Dropdown Lists", range: "B1:B28" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).not.toBe("data_validation_summary");
+      expect((result.answer as any).kind).not.toBe("workbook_design_overview");
+      expect((result.answer as any).valuesPreview).toContainEqual(["owner_cash_topup"]);
+      expect(runtime.runtimeMethodCalls["range.read_data_validation"] ?? 0).toBe(0);
+      expect(result.telemetry.fullReadCellCount).toBeGreaterThan(0);
+    });
+
+  it("checks source-list text containment as cell values, not validation metadata", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_dropdown_text_contains");
+      metadata.sheets = [
+        ...metadata.sheets,
+        {
+          id: "sheet:Dropdown Lists",
+          name: "Dropdown Lists",
+          index: 9,
+          usedRange: "A1:B29",
+          rowCount: 29,
+          columnCount: 2,
+          kind: "reference",
+          headers: [],
+          tableIds: [],
+          sectionIds: [],
+          summaryBlockIds: [],
+          formulaRegionIds: []
+        }
+      ];
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Check Dropdown Lists sheet, column B, rows 1 to 28. Tell me if any of the cells contain the text \"owner_cash_topup\". Just read the live values.",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).not.toBe("data_validation_summary");
+      expect(JSON.stringify((result.answer as any).valuesPreview)).toContain("owner_cash_topup");
+      expect(runtime.runtimeMethodCalls["range.read_data_validation"] ?? 0).toBe(0);
+    });
+
+  it("inlines small targeted source-list reads so agents do not fetch full result resources", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_dropdown_list_inline");
+      metadata.sheets = [
+        ...metadata.sheets,
+        {
+          id: "sheet:Dropdown Lists",
+          name: "Dropdown Lists",
+          index: 9,
+          usedRange: "A1:B29",
+          rowCount: 29,
+          columnCount: 2,
+          kind: "reference",
+          headers: [],
+          tableIds: [],
+          sectionIds: [],
+          summaryBlockIds: [],
+          formulaRegionIds: []
+        }
+      ];
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "",
+        mode: "auto",
+        workbookContextId: metadata.workbookContextId,
+        target: { sheetName: "Dropdown Lists", range: "B1:B28" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).valuesPreview).toContainEqual(["owner_cash_topup"]);
+      expect((result.answer as any).inlineIsComplete).toBe(true);
+      expect(result.nextAction).toBe("answer_now");
+      expect(result.maxRecommendedFollowupCalls).toBe(0);
+      expect(result.agentInstruction).toContain("do not call workbook tools again");
+      expect((result.answer as any).fullResultUri).toBeUndefined();
+      expect(result.continuation?.fullResultUri).toBeUndefined();
+      expect(result.resourceLinks.map((link) => link.uri).some((uri) => uri.includes("/results/"))).toBe(false);
+    });
+
+  it("honors explicit actual-cell-value wording even when the request says not data validation", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_dropdown_actual_values");
+      metadata.sheets = [
+        ...metadata.sheets,
+        {
+          id: "sheet:Dropdown Lists",
+          name: "Dropdown Lists",
+          index: 9,
+          usedRange: "A1:B29",
+          rowCount: 29,
+          columnCount: 2,
+          kind: "reference",
+          headers: [],
+          tableIds: [],
+          sectionIds: [],
+          summaryBlockIds: [],
+          formulaRegionIds: []
+        }
+      ];
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Actually read the cell values, not the data validation. I want to see the text strings stored in cells B1:B28 on the Dropdown Lists sheet. Give me each cell value.",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        target: { sheetName: "Dropdown Lists", range: "B1:B28" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).kind).not.toBe("data_validation_summary");
+      expect((result.answer as any).kind).not.toBe("workbook_design_overview");
+      expect((result.answer as any).valuesPreview).toContainEqual(["owner_cash_topup"]);
+      expect(runtime.runtimeMethodCalls["range.read_data_validation"] ?? 0).toBe(0);
+    });
+
+  it("routes natural validation formula/source requests to data-validation metadata", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Read the data validation rule on cell May 2026!E2. What is the validation formula, type, and inline list or range reference?",
+        mode: "answer",
+        target: { sheetName: "May 2026", range: "E2" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any)).toMatchObject({
+        kind: "data_validation_summary",
+        method: "range.read_data_validation"
+      });
+      expect((result.answer as any).kind).not.toBe("workbook_design_overview");
+      expect((result.answer as any).kind).not.toBe("formula_read");
+      expect((result.answer as any).kind).not.toBe("reference_sheet_analysis");
+      expect(runtime.runtimeMethodCalls["range.read_data_validation"]).toBe(1);
+      expect(result.maxRecommendedFollowupCalls).toBe(0);
+    });
+
+  it("treats inconsistent multi-cell validation reads as inconclusive, not broken dropdown proof", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      runtime.readRangeMetadata = async (method: string, request: any) => {
+        runtime.runtimeMethodCalls[method] = (runtime.runtimeMethodCalls[method] ?? 0) + 1;
+        return {
+          ok: true,
+          method,
+          request,
+          data: {
+            address: request.address,
+            type: "Inconsistent",
+            inCellDropDown: false
+          }
+        };
+      };
+
+      const result = await agent.run({
+        request: "Read the data validation rule on May 2026 column E (E2:E244). Does it include owner_cash_topup?",
+        mode: "answer",
+        target: { sheetName: "May 2026", range: "E2:E244" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any)).toMatchObject({
+        kind: "data_validation_summary",
+        type: "Inconsistent",
+        validationRangeStatus: "mixed_or_inconsistent_range"
+      });
+      expect((result.answer as any).guidance).toContain("Do not conclude");
+      expect(result.finalAnswer).toContain("inconclusive");
+      expect(result.finalAnswer).toContain("do not say the dropdown is broken");
+      expect(runtime.runtimeMethodCalls["range.read_data_validation"]).toBe(1);
     });
 
   it("does not large-range guard full-column validation inspection", async () => {
@@ -692,12 +912,94 @@ describe("AgentOrchestrator Read Answer Routing", () => {
 
       expect(result.status).toBe("SUCCESS");
       expect((result.answer as any)).toMatchObject({
-        kind: "range_metadata",
-        method: "range.read_data_validation"
+        kind: "data_validation_summary",
+        method: "range.read_data_validation",
+        optionCount: 3,
+        sourceComplete: true
       });
       expect((result.answer as any).kind).not.toBe("large_range_guard");
       expect(runtime.runtimeMethodCalls["range.read_data_validation"]).toBe(1);
       expect(result.telemetry.fullReadCellCount).toBe(0);
+    });
+
+  it("summarizes long dropdown validation inline without recommending full-result retries", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const options = Array.from({ length: 60 }, (_value, index) => `tx_type_${index + 1}`);
+      runtime.readRangeMetadata = async (method: string, request: any) => {
+        runtime.runtimeMethodCalls[method] = (runtime.runtimeMethodCalls[method] ?? 0) + 1;
+        return {
+          ok: true,
+          method,
+          request,
+          data: {
+            address: request.address,
+            rules: [{
+              address: request.address,
+              type: "list",
+              source: options,
+              inCellDropDown: true
+            }]
+          }
+        };
+      };
+
+      const result = await agent.run({
+        request: "What transaction type dropdown values are allowed?",
+        mode: "answer",
+        intent: { action: "read_data_validation" },
+        target: { sheetName: "May 2026", range: "E:E" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.nextAction).toBe("answer_now");
+      expect(result.taskOutcome).toBe("final_answer");
+      expect(result.maxRecommendedFollowupCalls).toBe(0);
+      expect((result.answer as any)).toMatchObject({
+        kind: "data_validation_summary",
+        optionCount: 60,
+        sourceComplete: true
+      });
+      expect((result.answer as any).fullResultUri).toBeUndefined();
+      expect(result.continuation?.fullResultUri).toBeUndefined();
+      expect(result.agentInstruction).toContain("do not fetch fullResultUri");
+    });
+
+  it("exposes dropdown source ranges so missing options can be added by source-list writes", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      runtime.readRangeMetadata = async (method: string, request: any) => {
+        runtime.runtimeMethodCalls[method] = (runtime.runtimeMethodCalls[method] ?? 0) + 1;
+        return {
+          ok: true,
+          method,
+          request,
+          data: {
+            address: request.address,
+            type: "List",
+            rule: { list: { source: "=Lists!$A$2:$A$40", inCellDropDown: true } },
+            ignoreBlanks: true,
+            valid: true
+          }
+        };
+      };
+
+      const result = await agent.run({
+        request: "Check transaction type dropdown source for May 2026.",
+        mode: "answer",
+        intent: { action: "read_data_validation" },
+        target: { sheetName: "May 2026", range: "E:E" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any)).toMatchObject({
+        kind: "data_validation_summary",
+        sourceFormula: "=Lists!$A$2:$A$40",
+        sourceRange: "Lists!$A$2:$A$40",
+        sourceComplete: false
+      });
+      expect((result.answer as any).guidance).toContain("source-list cells");
+      expect(result.maxRecommendedFollowupCalls).toBe(0);
     });
 
   it("finds similar prior-period rows across related workbook sheets", async () => {

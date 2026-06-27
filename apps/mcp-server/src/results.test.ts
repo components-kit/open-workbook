@@ -49,6 +49,52 @@ describe("MCP result rendering", () => {
     expect((result.structuredContent.answer as any).kind).toBe("workbook_summary");
   });
 
+  it("marks data validation summaries as complete inline for dropdown inspection", () => {
+    const output: AgentRunOutput = {
+      status: "SUCCESS",
+      mode: "answer",
+      workbookContextId: "wbctx_1",
+      summary: "Read data validation for May 2026!E:E.",
+      answer: {
+        kind: "data_validation_summary",
+        source: "runtime_range_metadata",
+        method: "range.read_data_validation",
+        sheetName: "May 2026",
+        range: "E:E",
+        ruleCount: 1,
+        type: "list",
+        inCellDropDown: true,
+        options: ["driver_wage_remaining", "owner_cash_topup"],
+        optionCount: 2,
+        sourceComplete: true,
+        guidance: "Use this inline validation summary to answer dropdown option questions."
+      },
+      proof: [{ sheetName: "May 2026", range: "E:E", label: "range metadata" }],
+      resourceLinks: [],
+      nextAction: "answer_now",
+      taskOutcome: "final_answer",
+      finalAnswer: "Read dropdown validation for May 2026!E:E.",
+      agentInstruction: "Answer from this data_validation_summary. Dropdown validation metadata/options are complete inline for the requested range; do not fetch fullResultUri.",
+      maxRecommendedFollowupCalls: 0,
+      warnings: [],
+      telemetry: {
+        internalCallCount: 1,
+        payloadBytes: 1000,
+        estimatedTokens: 250,
+        elapsedMs: 2,
+        cacheHit: true
+      }
+    };
+
+    const result = agentJsonResult(output);
+    const text = result.content[0]?.text ?? "";
+
+    expect(text).toContain("data: validation metadata/options complete inline");
+    expect(text).toContain("do not fetch full detail");
+    expect(text).not.toContain("exact rows/raw values need");
+    expect((result.structuredContent.answer as any).kind).toBe("data_validation_summary");
+  });
+
   it("keeps text compact while preserving structured content and resource links", () => {
     const output: AgentRunOutput = {
       status: "SUCCESS",

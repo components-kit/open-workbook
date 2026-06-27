@@ -99,8 +99,12 @@ describe("excel.agent.run MCP schema", () => {
   it("advertises dropdown source-list proof before value corrections", () => {
     const source = readFileSync(new URL("./agent-run.ts", import.meta.url), "utf8");
 
-    expect(source).toContain("read data validation/source-list proof");
-    expect(source).toContain("exact source-list value corrections should use auto");
+    expect(source).toContain("call intent.action read_data_validation once");
+    expect(source).toContain("answer from data_validation_summary");
+    expect(source).toContain("do not fetch fullResultUri");
+    expect(source).toContain("update the returned source-list cell/range with mode auto");
+    expect(source).toContain("inline comma-list");
+    expect(source).toContain("one preview_update with intent.action write_data_validation");
   });
 
   it("advertises section-anchor semantic patches for row-label and column-header edits", () => {

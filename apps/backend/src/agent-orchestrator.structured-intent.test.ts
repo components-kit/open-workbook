@@ -71,12 +71,12 @@ describe("AgentOrchestrator Structured Intent", () => {
     });
 
   it("uses caller structured intent for range metadata answer actions", async () => {
-      const cases: Array<{ action: "read_hyperlinks" | "read_comments" | "read_notes" | "read_merged_cells" | "read_data_validation" | "read_conditional_formatting" | "search_range" | "find_blank_cells" | "find_range_errors"; runtimeCall: string; values?: Record<string, unknown> }> = [
+      const cases: Array<{ action: "read_hyperlinks" | "read_comments" | "read_notes" | "read_merged_cells" | "read_data_validation" | "read_conditional_formatting" | "search_range" | "find_blank_cells" | "find_range_errors"; runtimeCall: string; answerKind?: string; values?: Record<string, unknown> }> = [
         { action: "read_hyperlinks", runtimeCall: "range.read_hyperlinks" },
         { action: "read_comments", runtimeCall: "range.read_comments" },
         { action: "read_notes", runtimeCall: "range.read_notes" },
         { action: "read_merged_cells", runtimeCall: "range.read_merged_cells" },
-        { action: "read_data_validation", runtimeCall: "range.read_data_validation" },
+        { action: "read_data_validation", runtimeCall: "range.read_data_validation", answerKind: "data_validation_summary" },
         { action: "read_conditional_formatting", runtimeCall: "range.read_conditional_formatting" },
         { action: "search_range", runtimeCall: "range.search", values: { text: "Open" } },
         { action: "find_blank_cells", runtimeCall: "range.find_blank_cells" },
@@ -95,7 +95,7 @@ describe("AgentOrchestrator Structured Intent", () => {
         });
 
         expect(result.status).toBe("SUCCESS");
-        expect((result.answer as any).kind).toBe("range_metadata");
+        expect((result.answer as any).kind).toBe(testCase.answerKind ?? "range_metadata");
         expect(result.telemetry.intentAction).toBe(testCase.action);
         expect(result.telemetry.routeMode).toBe("answer");
         expect(runtime.runtimeMethodCalls[testCase.runtimeCall]).toBe(1);

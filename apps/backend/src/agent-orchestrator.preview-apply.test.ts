@@ -1320,6 +1320,31 @@ Data rows:
       expect((runtime.lastBatchOperations[0] as any).entries.map((entry: any) => entry.target.address)).toEqual(["C19:E19", "D20:E20", "H20:J20"]);
     });
 
+  it("auto-applies a bounded missing dropdown source-list option as one value write", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Add owner_cash_topup to the transaction type source list.",
+        mode: "auto",
+        intent: { action: "write_values" },
+        target: { sheetName: "Data", range: "A4" },
+        values: { values: [["owner_cash_topup"]] }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.taskOutcome).toBe("apply_complete");
+      expect(result.maxRecommendedFollowupCalls).toBe(0);
+      expect(result.telemetry.autoApplied).toBe(true);
+      expect(runtime.writeBatchCount).toBe(1);
+      expect(runtime.lastBatchOperations).toHaveLength(1);
+      expect(runtime.lastBatchOperations[0]).toMatchObject({
+        kind: "range.write_values",
+        target: { sheetName: "Data", address: "A4" },
+        values: [["owner_cash_topup"]]
+      });
+    });
+
   it("auto-applies exact transfer match updates as one backend-owned grouped operation", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -3192,6 +3217,32 @@ Data rows:
       });
     });
 
+    it("preserves and normalizes formula sources for dropdown validation", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Update Transaction Type dropdown source range.",
+        mode: "preview_update",
+        intent: { action: "write_data_validation" },
+        target: { sheetName: "May 2026", range: "E2:E244" },
+        values: { validation: { type: "list", source: "=Dropdown Lists!$B$2:$B$28", inCellDropDown: true } }
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).validation).toMatchObject({
+        type: "list",
+        source: "='Dropdown Lists'!$B$2:$B$28",
+        inCellDropDown: true,
+        ignoreBlanks: true
+      });
+      const operation = (agent.dumpOperations()[0] as any).action.operations[0];
+      expect(operation).toMatchObject({
+        kind: "range.write_data_validation",
+        validation: { source: "='Dropdown Lists'!$B$2:$B$28" }
+      });
+    });
+
     it("applies formula conditional formatting from formula and style fields", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -3412,6 +3463,34 @@ Data rows:
       kind: "range.write_data_validation",
       target: { sheetName: "Data", address: "D2:D4" },
       validation: { type: "list", source: ["20GP", "40GP", "40HQ"] }
+    });
+  });
+
+  it("normalizes unquoted sheet range formula1 for dropdown data validation", async () => {
+    const runtime = new FakeAgentRuntime();
+    const agent = new AgentOrchestrator(runtime as any);
+
+    const preview = await agent.run({
+      request: "Update May 2026 transaction type dropdown source.",
+      mode: "preview_update",
+      intent: { action: "write_data_validation" },
+      target: { sheetName: "May 2026", range: "E2:E244" },
+      values: { validation: { type: "list", formula1: "Dropdown Lists!$B$2:$B$28", inCellDropDown: true } }
+    });
+    const applied = await agent.run({
+      request: "Apply dropdown validation.",
+      mode: "apply_update",
+      operationId: preview.operationId,
+      confirmationToken: preview.confirmationToken
+    });
+
+    expect(preview.status).toBe("PREVIEW_READY");
+    expect((preview.answer as any).validation.source).toBe("='Dropdown Lists'!$B$2:$B$28");
+    expect(applied.status).toBe("SUCCESS");
+    expect(runtime.lastBatchOperations[0]).toMatchObject({
+      kind: "range.write_data_validation",
+      target: { sheetName: "May 2026", address: "E2:E244" },
+      validation: { type: "list", source: "='Dropdown Lists'!$B$2:$B$28" }
     });
   });
 
@@ -5030,6 +5109,85 @@ Data rows:
       expect((result.answer as any).values).toEqual([["2026-06-02", "A-101", 456, "Closed"]]);
       const resultId = String((result.answer as any).resultUri).split("/").pop()!;
       expect((agent.getResultResource(resultId) as any).answer.values).toEqual([["2026-06-02", "A-101", 456, "Closed"]]);
+    });
+
+  it("auto-routes structured values with an explicit target to a scoped write even without intent.action", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_auto_structured_value_write");
+      metadata.sheets = [
+        ...metadata.sheets,
+        {
+          id: "sheet:Dropdown Lists",
+          name: "Dropdown Lists",
+          index: 9,
+          usedRange: "A1:B29",
+          rowCount: 29,
+          columnCount: 2,
+          kind: "reference",
+          headers: [],
+          tableIds: [],
+          sectionIds: [],
+          summaryBlockIds: [],
+          formulaRegionIds: []
+        }
+      ];
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "",
+        mode: "auto",
+        workbookContextId: metadata.workbookContextId,
+        target: { sheetName: "Dropdown Lists", range: "B29" },
+        values: { values: [["owner_cash_topup"]] }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.taskOutcome).toBe("apply_complete");
+      expect(result.telemetry.routeMode).toBe("preview_update");
+      expect(runtime.lastBatchOperations[0]).toMatchObject({
+        kind: "range.write_values",
+        target: { sheetName: "Dropdown Lists", address: "B29" },
+        values: [["owner_cash_topup"]]
+      });
+    });
+
+  it("rejects malformed direct value matrices before auto-applying structured writes", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_auto_structured_value_shape");
+      metadata.sheets = [
+        ...metadata.sheets,
+        {
+          id: "sheet:Dropdown Lists",
+          name: "Dropdown Lists",
+          index: 9,
+          usedRange: "A1:B29",
+          rowCount: 29,
+          columnCount: 2,
+          kind: "reference",
+          headers: [],
+          tableIds: [],
+          sectionIds: [],
+          summaryBlockIds: [],
+          formulaRegionIds: []
+        }
+      ];
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "",
+        mode: "auto",
+        workbookContextId: metadata.workbookContextId,
+        target: { sheetName: "Dropdown Lists", range: "B29" },
+        values: { values: [[null, "owner_cash_topup"]] }
+      });
+
+      expect(result.status).toBe("VALIDATION_FAILED");
+      expect(result.summary).toContain("shape mismatch");
+      expect(result.telemetry.routeMode).toBe("preview_update");
+      expect(runtime.writeBatchCount).toBe(0);
+      expect((result.answer as any)?.kind).not.toBe("range_profile");
     });
 
   it("normalizes structured table sort values", async () => {

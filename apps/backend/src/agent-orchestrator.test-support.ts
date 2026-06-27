@@ -230,6 +230,7 @@ export class FakeAgentRuntime {
             address: request.address,
             type: "list",
             source: ["Open", "Closed", "Pending"],
+            inCellDropDown: true,
             allowBlank: true
           }]
         }
@@ -1314,6 +1315,27 @@ function valuesFor(sheetName: string, address: string) {
       ["2026-01-02", "A-200", 200, "Closed"],
       ["2026-01-03", "A-300", 300, "Open"]
     ];
+  }
+  if (sheetName === "Dropdown Lists") {
+    const rows = [
+      ["", "driver_wage_remaining"],
+      ["", "driver_withholding_tax"],
+      ["", "employee_salary"],
+      ["", "income_customer_payment"],
+      ["", "income_driver_refund"],
+      ["", "income_driver_transfer"],
+      ["", "owner_cash_topup"]
+    ];
+    if (address === "B1:B7") {
+      return rows.map((row) => [row[1]]);
+    }
+    if (address === "B1:B28") {
+      return rows.map((row) => [row[1]]);
+    }
+    if (address === "B29") {
+      return [[""]];
+    }
+    return rows;
   }
   if (sheetName === "Financials - June 2026") {
     if (address === "B2") return [[1200]];

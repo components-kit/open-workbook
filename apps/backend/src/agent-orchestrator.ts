@@ -342,7 +342,18 @@ export class AgentOrchestrator {
       }
 
       const requestedOverviewIntent = workbookOverviewIntent(input);
-      const effectiveMode = route.mode;
+      const effectiveMode = mode === "auto" && shouldRouteStructuredWritePayloadToPreview(input)
+        ? "preview_update"
+        : route.mode;
+      if (effectiveMode !== route.mode) {
+        runMetrics.route = {
+          ...route,
+          mode: effectiveMode,
+          matchedRule: "structured_write_payload",
+          confidence: Math.max(route.confidence, 0.9),
+          reasons: ["Structured write values with an explicit target were routed to preview/update."]
+        };
+      }
       const includeSamples = shouldBuildSampledMetadata(input, effectiveMode, requestedOverviewIntent, route);
       internalCallCount += 1;
       const readiness = await this.runtime.getConnectionReadiness();
@@ -863,14 +874,14 @@ export class AgentOrchestrator {
     if (shouldSummarizeGroupedHeader(input)) {
       return this.groupedHeaderSummaryOutput(metadata, input, requestedMode, resolved.sheetName, normalizedRange, runMetrics);
     }
-    if (isFormulaReadIntentAction(intentAction(input)) || shouldInspectFormulaInline(input)) {
-      return this.formulaAnswerOutput(metadata, input, requestedMode, normalizedRange, resolved, runMetrics);
-    }
     if (hasRangeMetadataReadIntent(input)) {
       const rangeMetadataAnswer = await this.rangeMetadataAnswerOutput(metadata, input, requestedMode, normalizedRange, resolved, runMetrics);
       if (rangeMetadataAnswer) {
         return rangeMetadataAnswer;
       }
+    }
+    if (isFormulaReadIntentAction(intentAction(input)) || shouldInspectFormulaInline(input)) {
+      return this.formulaAnswerOutput(metadata, input, requestedMode, normalizedRange, resolved, runMetrics);
     }
     const largeRangeGuard = largeRangeGuardOutput(metadata, input, requestedMode, resolved.sheetName, normalizedRange, resolved.candidate.label);
     if (largeRangeGuard) {
@@ -2030,16 +2041,24 @@ export class AgentOrchestrator {
         warnings: ["No exact match was found. Do not broad-read adjacent chunks; ask the user to refine the search or target."]
       };
     }
+    const answer = method === "range.read_data_validation"
+      ? dataValidationSummaryAnswer(result, resolved.sheetName, normalizedRange)
+      : { kind: "range_metadata", method, result };
     return {
       status: (result as { ok?: boolean }).ok === false ? "VALIDATION_FAILED" : "SUCCESS",
       mode: requestedMode,
       workbookContextId: metadata.workbookContextId,
       summary: `Read ${method.replace("range.", "").replace(/_/g, " ")} for ${resolved.sheetName}!${normalizedRange}.`,
-      answer: { kind: "range_metadata", method, result },
+      answer,
       metrics: { source: "runtime_range_metadata" },
       proof: [{ sheetName: resolved.sheetName, range: normalizedRange, label: "range metadata" }],
       resourceLinks: [contextResource(metadata.workbookContextId)],
       nextAction: (result as { ok?: boolean }).ok === false ? "manual_review" : "answer_now",
+      ...((result as { ok?: boolean }).ok === false ? {} : method === "range.read_data_validation" ? {
+        taskOutcome: "final_answer" as const,
+        agentInstruction: "Answer from this data_validation_summary. Dropdown validation metadata/options are complete inline for the requested range; do not fetch fullResultUri, chunk-read sheets, list MCP resources, or read raw rows unless the user explicitly asks for raw audit metadata.",
+        maxRecommendedFollowupCalls: 0
+      } : {}),
       warnings: []
     };
   }
@@ -2522,6 +2541,19 @@ export class AgentOrchestrator {
     }
     const dateNormalization = normalizeShortYearDatesForWrite(metadata.workbook.workbookId as WorkbookId, input, resolved.range, matrix);
     const writeMatrix = dateNormalization.matrix;
+    const shapeIssue = matrixShapeIssue(resolved.range, writeMatrix);
+    if (shapeIssue) {
+      return {
+        status: "VALIDATION_FAILED",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: `Value payload has a shape mismatch for ${resolved.sheetName}!${resolved.range}.`,
+        proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "shape mismatch" }],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "manual_review",
+        warnings: [shapeIssue]
+      };
+    }
     if (containsFormulaLikeValue(writeMatrix) && (intentAction(input) === "write_formulas" || (!isConditionalFormattingMutationRequest(input.request) && isFormulaMutationRequest(input.request)))) {
       return this.previewFormulaUpdate(metadata, input, requestedMode, resolved, writeMatrix);
     }
@@ -7251,6 +7283,12 @@ function isWorkbookDesignOverviewRequest(requestText: string): boolean {
   if (isExplicitFullDataRequest(requestText)) {
     return false;
   }
+  if (isExplicitCellValueReadRequest(requestText.toLowerCase())) {
+    return false;
+  }
+  if (isDataValidationReadRequest(requestText.toLowerCase())) {
+    return false;
+  }
   if (/\b(style|styling|visual|readability|font|fonts|color|colors|border|borders|fills?|theme|header)\b/i.test(requestText)) {
     return false;
   }
@@ -7749,6 +7787,9 @@ function emptyLiveReadDiagnosticOutput(
 function shouldAnalyzeReferenceSheet(input: AgentRunInput): boolean {
   const request = input.request.toLowerCase();
   if (intentAction(input) === "find_similar_rows" || intentAction(input) === "find_style_references") {
+    return false;
+  }
+  if (isDataValidationReadRequest(request)) {
     return false;
   }
   if (!/\b(reference|same as|similar to|prior|previous|last month|before|template|convention|pattern|skim|learn from|look into)\b/.test(request)) {
@@ -10188,12 +10229,14 @@ function dataValidationFromInput(input: AgentRunInput): Extract<ExcelOperation, 
   const values = input.values as Record<string, unknown> | undefined;
   const validation = values?.validation && typeof values.validation === "object" ? values.validation as Record<string, unknown> : undefined;
   const source = validation?.source ?? validation?.formula1 ?? values?.source ?? values?.options ?? values?.allowedValues;
-  const options = Array.isArray(source)
-    ? source.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
-    : typeof source === "string"
-      ? source.split(",").map((item) => item.trim()).filter(Boolean)
-      : optionsFromRequest(input.request);
-  if (options.length === 0) {
+  const optionsOrFormula = dataValidationSourceFromValue(source);
+  const options = optionsOrFormula !== undefined
+    ? optionsOrFormula
+    : optionsFromRequest(input.request);
+  if (Array.isArray(options) && options.length === 0) {
+    return undefined;
+  }
+  if (typeof options === "string" && options.trim().length === 0) {
     return undefined;
   }
   return {
@@ -10204,20 +10247,74 @@ function dataValidationFromInput(input: AgentRunInput): Extract<ExcelOperation, 
   };
 }
 
+function dataValidationSourceFromValue(source: unknown): string | string[] | undefined {
+  if (Array.isArray(source)) {
+    const values = source.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
+    if (values.length === 1) {
+      const onlyValue = values[0];
+      const formula = onlyValue ? normalizeDataValidationRangeReference(onlyValue) : undefined;
+      return formula ?? values;
+    }
+    return values;
+  }
+  if (typeof source !== "string") {
+    return undefined;
+  }
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.startsWith("=")) {
+    return normalizeDataValidationFormulaSource(trimmed);
+  }
+  const formula = normalizeDataValidationRangeReference(trimmed);
+  if (formula) {
+    return formula;
+  }
+  return trimmed.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function normalizeDataValidationFormulaSource(source: string): string {
+  const formula = normalizeDataValidationRangeReference(source);
+  if (formula) {
+    return formula;
+  }
+  return source;
+}
+
+function normalizeDataValidationRangeReference(source: string): string | undefined {
+  const trimmed = source.trim();
+  const body = trimmed.startsWith("=") ? trimmed.slice(1).trim() : trimmed;
+  const match = /^(?:'((?:[^']|'')+)'|([^'!]+))!(\$?[A-Z]{1,3}\$?\d+:\$?[A-Z]{1,3}\$?\d+)$/iu.exec(body);
+  if (!match) {
+    return undefined;
+  }
+  const rawSheet = match[1] !== undefined ? match[1].replace(/''/g, "'") : match[2] ?? "";
+  const address = match[3] ?? "";
+  const sheet = rawSheet.trim();
+  if (!sheet) {
+    return undefined;
+  }
+  if (!/[\s()[\]{}.,]/u.test(sheet)) {
+    return `=${sheet}!${address}`;
+  }
+  return `='${sheet.replace(/'/g, "''")}'!${address}`;
+}
+
+function dataValidationSourceFromValueWithFallback(source: unknown, fallback: string | string[]): string | string[] {
+  return dataValidationSourceFromValue(source) ?? fallback;
+}
+
 function dataValidationFromRecord(
   record: Record<string, unknown>,
   fallback: Extract<ExcelOperation, { kind: "range.write_data_validation" }>["validation"]
 ): Extract<ExcelOperation, { kind: "range.write_data_validation" }>["validation"] {
   const validation = record.validation && typeof record.validation === "object" ? record.validation as Record<string, unknown> : undefined;
   const source = validation?.source ?? validation?.formula1 ?? record.source ?? record.options ?? record.allowedValues ?? fallback.source;
-  const options = Array.isArray(source)
-    ? source.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
-    : typeof source === "string"
-      ? source.split(",").map((item) => item.trim()).filter(Boolean)
-      : fallback.source;
+  const parsedSource = dataValidationSourceFromValueWithFallback(source, fallback.source);
   const next: Extract<ExcelOperation, { kind: "range.write_data_validation" }>["validation"] = {
     type: "list",
-    source: options
+    source: parsedSource
   };
   const inCellDropDown = booleanValue(validation?.inCellDropDown ?? record.inCellDropDown) ?? fallback.inCellDropDown;
   if (inCellDropDown !== undefined) next.inCellDropDown = inCellDropDown;
@@ -10519,6 +10616,114 @@ function rangeMetadataMethodForAction(action: AgentIntentAction | undefined): st
   }
 }
 
+function dataValidationSummaryAnswer(result: unknown, sheetName: string, range: string): Record<string, unknown> {
+  const typed = result && typeof result === "object" ? result as Record<string, unknown> : {};
+  const data = typed.data && typeof typed.data === "object" ? typed.data as Record<string, unknown> : {};
+  const rules = dataValidationRulesFromMetadata(data);
+  const summaries = rules.map((rule, index) => {
+    const source = dataValidationSource(rule);
+    const parsed = parseDataValidationOptions(source);
+    const type = stringValue(rule.type ?? data.type);
+    const inCellDropDown = booleanValue(rule.inCellDropDown ?? data.inCellDropDown);
+    return stripUndefinedRecord({
+      index,
+      address: stringValue(rule.address ?? data.address ?? range),
+      type,
+      inCellDropDown,
+      source,
+      sourceKind: dataValidationSourceKind(source),
+      options: parsed.options,
+      optionCount: parsed.optionCount,
+      sourceComplete: parsed.sourceComplete,
+      sourceRange: parsed.sourceRange
+    });
+  });
+  const first = summaries[0] as Record<string, unknown> | undefined;
+  const type = stringValue(first?.type ?? data.type);
+  const mixedRange = typeof type === "string" && /inconsistent/i.test(type);
+  return stripUndefinedRecord({
+    kind: "data_validation_summary",
+    source: "runtime_range_metadata",
+    method: "range.read_data_validation",
+    sheetName,
+    range,
+    ruleCount: summaries.length,
+    rules: summaries,
+    type,
+    inCellDropDown: first?.inCellDropDown,
+    sourceFormula: typeof first?.source === "string" ? first.source : undefined,
+    options: first?.options,
+    optionCount: first?.optionCount,
+    sourceComplete: summaries.length > 0 ? summaries.every((rule) => rule.sourceComplete === true) : false,
+    sourceRange: first?.sourceRange,
+    validationRangeStatus: mixedRange ? "mixed_or_inconsistent_range" : undefined,
+    guidance: mixedRange
+      ? "This multi-cell range has mixed/inconsistent validation. Do not conclude the dropdown option is missing or the rule is broken from this range summary. Read one representative data cell with the dropdown, such as the selected cell or a known row in the Transaction Type column, to inspect its exact validation source."
+      : "Use this inline validation summary to answer dropdown option questions. Add missing dropdown values by updating the source-list cells when sourceRange is present; otherwise preview a write_data_validation rule rewrite."
+  });
+}
+
+function dataValidationRulesFromMetadata(data: Record<string, unknown>): Record<string, unknown>[] {
+  if (Array.isArray(data.rules)) {
+    return data.rules.filter((rule): rule is Record<string, unknown> => Boolean(rule && typeof rule === "object"));
+  }
+  const rule = data.rule && typeof data.rule === "object" ? data.rule as Record<string, unknown> : undefined;
+  if (rule) {
+    const list = rule.list && typeof rule.list === "object" ? rule.list as Record<string, unknown> : undefined;
+    return [stripUndefinedRecord({
+      address: data.address,
+      type: stringValue(data.type) ?? (list ? "list" : undefined),
+      source: list?.source ?? rule.source,
+      inCellDropDown: list?.inCellDropDown,
+      ignoreBlanks: data.ignoreBlanks,
+      valid: data.valid
+    })];
+  }
+  if (data.type || data.source) {
+    return [data];
+  }
+  return [];
+}
+
+function dataValidationSource(rule: Record<string, unknown>): unknown {
+  const source = rule.source ?? rule.formula1;
+  if (source !== undefined) {
+    return source;
+  }
+  const list = rule.list && typeof rule.list === "object" ? rule.list as Record<string, unknown> : undefined;
+  return list?.source;
+}
+
+function dataValidationSourceKind(source: unknown): string | undefined {
+  if (Array.isArray(source)) {
+    return "inline_list";
+  }
+  if (typeof source !== "string") {
+    return undefined;
+  }
+  const trimmed = source.trim();
+  if (trimmed.startsWith("=")) {
+    return "range_formula";
+  }
+  return "inline_list";
+}
+
+function parseDataValidationOptions(source: unknown): { options?: string[]; optionCount: number; sourceComplete: boolean; sourceRange?: string } {
+  if (Array.isArray(source)) {
+    const options = source.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
+    return { options, optionCount: options.length, sourceComplete: true };
+  }
+  if (typeof source !== "string") {
+    return { optionCount: 0, sourceComplete: false };
+  }
+  const trimmed = source.trim();
+  if (trimmed.startsWith("=")) {
+    return { optionCount: 0, sourceComplete: false, sourceRange: trimmed.slice(1) };
+  }
+  const options = trimmed.split(",").map((item) => item.trim()).filter(Boolean);
+  return { options, optionCount: options.length, sourceComplete: true };
+}
+
 function hasRangeMetadataReadIntent(input: AgentRunInput): boolean {
   return rangeMetadataMethodForAction(intentAction(input) ?? inferredRangeMetadataReadAction(input)) !== undefined;
 }
@@ -10526,7 +10731,7 @@ function hasRangeMetadataReadIntent(input: AgentRunInput): boolean {
 function inferredRangeMetadataReadAction(input: AgentRunInput): AgentIntentAction | undefined {
   const request = input.request.toLowerCase();
   const readVerb = /\b(read|show|check|inspect|review|tell|what|which|whether|does|do|has|have|list|find)\b/.test(request);
-  if (readVerb && /\b(data\s+validation|validation|dropdown|drop\s*down|select\s+list|selection\s+list|allowed values?)\b/.test(request)) {
+  if (readVerb && isDataValidationReadRequest(request)) {
     return "read_data_validation";
   }
   if (readVerb && /\b(conditional\s+format|conditional\s+formatting)\b/.test(request)) {
@@ -10545,6 +10750,18 @@ function inferredRangeMetadataReadAction(input: AgentRunInput): AgentIntentActio
     return "read_notes";
   }
   return undefined;
+}
+
+function isDataValidationReadRequest(request: string): boolean {
+  if (isExplicitCellValueReadRequest(request)) {
+    return false;
+  }
+  return /\b(data\s+validation|validation|dropdown|drop\s*down|select\s+list|selection\s+list|allowed values?)\b/.test(request);
+}
+
+function isExplicitCellValueReadRequest(request: string): boolean {
+  return /\b(read|show|list|fetch|give|check|tell)\b/.test(request)
+    && /\b(actual\s+cell\s+values?|cell\s+values?|raw\s+values?|literal\s+text|text\s+strings?|stored\s+in\s+cells?|cells?\s+contain|contains?\s+the\s+text|values?\s+in\s+(?:column|range)|column\s+[a-z]+\s*,?\s+rows?\s+\d+)\b/i.test(request);
 }
 
 function shouldSummarizeGroupedHeader(input: AgentRunInput): boolean {
@@ -11244,6 +11461,9 @@ function shouldRunReferenceRowSearch(input: AgentRunInput): boolean {
     return false;
   }
   const request = input.request.toLowerCase();
+  if (isDataValidationReadRequest(request)) {
+    return false;
+  }
   return /\b(reference|similar|look back|last month|prior|previous|before|how did we|how we|label(?:ed)?|classif(?:y|ied|ication))\b/.test(request)
     && !shouldRunStyleReferenceSearch(input);
 }
@@ -11894,6 +12114,17 @@ function hasStructuredMutationPayload(input: AgentRunInput): boolean {
   return ["values", "rows", "patches", "formulas", "style", "validation", "rule", "entries", "options", "totalRow", "showTotals"].some((key) => values[key] !== undefined);
 }
 
+function shouldRouteStructuredWritePayloadToPreview(input: AgentRunInput): boolean {
+  if (!hasStructuredMutationPayload(input)) {
+    return false;
+  }
+  if (input.target?.range || input.target?.tableName) {
+    return true;
+  }
+  const patches = input.values?.patches;
+  return Array.isArray(patches) && patches.some((patch) => Boolean(patch?.target?.range || patch?.target?.tableName));
+}
+
 function tableNeedsInput(
   metadata: WorkbookMetadata,
   requestedMode: AgentRunMode,
@@ -12414,6 +12645,7 @@ function shouldIncludeInlineValuesPreview(input: AgentRunInput, cellCount: numbe
   return action === "read_values"
     || input.detailLevel === "table_sample"
     || input.detailLevel === "full_table"
+    || (cellCount > 0 && cellCount <= 50 && Boolean(input.target?.range))
     || /\b(?:actual|raw|all|full|every|show|read|print)\b.{0,40}\b(?:values?|rows?|data|headers?)\b/i.test(input.request);
 }
 
@@ -12611,7 +12843,10 @@ function answerNeedsResultResource(answer: unknown): boolean {
   if (typed.kind === "match_update_preview" || typed.kind === "match_update_result" || typed.kind === "match_update_no_match" || typed.kind === "exact_search_rows" || typed.kind === "exact_search_no_match") {
     return false;
   }
-  if (typed.kind === "workbook_summary" || typed.kind === "workbook_overview" || typed.kind === "sheet_summary") {
+  if (typed.kind === "workbook_summary" || typed.kind === "workbook_overview" || typed.kind === "sheet_summary" || typed.kind === "data_validation_summary") {
+    return false;
+  }
+  if (typed.kind === "range_profile" && typed.inlineIsComplete === true && Array.isArray(typed.valuesPreview) && matrixCellCount(typed.valuesPreview as CellMatrix) <= 50) {
     return false;
   }
   return text.length > 2_000
@@ -12684,6 +12919,9 @@ function compactAnswerForResponseMode(answer: unknown, responseMode: AgentRespon
   }
   if (kind === "visual_readability_preview") {
     return compactVisualReadabilityPreviewAnswer(typed, resultUri, fullResultUri);
+  }
+  if (kind === "data_validation_summary") {
+    return compactDataValidationSummaryAnswer(typed, resultUri, fullResultUri);
   }
   return compactGenericAnswer(typed, resultUri, fullResultUri);
 }
@@ -12785,6 +13023,7 @@ function compactRangeProfileAnswer(answer: Record<string, unknown>, responseMode
     ...(preserveExact && rows ? { rows } : {}),
     ...(preserveExact && !rows && sparseRows ? { sparseRows } : {}),
     ...(preserveExact ? { emptySummary: answer.emptySummary } : {}),
+    ...(preserveExact ? { inlineRowsReason: "narrow_exact_read" } : {}),
     valuesPreview: answer.valuesPreview,
     previewRange: answer.previewRange,
     previewTruncated: answer.previewTruncated,
@@ -13323,6 +13562,29 @@ function compactWorkbookDesignOverviewAnswer(answer: Record<string, unknown>, re
   });
 }
 
+function compactDataValidationSummaryAnswer(answer: Record<string, unknown>, resultUri?: string, fullResultUri?: string): Record<string, unknown> {
+  return stripUndefinedRecord({
+    kind: answer.kind,
+    source: answer.source,
+    method: answer.method,
+    sheetName: answer.sheetName,
+    range: answer.range,
+    ruleCount: answer.ruleCount,
+    type: answer.type,
+    inCellDropDown: answer.inCellDropDown,
+    sourceFormula: answer.sourceFormula,
+    options: Array.isArray(answer.options) ? answer.options.slice(0, 100) : undefined,
+    optionCount: answer.optionCount,
+    sourceComplete: answer.sourceComplete,
+    sourceRange: answer.sourceRange,
+    validationRangeStatus: answer.validationRangeStatus,
+    rules: Array.isArray(answer.rules) ? answer.rules.slice(0, 8) : undefined,
+    guidance: answer.guidance,
+    resultUri,
+    fullResultUri
+  });
+}
+
 function compactStyleDimension(value: unknown): unknown {
   if (!value || typeof value !== "object") {
     return value;
@@ -13686,6 +13948,19 @@ function conciseFinalAnswer(output: Omit<AgentRunOutput, "telemetry">): string |
         : [];
     const previewRows = Array.isArray(answer.valuesPreview) ? answer.valuesPreview.length : undefined;
     return `Read ${tableName}${range ? ` at ${range}` : ""}${rows && columns ? ` (${rows} rows x ${columns} columns in this page)` : ""}.${headers.length > 0 ? ` Columns include: ${headers.join(", ")}.` : ""}${previewRows ? ` ${previewRows} exact preview rows are inline; answer now unless the user asked for more rows.` : ""}`;
+  }
+  if (answer.kind === "data_validation_summary") {
+    const sheetName = stringValue(answer.sheetName) ?? "the requested sheet";
+    const range = stringValue(answer.range) ?? "the requested range";
+    if (answer.validationRangeStatus === "mixed_or_inconsistent_range") {
+      return `Read dropdown validation for ${sheetName}!${range}. The range has mixed/inconsistent validation, so this result is inconclusive for dropdown options; do not say the dropdown is broken or missing options from this range summary. Inspect one representative data cell with the dropdown, or update the known source-list cell directly if the user asked to add an option.`;
+    }
+    const optionCount = typeof answer.optionCount === "number" ? answer.optionCount : 0;
+    const options = Array.isArray(answer.options)
+      ? answer.options.slice(0, 12).map((option) => String(option)).filter(Boolean)
+      : [];
+    const sourceRange = stringValue(answer.sourceRange);
+    return `Read dropdown validation for ${sheetName}!${range}. ${optionCount} option${optionCount === 1 ? "" : "s"} found${options.length > 0 ? `: ${options.join(", ")}${optionCount > options.length ? ", ..." : ""}` : ""}.${sourceRange ? ` Source list: ${sourceRange}.` : ""} Answer now; do not fetch fullResultUri for dropdown options.`;
   }
   if (answer.kind === "workbook_summary" || answer.kind === "workbook_overview") {
     const sheetCount = typeof answer.sheetCount === "number" ? answer.sheetCount : undefined;
@@ -15627,6 +15902,7 @@ function deriveFormulaLikeValue(current: unknown, sourceValues: unknown[], value
 function shouldInspectFormulaInline(input: AgentRunInput): boolean {
   if (intentAction(input) === "read_formulas") return true;
   if (intentAction(input) !== undefined) return false;
+  if (isDataValidationReadRequest(input.request.toLowerCase())) return false;
   if (!/\b(formula|formulas|raw formula|r1c1|calculation)\b/i.test(input.request)) return false;
   if (/\b(write|set|apply|fill|copy|repair|replace|update|convert)\b/i.test(input.request) && !/\b(read|check|show|inspect|is|has|whether)\b/i.test(input.request)) {
     return false;

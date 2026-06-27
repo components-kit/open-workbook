@@ -135,7 +135,7 @@ function enforceStructuredContentBudget(value: AgentRunOutput, responseMode: "br
     resourceLinks: value.resourceLinks.slice(0, 3),
     ...(value.candidates ? { candidates: value.candidates.slice(0, 3) } : {}),
     ...(value.changes ? { changes: value.changes.slice(0, 3) } : {}),
-    warnings: [...value.warnings.slice(0, 3), "Compacted for budget; pass continuation.fullResultUri to excel.agent.run for hidden detail."],
+    warnings: [...value.warnings.slice(0, 3), compactedBudgetWarning(value)],
     telemetry: compactTelemetry(value.telemetry, "brief")
   }) as unknown as AgentRunOutput;
   if (Buffer.byteLength(JSON.stringify(compact)) <= maxBytes) {
@@ -143,11 +143,14 @@ function enforceStructuredContentBudget(value: AgentRunOutput, responseMode: "br
   }
   return stripUndefinedObject({
     ...compact,
-    warnings: [...compact.warnings.slice(0, 3), "Answer details omitted; use excel.agent.run with continuation.fullResultUri."]
+    warnings: [...compact.warnings.slice(0, 3), compactedBudgetWarning(value)]
   }, ["answer", "candidates", "changes"]) as unknown as AgentRunOutput;
 }
 
 function minimalStructuredAnswer(answer: Record<string, unknown>, continuation?: AgentRunOutput["continuation"]): Record<string, unknown> {
+  if (answer.kind === "data_validation_summary") {
+    return minimalDataValidationSummaryAnswer(answer);
+  }
   if (answer.kind === "similar_rows") {
     return minimalSimilarRowsAnswer(answer, continuation);
   }
@@ -164,6 +167,33 @@ function minimalStructuredAnswer(answer: Record<string, unknown>, continuation?:
     resultUri: answer.resultUri ?? continuation?.resultUri,
     fullResultUri: answer.fullResultUri ?? continuation?.fullResultUri
   };
+}
+
+function compactedBudgetWarning(value: AgentRunOutput): string {
+  const answer = value.answer && typeof value.answer === "object" ? value.answer as Record<string, unknown> : undefined;
+  if (answer?.kind === "data_validation_summary") {
+    return "Compacted for budget; validation metadata/options are complete inline for dropdown inspection. Do not fetch fullResultUri unless the user asks for raw audit metadata.";
+  }
+  return "Compacted for budget; pass continuation.fullResultUri to excel.agent.run for hidden detail.";
+}
+
+function minimalDataValidationSummaryAnswer(answer: Record<string, unknown>): Record<string, unknown> {
+  return stripUndefinedObject({
+    kind: answer.kind,
+    source: answer.source,
+    method: answer.method,
+    sheetName: answer.sheetName,
+    range: answer.range,
+    ruleCount: answer.ruleCount,
+    type: answer.type,
+    inCellDropDown: answer.inCellDropDown,
+    sourceFormula: answer.sourceFormula,
+    options: Array.isArray(answer.options) ? answer.options.slice(0, 100) : undefined,
+    optionCount: answer.optionCount,
+    sourceComplete: answer.sourceComplete,
+    sourceRange: answer.sourceRange,
+    guidance: answer.guidance
+  });
 }
 
 function minimalSimilarRowsAnswer(answer: Record<string, unknown>, continuation?: AgentRunOutput["continuation"]): Record<string, unknown> {
@@ -319,6 +349,9 @@ function compactDataAvailabilityText(value: AgentRunOutput): string | undefined 
   const typed = answer as Record<string, unknown>;
   if (typed.kind === "workbook_summary" || typed.kind === "workbook_overview" || typed.kind === "sheet_summary") {
     return "data: summary is complete from cached metadata; do not fetch full detail unless the user asks for all raw rows or exact cell values";
+  }
+  if (typed.kind === "data_validation_summary") {
+    return "data: validation metadata/options complete inline for dropdown inspection; do not fetch full detail unless the user asks for raw audit metadata";
   }
   const exactRows = countMatrixRows(typed.values) ?? countMatrixRows(typed.rows) ?? countSparseRows(typed.sparseRows);
   if (exactRows !== undefined) {
