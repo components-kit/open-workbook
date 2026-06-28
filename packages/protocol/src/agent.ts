@@ -282,7 +282,7 @@ export const AGENT_INTENT_ACTIONS = [
 
 export type AgentIntentAction = typeof AGENT_INTENT_ACTIONS[number];
 
-export const AGENT_CONTEXT_STRATEGIES = ["auto", "overview", "focused", "analysis", "audit"] as const;
+export const AGENT_CONTEXT_STRATEGIES = ["auto", "overview", "focused", "analysis", "audit", "mutation"] as const;
 export type AgentContextStrategy = typeof AGENT_CONTEXT_STRATEGIES[number];
 
 export const AGENT_CONTEXT_SCOPES = ["active_selection", "active_region", "active_sheet", "target", "workbook"] as const;
@@ -462,6 +462,23 @@ export interface AgentChangePreview {
   after?: unknown;
 }
 
+export interface AgentContextUsed {
+  strategy: AgentContextStrategy;
+  scope: AgentContextScope;
+  stagesUsed: string[];
+  included: string[];
+  rangesRead?: string[];
+  rowsRead?: number;
+  estimatedTokens?: number;
+  truncated?: boolean;
+  confidence?: number;
+  source?: "cache" | "live" | "mixed" | "none";
+  continuation?: {
+    available: boolean;
+    suggestedNext?: string[];
+  };
+}
+
 export interface AgentRunOutput {
   status: AgentRunStatus;
   mode: AgentRunMode;
@@ -479,6 +496,7 @@ export interface AgentRunOutput {
   invalidatedContextIds?: Array<WorkbookContextId | string>;
   invalidatedResourceUris?: string[];
   continuation?: AgentContinuation;
+  contextUsed?: AgentContextUsed;
   nextAction: AgentNextAction;
   taskOutcome?: AgentTaskOutcome;
   finalAnswer?: string;

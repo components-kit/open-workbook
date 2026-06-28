@@ -228,6 +228,22 @@ function agentRunOutputSchema() {
       nextRequest: z.string().optional(),
       responseMode: z.enum(["brief", "standard", "verbose"]).optional()
     }).optional(),
+    contextUsed: z.object({
+      strategy: z.enum(AGENT_CONTEXT_STRATEGIES),
+      scope: z.enum(AGENT_CONTEXT_SCOPES),
+      stagesUsed: z.array(z.string()),
+      included: z.array(z.string()),
+      rangesRead: z.array(z.string()).optional(),
+      rowsRead: z.number().optional(),
+      estimatedTokens: z.number().optional(),
+      truncated: z.boolean().optional(),
+      confidence: z.number().optional(),
+      source: z.enum(["cache", "live", "mixed", "none"]).optional(),
+      continuation: z.object({
+        available: z.boolean(),
+        suggestedNext: z.array(z.string()).optional()
+      }).optional()
+    }).optional(),
     nextAction: z.string(),
     taskOutcome: z.enum(["final_answer", "preview_ready", "apply_complete", "needs_user_input", "cannot_complete"]).optional(),
     finalAnswer: z.string().optional(),

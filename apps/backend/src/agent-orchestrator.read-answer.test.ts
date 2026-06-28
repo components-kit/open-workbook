@@ -555,6 +555,13 @@ describe("AgentOrchestrator Read Answer Routing", () => {
         scope: "workbook",
         source: "inferred"
       });
+      expect(workbookSummary.contextUsed).toMatchObject({
+        strategy: "overview",
+        scope: "workbook",
+        stagesUsed: expect.arrayContaining(["metadata", "schema"]),
+        included: expect.arrayContaining(["metadata", "schema"]),
+        source: "mixed"
+      });
       expect(workbookSummary.telemetry.contextDecision?.include).toEqual(expect.arrayContaining(["metadata", "schema"]));
       expect(sheetSummary.nextAction).toBe("answer_now");
       expect(sheetSummary.maxRecommendedFollowupCalls).toBe(0);
@@ -587,6 +594,11 @@ describe("AgentOrchestrator Read Answer Routing", () => {
         scope: "active_sheet",
         include: ["validation"],
         source: "caller"
+      });
+      expect(result.contextUsed).toMatchObject({
+        strategy: "audit",
+        scope: "active_sheet",
+        included: expect.arrayContaining(["validation"])
       });
     });
 

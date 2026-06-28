@@ -36,6 +36,9 @@ describe("excel.agent.run MCP schema", () => {
     expect(source).toContain("semanticCandidateUsed");
     expect(source).toContain("metadataPolicy");
     expect(source).toContain("readPolicy");
+    expect(source).toContain("contextUsed");
+    expect(source).toContain("stagesUsed");
+    expect(source).toContain("rangesRead");
   });
 
   it("exposes task outcome fields that tell agents when to stop looping", () => {

@@ -1296,6 +1296,11 @@ Data rows:
         proposedValues: ["Closed"],
         invalidValues: []
       });
+      expect(preview.contextUsed).toMatchObject({
+        strategy: "mutation",
+        stagesUsed: expect.arrayContaining(["field_context", "audit_facets", "target_resolution", "preview_proof"]),
+        included: expect.arrayContaining(["validation", "field_context", "preview"])
+      });
       expect(preview.warnings.join(" ")).toContain("validated Status");
     });
 

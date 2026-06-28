@@ -230,9 +230,15 @@ export class AgentOrchestrator {
       const budgeted = withTaskOutcomeContract(enforceFullDataFollowupAfterBudget(applyOutputBudget(output, input, this.results, this.metadataCache), input));
       const targetHintCount = runMetrics.intent.targetHints?.length ?? 0;
       const targetHintUsed = targetHintCount > 0 && outputUsedCallerTargetHint(output);
-      const payloadBytes = Buffer.byteLength(JSON.stringify(budgeted));
-      return {
+      const preliminaryPayloadBytes = Buffer.byteLength(JSON.stringify(budgeted));
+      const contextUsed = buildContextUsed(input, budgeted, runMetrics, cacheHit, preliminaryPayloadBytes);
+      const budgetedWithContext = stripUndefinedOptionals({
         ...budgeted,
+        ...(contextUsed !== undefined ? { contextUsed } : {})
+      });
+      const payloadBytes = Buffer.byteLength(JSON.stringify(budgetedWithContext));
+      return {
+        ...budgetedWithContext,
         telemetry: {
           internalCallCount,
           payloadBytes,
@@ -12719,6 +12725,138 @@ function resultFreshnessForOutput(output: Omit<AgentRunOutput, "telemetry">, met
     workbookStructureHash: metadata.fingerprint.structureHash,
     contextUpdatedAt: metadata.updatedAt
   }) as AgentResultFreshness;
+}
+
+function buildContextUsed(
+  input: AgentRunInput,
+  output: Omit<AgentRunOutput, "telemetry">,
+  runMetrics: AgentRunMetrics,
+  cacheHit: boolean,
+  payloadBytes: number
+): AgentRunOutput["contextUsed"] {
+  const decision = runMetrics.route.contextDecision;
+  const answer = output.answer && typeof output.answer === "object" ? output.answer as Record<string, unknown> : undefined;
+  const stages = new Set<string>();
+  const included = new Set<string>(decision.include);
+  if (output.workbookContextId) {
+    stages.add("metadata");
+  }
+  const kind = stringValue(answer?.kind);
+  if (kind === "workbook_summary" || kind === "workbook_overview" || kind === "sheet_summary" || kind === "semantic_workbook_index") {
+    stages.add("schema");
+    included.add("schema");
+  }
+  if (kind === "table_compact_read" || kind === "range_profile") {
+    stages.add("schema");
+    stages.add("field_context");
+    stages.add(proofImpliesSelectedData(output.proof) ? "focused_values" : "sample_values");
+    included.add("schema");
+    included.add("field_context");
+    included.add("values");
+  }
+  if (kind === "data_validation_summary" || kind === "patch_validation_failed") {
+    stages.add("field_context");
+    stages.add("audit_facets");
+    included.add("field_context");
+    included.add("validation");
+  }
+  if (output.mode === "preview_update" || output.taskOutcome === "preview_ready") {
+    stages.add("target_resolution");
+    stages.add("preview_proof");
+    included.add("target");
+    included.add("preview");
+  }
+  if (Array.isArray(answer?.fieldContext)) {
+    stages.add("field_context");
+    included.add("field_context");
+  }
+  if (Array.isArray((answer as Record<string, unknown> | undefined)?.validationChecks)) {
+    stages.add("field_context");
+    stages.add("audit_facets");
+    included.add("field_context");
+    included.add("validation");
+  }
+  const rangesRead = uniqueContextRanges(output.proof);
+  const rowsRead = contextRowsRead(output.proof);
+  const truncated = answerTruncated(answer) || output.continuation?.fullResultUri !== undefined;
+  const strategy = output.mode === "preview_update" || output.taskOutcome === "preview_ready" ? "mutation" as const : decision.strategy;
+  const suggestedNext = contextSuggestedNext(output, input);
+  const source = cacheHit ? "cache" as const : runMetrics.internalReadCount > 0 || runMetrics.fullReadCellCount > 0 ? "live" as const : output.workbookContextId ? "mixed" as const : "none" as const;
+  return stripUndefinedRecord({
+    strategy,
+    scope: decision.scope,
+    stagesUsed: [...stages],
+    included: [...included],
+    ...(rangesRead.length > 0 ? { rangesRead } : {}),
+    ...(rowsRead !== undefined ? { rowsRead } : {}),
+    estimatedTokens: Math.ceil(payloadBytes / 4),
+    ...(truncated !== undefined ? { truncated } : {}),
+    confidence: contextAnswerConfidence(output, runMetrics),
+    source,
+    continuation: {
+      available: output.continuation !== undefined || output.nextAction === "fetch_resource",
+      ...(suggestedNext !== undefined ? { suggestedNext } : {})
+    }
+  });
+}
+
+function uniqueContextRanges(proof: AgentProofReference[]): string[] {
+  const seen = new Set<string>();
+  const ranges: string[] = [];
+  for (const entry of proof) {
+    const range = entry.range ? `${entry.sheetName}!${entry.range}` : undefined;
+    if (!range || seen.has(range)) {
+      continue;
+    }
+    seen.add(range);
+    ranges.push(range);
+  }
+  return ranges.slice(0, 12);
+}
+
+function contextRowsRead(proof: AgentProofReference[]): number | undefined {
+  const rows = proof.reduce((total, entry) => {
+    const shape = entry.range ? rangeShape(entry.range) : undefined;
+    return total + (shape?.rows ?? 0);
+  }, 0);
+  return rows > 0 ? rows : undefined;
+}
+
+function answerTruncated(answer: Record<string, unknown> | undefined): boolean | undefined {
+  if (!answer) {
+    return undefined;
+  }
+  if (answer.truncated === true || answer.previewTruncated === true) {
+    return true;
+  }
+  if (answer.inlineIsComplete === false || answer.sourceComplete === false) {
+    return true;
+  }
+  return undefined;
+}
+
+function contextAnswerConfidence(output: Omit<AgentRunOutput, "telemetry">, runMetrics: AgentRunMetrics): number {
+  if (output.status === "SUCCESS" || output.status === "PREVIEW_READY") {
+    return Math.max(0.75, Math.min(0.98, runMetrics.route.confidence));
+  }
+  if (output.status === "NEEDS_INPUT" || output.status === "AMBIGUOUS_TARGET") {
+    return Math.min(0.55, runMetrics.route.confidence);
+  }
+  return Math.min(0.7, runMetrics.route.confidence);
+}
+
+function contextSuggestedNext(output: Omit<AgentRunOutput, "telemetry">, input: AgentRunInput): string[] | undefined {
+  const suggestions = new Set<string>();
+  if (output.nextAction === "fetch_resource" || output.continuation?.fullResultUri) {
+    suggestions.add("fetch_full_result");
+  }
+  if (output.nextAction === "call_with_target" || output.status === "AMBIGUOUS_TARGET") {
+    suggestions.add("provide_narrower_target");
+  }
+  if (output.mode === "preview_update" || input.mode === "preview_update") {
+    suggestions.add("apply_preview_after_confirmation");
+  }
+  return suggestions.size > 0 ? [...suggestions] : undefined;
 }
 
 function minimalAnswerForBudget(answer: unknown, continuation: AgentRunOutput["continuation"] | undefined, workbookContextId: AgentRunOutput["workbookContextId"] | undefined): Record<string, unknown> {
