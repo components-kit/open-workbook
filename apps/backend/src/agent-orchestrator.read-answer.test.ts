@@ -1566,10 +1566,31 @@ describe("AgentOrchestrator Read Answer Routing", () => {
         }
       });
       expect((result.answer as any).projectedColumns.map((column: any) => column.name)).toEqual(["Amount", "Status"]);
+      expect((result.answer as any).fieldContext).toEqual([
+        expect.objectContaining({
+          field: "Amount",
+          range: "C2:C4",
+          headerRange: "C1",
+          dataType: "number",
+          currentDistinctValues: [123, 456],
+          blankCount: 0,
+          examples: [123, 456]
+        }),
+        expect.objectContaining({
+          field: "Status",
+          range: "D2:D4",
+          headerRange: "D1",
+          dataType: "status",
+          currentDistinctValues: ["Open", "Closed"],
+          blankCount: 0,
+          examples: ["Open", "Closed"]
+        })
+      ]);
       const resultId = String((result.answer as any).resultUri).split("/").pop()!;
       expect((agent.getResultResource(resultId) as any).answer.values).toEqual([[123, "Open"], [456, "Closed"]]);
       const summary = agent.getResultResource(resultId, { view: "summary" }) as any;
       expect(summary.answer.values).toBeUndefined();
+      expect(summary.answer.fieldContext).toEqual((result.answer as any).fieldContext);
       expect(summary.answer.resultUri).toBe((result.answer as any).resultUri);
       expect(summary.freshness).toMatchObject({
         workbookStructureHash: metadata.fingerprint.structureHash

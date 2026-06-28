@@ -1337,6 +1337,12 @@ export class AgentOrchestrator {
     const projectedColumns = columns.length > 0
       ? table.columns.filter((column) => columns.includes(column.name) || columns.includes(column.index)).map(compactColumn)
       : table.columns.map(compactColumn);
+    const fieldContext = tableFieldContext(table, projectedColumns, {
+      values: payload.values,
+      text: payload.text,
+      formulas: payload.formulas,
+      numberFormat: payload.numberFormat
+    });
     const truncated = rowOffset + rowLimit < totalRows;
     return {
       status: "SUCCESS",
@@ -1354,6 +1360,7 @@ export class AgentOrchestrator {
         rowLimit,
         ...inlineCompleteness,
         projectedColumns,
+        fieldContext,
         truncated,
         ...(truncated ? { nextPage: { rowOffset: rowOffset + rowLimit } } : {}),
         schema: table.columns.map((column) => ({
@@ -10727,6 +10734,90 @@ function validationFieldContext(
   });
 }
 
+function tableFieldContext(
+  table: TableMetadata,
+  columns: TableFieldContextColumn[],
+  data: { values?: CellMatrix | undefined; text?: CellMatrix | undefined; formulas?: CellMatrix | undefined; numberFormat?: CellMatrix | undefined }
+): Array<Record<string, unknown>> | undefined {
+  if (columns.length === 0) {
+    return undefined;
+  }
+  const matrix = data.values ?? data.text ?? [];
+  const contexts = columns.slice(0, 24).map((column, projectedIndex) => {
+    const values = matrix.map((row) => row[projectedIndex]);
+    const presentValues = values.filter(hasCellValue);
+    const distinct = compactDistinctValues(presentValues, 5);
+    const examples = compactDistinctValues(presentValues, 2);
+    const formats = data.numberFormat ? compactDistinctValues(data.numberFormat.map((row) => row[projectedIndex]).filter(hasCellValue), 2) : undefined;
+    const formulas = data.formulas ? data.formulas.map((row) => row[projectedIndex]).filter(hasCellValue) : [];
+    return stripUndefinedRecord({
+      field: column.name,
+      range: tableColumnRange(table.dataRange ?? table.range, column.letter),
+      headerRange: tableColumnHeaderRange(table.range, column.letter),
+      semanticType: column.role,
+      dataType: column.inferredType,
+      numberFormats: formats && formats.length > 0 ? formats : undefined,
+      hasFormulas: formulas.length > 0 ? true : undefined,
+      currentDistinctValues: distinct.length > 0 ? distinct : undefined,
+      currentDistinctValueCount: distinct.length,
+      blankCount: matrix.length > 0 ? values.length - presentValues.length : undefined,
+      examples: examples.length > 0 ? examples : undefined
+    });
+  });
+  return contexts.length > 0 ? contexts : undefined;
+}
+
+type TableFieldContextColumn = {
+  index: number;
+  letter: string;
+  name: string;
+  inferredType: ColumnMetadata["inferredType"];
+  role?: ColumnMetadata["role"] | undefined;
+  importance?: number | undefined;
+};
+
+function compactDistinctValues(values: unknown[], limit: number): unknown[] {
+  const seen = new Set<string>();
+  const distinct: unknown[] = [];
+  for (const value of values) {
+    const compact = compactFieldContextValue(value);
+    const key = typeof compact === "string" ? compact.trim() : JSON.stringify(compact);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    distinct.push(compact);
+    if (distinct.length >= limit) {
+      break;
+    }
+  }
+  return distinct;
+}
+
+function compactFieldContextValue(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length <= 48 ? normalized : `${normalized.slice(0, 47)}…`;
+}
+
+function tableColumnRange(range: string | undefined, columnLetterValue: string | undefined): string | undefined {
+  if (!range || !columnLetterValue) {
+    return undefined;
+  }
+  const parsed = rangeShape(stripSheetName(range));
+  return parsed ? `${columnLetterValue}${parsed.startRow}:${columnLetterValue}${parsed.endRow}` : undefined;
+}
+
+function tableColumnHeaderRange(range: string | undefined, columnLetterValue: string | undefined): string | undefined {
+  if (!range || !columnLetterValue) {
+    return undefined;
+  }
+  const parsed = rangeShape(stripSheetName(range));
+  return parsed ? `${columnLetterValue}${parsed.startRow}` : undefined;
+}
+
 function fieldValidationContext(summary: Record<string, unknown>): Record<string, unknown> | undefined {
   const type = stringValue(summary.type);
   const sourceKind = stringValue(summary.sourceKind);
@@ -12396,12 +12487,13 @@ function compactExactReadForBudget(output: Omit<AgentRunOutput, "telemetry">, by
     return undefined;
   }
   const typed = answer as Record<string, unknown>;
+  const encodedValues = Array.isArray(typed.encodedValues) ? typed.encodedValues : undefined;
   const rows = Array.isArray(typed.rows) ? typed.rows : undefined;
   const valuesPreview = Array.isArray(typed.valuesPreview) ? typed.valuesPreview : undefined;
-  if (!rows && !valuesPreview) {
+  if (!encodedValues && !rows && !valuesPreview) {
     return undefined;
   }
-  const exactRows = rows ?? valuesPreview;
+  const exactRows = encodedValues ?? rows ?? valuesPreview;
   const exactCellCount = matrixCellCount(exactRows as CellMatrix);
   if (exactCellCount <= 0 || exactCellCount > 300) {
     return undefined;
@@ -12417,8 +12509,9 @@ function compactExactReadForBudget(output: Omit<AgentRunOutput, "telemetry">, by
     totalRowCount: typed.totalRowCount,
     inlineIsComplete: typed.inlineIsComplete,
     missingInlineReason: typed.missingInlineReason,
-    ...(rows ? { rows } : {}),
-    ...(valuesPreview ? { valuesPreview } : {}),
+    ...(encodedValues ? { encodedValues } : rows ? { rows } : {}),
+    ...(encodedValues ? { valueEncoding: typed.valueEncoding } : {}),
+    ...(valuesPreview && !encodedValues ? { valuesPreview } : {}),
     previewRange: typed.previewRange,
     previewTruncated: typed.previewTruncated,
     resultUri: typed.resultUri,
@@ -12447,8 +12540,9 @@ function compactExactReadForBudget(output: Omit<AgentRunOutput, "telemetry">, by
       totalRowCount: slimAnswer.totalRowCount,
       inlineIsComplete: slimAnswer.inlineIsComplete,
       missingInlineReason: slimAnswer.missingInlineReason,
-      ...(rows ? { rows } : {}),
-      ...(valuesPreview && !rows ? { valuesPreview } : {}),
+      ...(encodedValues ? { encodedValues } : rows ? { rows } : {}),
+      ...(encodedValues ? { valueEncoding: slimAnswer.valueEncoding } : {}),
+      ...(valuesPreview && !encodedValues && !rows ? { valuesPreview } : {}),
       previewRange: slimAnswer.previewRange,
       previewTruncated: slimAnswer.previewTruncated,
       resultUri: slimAnswer.resultUri,
@@ -12546,10 +12640,13 @@ function minimalAnswerForBudget(answer: unknown, continuation: AgentRunOutput["c
       inlineIsComplete: typed.inlineIsComplete,
       missingInlineReason: typed.missingInlineReason,
       projectedColumns: Array.isArray(typed.projectedColumns) ? typed.projectedColumns.slice(0, 16) : undefined,
+      fieldContext: Array.isArray(typed.fieldContext) ? typed.fieldContext.slice(0, 12) : undefined,
       schemaSummary: typed.schemaSummary,
       shape: typed.shape,
       metrics: typed.metrics,
       headers: compactMatrixLike(typed.headers, 1, 16),
+      encodedValues: compactMatrixLike(typed.encodedValues, 20, 16),
+      valueEncoding: typed.valueEncoding,
       valuesPreview: compactMatrixLike(typed.valuesPreview, 5, 16),
       previewRange: typed.previewRange,
       previewTruncated: typed.previewTruncated,
@@ -13199,6 +13296,7 @@ function compactTableReadAnswer(answer: Record<string, unknown>, responseMode: A
     inlineIsComplete: totalRows !== undefined ? compactInlineRows >= totalRows && answer.previewTruncated !== true : answer.inlineIsComplete,
     missingInlineReason: totalRows !== undefined && compactInlineRows < totalRows ? "payload_budget_preview" : answer.missingInlineReason,
     projectedColumns,
+    fieldContext: Array.isArray(answer.fieldContext) ? answer.fieldContext.slice(0, responseMode === "standard" ? 16 : 12) : undefined,
     truncated: answer.truncated,
     nextPage: answer.nextPage,
     schemaSummary: schemaSummary(schema, responseMode === "standard" ? 16 : 10),
