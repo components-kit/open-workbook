@@ -56,21 +56,21 @@ excel.agent.run mode=prepare request="Prepare workbook context"
 excel.agent.run mode=find request="Find the sheet or table I need"
 excel.agent.run mode=answer detailLevel=workbook_summary request="Summarize the active workbook"
 excel.agent.run mode=answer request="Compare January and February"
-excel.agent.run mode=auto intent.action=write_values target.sheetName=Sales target.range=E2 values.values=[["Reviewed"]] request="Change Sales!E2 to Reviewed"
+excel.agent.run mode=auto intent.action=write_values values.patches=[{"target":{"sheetName":"Sales","range":"E2"},"values":[["Reviewed"]]}] request="Change Sales!E2 to Reviewed"
 excel.agent.run mode=apply_update request="Apply the previewed update"
 excel.agent.run mode=operation_status request="Check a pending operation" operationId="..."
 ```
 
 For workbook overview prompts such as "what is this file?", "look into this workbook", or "summarize the workbook", use `detailLevel=workbook_summary` or `detailLevel=sheet_summary` and stop when the response says `nextAction=answer_now` or `maxRecommendedFollowupCalls=0`. Do not fetch `fullResultUri`, chunk-read sheets, list MCP resources, or call low-level resource reads unless the user explicitly asks for all raw rows or exact cell values.
 
-For small exact value edits the user already requested, prefer `mode=auto` with `intent.action=write_values`, explicit `target`, and structured `values`. Safe scoped edits can return `taskOutcome=apply_complete` in one call; report the proof and stop. Use `preview_update` only when the user asks to review first, the target/value is ambiguous, or the edit is broad, formula/style/table/structural, or otherwise risky.
+For small exact value edits the user already requested, prefer `mode=auto` with `intent.action=write_values` and `values.patches`; even a single-cell update is one patch. Patch-level `target` is the mutation destination; top-level `target` is only context/default scope. Safe scoped edits can return `taskOutcome=apply_complete` in one call; report the proof and stop. Use `preview_update` only when the user asks to review first, the target/value is ambiguous, or the edit is broad, formula/style/table/structural, or otherwise risky.
 
-For dropdown option questions, call `intent.action=read_data_validation` once on the selected/current column or exact target. When the answer kind is `data_validation_summary`, answer from the inline validation metadata/options and stop; do not fetch `fullResultUri`, chunk-read sheets, list MCP resources, or read raw rows unless the user explicitly asks for raw audit metadata. If the user asks to read values from a source-list sheet such as `Dropdown Lists`, read the actual cell values with `read_values`/targeted range read; do not treat the sheet name itself as validation intent. To add a missing option, update the returned source-list cell/range with `mode=auto` when bounded; for inline comma-list validation, use one `preview_update intent.action=write_data_validation` with existing options plus the new option, then one `apply_update`.
+For dropdown option questions, call `intent.action=read_data_validation` once on the selected/current column or exact target. When the answer kind is `data_validation_summary`, answer from the inline validation metadata/options and stop; do not fetch `fullResultUri`, chunk-read sheets, list MCP resources, or read raw rows unless the user explicitly asks for raw audit metadata. If the user asks to read values from a source-list sheet such as `Dropdown Lists`, read the actual cell values with `read_values`/targeted range read; do not treat the sheet name itself as validation intent. To add a missing option, update the returned source-list cell/range with `mode=auto` when bounded. If the dropdown source/rule itself must change, including mixed or inconsistent existing validation, use one `preview_update intent.action=write_data_validation` and one `apply_update`; then report proof or the exact apply error and stop. Do not retry source formula variants, fetch resources, or test-write cells.
 
-For direct range writes, send the cell values in the structured `values` field, not only in the request text:
+For direct range writes, send a canonical patch in the structured `values` field, not only in the request text:
 
 ```text
-excel.agent.run mode=preview_update intent.action=write_values target.sheetName=Booking target.range=A3:X7 values.values=[[46198,46198,"2X20'GP","2X20'GP","SC89","Loading at Rayong Factory",20,"2X20'GP","RAYONG DEPOT KM.5","STAFF2","038-123456","TER 3","STAFF2","038-654321","EVERGREEN V.123","27/6/26","EVERGREEN","SINGAPORE (SGSIN)","036GX11111","21/6/26","22/6/26","24/6/26","Before 12:00","Standard handling"]]
+excel.agent.run mode=preview_update intent.action=write_values values.patches=[{"target":{"sheetName":"Booking","range":"A3:X7"},"values":[[46198,46198,"2X20'GP","2X20'GP","SC89","Loading at Rayong Factory",20,"2X20'GP","RAYONG DEPOT KM.5","STAFF2","038-123456","TER 3","STAFF2","038-654321","EVERGREEN V.123","27/6/26","EVERGREEN","SINGAPORE (SGSIN)","036GX11111","21/6/26","22/6/26","24/6/26","Before 12:00","Standard handling"]]}]
 excel.agent.run mode=apply_update operationId="..." confirmationToken="..."
 ```
 

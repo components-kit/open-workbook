@@ -53,6 +53,8 @@ describe("excel.agent.run MCP schema", () => {
 
     expect(source).toContain("safe exact small edits may auto-apply");
     expect(source).toContain("session-scoped write permission");
+    expect(source).toContain("use mode auto with intent.action write_values and values.patches");
+    expect(source).toContain("patch.target is the mutation destination");
     expect(source).toContain("Do not ask the user to confirm every small exact edit");
     expect(source).toContain("apply_complete");
     expect(source).toContain("maxRecommendedFollowupCalls 0");
@@ -103,8 +105,9 @@ describe("excel.agent.run MCP schema", () => {
     expect(source).toContain("answer from data_validation_summary");
     expect(source).toContain("do not fetch fullResultUri");
     expect(source).toContain("update the returned source-list cell/range with mode auto");
-    expect(source).toContain("inline comma-list");
-    expect(source).toContain("one preview_update with intent.action write_data_validation");
+    expect(source).toContain("values.patches when bounded");
+    expect(source).toContain("dropdown rule/source itself must change");
+    expect(source).toContain("one preview_update with intent.action write_data_validation and one apply_update");
   });
 
   it("advertises section-anchor semantic patches for row-label and column-header edits", () => {
