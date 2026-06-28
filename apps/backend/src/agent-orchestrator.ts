@@ -207,7 +207,7 @@ export class AgentOrchestrator {
     const startedAt = Date.now();
     let internalCallCount = 0;
     const intent = normalizeAgentIntent(input);
-    const route = routeAgentRequest(input.request, input.mode ?? "auto", intent);
+    const route = routeAgentRequest(input.request, input.mode ?? "auto", intent, input.context, input.target);
     const runMetrics: AgentRunMetrics = { internalReadCount: 0, fullReadCellCount: 0, validationStatus: "not_run", route, intent };
     const mode = input.mode ?? "auto";
     const finish = (output: Omit<AgentRunOutput, "telemetry">, cacheHit = false): AgentRunOutput => {
@@ -263,6 +263,7 @@ export class AgentOrchestrator {
           semanticCandidateUsed: outputUsedSemanticCandidate(output),
           metadataPolicy: runMetrics.route.metadataPolicy,
           readPolicy: runMetrics.route.readPolicy,
+          contextDecision: runMetrics.route.contextDecision,
           ...(operationRisk !== undefined ? { operationRisk } : {}),
           ...(actionHandlerId !== undefined ? { actionHandlerId } : {}),
           ...(autoApplyBlockedReason !== undefined ? { autoApplyBlockedReason } : {}),

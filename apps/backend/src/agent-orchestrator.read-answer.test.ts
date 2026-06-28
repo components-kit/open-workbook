@@ -550,6 +550,12 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect((workbookSummary.answer as any).fullResultUri).toBeUndefined();
       expect(workbookSummary.continuation?.fullResultUri).toBeUndefined();
       expect(workbookSummary.resourceLinks.some((resource) => resource.uri.startsWith("excel://agent/results/"))).toBe(false);
+      expect(workbookSummary.telemetry.contextDecision).toMatchObject({
+        strategy: "overview",
+        scope: "workbook",
+        source: "inferred"
+      });
+      expect(workbookSummary.telemetry.contextDecision?.include).toEqual(expect.arrayContaining(["metadata", "schema"]));
       expect(sheetSummary.nextAction).toBe("answer_now");
       expect(sheetSummary.maxRecommendedFollowupCalls).toBe(0);
       expect(sheetSummary.agentInstruction).toContain("chunk-read the sheet");
@@ -559,6 +565,29 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(JSON.stringify(workbookSummary.answer)).toContain("dropdown rules");
       expect(JSON.stringify(workbookSummary.answer)).not.toContain("Company gas top-up");
       expect(JSON.stringify(workbookSummary.answer).length).toBeLessThan(20000);
+    });
+
+  it("reports caller-supplied context policy in telemetry", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Check dropdown issue on Data",
+        mode: "answer",
+        target: { sheetName: "Data" },
+        context: {
+          strategy: "audit",
+          include: ["validation"]
+        }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.telemetry.contextDecision).toMatchObject({
+        strategy: "audit",
+        scope: "active_sheet",
+        include: ["validation"],
+        source: "caller"
+      });
     });
 
   it("includes section header and data anchors in sheet summaries", async () => {

@@ -1,4 +1,4 @@
-import type { AgentRunMode } from "@components-kit/open-workbook-protocol";
+import type { AgentContextFacet, AgentContextPolicy, AgentContextScope, AgentContextStrategy, AgentRunMode, AgentRunTarget } from "@components-kit/open-workbook-protocol";
 import { modeForIntentAction, type NormalizedAgentIntent } from "./agent-intent.js";
 
 export interface IntentRoute {
@@ -11,6 +11,15 @@ export interface IntentRoute {
   workflowReasons: string[];
   metadataPolicy: "structure_only" | "sampled_allowed" | "sampled_required";
   readPolicy: "metadata_only" | "targeted_read" | "preview_only" | "apply_only" | "not_applicable";
+  contextDecision: AgentContextDecision;
+}
+
+export interface AgentContextDecision {
+  strategy: AgentContextStrategy;
+  scope: AgentContextScope;
+  include: AgentContextFacet[];
+  source: "caller" | "inferred";
+  reason: string;
 }
 
 export type AgentWorkflowRoute =
@@ -47,15 +56,23 @@ const ROUTE_RULES: IntentRouteRule[] = [
   }
 ];
 
-export function routeAgentRequest(request: string, requestedMode: AgentRunMode = "auto", intent?: NormalizedAgentIntent): IntentRoute {
+export function routeAgentRequest(
+  request: string,
+  requestedMode: AgentRunMode = "auto",
+  intent?: NormalizedAgentIntent,
+  context?: AgentContextPolicy,
+  target?: AgentRunTarget
+): IntentRoute {
   const workflow = routeAgentWorkflow(request, requestedMode, intent);
+  const contextDecision = inferContextPolicy(request, requestedMode, intent, workflow, context, target);
   if (requestedMode !== "auto") {
     return {
       mode: requestedMode,
       matchedRule: "mode.explicit",
       confidence: 1,
       reasons: [`Caller explicitly requested ${requestedMode}.`],
-      ...workflow
+      ...workflow,
+      contextDecision
     };
   }
 
@@ -65,7 +82,8 @@ export function routeAgentRequest(request: string, requestedMode: AgentRunMode =
       matchedRule: "caller_intent.action",
       confidence: intent.confidence ?? 0.9,
       reasons: [intent.reason ?? `Caller provided structured intent action ${intent.action}.`],
-      ...workflow
+      ...workflow,
+      contextDecision
     };
   }
 
@@ -75,7 +93,8 @@ export function routeAgentRequest(request: string, requestedMode: AgentRunMode =
       matchedRule: "read_inspection.keyword",
       confidence: workflow.workflowRoute === "range.read" ? 0.78 : workflow.workflowConfidence,
       reasons: workflow.workflowRoute === "range.read" ? ["Request asks to read or verify existing workbook values."] : workflow.workflowReasons,
-      ...workflow
+      ...workflow,
+      contextDecision
     };
   }
 
@@ -85,7 +104,8 @@ export function routeAgentRequest(request: string, requestedMode: AgentRunMode =
       matchedRule: "mutation.match_update",
       confidence: 0.88,
       reasons: ["Request describes matching rows and updating a column value."],
-      ...workflow
+      ...workflow,
+      contextDecision
     };
   }
 
@@ -96,7 +116,8 @@ export function routeAgentRequest(request: string, requestedMode: AgentRunMode =
       matchedRule: matched.matchedRule,
       confidence: matched.confidence,
       reasons: [matched.reason],
-      ...workflow
+      ...workflow,
+      contextDecision
     };
   }
 
@@ -105,7 +126,8 @@ export function routeAgentRequest(request: string, requestedMode: AgentRunMode =
     matchedRule: "default.answer",
     confidence: 0.65,
     reasons: ["No mutation route matched; defaulting to answer mode."],
-    ...workflow
+    ...workflow,
+    contextDecision
   };
 }
 
@@ -207,4 +229,77 @@ function workflow(
     metadataPolicy,
     readPolicy
   };
+}
+
+function inferContextPolicy(
+  request: string,
+  requestedMode: AgentRunMode,
+  intent: NormalizedAgentIntent | undefined,
+  workflow: Pick<IntentRoute, "workflowRoute" | "workflowReasons">,
+  callerPolicy: AgentContextPolicy | undefined,
+  target: AgentRunTarget | undefined
+): AgentContextDecision {
+  const inferred = inferDefaultContextPolicy(request, requestedMode, intent, workflow, target);
+  if (!callerPolicy) {
+    return inferred;
+  }
+  return {
+    strategy: callerPolicy.strategy ?? inferred.strategy,
+    scope: callerPolicy.scope ?? inferred.scope,
+    include: callerPolicy.include ?? inferred.include,
+    source: "caller",
+    reason: "Caller supplied context policy; missing fields were filled from router defaults."
+  };
+}
+
+function inferDefaultContextPolicy(
+  request: string,
+  requestedMode: AgentRunMode,
+  intent: NormalizedAgentIntent | undefined,
+  workflow: Pick<IntentRoute, "workflowRoute" | "workflowReasons">,
+  target: AgentRunTarget | undefined
+): AgentContextDecision {
+  const lower = request.toLowerCase();
+  const targetScope = contextScopeForTarget(target);
+  const action = intent?.accepted ? intent.action : undefined;
+
+  if (requestedMode === "status") {
+    return contextDecision("overview", "workbook", ["metadata"], "Status only needs minimal workbook/runtime metadata.");
+  }
+  if (requestedMode === "find" || workflow.workflowRoute === "semantic_index.find") {
+    return contextDecision("overview", "workbook", ["metadata", "schema", "tables", "regions", "names"], "Find uses workbook structure, schema, and semantic index context.");
+  }
+  if (requestedMode === "apply_update") {
+    return contextDecision("overview", "target", ["metadata"], "Apply reuses the previewed operation and avoids new reads unless validation requires them.");
+  }
+  if (requestedMode === "preview_update" || workflow.workflowRoute === "mutation.preview" || action === "write_values") {
+    return contextDecision("focused", targetScope, ["metadata", "schema", "field_context", "validation"], "Mutation previews need focused target context plus field and validation facets.");
+  }
+  if (/\b(here|selected|selection|current cell|current range|this area|look here)\b/.test(lower) || target?.entity === "active_selection") {
+    return contextDecision("focused", "active_selection", ["values", "schema", "field_context", "formulas", "formats", "validation"], "User referenced the selected/current area.");
+  }
+  if (/\b(analy[sz]e|analysis|trend|trends|compare|comparison|variance|anomal(?:y|ies)|patterns?|aggregate|summary stats)\b/.test(lower)) {
+    return contextDecision("analysis", targetScope, ["metadata", "schema", "field_context", "values", "formulas"], "Analytical wording needs patterns, values, and formula context within budget.");
+  }
+  if (/\b(check|broken|issue|problem|why|diagnos(?:e|is)|dropdown|validation|filter|formula|conditional formatting|format not working)\b/.test(lower)) {
+    return contextDecision("audit", targetScope, ["schema", "field_context", "validation", "filters", "formulas", "conditional_formatting", "formats"], "Audit wording needs proof facets such as validation, filters, formulas, and formats.");
+  }
+  if (workflow.workflowRoute === "workbook.summary") {
+    return contextDecision("overview", "workbook", ["metadata", "schema", "tables", "regions", "values"], workflow.workflowReasons[0] ?? "Workbook overview uses lightweight structure and samples.");
+  }
+  if (workflow.workflowRoute === "sheet.summary") {
+    return contextDecision("overview", targetScope === "workbook" ? "active_sheet" : targetScope, ["metadata", "schema", "tables", "regions", "values"], workflow.workflowReasons[0] ?? "Sheet overview uses structure and bounded values.");
+  }
+  return contextDecision("auto", targetScope, ["metadata", "schema", "values"], "Default context policy lets the backend choose the cheapest useful context.");
+}
+
+function contextDecision(strategy: AgentContextStrategy, scope: AgentContextScope, include: AgentContextFacet[], reason: string): AgentContextDecision {
+  return { strategy, scope, include, source: "inferred", reason };
+}
+
+function contextScopeForTarget(target: AgentRunTarget | undefined): AgentContextScope {
+  if (target?.entity === "active_selection") return "active_selection";
+  if (target?.range || target?.tableName || target?.candidateId || target?.entity) return "target";
+  if (target?.sheetName) return "active_sheet";
+  return "workbook";
 }

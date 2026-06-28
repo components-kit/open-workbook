@@ -19,6 +19,8 @@ describe("agent workflow routing", () => {
     expect(route.metadataPolicy).toBe(metadataPolicy);
     expect(route.readPolicy).toBe(readPolicy);
     expect(route.workflowConfidence).toBeGreaterThan(0);
+    expect(route.contextDecision.strategy).toBeTruthy();
+    expect(route.contextDecision.include.length).toBeGreaterThan(0);
   });
 
   it.each([
@@ -75,5 +77,43 @@ describe("agent workflow routing", () => {
 
     expect(route.mode).toBe("preview_update");
     expect(route.workflowRoute).toBe("mutation.preview");
+  });
+
+  it.each([
+    ["What is this sheet about?", "answer", "overview", "active_sheet", ["metadata", "schema"]],
+    ["Look here and explain this area", "answer", "focused", "active_selection", ["values", "field_context", "validation"]],
+    ["Analyze this sheet for trends", "answer", "analysis", "workbook", ["values", "formulas"]],
+    ["Check why this dropdown is broken", "answer", "audit", "workbook", ["validation", "filters", "formulas"]],
+    ["Find payment status column", "find", "overview", "workbook", ["schema", "tables", "regions"]],
+    ["Update this category", "preview_update", "focused", "workbook", ["field_context", "validation"]]
+  ] as const)("infers context policy for %s", (request, mode, strategy, scope, include) => {
+    const route = routeAgentRequest(request, mode);
+
+    expect(route.contextDecision).toMatchObject({ strategy, scope, source: "inferred" });
+    expect(route.contextDecision.include).toEqual(expect.arrayContaining([...include]));
+  });
+
+  it("uses explicit target as focused context scope for mutation previews", () => {
+    const route = routeAgentRequest("Update status", "preview_update", undefined, undefined, { sheetName: "Data", range: "B2" });
+
+    expect(route.contextDecision).toMatchObject({
+      strategy: "focused",
+      scope: "target"
+    });
+    expect(route.contextDecision.include).toEqual(expect.arrayContaining(["field_context", "validation"]));
+  });
+
+  it("respects caller context policy and fills missing fields from defaults", () => {
+    const route = routeAgentRequest("Check dropdown issue", "answer", undefined, {
+      strategy: "audit",
+      include: ["validation"]
+    });
+
+    expect(route.contextDecision).toMatchObject({
+      strategy: "audit",
+      scope: "workbook",
+      include: ["validation"],
+      source: "caller"
+    });
   });
 });

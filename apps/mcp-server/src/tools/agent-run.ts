@@ -266,6 +266,13 @@ function agentRunOutputSchema() {
       semanticCandidateUsed: z.boolean().optional(),
       metadataPolicy: z.enum(["structure_only", "sampled_allowed", "sampled_required"]).optional(),
       readPolicy: z.enum(["metadata_only", "targeted_read", "preview_only", "apply_only", "not_applicable"]).optional(),
+      contextDecision: z.object({
+        strategy: z.enum(AGENT_CONTEXT_STRATEGIES),
+        scope: z.enum(AGENT_CONTEXT_SCOPES),
+        include: z.array(z.enum(AGENT_CONTEXT_FACETS)),
+        source: z.enum(["caller", "inferred"]),
+        reason: z.string()
+      }).optional(),
       candidateCount: z.number().optional(),
       resourceLinkCount: z.number().optional(),
       estimatedTokensSaved: z.number().optional(),

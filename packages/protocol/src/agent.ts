@@ -511,6 +511,13 @@ export interface AgentRunOutput {
     semanticCandidateUsed?: boolean;
     metadataPolicy?: "structure_only" | "sampled_allowed" | "sampled_required";
     readPolicy?: "metadata_only" | "targeted_read" | "preview_only" | "apply_only" | "not_applicable";
+    contextDecision?: {
+      strategy: AgentContextStrategy;
+      scope: AgentContextScope;
+      include: AgentContextFacet[];
+      source: "caller" | "inferred";
+      reason: string;
+    };
     candidateCount?: number;
     resourceLinkCount?: number;
     estimatedTokensSaved?: number;
