@@ -132,11 +132,62 @@ export interface WorkbookMetadataFreshness {
   reason?: string;
 }
 
+export type ContextFacet =
+  | "metadata"
+  | "schema"
+  | "headers"
+  | "tableDimensions"
+  | "regions"
+  | "fieldContext"
+  | "validation"
+  | "formats"
+  | "formulas"
+  | "formulaResults"
+  | "filters"
+  | "values"
+  | "aggregates"
+  | "rowPositions"
+  | "selection"
+  | "names";
+
+export type FacetFreshnessStatus = "fresh" | "mostly_fresh" | "partially_stale" | "stale";
+
+export interface ContextFreshness {
+  status: FacetFreshnessStatus;
+  freshFacets: ContextFacet[];
+  staleFacets: ContextFacet[];
+  staleRanges?: string[];
+  confidence: number;
+  updatedAt: number;
+}
+
+export interface OperationJournalEntry {
+  operationId: string;
+  workbookContextId: string;
+  contextVersion: number;
+  appliedAt: number;
+  affectedRanges: string[];
+  affectedFacets: ContextFacet[];
+  invalidatedFacets: ContextFacet[];
+  preservedFacets: ContextFacet[];
+  changes?: Array<{ sheetName: string; range?: string; cell?: string; columnName?: string; before?: unknown; after?: unknown }>;
+  cacheAction: "recorded" | "updated_from_patch" | "invalidated";
+}
+
+export interface WorkbookContextState {
+  workbookContextId: string;
+  contextVersion: number;
+  lastValidatedAt?: number;
+  freshness: ContextFreshness;
+  journal: OperationJournalEntry[];
+}
+
 export const DEFAULT_METADATA_CACHE_TTL_MS = 60 * 60 * 1000;
 
 export class WorkbookMetadataCache {
   private readonly byKey = new Map<string, WorkbookMetadata>();
   private readonly keyByContextId = new Map<string, string>();
+  private readonly contextStateById = new Map<string, WorkbookContextState>();
 
   get(workbookKey: string): WorkbookMetadata | undefined {
     const metadata = this.byKey.get(workbookKey);
@@ -158,6 +209,9 @@ export class WorkbookMetadataCache {
   set(metadata: WorkbookMetadata): WorkbookMetadata {
     this.byKey.set(metadata.workbookKey, metadata);
     this.keyByContextId.set(metadata.workbookContextId, metadata.workbookKey);
+    if (!this.contextStateById.has(metadata.workbookContextId)) {
+      this.contextStateById.set(metadata.workbookContextId, createInitialContextState(metadata.workbookContextId, metadata.updatedAt));
+    }
     return metadata;
   }
 
@@ -178,6 +232,7 @@ export class WorkbookMetadataCache {
     const existing = this.byKey.get(workbookKey);
     if (existing) {
       this.keyByContextId.delete(existing.workbookContextId);
+      this.contextStateById.delete(existing.workbookContextId);
     }
     this.byKey.delete(workbookKey);
   }
@@ -206,6 +261,126 @@ export class WorkbookMetadataCache {
       }
     }
   }
+
+  getContextState(workbookContextId: string): WorkbookContextState | undefined {
+    const state = this.contextStateById.get(workbookContextId);
+    return state ? cloneContextState(state) : undefined;
+  }
+
+  markFacetsStale(workbookContextId: string, facets: ContextFacet[], staleRanges: string[] = [], now = Date.now()): WorkbookContextState | undefined {
+    const state = this.contextStateById.get(workbookContextId);
+    if (!state) {
+      return undefined;
+    }
+    const stale = new Set<ContextFacet>([...state.freshness.staleFacets, ...facets]);
+    const fresh = state.freshness.freshFacets.filter((facet) => !stale.has(facet));
+    const ranges = [...new Set([...(state.freshness.staleRanges ?? []), ...staleRanges])];
+    const next: WorkbookContextState = {
+      ...state,
+      contextVersion: state.contextVersion + 1,
+      freshness: {
+        status: freshnessStatus(fresh.length, stale.size),
+        freshFacets: fresh,
+        staleFacets: [...stale],
+        ...(ranges.length > 0 ? { staleRanges: ranges } : {}),
+        confidence: freshnessConfidence(fresh.length, stale.size),
+        updatedAt: now
+      }
+    };
+    this.contextStateById.set(workbookContextId, next);
+    return cloneContextState(next);
+  }
+
+  appendJournalEntry(workbookContextId: string, entry: Omit<OperationJournalEntry, "workbookContextId" | "contextVersion" | "appliedAt">, now = Date.now()): OperationJournalEntry | undefined {
+    const state = this.contextStateById.get(workbookContextId);
+    if (!state) {
+      return undefined;
+    }
+    const { changes, ...entryWithoutChanges } = entry;
+    const journalEntry: OperationJournalEntry = {
+      ...entryWithoutChanges,
+      workbookContextId,
+      contextVersion: state.contextVersion,
+      appliedAt: now,
+      ...(changes !== undefined ? { changes: changes.map((change) => ({ ...change })) } : {})
+    };
+    const next = {
+      ...state,
+      journal: [...state.journal, journalEntry].slice(-100)
+    };
+    this.contextStateById.set(workbookContextId, next);
+    return cloneJournalEntry(journalEntry);
+  }
+}
+
+const ALL_CONTEXT_FACETS: ContextFacet[] = [
+  "metadata",
+  "schema",
+  "headers",
+  "tableDimensions",
+  "regions",
+  "fieldContext",
+  "validation",
+  "formats",
+  "formulas",
+  "formulaResults",
+  "filters",
+  "values",
+  "aggregates",
+  "rowPositions",
+  "selection",
+  "names"
+];
+
+function createInitialContextState(workbookContextId: string, now: number): WorkbookContextState {
+  return {
+    workbookContextId,
+    contextVersion: 1,
+    lastValidatedAt: now,
+    freshness: {
+      status: "fresh",
+      freshFacets: [...ALL_CONTEXT_FACETS],
+      staleFacets: [],
+      confidence: 1,
+      updatedAt: now
+    },
+    journal: []
+  };
+}
+
+function freshnessStatus(freshCount: number, staleCount: number): FacetFreshnessStatus {
+  if (staleCount === 0) return "fresh";
+  if (freshCount === 0) return "stale";
+  return staleCount <= 2 ? "mostly_fresh" : "partially_stale";
+}
+
+function freshnessConfidence(freshCount: number, staleCount: number): number {
+  const total = freshCount + staleCount;
+  return total === 0 ? 0 : Math.max(0, Math.min(1, freshCount / total));
+}
+
+function cloneContextState(state: WorkbookContextState): WorkbookContextState {
+  return {
+    ...state,
+    freshness: {
+      ...state.freshness,
+      freshFacets: [...state.freshness.freshFacets],
+      staleFacets: [...state.freshness.staleFacets],
+      ...(state.freshness.staleRanges ? { staleRanges: [...state.freshness.staleRanges] } : {})
+    },
+    journal: state.journal.map(cloneJournalEntry)
+  };
+}
+
+function cloneJournalEntry(entry: OperationJournalEntry): OperationJournalEntry {
+  return {
+    ...entry,
+    affectedRanges: [...entry.affectedRanges],
+    affectedFacets: [...entry.affectedFacets],
+    invalidatedFacets: [...entry.invalidatedFacets],
+    preservedFacets: [...entry.preservedFacets],
+    ...(entry.changes !== undefined ? { changes: entry.changes.map((change) => ({ ...change })) } : {})
+  };
 }
 
 export function workbookMetadataKey(input: { workbookId?: WorkbookId | string; workbookName: string; workbookPath?: string }): string {
