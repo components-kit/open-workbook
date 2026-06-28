@@ -38,6 +38,7 @@ import {
   type WorkbookId
 } from "@components-kit/open-workbook-protocol";
 import type { AgentOperationRisk } from "./agent-action-policy.js";
+import type { AgentUpdateRisk } from "./agent-action-policy.js";
 
 export type PendingAgentAction =
   | { kind: "batch"; operations: ExcelOperation[] }
@@ -131,6 +132,7 @@ export interface PendingAgentOperation {
   createdAt: number;
   summary: string;
   risk?: AgentOperationRisk;
+  updateRisk?: AgentUpdateRisk;
   agentId?: AgentId | string;
   agentName?: string;
   sourceFingerprintHash?: string;

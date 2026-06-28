@@ -70,7 +70,7 @@ import { AgentOperationStore, type AgentCleanMutationAction, type AgentCleanRequ
 import { WorkbookMetadataBuilder } from "./workbook-metadata-builder.js";
 import { findAgentCandidates, resolveAgentReadTarget, resolveAgentUpdateTarget, type AgentTargetResolution } from "./agent-target-resolver.js";
 import type { RuntimeService } from "./runtime-service.js";
-import { classifyAgentActionRisk, type AgentOperationRisk } from "./agent-action-policy.js";
+import { assessAgentUpdateRisk, classifyAgentActionRisk, type AgentOperationRisk } from "./agent-action-policy.js";
 import { routeAgentRequest, type IntentRoute } from "./agent-routing.js";
 import { isAgentIntentAction, modeForIntentAction, normalizeAgentIntent, type AgentIntentAction, type NormalizedAgentIntent } from "./agent-intent.js";
 import { findAgentActionHandler, type AgentActionHandlerDefinition, type AgentActionHandlerId } from "./agent-action-handlers.js";
@@ -2910,9 +2910,10 @@ export class AgentOrchestrator {
         cellCount,
         operationCount: 1,
         grouped: true,
+        updateRisk: pending.updateRisk,
         ...(validationChecks.length > 0 ? { validationChecks } : {})
       },
-      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched", safetyFingerprintOnly: true },
+      metrics: { operationRisk: pending.risk, updateRisk: pending.updateRisk, targetFingerprintStatus: "matched", safetyFingerprintOnly: true },
       changes,
       proof,
       resourceLinks: [operationResource(String(pending.operationId))],
@@ -6215,8 +6216,8 @@ export class AgentOrchestrator {
         workbookContextId: pending.workbookContextId,
         operationId: pending.operationId,
         summary: "Workbook update failed.",
-        answer: { kind: "apply_update_result", ok: false, validationOk: false, validationIssueCount: 1, changeCount: pending.changes.length, operationRisk: pending.risk },
-        metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
+        answer: { kind: "apply_update_result", ok: false, validationOk: false, validationIssueCount: 1, changeCount: pending.changes.length, operationRisk: pending.risk, updateRisk: pending.updateRisk },
+        metrics: { operationRisk: pending.risk, updateRisk: pending.updateRisk, targetFingerprintStatus: "matched" },
         changes: pending.changes,
         proof: [],
         resourceLinks: [operationResource(String(pending.operationId))],
@@ -6256,11 +6257,12 @@ export class AgentOrchestrator {
         rollbackAvailable: resultRecord.rollbackAvailable ?? false,
         partialFailure: applyFailed && Array.isArray(resultRecord.results) && resultRecord.results.some((step) => Boolean(step) && typeof step === "object" && (step as { ok?: unknown }).ok !== false),
         operationRisk: pending.risk,
+        updateRisk: pending.updateRisk,
         telemetry: resultRecord.telemetry,
         ...(resultRecord.formulaPreservation !== undefined ? { formulaPreservation: resultRecord.formulaPreservation } : {}),
         ...(applyFailed && resultRecord.results !== undefined ? { stepResults: resultRecord.results } : {})
       },
-      metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
+      metrics: { operationRisk: pending.risk, updateRisk: pending.updateRisk, targetFingerprintStatus: "matched" },
       changes: pending.changes,
       proof: pending.changes.flatMap((change) => change.range ? [{ sheetName: change.sheetName, range: change.range, label: "applied target" }] : []).slice(0, 1),
       resourceLinks: resultRecord.transactionId ? [{ uri: `excel://transactions/${resultRecord.transactionId}`, name: "transaction", description: "Applied workbook transaction.", mimeType: "application/json" }] : [],
@@ -6671,6 +6673,7 @@ export class AgentOrchestrator {
     }
   ) {
     const risk = classifyAgentActionRisk(input.action);
+    const updateRisk = assessAgentUpdateRisk(input.action);
     const agentContext = this.runtime.currentAgentExecutionContext();
     return this.operations.create({
       workbookContextId: metadata.workbookContextId,
@@ -6680,6 +6683,7 @@ export class AgentOrchestrator {
       changes: input.changes,
       summary: input.summary,
       risk,
+      updateRisk,
       ...(agentContext?.agentId !== undefined ? { agentId: agentContext.agentId } : {}),
       ...(agentContext?.agentName !== undefined ? { agentName: agentContext.agentName } : {}),
       sourceFingerprintHash: metadata.fingerprint.structureHash,

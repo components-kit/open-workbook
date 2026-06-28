@@ -11,6 +11,20 @@ export type AgentOperationRisk =
   | "structure_change"
   | "destructive";
 
+export type AgentCacheRisk = "none" | "low" | "medium" | "high";
+export type AgentSafetyRisk = "low" | "medium" | "high";
+export type AgentCacheAction = "none" | "update_cache" | "partial_invalidate" | "rebuild_context";
+
+export interface AgentUpdateRisk {
+  cacheRisk: AgentCacheRisk;
+  safetyRisk: AgentSafetyRisk;
+  cacheAction: AgentCacheAction;
+  reason: string;
+  invalidatedFacets: string[];
+  preservedFacets: string[];
+  requiresRefreshBeforeNextMutation: boolean;
+}
+
 export interface AgentActionDefinition {
   kind: string;
   risk: AgentOperationRisk;
@@ -140,6 +154,28 @@ export function classifyAgentActionRisk(action: PendingAgentAction): AgentOperat
   return highestRisk(risks);
 }
 
+export function assessAgentUpdateRisk(action: PendingAgentAction): AgentUpdateRisk {
+  const operationRisk = classifyAgentActionRisk(action);
+  switch (operationRisk) {
+    case "read_only":
+      return updateRisk("none", "low", "none", "Read-only operation does not change workbook context.", [], ALL_FACETS, false);
+    case "safe_format":
+      return updateRisk("low", "low", "update_cache", "Formatting/filter-style operation preserves values and schema.", ["formats"], ["schema", "headers", "fieldContext", "validation", "values"], false);
+    case "small_value_write":
+      return updateRisk("low", "low", "update_cache", "Small known value write can update cached values and mark dependent results stale.", ["values", "aggregates", "formulaResults"], ["schema", "headers", "fieldContext", "validation"], false);
+    case "table_append":
+      return updateRisk("medium", "medium", "partial_invalidate", "Append row changes table dimensions and aggregate values.", ["tableDimensions", "values", "aggregates", "rowPositions"], ["schema", "headers", "fieldContext", "validation"], false);
+    case "formula_write":
+      return updateRisk("medium", "medium", "partial_invalidate", "Formula writes can change formula regions and formula results.", ["formulas", "formulaResults", "aggregates", "values"], ["headers", "fieldContext", "validation"], false);
+    case "broad_range_write":
+      return updateRisk("low", "medium", "update_cache", "Known range values can update cached values while dependent aggregate/formula facets become stale.", ["values", "aggregates", "formulaResults"], ["schema", "headers", "fieldContext", "validation"], false);
+    case "structure_change":
+      return updateRisk("high", "medium", "rebuild_context", "Structure changes can invalidate schema, headers, field mapping, and regions.", ["schema", "headers", "tableDimensions", "regions", "fieldContext", "validation", "rowPositions"], ["metadata"], true);
+    case "destructive":
+      return updateRisk("high", "high", "rebuild_context", "Destructive operation can remove data or structure and requires context rebuild.", ["metadata", "schema", "headers", "tableDimensions", "regions", "fieldContext", "validation", "values", "aggregates", "rowPositions"], [], true);
+  }
+}
+
 function riskForOperation(operation: ExcelOperation): AgentOperationRisk {
   if (operation.kind === "range.write_values_many") {
     const cellCount = operation.entries.reduce((total, entry) => total + matrixCellCount(entry.values), 0);
@@ -215,6 +251,28 @@ export function riskForOperationKind(
 
 function highestRisk(risks: AgentOperationRisk[]): AgentOperationRisk {
   return risks.reduce<AgentOperationRisk>((highest, risk) => RISK_RANK[risk] > RISK_RANK[highest] ? risk : highest, "read_only");
+}
+
+const ALL_FACETS = ["metadata", "schema", "headers", "tableDimensions", "regions", "fieldContext", "validation", "formats", "formulas", "formulaResults", "filters", "values", "aggregates", "rowPositions", "selection", "names"];
+
+function updateRisk(
+  cacheRisk: AgentCacheRisk,
+  safetyRisk: AgentSafetyRisk,
+  cacheAction: AgentCacheAction,
+  reason: string,
+  invalidatedFacets: string[],
+  preservedFacets: string[],
+  requiresRefreshBeforeNextMutation: boolean
+): AgentUpdateRisk {
+  return {
+    cacheRisk,
+    safetyRisk,
+    cacheAction,
+    reason,
+    invalidatedFacets,
+    preservedFacets,
+    requiresRefreshBeforeNextMutation
+  };
 }
 
 function matrixCellCount(matrix: unknown[][]): number {

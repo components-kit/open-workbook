@@ -1290,6 +1290,14 @@ Data rows:
       });
 
       expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).updateRisk).toMatchObject({
+        cacheRisk: "low",
+        safetyRisk: "low",
+        cacheAction: "update_cache",
+        invalidatedFacets: expect.arrayContaining(["values", "aggregates", "formulaResults"]),
+        preservedFacets: expect.arrayContaining(["schema", "headers", "fieldContext", "validation"]),
+        requiresRefreshBeforeNextMutation: false
+      });
       expect((preview.answer as any).validationChecks[0]).toMatchObject({
         field: "Status",
         allowedValues: ["Open", "Closed", "Pending"],
