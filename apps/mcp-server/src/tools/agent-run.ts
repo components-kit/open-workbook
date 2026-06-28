@@ -1,6 +1,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
-import { AGENT_DETAIL_LEVELS, AGENT_RUN_MODES, AGENT_RUN_STATUSES, type AgentRunExecutionContext, type AgentRunInput } from "@components-kit/open-workbook-protocol";
+import {
+  AGENT_CONTEXT_FACETS,
+  AGENT_CONTEXT_SCOPES,
+  AGENT_CONTEXT_STRATEGIES,
+  AGENT_DETAIL_LEVELS,
+  AGENT_RUN_MODES,
+  AGENT_RUN_STATUSES,
+  type AgentRunExecutionContext,
+  type AgentRunInput
+} from "@components-kit/open-workbook-protocol";
 import type { RuntimeFacade } from "../runtime-facade.js";
 import { agentJsonResult } from "../results.js";
 
@@ -58,6 +67,11 @@ export function agentRunInputSchema() {
     reason: z.string().optional(),
     targetHints: z.array(z.string()).optional()
   }), "intent");
+  const contextSchema = jsonObjectString(z.object({
+    strategy: z.enum(AGENT_CONTEXT_STRATEGIES).optional(),
+    scope: z.enum(AGENT_CONTEXT_SCOPES).optional(),
+    include: z.array(z.enum(AGENT_CONTEXT_FACETS)).optional()
+  }), "context");
   const colorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$|^[A-Za-z]+$/, "colors must be CSS-style names or #RRGGBB hex strings");
   const styleSchema = z.object({
     fillColor: colorSchema.optional(),
@@ -148,6 +162,7 @@ export function agentRunInputSchema() {
     target: targetSchema.optional(),
     values: valuesSchema.optional(),
     autoApply: z.boolean().optional(),
+    context: contextSchema.optional(),
     detailLevel: z.enum(AGENT_DETAIL_LEVELS).optional(),
     responseMode: z.union([z.enum(["brief", "standard", "verbose"]), z.literal("apply_update")]).optional(),
     budget: z.object({

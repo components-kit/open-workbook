@@ -233,6 +233,11 @@ describe("excel.agent.run MCP schema", () => {
 
     expect((schema.target as any).parse("{\"sheetName\":\"Booking\",\"range\":\"A1:X7\"}")).toEqual({ sheetName: "Booking", range: "A1:X7" });
     expect((schema.intent as any).parse("{\"action\":\"read_values\",\"targetHints\":[\"Booking\"]}")).toEqual({ action: "read_values", targetHints: ["Booking"] });
+    expect((schema.context as any).parse("{\"strategy\":\"focused\",\"scope\":\"active_selection\",\"include\":[\"values\",\"schema\",\"validation\"]}")).toEqual({
+      strategy: "focused",
+      scope: "active_selection",
+      include: ["values", "schema", "validation"]
+    });
     expect((schema.continuation as any).parse("{\"workbookContextId\":\"wbctx_1\",\"fullResultUri\":\"excel://agent/results/agentres_1?view=full\",\"freshness\":{\"workbookId\":\"workbook_1\",\"workbookContentVersion\":4,\"workbookStructureHash\":\"abc\"}}")).toEqual({
       workbookContextId: "wbctx_1",
       fullResultUri: "excel://agent/results/agentres_1?view=full",
@@ -289,6 +294,16 @@ describe("excel.agent.run MCP schema", () => {
   it("accepts common structured update payloads without requiring agents to send schemas", () => {
     const schema = agentRunInputSchema();
 
+    expect((schema.context as any).parse({
+      strategy: "audit",
+      scope: "target",
+      include: ["schema", "field_context", "validation", "filters", "formulas"]
+    })).toEqual({
+      strategy: "audit",
+      scope: "target",
+      include: ["schema", "field_context", "validation", "filters", "formulas"]
+    });
+
     expect((schema.values as any).parse({
       values: [["Reviewed"]],
       style: { fillColor: "#1F4E78", fontColor: "#FFFFFF", fontBold: true },
@@ -327,5 +342,7 @@ describe("excel.agent.run MCP schema", () => {
     expect(() => (schema.values as any).parse({ rule: { formula: 42, style: { fillColor: "#FFFF00" } } })).toThrow(/formula/i);
     expect(() => (schema.values as any).parse({ columnOrder: [2, { bad: true }] })).toThrow(/columnOrder/i);
     expect(() => (schema.values as any).parse({ numberFormat: [["dd/mm/yyyy", 42]] })).toThrow(/numberFormat/i);
+    expect(() => (schema.context as any).parse({ strategy: "deep_dive" })).toThrow(/strategy/i);
+    expect(() => (schema.context as any).parse({ include: ["validation", "unsupported_facet"] })).toThrow(/include/i);
   });
 });

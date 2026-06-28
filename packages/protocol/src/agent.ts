@@ -282,6 +282,39 @@ export const AGENT_INTENT_ACTIONS = [
 
 export type AgentIntentAction = typeof AGENT_INTENT_ACTIONS[number];
 
+export const AGENT_CONTEXT_STRATEGIES = ["auto", "overview", "focused", "analysis", "audit"] as const;
+export type AgentContextStrategy = typeof AGENT_CONTEXT_STRATEGIES[number];
+
+export const AGENT_CONTEXT_SCOPES = ["active_selection", "active_region", "active_sheet", "target", "workbook"] as const;
+export type AgentContextScope = typeof AGENT_CONTEXT_SCOPES[number];
+
+export const AGENT_CONTEXT_FACETS = [
+  "metadata",
+  "schema",
+  "regions",
+  "tables",
+  "values",
+  "field_context",
+  "formulas",
+  "formats",
+  "validation",
+  "filters",
+  "names",
+  "comments",
+  "merged_cells",
+  "conditional_formatting",
+  "charts",
+  "pivots",
+  "hidden"
+] as const;
+export type AgentContextFacet = typeof AGENT_CONTEXT_FACETS[number];
+
+export interface AgentContextPolicy {
+  strategy?: AgentContextStrategy;
+  scope?: AgentContextScope;
+  include?: AgentContextFacet[];
+}
+
 export interface AgentRunIntent {
   action: AgentIntentAction;
   confidence?: number;
@@ -317,6 +350,7 @@ export interface AgentRunInput {
     }>;
   };
   autoApply?: boolean;
+  context?: AgentContextPolicy;
   detailLevel?: AgentDetailLevel;
   responseMode?: "brief" | "standard" | "verbose";
   budget?: {
