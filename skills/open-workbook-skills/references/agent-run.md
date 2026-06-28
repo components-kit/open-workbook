@@ -27,7 +27,7 @@ Use structured fields when the task is clear:
 
 Structured intent is a hint, not a bypass. The backend still resolves ambiguity, checks permissions, blocks unsafe edits, records snapshots/backups, runs Office.js, validates, and returns rollback metadata.
 
-Use `detailLevel: "semantic_index"` when you need a compact role-aware workbook map before choosing a sheet, table, template, form region, formula region, or style target. Use `workbook_summary` and `sheet_summary` for overview questions. Do not request table samples or full tables for broad context questions.
+Use `context` to request the acquisition policy and `detailLevel` to request the returned preset shape. `context.strategy` is why/how to gather context, `context.scope` is where to start, and `context.include` is the facet list. Use `detailLevel: "semantic_index"` when you need a compact role-aware workbook map before choosing a sheet, table, template, form region, formula region, or style target. Use `workbook_summary` and `sheet_summary` for overview questions. Do not request table samples or full tables for broad context questions.
 
 For overview questions such as "what is this workbook/file?", "look into this Excel file", or "summarize this workbook", one `mode: "answer"` call with `detailLevel: "workbook_summary"` or `detailLevel: "sheet_summary"` is normally the whole workflow. If the response has `nextAction: "answer_now"` or `maxRecommendedFollowupCalls: 0`, answer immediately. Do not follow `resourceLinks`, fetch `fullResultUri`, chunk-read sheets, list MCP resources, or call low-level resource reads unless the user explicitly asks for all raw rows, every value, or exact cell contents.
 
