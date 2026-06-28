@@ -2748,6 +2748,7 @@ export class AgentOrchestrator {
     const numberFormatEntries: Array<{ target: A1Range; numberFormat: string[][] }> = [];
     const changes: NonNullable<AgentRunOutput["changes"]> = [];
     const warnings: string[] = [];
+    const validationChecks: Array<Record<string, unknown>> = [];
     let cellCount = 0;
     let detailedPreviewCells = 0;
 
@@ -2833,6 +2834,22 @@ export class AgentOrchestrator {
       if (formulaWarning) {
         warnings.push(formulaWarning);
       }
+      const validationCheck = await this.patchDataValidationCheck(metadata, index, resolved.sheetName, resolved.range, writeMatrix);
+      if (!validationCheck.ok) {
+        return {
+          status: "VALIDATION_FAILED",
+          mode: requestedMode,
+          workbookContextId: metadata.workbookContextId,
+          summary: validationCheck.summary,
+          answer: validationCheck.answer,
+          proof: [{ sheetName: resolved.sheetName, range: resolved.range, label: "dropdown validation" }],
+          resourceLinks: [contextResource(metadata.workbookContextId)],
+          nextAction: "manual_review",
+          warnings: validationCheck.warnings
+        };
+      }
+      warnings.push(...validationCheck.warnings);
+      validationChecks.push(...validationCheck.checks);
       const patchCellCount = matrixCellCount(writeMatrix);
       const detailedPreview = patchCellCount <= Math.max(0, AGENT_DETAILED_PREVIEW_CELL_LIMIT - detailedPreviewCells);
       const before = detailedPreview ? await this.readRangeValues(metadata.workbook.workbookId as WorkbookId, resolved.sheetName, resolved.range) : [];
@@ -2886,7 +2903,8 @@ export class AgentOrchestrator {
         patchCount: patches.length,
         cellCount,
         operationCount: 1,
-        grouped: true
+        grouped: true,
+        ...(validationChecks.length > 0 ? { validationChecks } : {})
       },
       metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched", safetyFingerprintOnly: true },
       changes,
@@ -2895,6 +2913,92 @@ export class AgentOrchestrator {
       nextAction: "call_apply_update",
       warnings
     };
+  }
+
+  private async patchDataValidationCheck(
+    metadata: WorkbookMetadata,
+    patchIndex: number,
+    sheetName: string,
+    range: string,
+    values: CellMatrix
+  ): Promise<
+    | { ok: true; warnings: string[]; checks: Array<Record<string, unknown>> }
+    | { ok: false; summary: string; answer: Record<string, unknown>; warnings: string[] }
+  > {
+    const targetShape = rangeShape(range);
+    if (targetShape && targetShape.columns !== 1) {
+      return { ok: true, warnings: [], checks: [] };
+    }
+    const result = await this.runtime.readRangeMetadata("range.read_data_validation", {
+      workbookId: metadata.workbook.workbookId as WorkbookId,
+      sheetName,
+      address: range
+    });
+    const answer = dataValidationSummaryAnswer(result, metadata, sheetName, range);
+    const fieldContext = Array.isArray(answer.fieldContext)
+      ? answer.fieldContext.filter((field): field is Record<string, unknown> => Boolean(field && typeof field === "object"))
+      : [];
+    const fieldsWithValidation = fieldContext.filter((field) => fieldHasEnforceableDropdownContext(field));
+    if (fieldsWithValidation.length === 0) {
+      return { ok: true, warnings: [], checks: [] };
+    }
+    const proposedValues = uniqueProposedValidationValues(values);
+    if (proposedValues.length === 0) {
+      return { ok: true, warnings: [], checks: [] };
+    }
+    const warnings: string[] = [];
+    const checks: Array<Record<string, unknown>> = [];
+    for (const field of fieldsWithValidation) {
+      const allowedValues = Array.isArray(field.allowedValues)
+        ? field.allowedValues.filter((value): value is string => typeof value === "string")
+        : [];
+      const validation = field.validation && typeof field.validation === "object" ? field.validation as Record<string, unknown> : {};
+      const fieldName = stringValue(field.field) ?? stringValue(field.range) ?? "validated field";
+      if (allowedValues.length === 0) {
+        checks.push(stripUndefinedRecord({
+          patchIndex: patchIndex + 1,
+          field: fieldName,
+          range: field.range,
+          validation,
+          optionsResolved: false
+        }));
+        continue;
+      }
+      const allowed = new Map(allowedValues.map((value) => [normalizeValidationOption(value), value]));
+      const invalidValues = proposedValues.filter((value) => !allowed.has(normalizeValidationOption(value)));
+      const check = stripUndefinedRecord({
+        patchIndex: patchIndex + 1,
+        field: fieldName,
+        range: field.range,
+        allowedValues,
+        allowedValueCount: allowedValues.length,
+        proposedValues,
+        invalidValues,
+        validation
+      });
+      checks.push(check);
+      if (invalidValues.length > 0) {
+        const warning = `VALUE_NOT_IN_DROPDOWN_OPTIONS: Patch ${patchIndex + 1} proposes ${invalidValues.map((value) => `"${value}"`).join(", ")} for ${fieldName}, but allowed values are ${allowedValues.join(", ")}.`;
+        return {
+          ok: false,
+          summary: `Patch ${patchIndex + 1} writes a value outside the dropdown options for ${fieldName}.`,
+          answer: {
+            kind: "patch_validation_failed",
+            code: "VALUE_NOT_IN_DROPDOWN_OPTIONS",
+            patchIndex: patchIndex + 1,
+            field: fieldName,
+            range: field.range,
+            proposedValues,
+            invalidValues,
+            allowedValues,
+            fieldContext: [field]
+          },
+          warnings: [warning]
+        };
+      }
+      warnings.push(`Patch ${patchIndex + 1} validated ${fieldName} against ${allowedValues.length} dropdown option(s).`);
+    }
+    return { ok: true, warnings, checks };
   }
 
   private async previewMatchUpdate(
@@ -10855,6 +10959,42 @@ function fieldValidationContext(summary: Record<string, unknown>): Record<string
     optionCount: typeof summary.optionCount === "number" ? summary.optionCount : options?.length,
     truncated: false
   });
+}
+
+function fieldHasEnforceableDropdownContext(field: Record<string, unknown>): boolean {
+  const validation = field.validation && typeof field.validation === "object" ? field.validation as Record<string, unknown> : {};
+  const sourceType = stringValue(validation.sourceType);
+  const semanticType = stringValue(field.semanticType);
+  const dataType = stringValue(field.dataType);
+  const fieldName = stringValue(field.field) ?? "";
+  const allowedValues = Array.isArray(field.allowedValues) ? field.allowedValues : [];
+  return allowedValues.length > 0
+    && sourceType !== "formula"
+    && (semanticType === "status" || semanticType === "category" || dataType === "status" || /\b(status|state|stage|category|type)\b/i.test(fieldName));
+}
+
+function uniqueProposedValidationValues(values: CellMatrix): string[] {
+  const seen = new Set<string>();
+  const proposed: string[] = [];
+  for (const row of values) {
+    for (const cell of row) {
+      if (cell === null || cell === undefined || cell === "") {
+        continue;
+      }
+      const value = String(cell).trim();
+      const normalized = normalizeValidationOption(value);
+      if (!normalized || seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
+      proposed.push(value);
+    }
+  }
+  return proposed;
+}
+
+function normalizeValidationOption(value: string): string {
+  return value.trim().toLowerCase().normalize("NFKC");
 }
 
 function headerRangeForColumn(metadata: WorkbookMetadata, sheetName: string, column: ColumnMetadata): string | undefined {

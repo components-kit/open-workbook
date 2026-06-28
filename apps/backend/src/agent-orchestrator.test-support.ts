@@ -220,11 +220,12 @@ export class FakeAgentRuntime {
       };
     }
     if (method === "range.read_data_validation") {
+      const hasStatusValidation = request.sheetName === "Data" && /(^|:)D|\bD\d/i.test(String(request.address ?? ""));
       return {
         ok: true,
         method,
         request,
-        data: {
+        data: hasStatusValidation ? {
           address: request.address,
           rules: [{
             address: request.address,
@@ -233,7 +234,7 @@ export class FakeAgentRuntime {
             inCellDropDown: true,
             allowBlank: true
           }]
-        }
+        } : { address: request.address, rules: [] }
       };
     }
     return { ok: true, method, request, data: { address: request.address, count: method === "range.search" ? 1 : 0 } };

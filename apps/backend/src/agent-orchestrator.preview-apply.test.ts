@@ -1276,6 +1276,56 @@ Data rows:
       expect((runtime.lastBatchOperations[0] as any).entries.map((entry: any) => entry.target.address)).toEqual(["B2:C2", "B3:C3"]);
     });
 
+  it("validates grouped patches against dropdown options before previewing", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_valid_dropdown_patch");
+      agent.metadataCache.set(metadata);
+
+      const preview = await agent.run({
+        request: "Set the selected status to Closed.",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        values: valuePatch("Data", "D2", [["Closed"]])
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).validationChecks[0]).toMatchObject({
+        field: "Status",
+        allowedValues: ["Open", "Closed", "Pending"],
+        proposedValues: ["Closed"],
+        invalidValues: []
+      });
+      expect(preview.warnings.join(" ")).toContain("validated Status");
+    });
+
+  it("blocks grouped patches with values outside dropdown options", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_invalid_dropdown_patch");
+      agent.metadataCache.set(metadata);
+
+      const preview = await agent.run({
+        request: "Set the selected status to Done.",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        values: valuePatch("Data", "D2", [["Done"]])
+      });
+
+      expect(preview.status).toBe("VALIDATION_FAILED");
+      expect((preview.answer as any)).toMatchObject({
+        kind: "patch_validation_failed",
+        code: "VALUE_NOT_IN_DROPDOWN_OPTIONS",
+        field: "Status",
+        proposedValues: ["Done"],
+        invalidValues: ["Done"],
+        allowedValues: ["Open", "Closed", "Pending"]
+      });
+      expect(preview.operationId).toBeUndefined();
+      expect(preview.warnings.join(" ")).toContain("VALUE_NOT_IN_DROPDOWN_OPTIONS");
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
   it("auto-applies small grouped range patches with explicit patch targets", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
