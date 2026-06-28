@@ -174,6 +174,13 @@ export interface OperationJournalEntry {
   cacheAction: "recorded" | "updated_from_patch" | "invalidated";
 }
 
+export interface CacheImpactSummary {
+  cacheAction: OperationJournalEntry["cacheAction"];
+  contextVersion: number;
+  freshness: ContextFreshness;
+  journalEntry: OperationJournalEntry;
+}
+
 export interface WorkbookContextState {
   workbookContextId: string;
   contextVersion: number;

@@ -65,7 +65,7 @@ import {
   stripSheetName,
   tryParseA1Address
 } from "@components-kit/open-workbook-excel-core";
-import { columnLetter, normalizeHeaderName, type ColumnMetadata, type HeaderMetadata, type TableMetadata, type WorkbookMetadata, WorkbookMetadataCache } from "./workbook-metadata-cache.js";
+import { columnLetter, normalizeHeaderName, type CacheImpactSummary, type ColumnMetadata, type ContextFacet, type HeaderMetadata, type TableMetadata, type WorkbookMetadata, WorkbookMetadataCache } from "./workbook-metadata-cache.js";
 import { AgentOperationStore, type AgentCleanMutationAction, type AgentCleanRequest, type PendingAgentOperation } from "./agent-operation-store.js";
 import { WorkbookMetadataBuilder } from "./workbook-metadata-builder.js";
 import { findAgentCandidates, resolveAgentReadTarget, resolveAgentUpdateTarget, type AgentTargetResolution } from "./agent-target-resolver.js";
@@ -231,14 +231,16 @@ export class AgentOrchestrator {
       const targetHintCount = runMetrics.intent.targetHints?.length ?? 0;
       const targetHintUsed = targetHintCount > 0 && outputUsedCallerTargetHint(output);
       const preliminaryPayloadBytes = Buffer.byteLength(JSON.stringify(budgeted));
-      const contextUsed = buildContextUsed(input, budgeted, runMetrics, cacheHit, preliminaryPayloadBytes);
+      const fullContextUsed = buildContextUsed(input, budgeted, runMetrics, cacheHit, preliminaryPayloadBytes);
+      const contextUsed = compactContextUsedForBudget(fullContextUsed, input.budget?.maxPayloadBytes);
       const budgetedWithContext = stripUndefinedOptionals({
         ...budgeted,
         ...(contextUsed !== undefined ? { contextUsed } : {})
       });
-      const payloadBytes = Buffer.byteLength(JSON.stringify(budgetedWithContext));
+      const finalBudgeted = compactPostContextForTinyBudget(budgetedWithContext, input.budget?.maxPayloadBytes);
+      const payloadBytes = Buffer.byteLength(JSON.stringify(finalBudgeted));
       return {
-        ...budgetedWithContext,
+        ...finalBudgeted,
         telemetry: {
           internalCallCount,
           payloadBytes,
@@ -254,8 +256,8 @@ export class AgentOrchestrator {
           fullReadCellCount: runMetrics.fullReadCellCount,
           fullReadUsed: runMetrics.fullReadUsed === true,
           ...(safetyFingerprintOnly !== undefined ? { safetyFingerprintOnly } : {}),
-          candidateCount: budgeted.candidates?.length ?? 0,
-          resourceLinkCount: budgeted.resourceLinks.length,
+          candidateCount: finalBudgeted.candidates?.length ?? 0,
+          resourceLinkCount: finalBudgeted.resourceLinks.length,
           estimatedTokensSaved: Math.max(0, Math.ceil((preBudgetPayloadBytes - payloadBytes) / 4)),
           routeMode: runMetrics.route.mode,
           routeMatchedRule: runMetrics.route.matchedRule,
@@ -661,6 +663,39 @@ export class AgentOrchestrator {
 
   invalidateWorkbook(workbookId: WorkbookId | string): void {
     this.metadataCache.deleteByWorkbookId(workbookId);
+  }
+
+  private recordApplyCacheImpact(pending: PendingAgentOperation): CacheImpactSummary | undefined {
+    const updateRisk = pending.updateRisk;
+    if (!updateRisk) {
+      return undefined;
+    }
+    const staleFacets = updateRisk.invalidatedFacets.filter(isContextFacet);
+    const affectedRanges = uniqueChangeRanges(pending.changes);
+    const freshness = this.metadataCache.markFacetsStale(pending.workbookContextId, staleFacets, affectedRanges);
+    const state = freshness ?? this.metadataCache.getContextState(pending.workbookContextId);
+    if (!state) {
+      return undefined;
+    }
+    const journalEntry = this.metadataCache.appendJournalEntry(pending.workbookContextId, {
+      operationId: String(pending.operationId),
+      affectedRanges,
+      affectedFacets: staleFacets,
+      invalidatedFacets: staleFacets,
+      preservedFacets: updateRisk.preservedFacets.filter(isContextFacet),
+      changes: pending.changes,
+      cacheAction: updateRisk.cacheAction === "update_cache" ? "updated_from_patch" : updateRisk.cacheAction === "none" ? "recorded" : "invalidated"
+    });
+    if (!journalEntry) {
+      return undefined;
+    }
+    const latestState = this.metadataCache.getContextState(pending.workbookContextId) ?? state;
+    return {
+      cacheAction: journalEntry.cacheAction,
+      contextVersion: latestState.contextVersion,
+      freshness: latestState.freshness,
+      journalEntry
+    };
   }
 
   private invalidateWorkbookContext(workbookContextId: string): { invalidatedContextIds: string[]; invalidatedResourceUris: string[] } {
@@ -6234,6 +6269,7 @@ export class AgentOrchestrator {
     const resultRecord = result as { transactionId?: string; backups?: string[]; rollbackAvailable?: boolean; telemetry?: unknown; warnings?: unknown[]; results?: unknown[]; error?: unknown; formulaPreservation?: unknown };
     const resultWarnings = Array.isArray(resultRecord.warnings) ? resultRecord.warnings.map(operationWarningMessage) : [];
     const errorWarning = applyErrorMessage(resultRecord.error);
+    const cacheImpact = !applyFailed ? this.recordApplyCacheImpact(pending) : undefined;
     const invalidated = applyFailed ? { invalidatedContextIds: [] as string[], invalidatedResourceUris: [] as string[] } : this.invalidateWorkbookContext(pending.workbookContextId);
     const permissionFollowup = this.structuralPermissionFollowup(resultWarnings, pending);
     const output: Omit<AgentRunOutput, "telemetry"> = {
@@ -6258,6 +6294,7 @@ export class AgentOrchestrator {
         partialFailure: applyFailed && Array.isArray(resultRecord.results) && resultRecord.results.some((step) => Boolean(step) && typeof step === "object" && (step as { ok?: unknown }).ok !== false),
         operationRisk: pending.risk,
         updateRisk: pending.updateRisk,
+        cacheImpact,
         telemetry: resultRecord.telemetry,
         ...(resultRecord.formulaPreservation !== undefined ? { formulaPreservation: resultRecord.formulaPreservation } : {}),
         ...(applyFailed && resultRecord.results !== undefined ? { stepResults: resultRecord.results } : {})
@@ -12861,6 +12898,81 @@ function contextSuggestedNext(output: Omit<AgentRunOutput, "telemetry">, input: 
     suggestions.add("apply_preview_after_confirmation");
   }
   return suggestions.size > 0 ? [...suggestions] : undefined;
+}
+
+function compactContextUsedForBudget(contextUsed: AgentRunOutput["contextUsed"], maxPayloadBytes: number | undefined): AgentRunOutput["contextUsed"] {
+  if (!contextUsed || maxPayloadBytes === undefined || maxPayloadBytes > 1_200) {
+    return contextUsed;
+  }
+  if (maxPayloadBytes <= 900) {
+    return {
+      strategy: contextUsed.strategy,
+      scope: contextUsed.scope,
+      stagesUsed: contextUsed.stagesUsed.slice(0, 1),
+      included: contextUsed.included.slice(0, 1)
+    };
+  }
+  return stripUndefinedRecord({
+    strategy: contextUsed.strategy,
+    scope: contextUsed.scope,
+    stagesUsed: contextUsed.stagesUsed.slice(0, 4),
+    included: contextUsed.included.slice(0, 5),
+    ...(contextUsed.truncated !== undefined ? { truncated: contextUsed.truncated } : {}),
+    ...(contextUsed.confidence !== undefined ? { confidence: contextUsed.confidence } : {}),
+    ...(contextUsed.source !== undefined ? { source: contextUsed.source } : {})
+  });
+}
+
+function compactPostContextForTinyBudget(output: Omit<AgentRunOutput, "telemetry">, maxPayloadBytes: number | undefined): Omit<AgentRunOutput, "telemetry"> {
+  if (maxPayloadBytes === undefined || maxPayloadBytes > 900 || Buffer.byteLength(JSON.stringify(output)) <= maxPayloadBytes + 350) {
+    return output;
+  }
+  return stripUndefinedOptionals({
+    ...output,
+    ...(output.candidates ? { candidates: output.candidates.slice(0, 1) } : {}),
+    proof: output.proof.slice(0, 1),
+    resourceLinks: output.resourceLinks.slice(0, 1),
+    warnings: output.warnings.slice(0, 1)
+  });
+}
+
+function uniqueChangeRanges(changes: NonNullable<AgentRunOutput["changes"]>): string[] {
+  const seen = new Set<string>();
+  const ranges: string[] = [];
+  for (const change of changes) {
+    const range = change.range ?? change.cell;
+    if (!range) {
+      continue;
+    }
+    const qualified = `${change.sheetName}!${range}`;
+    if (seen.has(qualified)) {
+      continue;
+    }
+    seen.add(qualified);
+    ranges.push(qualified);
+  }
+  return ranges;
+}
+
+function isContextFacet(value: string): value is ContextFacet {
+  return [
+    "metadata",
+    "schema",
+    "headers",
+    "tableDimensions",
+    "regions",
+    "fieldContext",
+    "validation",
+    "formats",
+    "formulas",
+    "formulaResults",
+    "filters",
+    "values",
+    "aggregates",
+    "rowPositions",
+    "selection",
+    "names"
+  ].includes(value);
 }
 
 function minimalAnswerForBudget(answer: unknown, continuation: AgentRunOutput["continuation"] | undefined, workbookContextId: AgentRunOutput["workbookContextId"] | undefined): Record<string, unknown> {

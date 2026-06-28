@@ -1204,6 +1204,19 @@ Data rows:
       });
 
       expect(applied.status).toBe("SUCCESS");
+      expect((applied.answer as any).cacheImpact).toMatchObject({
+        cacheAction: "updated_from_patch",
+        freshness: {
+          status: "partially_stale",
+          staleFacets: expect.arrayContaining(["values", "aggregates", "formulaResults"]),
+          staleRanges: expect.arrayContaining(["Data!B2"])
+        },
+        journalEntry: {
+          operationId: preview.operationId,
+          affectedRanges: ["Data!B2"],
+          cacheAction: "updated_from_patch"
+        }
+      });
       expect(applied.invalidatedContextIds).toContain(metadata.workbookContextId);
       expect(applied.invalidatedResourceUris).toContain(resultUri);
       expect(agent.getResultResource(resultId) as any).toMatchObject({ ok: false });
