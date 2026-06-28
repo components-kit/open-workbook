@@ -1825,13 +1825,13 @@ describe("AgentOrchestrator Read Answer Routing", () => {
         request: "Update booking dates",
         mode: "preview_update",
         target: { sheetName: "Data", range: "A2:B2" },
-        values: { values: [["25/6/26", "27/6/26"]] }
+        values: { patches: [{ target: { sheetName: "Data", range: "A2:B2" }, values: [["25/6/26", "27/6/26"]] }] }
       });
 
       expect(result.status).toBe("PREVIEW_READY");
       const operations = (agent.dumpOperations()[0] as any).action.operations;
-      expect(operations[0]).toMatchObject({ kind: "range.write_values" });
-      expect(operations[0].values).toEqual([[46198, 46200]]);
+      expect(operations[0]).toMatchObject({ kind: "range.write_values_many" });
+      expect(operations[0].entries[0].values).toEqual([[46198, 46200]]);
       expect(operations[1]).toMatchObject({ kind: "range.write_number_formats_many" });
       expect(operations[1].entries).toHaveLength(2);
       expect(operations[1].entries[0].numberFormat).toEqual([["dd/mm/yyyy"]]);
@@ -1846,12 +1846,12 @@ describe("AgentOrchestrator Read Answer Routing", () => {
         request: "Write booking dates",
         mode: "preview_update",
         target: { sheetName: "Data", range: "A2:C3" },
-        values: { values: [["25/6/26", "Customer A", "27/6/26"], ["26/6/26", "Customer B", "28/6/26"]] }
+        values: { patches: [{ target: { sheetName: "Data", range: "A2:C3" }, values: [["25/6/26", "Customer A", "27/6/26"], ["26/6/26", "Customer B", "28/6/26"]] }] }
       });
 
       expect(result.status).toBe("PREVIEW_READY");
       const operations = (agent.dumpOperations()[0] as any).action.operations;
-      expect(operations[0].values).toEqual([[46198, "Customer A", 46200], [46199, "Customer B", 46201]]);
+      expect(operations[0].entries[0].values).toEqual([[46198, "Customer A", 46200], [46199, "Customer B", 46201]]);
       expect(operations[1]).toMatchObject({ kind: "range.write_number_formats_many" });
       expect(operations[1].entries.map((entry: any) => entry.target.address)).toEqual(["A2", "C2", "A3", "C3"]);
     });
@@ -1864,13 +1864,13 @@ describe("AgentOrchestrator Read Answer Routing", () => {
         request: "Update booking dates",
         mode: "preview_update",
         target: { sheetName: "Data", range: "A2:A2" },
-        values: { values: [["31/2/26"]] }
+        values: { patches: [{ target: { sheetName: "Data", range: "A2:A2" }, values: [["31/2/26"]] }] }
       });
 
       expect(result.status).toBe("PREVIEW_READY");
       const operations = (agent.dumpOperations()[0] as any).action.operations;
       expect(operations).toHaveLength(1);
-      expect(operations[0].values).toEqual([["31/2/26"]]);
+      expect(operations[0].entries[0].values).toEqual([["31/2/26"]]);
       expect(result.warnings.join(" ")).not.toContain("Short-year date text was normalized");
     });
 

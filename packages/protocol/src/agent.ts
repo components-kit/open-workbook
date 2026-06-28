@@ -304,7 +304,15 @@ export interface AgentRunInput {
       target: AgentRunTarget;
       values?: unknown[][];
       rows?: unknown[][];
+      formulas?: Array<Array<string | null>>;
       style?: Record<string, unknown>;
+      numberFormat?: string | string[][];
+      numberFormats?: string | string[][];
+      validation?: Record<string, unknown>;
+      conditionalFormatting?: Record<string, unknown>;
+      note?: string;
+      comment?: string;
+      options?: Record<string, unknown>;
       reason?: string;
     }>;
   };

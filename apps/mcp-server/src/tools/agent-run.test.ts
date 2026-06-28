@@ -254,6 +254,33 @@ describe("excel.agent.run MCP schema", () => {
         }
       ]
     });
+    expect((schema.values as any).parse({
+      patches: [
+        {
+          target: { sheetName: "Booking", range: "C2:C3" },
+          formulas: [["=A2+B2"], ["=A3+B3"]],
+          numberFormat: "$#,##0.00",
+          validation: { type: "list", source: ["Open", "Closed"] },
+          conditionalFormatting: { type: "custom", formula: "=$C2>0" },
+          note: "review",
+          comment: "updated by agent",
+          options: { preserveFormats: true }
+        }
+      ]
+    })).toMatchObject({
+      patches: [
+        {
+          target: { sheetName: "Booking", range: "C2:C3" },
+          formulas: [["=A2+B2"], ["=A3+B3"]],
+          numberFormat: "$#,##0.00",
+          validation: { type: "list", source: ["Open", "Closed"] },
+          conditionalFormatting: { type: "custom", formula: "=$C2>0" },
+          note: "review",
+          comment: "updated by agent",
+          options: { preserveFormats: true }
+        }
+      ]
+    });
   });
 
   it("accepts common structured update payloads without requiring agents to send schemas", () => {

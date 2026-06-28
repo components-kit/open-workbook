@@ -2474,6 +2474,10 @@ export class AgentOrchestrator {
     if (hasStyleBatchInput(input) && styleEntriesFromInput(metadata, metadata.workbook.workbookId as WorkbookId, input).length > 0) {
       return this.previewWriteStylesMany(metadata, input, requestedMode);
     }
+    const patchValidation = validateDirectPatchInput(input);
+    if (!patchValidation.ok) {
+      return canonicalPatchRequiredOutput(metadata, requestedMode, patchValidation.summary, patchValidation.warnings);
+    }
     const patches = valuePatchesFromInput(input);
     if (patches.length > 0) {
       return this.previewPatchUpdate(metadata, input, requestedMode, patches);
@@ -2502,6 +2506,14 @@ export class AgentOrchestrator {
     const operationPreview = await this.previewOperationIntent(metadata, input, requestedMode);
     if (operationPreview) {
       return operationPreview;
+    }
+    if (usesLegacyDirectValueWrite(input)) {
+      return canonicalPatchRequiredOutput(
+        metadata,
+        requestedMode,
+        "Direct range value updates must use values.patches. Top-level target plus values.values is no longer accepted for agent-facing direct writes.",
+        ["Use values.patches for direct cell/range updates, including single-cell updates."]
+      );
     }
     const resolved = resolveUpdateTarget(metadata, input);
     if (!resolved.ok) {
@@ -2725,6 +2737,7 @@ export class AgentOrchestrator {
     patches: AgentValuePatch[]
   ): Promise<Omit<AgentRunOutput, "telemetry">> {
     const entries: Array<{ target: A1Range; values: CellMatrix; preserveFormats?: true }> = [];
+    const numberFormatEntries: Array<{ target: A1Range; numberFormat: string[][] }> = [];
     const changes: NonNullable<AgentRunOutput["changes"]> = [];
     const warnings: string[] = [];
     let cellCount = 0;
@@ -2750,7 +2763,14 @@ export class AgentOrchestrator {
           warnings: resolved.warnings
         };
       }
-      const shapeIssue = matrixShapeIssue(resolved.range, patch.values);
+      const dateNormalization = normalizeShortYearDatesForWrite(metadata.workbook.workbookId as WorkbookId, {
+        ...input,
+        target: patchTarget
+      }, resolved.range, patch.values);
+      const writeMatrix = dateNormalization.matrix;
+      numberFormatEntries.push(...dateNormalization.numberFormatEntries);
+      warnings.push(...dateNormalization.warnings);
+      const shapeIssue = matrixShapeIssue(resolved.range, writeMatrix);
       if (shapeIssue) {
         return {
           status: "VALIDATION_FAILED",
@@ -2763,7 +2783,7 @@ export class AgentOrchestrator {
           warnings: [shapeIssue]
         };
       }
-      if (isSparseBroadWrite(resolved.range, patch.values)) {
+      if (isSparseBroadWrite(resolved.range, writeMatrix)) {
         return {
           status: "VALIDATION_FAILED",
           mode: requestedMode,
@@ -2775,7 +2795,7 @@ export class AgentOrchestrator {
           warnings: ["Sparse/null-padded broad writes are blocked by the agent workflow."]
         };
       }
-      if (containsFormulaLikeValue(patch.values)) {
+      if (containsFormulaLikeValue(writeMatrix)) {
         return {
           status: "VALIDATION_FAILED",
           mode: requestedMode,
@@ -2790,7 +2810,7 @@ export class AgentOrchestrator {
       const formulaWarning = overlapsFormulaRegion(metadata, resolved.sheetName, resolved.range)
         ? `Patch ${index + 1} overlaps detected formula regions at ${resolved.sheetName}!${resolved.range}. Review carefully before applying.`
         : undefined;
-      if (formulaWarning && (!patch.target.range || (cellCountFromAddress(resolved.range) ?? 0) > Math.max(1, matrixCellCount(patch.values)))) {
+      if (formulaWarning && (!patch.target.range || (cellCountFromAddress(resolved.range) ?? 0) > Math.max(1, matrixCellCount(writeMatrix)))) {
         return {
           status: "VALIDATION_FAILED",
           mode: requestedMode,
@@ -2805,7 +2825,7 @@ export class AgentOrchestrator {
       if (formulaWarning) {
         warnings.push(formulaWarning);
       }
-      const patchCellCount = matrixCellCount(patch.values);
+      const patchCellCount = matrixCellCount(writeMatrix);
       const detailedPreview = patchCellCount <= Math.max(0, AGENT_DETAILED_PREVIEW_CELL_LIMIT - detailedPreviewCells);
       const before = detailedPreview ? await this.readRangeValues(metadata.workbook.workbookId as WorkbookId, resolved.sheetName, resolved.range) : [];
       if (detailedPreview) {
@@ -2813,24 +2833,34 @@ export class AgentOrchestrator {
       }
       entries.push({
         target: { workbookId: metadata.workbook.workbookId as WorkbookId, sheetName: resolved.sheetName, address: resolved.range },
-        values: patch.values,
+        values: writeMatrix,
         preserveFormats: true
       });
       cellCount += patchCellCount;
-      changes.push(...previewChangesForMatrix(resolved.sheetName, resolved.range, patch.values, before, !detailedPreview));
+      changes.push(...previewChangesForMatrix(resolved.sheetName, resolved.range, writeMatrix, before, !detailedPreview));
     }
 
     const pending = this.createPendingOperation(metadata, {
       action: {
         kind: "batch",
-        operations: [{
-          kind: "range.write_values_many",
-          operationId: makeId<OperationId>("op"),
-          workbookId: metadata.workbook.workbookId as WorkbookId,
-          destructiveLevel: "values",
-          reason: input.request,
-          entries
-        }]
+        operations: [
+          {
+            kind: "range.write_values_many",
+            operationId: makeId<OperationId>("op"),
+            workbookId: metadata.workbook.workbookId as WorkbookId,
+            destructiveLevel: "values",
+            reason: input.request,
+            entries
+          },
+          ...(numberFormatEntries.length > 0 ? [{
+            kind: "range.write_number_formats_many" as const,
+            operationId: makeId<OperationId>("op"),
+            workbookId: metadata.workbook.workbookId as WorkbookId,
+            destructiveLevel: "format" as const,
+            reason: "Apply date number format for normalized short-year date values.",
+            entries: numberFormatEntries
+          }] : [])
+        ]
       },
       changes,
       summary: `Prepared ${cellCount} cell update(s) across ${patches.length} grouped range patch(es).`
@@ -14052,7 +14082,7 @@ function resolveUpdateTarget(metadata: WorkbookMetadata, input: AgentRunInput):
       summary: "Preview needs structured values; rows embedded in request text are not used for safe writes.",
       ...(candidates.length > 0 ? { candidates } : {}),
       nextAction: "ask_user",
-      warnings: ["Mutation payloads must be supplied in the structured values field, such as values.values, values.rows, or values.patches."]
+      warnings: ["Direct cell/range updates must be supplied as values.patches. Specialized workflows such as table appends may use their dedicated structured values."]
     };
   }
   const resolved = resolveAgentUpdateTarget(metadata, input);
@@ -14072,6 +14102,98 @@ function resolveUpdateTarget(metadata: WorkbookMetadata, input: AgentRunInput):
     };
   }
   return resolved;
+}
+
+function validateDirectPatchInput(input: AgentRunInput): { ok: true } | { ok: false; summary: string; warnings: string[] } {
+  const patches = input.values?.patches;
+  if (!Array.isArray(patches)) {
+    return { ok: true };
+  }
+  for (const [index, patch] of patches.entries()) {
+    if (!patch || typeof patch !== "object") {
+      return {
+        ok: false,
+        summary: `Patch ${index + 1} is not a valid object.`,
+        warnings: ["Each direct update patch must include target and one supported payload field."]
+      };
+    }
+    if (!patch.target) {
+      return {
+        ok: false,
+        summary: `Patch ${index + 1} is missing target.`,
+        warnings: ["Each direct update patch must include patch.target with sheetName/range or an equivalent target."]
+      };
+    }
+    const typed = patch as Record<string, unknown>;
+    const payloadKeys = ["values", "rows", "formulas", "style", "numberFormat", "numberFormats", "validation", "conditionalFormatting", "note", "comment"];
+    if (!payloadKeys.some((key) => typed[key] !== undefined)) {
+      return {
+        ok: false,
+        summary: `Patch ${index + 1} is missing a mutation payload.`,
+        warnings: ["Each direct update patch must include values, rows, formulas, style, numberFormat, validation, conditionalFormatting, note, or comment."]
+      };
+    }
+    const hasValuePayload = typed.values !== undefined || typed.rows !== undefined;
+    const nonValuePayloadCount = ["formulas", "style", "validation", "conditionalFormatting", "note", "comment"]
+      .filter((key) => typed[key] !== undefined).length;
+    if (hasValuePayload && nonValuePayloadCount > 0) {
+      return {
+        ok: false,
+        summary: `Patch ${index + 1} mixes value payloads with another mutation family.`,
+        warnings: ["Split values/formulas/styles/validation/comments into separate patches so preview can compile the correct operation family."]
+      };
+    }
+  }
+  return { ok: true };
+}
+
+function usesLegacyDirectValueWrite(input: AgentRunInput): boolean {
+  const values = input.values as Record<string, unknown> | undefined;
+  if (!Array.isArray(values?.values) || Array.isArray(values?.patches)) {
+    return false;
+  }
+  const action = intentAction(input);
+  if (action && action !== "write_values") {
+    return false;
+  }
+  if (isTableAppendIntent(input.request)) {
+    return false;
+  }
+  return Boolean(input.target?.range || action === "write_values" || /\b(update|write|set|change|edit)\b/i.test(input.request));
+}
+
+function canonicalPatchRequiredOutput(
+  metadata: WorkbookMetadata,
+  requestedMode: AgentRunMode,
+  summary: string,
+  warnings: string[]
+): Omit<AgentRunOutput, "telemetry"> {
+  return {
+    status: "NEEDS_INPUT",
+    mode: requestedMode,
+    workbookContextId: metadata.workbookContextId,
+    summary,
+    answer: {
+      kind: "canonical_patch_required",
+      code: "CANONICAL_PATCH_REQUIRED",
+      example: {
+        mode: "preview_update",
+        intent: { action: "write_values" },
+        values: {
+          patches: [
+            {
+              target: { sheetName: "Sales", range: "E2" },
+              values: [["Reviewed"]]
+            }
+          ]
+        }
+      }
+    },
+    proof: [],
+    resourceLinks: [contextResource(metadata.workbookContextId)],
+    nextAction: "ask_user",
+    warnings: ["CANONICAL_PATCH_REQUIRED", ...warnings]
+  };
 }
 
 function safetyArtifactNeedsInput(metadata: WorkbookMetadata, requestedMode: AgentRunMode, summary: string): Omit<AgentRunOutput, "telemetry"> {

@@ -124,7 +124,15 @@ export function agentRunInputSchema() {
       target: targetSchema,
       values: z.array(z.array(z.any())).optional(),
       rows: z.array(z.array(z.any())).optional(),
+      formulas: z.array(z.array(z.union([z.string(), z.null()]))).optional(),
       style: styleSchema.optional(),
+      numberFormat: numberFormatSchema.optional(),
+      numberFormats: numberFormatSchema.optional(),
+      validation: validationSchema.optional(),
+      conditionalFormatting: conditionalRuleSchema.optional(),
+      note: z.string().optional(),
+      comment: z.string().optional(),
+      options: z.record(z.string(), z.any()).optional(),
       reason: z.string().optional()
     })).optional()
   }).catchall(z.any()), "values");

@@ -3,6 +3,10 @@ import { AgentOrchestrator } from "./agent-orchestrator.js";
 import { FakeAgentRuntime, createCachedMetadata, selectionInfo, sheets, workbookId } from "./agent-orchestrator.test-support.js";
 
 describe("AgentOrchestrator Preview Apply Safety", () => {
+  const valuePatch = (sheetName: string, range: string, values: unknown[][]) => ({
+    patches: [{ target: { sheetName, range }, values }]
+  });
+
   it("applies visual readability to Thai invoice body after grouped headers without skipping all rules", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -1056,7 +1060,7 @@ Data rows:
       expect(preview.summary).toContain("Preview needs structured values");
       expect(preview.summary).toContain("rows embedded in request text");
       expect(preview.nextAction).toBe("ask_user");
-      expect(preview.warnings).toContain("Mutation payloads must be supplied in the structured values field, such as values.values, values.rows, or values.patches.");
+      expect(preview.warnings).toContain("Direct cell/range updates must be supplied as values.patches. Specialized workflows such as table appends may use their dedicated structured values.");
       expect(runtime.writeBatchCount).toBe(0);
     });
 
@@ -1085,7 +1089,7 @@ Data rows:
         request: "Update Data B2",
         mode: "preview_update",
         target: { sheetName: "Data", range: "B2" },
-        values: { values: [[999]] }
+        values: valuePatch("Data", "B2", [[999]])
       });
       const missingToken = await agent.run({
         request: "Apply update",
@@ -1115,7 +1119,7 @@ Data rows:
         request: "Update Data B2",
         mode: "preview_update",
         target: { sheetName: "Data", range: "B2" },
-        values: { values: [[999]] }
+        values: valuePatch("Data", "B2", [[999]])
       });
       const wrongToken = await agent.run({
         request: "Apply update",
@@ -1137,7 +1141,7 @@ Data rows:
         request: "Update Data B2",
         mode: "preview_update",
         target: { sheetName: "Data", range: "B2" },
-        values: { values: [[999]] }
+        values: valuePatch("Data", "B2", [[999]])
       });
       const first = await agent.run({
         request: "Apply update",
@@ -1190,7 +1194,7 @@ Data rows:
         mode: "preview_update",
         workbookContextId: metadata.workbookContextId,
         target: { sheetName: "Data", range: "B2" },
-        values: { values: [[999]] }
+        values: valuePatch("Data", "B2", [[999]])
       });
       const applied = await agent.run({
         request: "Apply update",
@@ -1214,7 +1218,7 @@ Data rows:
         request: "Update Data B2",
         mode: "preview_update",
         target: { sheetName: "Data", range: "B2" },
-        values: { values: [[999]] }
+        values: valuePatch("Data", "B2", [[999]])
       });
       const status = await agent.run({
         request: "Check operation",
@@ -1329,7 +1333,7 @@ Data rows:
         mode: "auto",
         intent: { action: "write_values" },
         target: { sheetName: "Data", range: "A4" },
-        values: { values: [["owner_cash_topup"]] }
+        values: valuePatch("Data", "A4", [["owner_cash_topup"]])
       });
 
       expect(result.status).toBe("SUCCESS");
@@ -1339,9 +1343,8 @@ Data rows:
       expect(runtime.writeBatchCount).toBe(1);
       expect(runtime.lastBatchOperations).toHaveLength(1);
       expect(runtime.lastBatchOperations[0]).toMatchObject({
-        kind: "range.write_values",
-        target: { sheetName: "Data", address: "A4" },
-        values: [["owner_cash_topup"]]
+        kind: "range.write_values_many",
+        entries: [{ target: { sheetName: "Data", address: "A4" }, values: [["owner_cash_topup"]] }]
       });
     });
 
@@ -1576,7 +1579,7 @@ Data rows:
         workbookContextId: metadata.workbookContextId,
         intent: { action: "write_values" },
         target: { sheetName: "Vendor Propose", range: "O3:P5" },
-        values: { values: [[10, 7500], [10, 7500], [10, 8000]] }
+        values: valuePatch("Vendor Propose", "O3:P5", [[10, 7500], [10, 7500], [10, 8000]])
       });
 
       expect(result.status).toBe("PREVIEW_READY");
@@ -1601,7 +1604,7 @@ Data rows:
         request: "Update Data B2:C2 with the corrected values",
         intent: { action: "write_values" },
         target: { sheetName: "Data", range: "B2:C2" },
-        values: { values: [[null, 7500]] }
+        values: valuePatch("Data", "B2:C2", [[null, 7500]])
       });
 
       expect(result.status).toBe("PREVIEW_READY");
@@ -1659,7 +1662,7 @@ Data rows:
         request: "Update Data B2:C2",
         mode: "preview_update",
         target: { sheetName: "Data", range: "B2:C2" },
-        values: { values: [["Checking", 9000]] }
+        values: valuePatch("Data", "B2:C2", [["Checking", 9000]])
       });
       const applied = await agent.run({
         request: "Apply Data B2:C2",
@@ -1688,7 +1691,7 @@ Data rows:
       mode: "preview_update",
       workbookContextId: metadata.workbookContextId,
       target: { sheetName: "Report", range: "A1:J21" },
-      values: { values }
+      values: valuePatch("Report", "A1:J21", values)
     });
 
     expect(preview.status).toBe("PREVIEW_READY");
@@ -1727,7 +1730,7 @@ Data rows:
         request: "Update Data B2",
         mode: "preview_update",
         target: { sheetName: "Data", range: "B2" },
-        values: { values: [[999]] }
+        values: valuePatch("Data", "B2", [[999]])
       });
 
       runtime.agentExecutionContext = { agentId: "agent_other", agentName: "Other", clientType: "mcp" };
@@ -1771,7 +1774,7 @@ Data rows:
         request: "Update Data B2",
         mode: "preview_update",
         target: { sheetName: "Data", range: "B2" },
-        values: { values: [[999]] }
+        values: valuePatch("Data", "B2", [[999]])
       });
       const applied = await agent.run({
         request: "Apply update",
@@ -1797,19 +1800,19 @@ Data rows:
         mode: "preview_update",
         workbookContextId: metadata.workbookContextId,
         target: { sheetName: "Report", range: "B1" },
-        values: { values: [["ok"]] }
+        values: valuePatch("Report", "B1", [["ok"]])
       });
       const formulaPreview = await agent.run({
         request: "Update formula area",
         mode: "preview_update",
         workbookContextId: metadata.workbookContextId,
         target: { sheetName: "Report", range: "A12" },
-        values: { values: [["bad"]] }
+        values: valuePatch("Report", "A12", [["bad"]])
       });
 
       expect(allowed.status).toBe("PREVIEW_READY");
       expect(formulaPreview.status).toBe("PREVIEW_READY");
-      expect(formulaPreview.warnings).toContain("Target overlaps detected formula regions. Review carefully before applying.");
+      expect(formulaPreview.warnings.join(" ")).toContain("Patch 1 overlaps detected formula regions at Report!A12");
     });
 
   it("auto-applies scoped auto value edits by default", async () => {
@@ -1819,7 +1822,7 @@ Data rows:
       const result = await agent.run({
         request: "Change Data B2 to 999",
         target: { sheetName: "Data", range: "B2" },
-        values: { values: [[999]] }
+        values: valuePatch("Data", "B2", [[999]])
       });
 
       expect(result.status).toBe("SUCCESS");
@@ -1859,7 +1862,7 @@ Data rows:
         workbookContextId: metadata.workbookContextId,
         intent: { action: "write_values" },
         target: { sheetName: "Vendor Propose", range: "J4" },
-        values: { values: [[6100]] }
+        values: valuePatch("Vendor Propose", "J4", [[6100]])
       });
 
       expect(result.status).toBe("SUCCESS");
@@ -1871,9 +1874,8 @@ Data rows:
       expect(result.telemetry.safetyDecision).toBe("auto_apply:scoped_value_edit");
       expect(runtime.writeBatchCount).toBe(1);
       expect(runtime.lastBatchOperations[0]).toMatchObject({
-        kind: "range.write_values",
-        target: { sheetName: "Vendor Propose", address: "J4" },
-        values: [[6100]]
+        kind: "range.write_values_many",
+        entries: [{ target: { sheetName: "Vendor Propose", address: "J4" }, values: [[6100]] }]
       });
     });
 
@@ -1884,7 +1886,7 @@ Data rows:
       const result = await agent.run({
         request: "Change Data B2 to 999",
         target: { sheetName: "Data", range: "B2" },
-        values: { values: [[999]] },
+        values: valuePatch("Data", "B2", [[999]]),
         autoApply: false
       });
 
@@ -1901,7 +1903,7 @@ Data rows:
       const result = await agent.run({
         request: "Add a notes block to Report",
         target: { sheetName: "Report", range: "B1:B2" },
-        values: { values: [["Owner"], ["Finance"]] }
+        values: valuePatch("Report", "B1:B2", [["Owner"], ["Finance"]])
       });
 
       expect(result.status).toBe("SUCCESS");
@@ -1918,7 +1920,7 @@ Data rows:
         mode: "auto",
         intent: { action: "write_values" },
         target: { sheetName: "Data", range: "C15:D15" },
-        values: { values: [["71-0409", "Maintenance fee"]] }
+        values: valuePatch("Data", "C15:D15", [["71-0409", "Maintenance fee"]])
       });
 
       expect(result.status).toBe("SUCCESS");
@@ -1939,7 +1941,7 @@ Data rows:
         mode: "auto",
         intent: { action: "write_values", targetHints: ["Truck ID dropdown source list"] },
         target: { sheetName: "Data", range: "A3:A4" },
-        values: { values: [["700-5226"], ["700-5229"]] }
+        values: valuePatch("Data", "A3:A4", [["700-5226"], ["700-5229"]])
       });
 
       expect(result.status).toBe("SUCCESS");
@@ -1947,7 +1949,7 @@ Data rows:
       expect(result.telemetry.autoApplied).toBe(true);
       expect(result.telemetry.safetyDecision).toBe("auto_apply:scoped_value_edit");
       expect(runtime.writeBatchCount).toBe(1);
-      expect(runtime.lastBatchOperations[0]?.kind).toBe("range.write_values");
+      expect(runtime.lastBatchOperations[0]?.kind).toBe("range.write_values_many");
     });
 
   it("previews header formatting as a style mutation instead of reading values", async () => {
@@ -1973,7 +1975,7 @@ Data rows:
         request: "Duplicate the formula from A12 down",
         mode: "preview_update",
         target: { sheetName: "Report", range: "A13:A14" },
-        values: { values: [["=SUM(B1:B10)"], ["=SUM(B2:B11)"]] }
+        values: { formulas: [["=SUM(B1:B10)"], ["=SUM(B2:B11)"]] }
       });
 
       expect(result.status).toBe("PREVIEW_READY");
@@ -2876,23 +2878,19 @@ Data rows:
       mode: "preview_update",
       workbookContextId: metadata.workbookContextId,
       target: { sheetName: "Report", range: "A1" },
-      values: { values: [["A"]] }
+      values: valuePatch("Report", "A1", [["A"]])
     });
     const redirected = await agent.run({
       request: "Write second extracted value",
       mode: "preview_update",
       workbookContextId: metadata.workbookContextId,
       target: { sheetName: "Report", range: "B1" },
-      values: { values: [["B"]] }
+      values: valuePatch("Report", "B1", [["B"]])
     });
 
-    expect(redirected.status).toBe("NEEDS_WORKFLOW_REDIRECT");
-    expect((redirected.answer as any).suggestedIntentAction).toBe("write_values");
-    expect((redirected.answer as any).suggestedValues.patches).toEqual([
-      { target: { sheetName: "Report", range: "A1" }, values: [["A"]] },
-      { target: { sheetName: "Report", range: "B1" }, values: [["B"]] }
-    ]);
-    expect(redirected.warnings).toContain("Fragmented value-write previews were redirected to a grouped patch workflow.");
+    expect(redirected.status).toBe("PREVIEW_READY");
+    expect((redirected.answer as any).kind).toBe("multi_range_preview");
+    expect((redirected.answer as any).patchCount).toBe(1);
   });
 
   it("redirects repeated format previews to write_styles_many", async () => {
@@ -3684,7 +3682,7 @@ Data rows:
       mode: "preview_update",
       intent: { action: "write_values" },
       target: { sheetName: "Report", range: "A1:B1" },
-      values: { values: [["A", "B"]] }
+      values: valuePatch("Report", "A1:B1", [["A", "B"]])
     });
     const first = await agent.run({
       request: "Apply values",
@@ -4136,12 +4134,12 @@ Data rows:
     }> = [
       {
         capabilityName: "excel.range.write_values",
-        expectedOperationKind: "range.write_values",
+        expectedOperationKind: "range.write_values_many",
         input: {
           request: "Update Data B2",
           mode: "preview_update",
           target: { sheetName: "Data", range: "B2" },
-          values: { values: [[123]] }
+          values: valuePatch("Data", "B2", [[123]])
         }
       },
       {
@@ -4152,7 +4150,7 @@ Data rows:
           mode: "preview_update",
           intent: { action: "write_formulas" },
           target: { sheetName: "Report", range: "A12" },
-          values: { values: [["=SUM(B1:B10)"]] }
+          values: { formulas: [["=SUM(B1:B10)"]] }
         }
       },
       {
@@ -4821,17 +4819,17 @@ Data rows:
       expect(runtime.writeBatchCount).toBe(0);
     });
 
-  it("does not auto-apply ambiguous natural-language updates", async () => {
+  it("does not auto-apply ambiguous natural-language updates without canonical patch values", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
 
       const result = await agent.run({
-        request: "Update financial 2026",
-        values: { values: [[999]] }
+        request: "Update financial 2026"
       });
 
-      expect(result.status).toBe("AMBIGUOUS_TARGET");
-      expect(result.nextAction).toBe("call_with_target");
+      expect(result.status).toBe("NEEDS_INPUT");
+      expect(result.summary).toContain("Preview needs structured values");
+      expect(result.nextAction).toBe("ask_user");
       expect(runtime.writeBatchCount).toBe(0);
     });
 
@@ -4842,7 +4840,7 @@ Data rows:
       const result = await agent.run({
         request: "Fix formula in Report A12",
         target: { sheetName: "Report", range: "A12" },
-        values: { values: [[100]] }
+        values: valuePatch("Report", "A12", [[100]])
       });
 
       expect(result.status).toBe("NEEDS_INPUT");
@@ -4859,7 +4857,7 @@ Data rows:
         request: "Change Data B2",
         mode: "preview_update",
         target: { sheetName: "Data", range: "B2" },
-        values: { values: [["=SUM(A1:A2)"]] }
+        values: valuePatch("Data", "B2", [["=SUM(A1:A2)"]])
       });
 
       expect(result.status).toBe("VALIDATION_FAILED");
@@ -4874,10 +4872,33 @@ Data rows:
       const result = await agent.run({
         request: "Change Report B1:C4",
         target: { sheetName: "Report", range: "B1:C4" },
-        values: { values: [[1]] }
+        values: { patches: [{ target: { sheetName: "Report", range: "B1:C4" }, values: [[1]] }] }
       });
 
       expect(result.status).toBe("VALIDATION_FAILED");
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
+  it("rejects legacy direct values.values updates with a canonical patch example", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Update Data B2",
+        mode: "preview_update",
+        intent: { action: "write_values" },
+        target: { sheetName: "Data", range: "B2" },
+        values: { values: [[123]] }
+      });
+
+      expect(result.status).toBe("NEEDS_INPUT");
+      expect((result.answer as any).kind).toBe("canonical_patch_required");
+      expect((result.answer as any).code).toBe("CANONICAL_PATCH_REQUIRED");
+      expect((result.answer as any).example.values.patches[0]).toMatchObject({
+        target: { sheetName: "Sales", range: "E2" },
+        values: [["Reviewed"]]
+      });
+      expect(result.warnings).toContain("CANONICAL_PATCH_REQUIRED");
       expect(runtime.writeBatchCount).toBe(0);
     });
 
@@ -4887,8 +4908,7 @@ Data rows:
 
       const result = await agent.run({
         request: "Update Data B2",
-        target: { sheetName: "Data", range: "B2" },
-        values: { values: [[123]] }
+        values: { patches: [{ target: { sheetName: "Data", range: "B2" }, values: [[123]] }] }
       });
 
       expect(result.status).toBe("SUCCESS");
@@ -5139,16 +5159,15 @@ Data rows:
         mode: "auto",
         workbookContextId: metadata.workbookContextId,
         target: { sheetName: "Dropdown Lists", range: "B29" },
-        values: { values: [["owner_cash_topup"]] }
+        values: valuePatch("Dropdown Lists", "B29", [["owner_cash_topup"]])
       });
 
       expect(result.status).toBe("SUCCESS");
       expect(result.taskOutcome).toBe("apply_complete");
       expect(result.telemetry.routeMode).toBe("preview_update");
       expect(runtime.lastBatchOperations[0]).toMatchObject({
-        kind: "range.write_values",
-        target: { sheetName: "Dropdown Lists", address: "B29" },
-        values: [["owner_cash_topup"]]
+        kind: "range.write_values_many",
+        entries: [{ target: { sheetName: "Dropdown Lists", address: "B29" }, values: [["owner_cash_topup"]] }]
       });
     });
 
@@ -5180,7 +5199,7 @@ Data rows:
         mode: "auto",
         workbookContextId: metadata.workbookContextId,
         target: { sheetName: "Dropdown Lists", range: "B29" },
-        values: { values: [[null, "owner_cash_topup"]] }
+        values: valuePatch("Dropdown Lists", "B29", [[null, "owner_cash_topup"]])
       });
 
       expect(result.status).toBe("VALIDATION_FAILED");

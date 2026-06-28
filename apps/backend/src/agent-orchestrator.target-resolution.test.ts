@@ -566,7 +566,7 @@ describe("AgentOrchestrator Target Resolution", () => {
         request: "Update june financial report input",
         mode: "preview_update",
         target: { sheetName: "Financial Jun 2026", range: "B2" },
-        values: { values: [[1234]] }
+        values: { patches: [{ target: { sheetName: "Financial Jun 2026", range: "B2" }, values: [[1234]] }] }
       });
 
       expect(result.status).toBe("PREVIEW_READY");

@@ -130,14 +130,22 @@ const RISK_RANK: Record<AgentOperationRisk, number> = {
 };
 
 export function classifyAgentActionRisk(action: PendingAgentAction): AgentOperationRisk {
-  const kinds = action.kind === "batch"
-    ? action.operations.map((operation) => operation.kind)
+  const risks = action.kind === "batch"
+    ? action.operations.map(riskForOperation)
     : action.kind === "workflow.replace_styled_table"
-      ? [...action.operations.map((operation) => operation.kind), ...action.styleCopies.map(() => "style.copy_dimensions" as const)]
+      ? [...action.operations.map(riskForOperation), ...action.styleCopies.map(() => riskForOperationKind("style.copy_dimensions"))]
       : action.kind === "style.copy_dimensions_many"
-        ? action.requests.map(() => "style.copy_dimensions" as const)
-    : [action.kind];
-  return highestRisk(kinds.map(riskForOperationKind));
+        ? action.requests.map(() => riskForOperationKind("style.copy_dimensions"))
+    : [riskForOperationKind(action.kind)];
+  return highestRisk(risks);
+}
+
+function riskForOperation(operation: ExcelOperation): AgentOperationRisk {
+  if (operation.kind === "range.write_values_many") {
+    const cellCount = operation.entries.reduce((total, entry) => total + matrixCellCount(entry.values), 0);
+    return cellCount <= 4 ? "small_value_write" : "broad_range_write";
+  }
+  return riskForOperationKind(operation.kind);
 }
 
 export function riskForOperationKind(
@@ -207,4 +215,8 @@ export function riskForOperationKind(
 
 function highestRisk(risks: AgentOperationRisk[]): AgentOperationRisk {
   return risks.reduce<AgentOperationRisk>((highest, risk) => RISK_RANK[risk] > RISK_RANK[highest] ? risk : highest, "read_only");
+}
+
+function matrixCellCount(matrix: unknown[][]): number {
+  return matrix.reduce((total, row) => total + row.length, 0);
 }

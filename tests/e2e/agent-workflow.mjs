@@ -190,7 +190,7 @@ async function main() {
       mode: "preview_update",
       workbookContextId: prepared.workbookContextId,
       target: { sheetName: "Data", range: "B2" },
-      values: { values: [[999]] }
+      values: { patches: [{ target: { sheetName: "Data", range: "B2" }, values: [[999]] }] }
     }, agentOutputSchema);
     assert(preview.status === "PREVIEW_READY", "preview_update should return a pending operation");
     assert(preview.operationId && preview.confirmationToken, "preview_update should return operationId and confirmationToken");
@@ -210,7 +210,7 @@ async function main() {
       request: "Change Data C2 to 321",
       workbookContextId: prepared.workbookContextId,
       target: { sheetName: "Data", range: "C2" },
-      values: { values: [[321]] }
+      values: { patches: [{ target: { sheetName: "Data", range: "C2" }, values: [[321]] }] }
     }, agentOutputSchema);
     assert(autoApplied.status === "SUCCESS", "auto mode should apply scoped value edits when safe auto-apply is enabled");
     assert(autoApplied.mode === "auto", "auto apply result should preserve auto mode");
@@ -222,7 +222,7 @@ async function main() {
       request: "Fix formula in Report A10",
       workbookContextId: prepared.workbookContextId,
       target: { sheetName: "Report", range: "A10" },
-      values: { values: [[100]] }
+      values: { patches: [{ target: { sheetName: "Report", range: "A10" }, values: [[100]] }] }
     }, agentOutputSchema);
     assert(formulaBlocked.status === "NEEDS_INPUT", "auto mode should not treat formula repair as a value write");
     assert(formulaBlocked.telemetry?.safetyDecision === "manual_review:advanced_workflow", "formula-sensitive auto request should report manual review decision");
