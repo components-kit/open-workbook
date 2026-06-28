@@ -192,6 +192,7 @@ function minimalDataValidationSummaryAnswer(answer: Record<string, unknown>): Re
     optionCount: answer.optionCount,
     sourceComplete: answer.sourceComplete,
     sourceRange: answer.sourceRange,
+    fieldContext: Array.isArray(answer.fieldContext) ? answer.fieldContext.slice(0, 12) : undefined,
     guidance: answer.guidance
   });
 }

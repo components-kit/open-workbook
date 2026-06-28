@@ -2043,7 +2043,7 @@ export class AgentOrchestrator {
       };
     }
     const answer = method === "range.read_data_validation"
-      ? dataValidationSummaryAnswer(result, resolved.sheetName, normalizedRange)
+      ? dataValidationSummaryAnswer(result, metadata, resolved.sheetName, normalizedRange)
       : { kind: "range_metadata", method, result };
     return {
       status: (result as { ok?: boolean }).ok === false ? "VALIDATION_FAILED" : "SUCCESS",
@@ -10647,7 +10647,7 @@ function rangeMetadataMethodForAction(action: AgentIntentAction | undefined): st
   }
 }
 
-function dataValidationSummaryAnswer(result: unknown, sheetName: string, range: string): Record<string, unknown> {
+function dataValidationSummaryAnswer(result: unknown, metadata: WorkbookMetadata, sheetName: string, range: string): Record<string, unknown> {
   const typed = result && typeof result === "object" ? result as Record<string, unknown> : {};
   const data = typed.data && typeof typed.data === "object" ? typed.data as Record<string, unknown> : {};
   const rules = dataValidationRulesFromMetadata(data);
@@ -10672,6 +10672,7 @@ function dataValidationSummaryAnswer(result: unknown, sheetName: string, range: 
   const first = summaries[0] as Record<string, unknown> | undefined;
   const type = stringValue(first?.type ?? data.type);
   const mixedRange = typeof type === "string" && /inconsistent/i.test(type);
+  const fieldContext = validationFieldContext(metadata, sheetName, range, summaries);
   return stripUndefinedRecord({
     kind: "data_validation_summary",
     source: "runtime_range_metadata",
@@ -10687,11 +10688,88 @@ function dataValidationSummaryAnswer(result: unknown, sheetName: string, range: 
     optionCount: first?.optionCount,
     sourceComplete: summaries.length > 0 ? summaries.every((rule) => rule.sourceComplete === true) : false,
     sourceRange: first?.sourceRange,
+    fieldContext,
     validationRangeStatus: mixedRange ? "mixed_or_inconsistent_range" : undefined,
     guidance: mixedRange
       ? "This multi-cell range has mixed/inconsistent validation. Do not conclude the dropdown option is missing or the rule is broken from this range summary. Read one representative data cell with the dropdown, such as the selected cell or a known row in the Transaction Type column, to inspect its exact validation source."
       : "Use this inline validation summary to answer dropdown option questions. Add missing dropdown values by updating the source-list cells when sourceRange is present; otherwise preview a write_data_validation rule rewrite."
   });
+}
+
+function validationFieldContext(
+  metadata: WorkbookMetadata,
+  sheetName: string,
+  range: string,
+  summaries: Array<Record<string, unknown>>
+): Array<Record<string, unknown>> | undefined {
+  if (summaries.length === 0) {
+    return undefined;
+  }
+  return summaries.map((summary) => {
+    const address = stringValue(summary.address) ?? range;
+    const bounds = columnRangeBounds(address, metadata, sheetName) ?? columnRangeBounds(range, metadata, sheetName);
+    const column = bounds ? metadataColumnsForSheet(metadata, sheetName).find((candidate) => candidate.index === bounds.startColumn - 1) : undefined;
+    const validation = fieldValidationContext(summary);
+    const allowedValues = Array.isArray(summary.options) ? summary.options.filter((value): value is string => typeof value === "string") : undefined;
+    return stripUndefinedRecord({
+      field: column?.name ?? (bounds ? columnLetter(bounds.startColumn - 1) : undefined),
+      range: address,
+      headerRange: column ? headerRangeForColumn(metadata, sheetName, column) : undefined,
+      semanticType: column?.role,
+      dataType: column?.inferredType,
+      hasValidation: true,
+      allowedValues,
+      allowedValueCount: typeof summary.optionCount === "number" ? summary.optionCount : allowedValues?.length,
+      allowedValuesTruncated: false,
+      validation,
+      examples: allowedValues?.slice(0, 3)
+    });
+  });
+}
+
+function fieldValidationContext(summary: Record<string, unknown>): Record<string, unknown> | undefined {
+  const type = stringValue(summary.type);
+  const sourceKind = stringValue(summary.sourceKind);
+  const options = Array.isArray(summary.options) ? summary.options.filter((value): value is string => typeof value === "string") : undefined;
+  const sourceRange = stringValue(summary.sourceRange);
+  const source = stringValue(summary.source);
+  if (sourceKind === "inline_list") {
+    return stripUndefinedRecord({
+      type,
+      sourceType: "inline",
+      options,
+      optionCount: typeof summary.optionCount === "number" ? summary.optionCount : options?.length,
+      truncated: false
+    });
+  }
+  if (sourceKind === "range_formula" && sourceRange) {
+    const dynamic = /\b(INDIRECT|OFFSET|CHOOSE|INDEX|FILTER)\b/i.test(sourceRange);
+    return stripUndefinedRecord({
+      type,
+      sourceType: dynamic ? "formula" : "range",
+      sourceRange: dynamic ? undefined : sourceRange,
+      formula: dynamic ? source : undefined,
+      optionsResolved: dynamic ? false : options !== undefined,
+      reason: dynamic ? "Dynamic or dependent dropdown; options depend on formula evaluation." : undefined,
+      options,
+      optionCount: typeof summary.optionCount === "number" ? summary.optionCount : options?.length,
+      truncated: false
+    });
+  }
+  return stripUndefinedRecord({
+    type,
+    sourceType: sourceKind,
+    optionsResolved: options !== undefined,
+    options,
+    optionCount: typeof summary.optionCount === "number" ? summary.optionCount : options?.length,
+    truncated: false
+  });
+}
+
+function headerRangeForColumn(metadata: WorkbookMetadata, sheetName: string, column: ColumnMetadata): string | undefined {
+  const sheet = metadata.sheets.find((candidate) => candidate.name === sheetName);
+  const header = sheet?.headers.find((candidate) => candidate.columns.some((item) => item.index === column.index));
+  return header ? `${column.letter}${header.row}` : undefined;
 }
 
 function dataValidationRulesFromMetadata(data: Record<string, unknown>): Record<string, unknown>[] {
@@ -13610,6 +13688,7 @@ function compactDataValidationSummaryAnswer(answer: Record<string, unknown>, res
     sourceRange: answer.sourceRange,
     validationRangeStatus: answer.validationRangeStatus,
     rules: Array.isArray(answer.rules) ? answer.rules.slice(0, 8) : undefined,
+    fieldContext: Array.isArray(answer.fieldContext) ? answer.fieldContext.slice(0, 12) : undefined,
     guidance: answer.guidance,
     resultUri,
     fullResultUri

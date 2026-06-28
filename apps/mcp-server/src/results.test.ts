@@ -67,6 +67,13 @@ describe("MCP result rendering", () => {
         options: ["driver_wage_remaining", "owner_cash_topup"],
         optionCount: 2,
         sourceComplete: true,
+        fieldContext: [{
+          field: "Transaction Type",
+          range: "E:E",
+          hasValidation: true,
+          allowedValues: ["driver_wage_remaining", "owner_cash_topup"],
+          validation: { type: "list", sourceType: "inline", optionCount: 2 }
+        }],
         guidance: "Use this inline validation summary to answer dropdown option questions."
       },
       proof: [{ sheetName: "May 2026", range: "E:E", label: "range metadata" }],
@@ -93,6 +100,10 @@ describe("MCP result rendering", () => {
     expect(text).toContain("do not fetch full detail");
     expect(text).not.toContain("exact rows/raw values need");
     expect((result.structuredContent.answer as any).kind).toBe("data_validation_summary");
+    expect((result.structuredContent.answer as any).fieldContext[0]).toMatchObject({
+      field: "Transaction Type",
+      validation: { sourceType: "inline" }
+    });
   });
 
   it("keeps text compact while preserving structured content and resource links", () => {

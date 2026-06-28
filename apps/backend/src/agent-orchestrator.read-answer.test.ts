@@ -693,7 +693,25 @@ describe("AgentOrchestrator Read Answer Routing", () => {
         range: "D1:D4",
         options: ["Open", "Closed", "Pending"],
         optionCount: 3,
-        sourceComplete: true
+        sourceComplete: true,
+        fieldContext: [
+          expect.objectContaining({
+            field: "Status",
+            range: "D1:D4",
+            headerRange: "D1",
+            semanticType: "status",
+            dataType: "status",
+            hasValidation: true,
+            allowedValues: ["Open", "Closed", "Pending"],
+            allowedValueCount: 3,
+            validation: expect.objectContaining({
+              type: "list",
+              sourceType: "inline",
+              options: ["Open", "Closed", "Pending"],
+              optionCount: 3
+            })
+          })
+        ]
       });
       expect(result.taskOutcome).toBe("final_answer");
       expect(result.maxRecommendedFollowupCalls).toBe(0);
@@ -1025,10 +1043,58 @@ describe("AgentOrchestrator Read Answer Routing", () => {
         kind: "data_validation_summary",
         sourceFormula: "=Lists!$A$2:$A$40",
         sourceRange: "Lists!$A$2:$A$40",
-        sourceComplete: false
+        sourceComplete: false,
+        fieldContext: [
+          expect.objectContaining({
+            validation: expect.objectContaining({
+              type: "List",
+              sourceType: "range",
+              sourceRange: "Lists!$A$2:$A$40",
+              optionsResolved: false
+            })
+          })
+        ]
       });
       expect((result.answer as any).guidance).toContain("source-list cells");
       expect(result.maxRecommendedFollowupCalls).toBe(0);
+    });
+
+  it("marks dynamic dropdown formulas as unresolved field context", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      runtime.readRangeMetadata = async (method: string, request: any) => {
+        runtime.runtimeMethodCalls[method] = (runtime.runtimeMethodCalls[method] ?? 0) + 1;
+        return {
+          ok: true,
+          method,
+          request,
+          data: {
+            address: request.address,
+            rules: [{
+              address: request.address,
+              type: "list",
+              source: "=INDIRECT($B2)",
+              inCellDropDown: true
+            }]
+          }
+        };
+      };
+
+      const result = await agent.run({
+        request: "Check dependent subcategory dropdown.",
+        mode: "answer",
+        intent: { action: "read_data_validation" },
+        target: { sheetName: "Data", range: "D2:D4" }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any).fieldContext[0].validation).toMatchObject({
+        type: "list",
+        sourceType: "formula",
+        formula: "=INDIRECT($B2)",
+        optionsResolved: false,
+        reason: expect.stringContaining("Dynamic or dependent dropdown")
+      });
     });
 
   it("finds similar prior-period rows across related workbook sheets", async () => {
