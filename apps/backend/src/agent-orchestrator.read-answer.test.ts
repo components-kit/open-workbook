@@ -646,7 +646,7 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       });
     });
 
-  it("recognizes query_rows as a read-only contract distinct from visible filters", async () => {
+  it("executes query_rows as a read-only table query distinct from visible filters", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
       const metadata = createCachedMetadata("wbctx_query_rows_contract");
@@ -663,28 +663,33 @@ describe("AgentOrchestrator Read Answer Routing", () => {
           return: ["Date", "Status"],
           limit: 10,
           format: "json_rows"
-        }
+        },
+        responseMode: "verbose"
       });
 
-      expect(result.status).toBe("NEEDS_INPUT");
+      expect(result.status).toBe("SUCCESS");
       expect((result.answer as any)).toMatchObject({
-        kind: "query_rows_contract",
-        readOnly: true,
+        kind: "query_rows_result",
+        matchedRows: 2,
+        returnedRows: 2,
         predicates: [{ column: "Status", op: "=", value: "Open" }],
-        returnColumns: ["Date", "Status"],
+        columns: ["Date", "Status"],
+        rows: [
+          { Date: "2026-06-01", Status: "Open" },
+          { Date: "2026-06-03", Status: "Open" }
+        ],
+        rowAddresses: ["Data!2:2", "Data!4:4"],
         fieldCandidates: expect.arrayContaining([
           expect.objectContaining({
             term: "Status",
             candidates: expect.arrayContaining([expect.objectContaining({ field: "Status", columnLetter: "D" })])
           })
-        ]),
-        supportedOperators: expect.arrayContaining(["=", "between", "contains"]),
-        supportedFormats: ["json_rows", "csv", "summary"]
+        ])
       });
       expect(result.telemetry.intentAction).toBe("query_rows");
       expect(result.telemetry.workflowRoute).toBe("rows.query");
-      expect(result.agentInstruction).toContain("Do not call filter_range");
-      expect(runtime.readBatchCount).toBe(0);
+      expect(result.agentInstruction).toContain("do not apply visible Excel filters");
+      expect(runtime.runtimeMethodCalls["table.read"]).toBe(1);
     });
 
   it("includes section header and data anchors in sheet summaries", async () => {

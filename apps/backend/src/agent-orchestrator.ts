@@ -5,6 +5,7 @@ import {
   type AgentCandidate,
   type AgentOperationId,
   type AgentProofReference,
+  type AgentQueryRowsPredicate,
   type AgentRequiredFollowup,
   type AgentRunInput,
   type AgentRunExecutionContext,
@@ -883,7 +884,7 @@ export class AgentOrchestrator {
       return this.regionAnswerOutput(metadata, input, requestedMode, runMetrics);
     }
     if (intentAction(input) === "query_rows") {
-      return queryRowsContractOutput(metadata, input, requestedMode);
+      return this.queryRowsAnswerOutput(metadata, input, requestedMode, runMetrics);
     }
     const templateAnswer = await this.templateAnswerOutput(metadata, input, requestedMode, runMetrics);
     if (templateAnswer) {
@@ -998,6 +999,130 @@ export class AgentOrchestrator {
       resourceLinks: [contextResource(metadata.workbookContextId)],
       nextAction: "answer_now",
       warnings: [...adjustedTarget.warnings, ...(profile.warning ? [profile.warning] : [])]
+    };
+  }
+
+  private async queryRowsAnswerOutput(
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode,
+    runMetrics: AgentRunMetrics
+  ): Promise<Omit<AgentRunOutput, "telemetry">> {
+    const values = input.values as Record<string, unknown> | undefined;
+    if (!Array.isArray(values?.where) || values.where.length === 0) {
+      return queryRowsContractOutput(metadata, input, requestedMode);
+    }
+    const table = resolveQueryRowsTable(metadata, input.target);
+    if (!table) {
+      return {
+        status: "AMBIGUOUS_TARGET",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: "query_rows needs a table target or a sheet with one known table.",
+        candidates: findAgentCandidates(metadata, input).filter((candidate) => candidate.kind === "table" || candidate.kind === "sheet").slice(0, 5),
+        proof: [],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "call_with_target",
+        warnings: ["Retry query_rows with target.tableName or a narrower target.sheetName."]
+      };
+    }
+    if (!table.name) {
+      return queryRowsContractOutput(metadata, input, requestedMode);
+    }
+    const predicates = normalizeQueryRowsPredicates(values.where);
+    const returnTerms = Array.isArray(values.return) ? values.return.filter((value): value is string => typeof value === "string") : [];
+    const fieldTerms = [...new Set([...predicates.map((predicate) => predicate.column), ...returnTerms])];
+    const fieldResolutions = resolveSemanticFields(metadata, fieldTerms, {
+      ...(input.target ?? {}),
+      sheetName: table.sheetName,
+      tableName: table.name
+    });
+    const unresolved = fieldResolutions.filter((resolution) => !resolution.best || resolution.ambiguous);
+    if (unresolved.length > 0) {
+      return {
+        status: "AMBIGUOUS_TARGET",
+        mode: requestedMode,
+        workbookContextId: metadata.workbookContextId,
+        summary: `query_rows could not resolve ${unresolved.map((resolution) => `"${resolution.term}"`).join(", ")} unambiguously.`,
+        answer: {
+          kind: "query_rows_field_candidates",
+          fieldCandidates: fieldResolutions.map((resolution) => ({
+            term: resolution.term,
+            ambiguous: resolution.ambiguous,
+            candidates: resolution.candidates
+          }))
+        },
+        proof: [{ sheetName: table.sheetName, range: table.range, label: "query table" }],
+        resourceLinks: [contextResource(metadata.workbookContextId)],
+        nextAction: "call_with_target",
+        warnings: ["Retry query_rows with exact column names from fieldCandidates."]
+      };
+    }
+    const fieldByTerm = new Map(fieldResolutions.map((resolution) => [resolution.term, resolution.best!]));
+    const returnFields = returnTerms.length > 0
+      ? returnTerms.map((term) => fieldByTerm.get(term)!).filter(Boolean)
+      : table.columns.map((column) => ({
+          field: column.name,
+          sheetName: table.sheetName,
+          ...(table.name ? { tableName: table.name } : {}),
+          range: table.range,
+          columnIndex: column.index,
+          columnLetter: column.letter,
+          score: 1,
+          evidence: ["table column"]
+        }));
+    const predicateFields = predicates.map((predicate) => fieldByTerm.get(predicate.column)!);
+    const readColumns = [...new Set([...predicateFields, ...returnFields].map((field) => field.field))];
+    const limit = clampQueryRowsLimit(values.limit);
+    const scanLimit = clampQueryRowsScanLimit(values.scanLimit, limit);
+    runMetrics.internalReadCount += 1;
+    const result = await this.runtime.readTable({
+      workbookId: metadata.workbook.workbookId as WorkbookId,
+      tableName: table.name,
+      columns: readColumns,
+      rowLimit: scanLimit
+    });
+    if ((result as { ok?: boolean }).ok === false) {
+      return formulaRuntimeErrorOutput(metadata, requestedMode, `query_rows failed to read ${table.name ?? table.range}.`, result);
+    }
+    const tableResult = (result as { table?: { headers?: string[]; values?: CellMatrix } }).table;
+    const headers = tableResult?.headers ?? readColumns;
+    const rows = tableResult?.values ?? [];
+    const matched = rows
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) => predicates.every((predicate, predicateIndex) => queryPredicateMatches(row[headers.indexOf(predicateFields[predicateIndex]!.field)], predicate)));
+    const returned = matched.slice(0, limit);
+    const outputColumns = returnFields.map((field) => field.field);
+    const rowObjects = returned.map(({ row }) => Object.fromEntries(outputColumns.map((column) => [column, row[headers.indexOf(column)]])));
+    const rowAddresses = returned.map(({ index }) => queryRowAddress(table, index));
+    const format = values.format === "csv" || values.format === "summary" ? values.format : "json_rows";
+    return {
+      status: "SUCCESS",
+      mode: requestedMode,
+      workbookContextId: metadata.workbookContextId,
+      summary: `query_rows matched ${matched.length} row(s) in ${table.name ?? table.range}; returned ${returned.length}.`,
+      answer: {
+        kind: "query_rows_result",
+        matchedRows: matched.length,
+        returnedRows: returned.length,
+        format,
+        columns: outputColumns,
+        truncated: matched.length > returned.length || rows.length >= scanLimit,
+        rows: format === "csv" ? rowsToCsv(outputColumns, rowObjects) : format === "summary" ? undefined : rowObjects,
+        rowAddresses,
+        predicates,
+        fieldCandidates: fieldResolutions.map((resolution) => ({
+          term: resolution.term,
+          ambiguous: resolution.ambiguous,
+          candidates: resolution.candidates
+        }))
+      },
+      proof: [{ sheetName: table.sheetName, range: table.dataRange ?? table.range, label: "queried rows" }],
+      resourceLinks: [contextResource(metadata.workbookContextId)],
+      nextAction: "answer_now",
+      agentInstruction: "Answer from query_rows_result. Use rowAddresses for any follow-up preview patches; do not apply visible Excel filters for read-only lookup.",
+      maxRecommendedFollowupCalls: 0,
+      warnings: rows.length >= scanLimit ? [`Scanned row limit ${scanLimit} was reached; narrow the query or increase values.scanLimit if more rows are needed.`] : []
     };
   }
 
@@ -19912,6 +20037,96 @@ function queryRowsContractOutput(metadata: WorkbookMetadata, input: AgentRunInpu
       ? ["query_rows execution is scheduled for the next implementation milestone; do not emulate it with a visible filter."]
       : ["Provide values.where with one or more predicates. Do not use filter_range for lookup-only questions."]
   };
+}
+
+function resolveQueryRowsTable(metadata: WorkbookMetadata, target: AgentRunTarget | undefined): TableMetadata | undefined {
+  const tables = metadata.tables
+    .filter((table) => !target?.sheetName || table.sheetName === target.sheetName)
+    .filter((table) => !target?.tableName || table.name === target.tableName);
+  if (target?.tableName) {
+    return tables[0];
+  }
+  return tables.length === 1 ? tables[0] : undefined;
+}
+
+function normalizeQueryRowsPredicates(value: unknown[]): AgentQueryRowsPredicate[] {
+  return value
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object" && !Array.isArray(entry))
+    .map((entry) => ({
+      column: String(entry.column ?? ""),
+      op: isQueryRowsOperator(entry.op) ? entry.op : "=",
+      ...(entry.value !== undefined ? { value: entry.value } : {})
+    }))
+    .filter((predicate) => predicate.column.trim().length > 0);
+}
+
+function isQueryRowsOperator(value: unknown): value is AgentQueryRowsPredicate["op"] {
+  return typeof value === "string" && (AGENT_QUERY_ROW_OPERATORS as readonly string[]).includes(value);
+}
+
+function clampQueryRowsLimit(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(1, Math.min(500, Math.floor(value))) : 100;
+}
+
+function clampQueryRowsScanLimit(value: unknown, limit: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(limit, Math.min(5_000, Math.floor(value))) : Math.max(limit, 500);
+}
+
+function queryPredicateMatches(value: unknown, predicate: AgentQueryRowsPredicate): boolean {
+  const op = predicate.op;
+  if (op === "blank") return value === undefined || value === null || String(value).trim() === "";
+  if (op === "not_blank") return !(value === undefined || value === null || String(value).trim() === "");
+  if (op === "contains") return normalizedCellString(value).includes(normalizedCellString(predicate.value));
+  if (op === "starts_with") return normalizedCellString(value).startsWith(normalizedCellString(predicate.value));
+  if (op === "ends_with") return normalizedCellString(value).endsWith(normalizedCellString(predicate.value));
+  if (op === "in") return Array.isArray(predicate.value) && predicate.value.some((candidate) => cellEquals(value, candidate));
+  if (op === "not_in") return Array.isArray(predicate.value) && !predicate.value.some((candidate) => cellEquals(value, candidate));
+  if (op === "between" && Array.isArray(predicate.value) && predicate.value.length >= 2) {
+    return compareCells(value, predicate.value[0]) >= 0 && compareCells(value, predicate.value[1]) <= 0;
+  }
+  if (op === ">") return compareCells(value, predicate.value) > 0;
+  if (op === ">=") return compareCells(value, predicate.value) >= 0;
+  if (op === "<") return compareCells(value, predicate.value) < 0;
+  if (op === "<=") return compareCells(value, predicate.value) <= 0;
+  if (op === "!=") return !cellEquals(value, predicate.value);
+  return cellEquals(value, predicate.value);
+}
+
+function cellEquals(left: unknown, right: unknown): boolean {
+  const leftNumber = numericCellValue(left);
+  const rightNumber = numericCellValue(right);
+  if (leftNumber !== undefined && rightNumber !== undefined) {
+    return leftNumber === rightNumber;
+  }
+  return normalizedCellString(left) === normalizedCellString(right);
+}
+
+function compareCells(left: unknown, right: unknown): number {
+  const leftNumber = numericCellValue(left);
+  const rightNumber = numericCellValue(right);
+  if (leftNumber !== undefined && rightNumber !== undefined) {
+    return leftNumber - rightNumber;
+  }
+  return normalizedCellString(left).localeCompare(normalizedCellString(right));
+}
+
+function normalizedCellString(value: unknown): string {
+  return value === undefined || value === null ? "" : String(value).trim().toLowerCase();
+}
+
+function queryRowAddress(table: TableMetadata, zeroBasedDataIndex: number): string {
+  const parsed = table.dataRange ? tryParseA1Address(stripSheetName(table.dataRange)) : undefined;
+  const rowNumber = (parsed?.startRow ?? 2) + zeroBasedDataIndex;
+  return `${table.sheetName}!${rowNumber}:${rowNumber}`;
+}
+
+function rowsToCsv(columns: string[], rows: Array<Record<string, unknown>>): string {
+  return [columns.join(","), ...rows.map((row) => columns.map((column) => csvCell(row[column])).join(","))].join("\n");
+}
+
+function csvCell(value: unknown): string {
+  const text = value === undefined || value === null ? "" : String(value);
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, "\"\"")}"` : text;
 }
 
 function uniqueProofFromChanges(changes: NonNullable<AgentRunOutput["changes"]>): AgentProofReference[] {
