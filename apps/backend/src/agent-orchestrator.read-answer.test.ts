@@ -672,6 +672,12 @@ describe("AgentOrchestrator Read Answer Routing", () => {
         readOnly: true,
         predicates: [{ column: "Status", op: "=", value: "Open" }],
         returnColumns: ["Date", "Status"],
+        fieldCandidates: expect.arrayContaining([
+          expect.objectContaining({
+            term: "Status",
+            candidates: expect.arrayContaining([expect.objectContaining({ field: "Status", columnLetter: "D" })])
+          })
+        ]),
         supportedOperators: expect.arrayContaining(["=", "between", "contains"]),
         supportedFormats: ["json_rows", "csv", "summary"]
       });

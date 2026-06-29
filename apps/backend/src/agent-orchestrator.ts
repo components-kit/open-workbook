@@ -76,6 +76,7 @@ import { routeAgentRequest, type IntentRoute } from "./agent-routing.js";
 import { isAgentIntentAction, modeForIntentAction, normalizeAgentIntent, type AgentIntentAction, type NormalizedAgentIntent } from "./agent-intent.js";
 import { findAgentActionHandler, type AgentActionHandlerDefinition, type AgentActionHandlerId } from "./agent-action-handlers.js";
 import { buildSemanticWorkbookIndex } from "./semantic-workbook-index.js";
+import { resolveSemanticFields } from "./semantic-field-resolver.js";
 
 const AGENT_RESULT_TTL_MS = 60 * 60 * 1000;
 const AGENT_LARGE_RANGE_CELL_LIMIT = 10_000;
@@ -19869,6 +19870,10 @@ function queryRowsContractOutput(metadata: WorkbookMetadata, input: AgentRunInpu
   const values = input.values as Record<string, unknown> | undefined;
   const hasWhere = Array.isArray(values?.where);
   const returnColumns = Array.isArray(values?.return) ? values.return.filter((value): value is string => typeof value === "string") : undefined;
+  const predicateColumns = hasWhere
+    ? (values?.where as Array<Record<string, unknown>>).map((predicate) => predicate.column).filter((column): column is string => typeof column === "string")
+    : [];
+  const fieldResolutions = resolveSemanticFields(metadata, [...predicateColumns, ...(returnColumns ?? [])], input.target);
   return {
     status: hasWhere ? "NEEDS_INPUT" : "VALIDATION_FAILED",
     mode: requestedMode,
@@ -19882,6 +19887,11 @@ function queryRowsContractOutput(metadata: WorkbookMetadata, input: AgentRunInpu
       target: input.target ?? {},
       predicates: hasWhere ? values?.where : [],
       returnColumns: returnColumns ?? [],
+      fieldCandidates: fieldResolutions.map((resolution) => ({
+        term: resolution.term,
+        ambiguous: resolution.ambiguous,
+        candidates: resolution.candidates
+      })),
       supportedOperators: [...AGENT_QUERY_ROW_OPERATORS],
       supportedFormats: ["json_rows", "csv", "summary"],
       requiredShape: {
