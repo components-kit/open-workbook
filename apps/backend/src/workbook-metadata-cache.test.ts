@@ -76,6 +76,35 @@ describe("WorkbookMetadataCache context state", () => {
     });
   });
 
+  it("plans narrow refreshes for only missing or stale required facets", () => {
+    const cache = new WorkbookMetadataCache();
+    const metadata = createCachedMetadata("wbctx_cache_refresh_plan");
+    cache.set(metadata);
+    cache.markFacetsStale(metadata.workbookContextId, ["values", "aggregates"], ["Data!B2"]);
+
+    expect(cache.planContextRefresh(metadata.workbookContextId, ["schema", "headers", "values"])).toMatchObject({
+      status: "mostly_fresh",
+      requiredFacets: ["schema", "headers", "values"],
+      cacheFacets: ["schema", "headers"],
+      liveFacets: ["values"],
+      missingFacets: [],
+      staleFacets: ["values"],
+      staleRanges: ["Data!B2"],
+      requiresRead: true,
+      readStrategy: "read_stale_facets",
+      reason: expect.stringContaining("stale context facets"),
+      confidence: 2 / 3
+    });
+    expect(cache.planContextRefresh("missing_ctx", ["schema", "validation"])).toMatchObject({
+      status: "stale",
+      cacheFacets: [],
+      liveFacets: ["schema", "validation"],
+      missingFacets: ["schema", "validation"],
+      requiresRead: true,
+      readStrategy: "read_missing_facets"
+    });
+  });
+
   it("records optimistic value updates without making the values facet stale", () => {
     const cache = new WorkbookMetadataCache();
     const metadata = createCachedMetadata("wbctx_cache_optimistic_values");

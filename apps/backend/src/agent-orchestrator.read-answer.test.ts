@@ -607,6 +607,45 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       });
     });
 
+  it("reports required cached facets and stale-only refresh plans in contextUsed", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_context_refresh_plan");
+      agent.metadataCache.set(metadata);
+      agent.metadataCache.markFacetsStale(metadata.workbookContextId, ["values", "aggregates"], ["Data!B2"]);
+
+      const result = await agent.run({
+        request: "Analyze Data values",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        target: { sheetName: "Data" },
+        context: {
+          strategy: "analysis",
+          include: ["schema", "values"]
+        }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.contextUsed).toMatchObject({
+        strategy: "analysis",
+        requiredFacets: expect.arrayContaining(["schema", "headers", "values"]),
+        cachedFacetsUsed: expect.arrayContaining(["schema", "headers"]),
+        staleFacets: ["values"],
+        facetsToRefresh: ["values"],
+        freshnessRequiresRead: true,
+        refreshReason: expect.stringContaining("stale context facets")
+      });
+      expect(result.contextUsed?.missingFacets).toBeUndefined();
+      expect(result.telemetry.contextRefresh).toMatchObject({
+        requiredFacets: expect.arrayContaining(["schema", "headers", "values"]),
+        cachedFacets: expect.arrayContaining(["schema", "headers"]),
+        staleFacets: ["values"],
+        facetsToRefresh: ["values"],
+        readStrategy: "read_stale_facets",
+        requiresRead: true
+      });
+    });
+
   it("includes section header and data anchors in sheet summaries", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);

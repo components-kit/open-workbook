@@ -234,6 +234,7 @@ export class AgentOrchestrator {
       const fullContextUsed = buildContextUsed(input, budgeted, runMetrics, cacheHit, preliminaryPayloadBytes, this.metadataCache);
       const contextUsed = compactContextUsedForBudget(fullContextUsed, input.budget?.maxPayloadBytes);
       const contextFreshness = compactContextFreshnessForBudget(budgeted.contextFreshness ?? contextFreshnessForOutput(budgeted, this.metadataCache).contextFreshness, input.budget?.maxPayloadBytes);
+      const contextRefresh = buildContextRefreshTelemetry(budgeted, runMetrics, this.metadataCache);
       const budgetedWithContext = stripUndefinedOptionals({
         ...budgeted,
         ...(contextUsed !== undefined ? { contextUsed } : {}),
@@ -274,6 +275,7 @@ export class AgentOrchestrator {
           metadataPolicy: runMetrics.route.metadataPolicy,
           readPolicy: runMetrics.route.readPolicy,
           contextDecision: runMetrics.route.contextDecision,
+          ...(contextRefresh !== undefined ? { contextRefresh } : {}),
           ...(operationRisk !== undefined ? { operationRisk } : {}),
           ...(actionHandlerId !== undefined ? { actionHandlerId } : {}),
           ...(autoApplyBlockedReason !== undefined ? { autoApplyBlockedReason } : {}),
@@ -12864,11 +12866,11 @@ function buildContextUsed(
   const strategy = output.mode === "preview_update" || output.taskOutcome === "preview_ready" ? "mutation" as const : decision.strategy;
   const suggestedNext = contextSuggestedNext(output, input);
   const requiredCacheFacets = contextDecisionCacheFacets(decision.include);
-  const freshnessCheck = output.workbookContextId ? metadataCache.checkFacetFreshness(String(output.workbookContextId), requiredCacheFacets) : undefined;
-  const source = cacheHit && freshnessCheck?.requiresRead !== true
+  const refreshPlan = output.workbookContextId ? metadataCache.planContextRefresh(String(output.workbookContextId), requiredCacheFacets) : undefined;
+  const source = cacheHit && refreshPlan?.requiresRead !== true
     ? "cache" as const
     : runMetrics.internalReadCount > 0 || runMetrics.fullReadCellCount > 0
-      ? "live" as const
+      ? refreshPlan && refreshPlan.cacheFacets.length > 0 ? "mixed" as const : "live" as const
       : output.workbookContextId
         ? "mixed" as const
         : "none" as const;
@@ -12889,10 +12891,14 @@ function buildContextUsed(
     stopReason,
     included: [...included],
     ...(rangesRead.length > 0 ? { rangesRead } : {}),
-    ...(freshnessCheck ? {
-      cachedFacetsUsed: freshnessCheck.freshRequiredFacets,
-      staleFacets: freshnessCheck.staleRequiredFacets,
-      freshnessRequiresRead: freshnessCheck.requiresRead
+    ...(refreshPlan ? {
+      requiredFacets: refreshPlan.requiredFacets,
+      cachedFacetsUsed: refreshPlan.cacheFacets,
+      ...(refreshPlan.missingFacets.length > 0 ? { missingFacets: refreshPlan.missingFacets } : {}),
+      ...(refreshPlan.staleFacets.length > 0 ? { staleFacets: refreshPlan.staleFacets } : {}),
+      ...(refreshPlan.liveFacets.length > 0 ? { facetsToRefresh: refreshPlan.liveFacets } : {}),
+      refreshReason: refreshPlan.reason,
+      freshnessRequiresRead: refreshPlan.requiresRead
     } : {}),
     ...(rowsRead !== undefined ? { rowsRead } : {}),
     estimatedTokens: Math.ceil(payloadBytes / 4),
@@ -12916,6 +12922,29 @@ function contextFreshnessForOutput(
   }
   const state = metadataCache.getContextState(workbookContextId);
   return state ? { contextFreshness: state.freshness } : {};
+}
+
+function buildContextRefreshTelemetry(
+  output: Omit<AgentRunOutput, "telemetry">,
+  runMetrics: AgentRunMetrics,
+  metadataCache: WorkbookMetadataCache
+): NonNullable<AgentRunOutput["telemetry"]["contextRefresh"]> | undefined {
+  const workbookContextId = output.workbookContextId ? String(output.workbookContextId) : undefined;
+  if (!workbookContextId) {
+    return undefined;
+  }
+  const plan = metadataCache.planContextRefresh(workbookContextId, contextDecisionCacheFacets(runMetrics.route.contextDecision.include));
+  return {
+    requiredFacets: plan.requiredFacets,
+    cachedFacets: plan.cacheFacets,
+    facetsToRefresh: plan.liveFacets,
+    ...(plan.missingFacets.length > 0 ? { missingFacets: plan.missingFacets } : {}),
+    ...(plan.staleFacets.length > 0 ? { staleFacets: plan.staleFacets } : {}),
+    readStrategy: plan.readStrategy,
+    reason: plan.reason,
+    requiresRead: plan.requiresRead,
+    confidence: plan.confidence
+  };
 }
 
 function contextDecisionCacheFacets(include: string[]): ContextFacet[] {
@@ -13042,6 +13071,8 @@ function compactContextUsedForBudget(contextUsed: AgentRunOutput["contextUsed"],
     levelUsed: contextUsed.levelUsed,
     stagesUsed: contextUsed.stagesUsed.slice(0, 4),
     included: contextUsed.included.slice(0, 5),
+    ...(contextUsed.facetsToRefresh !== undefined ? { facetsToRefresh: contextUsed.facetsToRefresh.slice(0, 4) } : {}),
+    ...(contextUsed.freshnessRequiresRead !== undefined ? { freshnessRequiresRead: contextUsed.freshnessRequiresRead } : {}),
     ...(contextUsed.truncated !== undefined ? { truncated: contextUsed.truncated } : {}),
     ...(contextUsed.confidence !== undefined ? { confidence: contextUsed.confidence } : {}),
     ...(contextUsed.source !== undefined ? { source: contextUsed.source } : {})

@@ -211,6 +211,20 @@ export interface ContextFreshnessCheck {
   confidence: number;
 }
 
+export interface ContextRefreshPlan {
+  status: FacetFreshnessStatus;
+  requiredFacets: ContextFacet[];
+  cacheFacets: ContextFacet[];
+  liveFacets: ContextFacet[];
+  missingFacets: ContextFacet[];
+  staleFacets: ContextFacet[];
+  staleRanges?: string[];
+  requiresRead: boolean;
+  readStrategy: "use_cache" | "read_missing_facets" | "read_stale_facets" | "read_missing_and_stale_facets";
+  reason: string;
+  confidence: number;
+}
+
 export const DEFAULT_METADATA_CACHE_TTL_MS = 60 * 60 * 1000;
 
 export class WorkbookMetadataCache {
@@ -316,6 +330,51 @@ export class WorkbookMetadataCache {
         ? "Required context facets are fresh."
         : `Required context facets are stale: ${staleRequiredFacets.join(", ")}.`,
       confidence: uniqueRequired.length === 0 ? state.freshness.confidence : freshRequiredFacets.length / uniqueRequired.length
+    };
+  }
+
+  planContextRefresh(workbookContextId: string, requiredFacets: ContextFacet[]): ContextRefreshPlan {
+    const uniqueRequired = [...new Set(requiredFacets)];
+    const state = this.contextStateById.get(workbookContextId);
+    if (!state) {
+      return {
+        status: "stale",
+        requiredFacets: uniqueRequired,
+        cacheFacets: [],
+        liveFacets: uniqueRequired,
+        missingFacets: uniqueRequired,
+        staleFacets: [],
+        requiresRead: uniqueRequired.length > 0,
+        readStrategy: uniqueRequired.length > 0 ? "read_missing_facets" : "use_cache",
+        reason: uniqueRequired.length > 0 ? "No cached context state exists for the requested workbook context." : "No context facets were required.",
+        confidence: uniqueRequired.length > 0 ? 0 : 1
+      };
+    }
+    const knownFacets = new Set<ContextFacet>([...state.freshness.freshFacets, ...state.freshness.staleFacets]);
+    const stale = new Set(state.freshness.staleFacets);
+    const missingFacets = uniqueRequired.filter((facet) => !knownFacets.has(facet));
+    const staleFacets = uniqueRequired.filter((facet) => stale.has(facet));
+    const cacheFacets = uniqueRequired.filter((facet) => knownFacets.has(facet) && !stale.has(facet));
+    const liveFacets = [...new Set<ContextFacet>([...missingFacets, ...staleFacets])];
+    const readStrategy: ContextRefreshPlan["readStrategy"] = missingFacets.length > 0 && staleFacets.length > 0
+      ? "read_missing_and_stale_facets"
+      : missingFacets.length > 0
+        ? "read_missing_facets"
+        : staleFacets.length > 0
+          ? "read_stale_facets"
+          : "use_cache";
+    return {
+      status: liveFacets.length === 0 ? "fresh" : freshnessStatus(cacheFacets.length, liveFacets.length),
+      requiredFacets: uniqueRequired,
+      cacheFacets,
+      liveFacets,
+      missingFacets,
+      staleFacets,
+      ...(state.freshness.staleRanges ? { staleRanges: [...state.freshness.staleRanges] } : {}),
+      requiresRead: liveFacets.length > 0,
+      readStrategy,
+      reason: contextRefreshReason(readStrategy, missingFacets, staleFacets),
+      confidence: uniqueRequired.length === 0 ? state.freshness.confidence : cacheFacets.length / uniqueRequired.length
     };
   }
 
@@ -457,6 +516,23 @@ function freshnessStatus(freshCount: number, staleCount: number): FacetFreshness
 function freshnessConfidence(freshCount: number, staleCount: number): number {
   const total = freshCount + staleCount;
   return total === 0 ? 0 : Math.max(0, Math.min(1, freshCount / total));
+}
+
+function contextRefreshReason(
+  readStrategy: ContextRefreshPlan["readStrategy"],
+  missingFacets: ContextFacet[],
+  staleFacets: ContextFacet[]
+): string {
+  if (readStrategy === "use_cache") {
+    return "All required context facets are fresh in cache.";
+  }
+  if (readStrategy === "read_missing_facets") {
+    return `Read only missing context facets: ${missingFacets.join(", ")}.`;
+  }
+  if (readStrategy === "read_stale_facets") {
+    return `Read only stale context facets: ${staleFacets.join(", ")}.`;
+  }
+  return `Read missing facets (${missingFacets.join(", ")}) and stale facets (${staleFacets.join(", ")}).`;
 }
 
 function cloneContextState(state: WorkbookContextState): WorkbookContextState {

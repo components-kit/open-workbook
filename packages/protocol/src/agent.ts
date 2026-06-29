@@ -478,8 +478,12 @@ export interface AgentContextUsed {
   stopReason?: string;
   included: string[];
   rangesRead?: string[];
+  requiredFacets?: string[];
   cachedFacetsUsed?: string[];
+  missingFacets?: string[];
   staleFacets?: string[];
+  facetsToRefresh?: string[];
+  refreshReason?: string;
   freshnessRequiresRead?: boolean;
   rowsRead?: number;
   estimatedTokens?: number;
@@ -565,6 +569,17 @@ export interface AgentRunOutput {
       stopWhen?: string;
       source: "caller" | "inferred";
       reason: string;
+    };
+    contextRefresh?: {
+      requiredFacets: string[];
+      cachedFacets: string[];
+      facetsToRefresh: string[];
+      missingFacets?: string[];
+      staleFacets?: string[];
+      readStrategy: string;
+      reason: string;
+      requiresRead: boolean;
+      confidence: number;
     };
     candidateCount?: number;
     resourceLinkCount?: number;
