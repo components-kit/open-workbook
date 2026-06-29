@@ -5208,6 +5208,32 @@ Data rows:
       expect(explicitFormat.telemetry.actionHandlerId).toBe("format_range");
     });
 
+  it("redirects lookup-only filter_range requests to query_rows", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const redirected = await agent.run({
+        request: "Show rows where Status = Open",
+        mode: "preview_update",
+        intent: { action: "filter_range" },
+        target: { sheetName: "Data", tableName: "Transactions" },
+        values: { where: [{ column: "Status", op: "=", value: "Open" }] }
+      });
+
+      expect(redirected.status).toBe("NEEDS_WORKFLOW_REDIRECT");
+      expect((redirected.answer as any)).toMatchObject({
+        kind: "query_rows_redirect",
+        suggestedIntentAction: "query_rows"
+      });
+      expect(redirected.suggestedOperation).toMatchObject({
+        mode: "answer",
+        intent: { action: "query_rows" },
+        values: { where: [{ column: "Status", op: "=", value: "Open" }] }
+      });
+      expect(redirected.agentInstruction).toContain("filter_range only when the user explicitly asks");
+      expect(runtime.writeBatchCount).toBe(0);
+    });
+
   it("clears range autofilters without requiring table filter criteria", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);

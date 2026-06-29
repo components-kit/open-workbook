@@ -4110,6 +4110,9 @@ export class AgentOrchestrator {
             : this.previewClearAutoFilter(metadata, input, requestedMode, resolved)
           : undefined;
       case "filter_range":
+        if (isLookupOnlyFilterRequest(input)) {
+          return queryRowsRedirectOutput(metadata, input, requestedMode);
+        }
         return resolved?.candidate.kind === "table"
           ? this.previewTableApplyFilters(metadata, input, requestedMode, resolved)
           : resolved ? this.previewAutoFilterMutation(metadata, input, requestedMode, resolved) : undefined;
@@ -20046,6 +20049,46 @@ function queryRowsContractOutput(metadata: WorkbookMetadata, input: AgentRunInpu
       ? ["query_rows execution is scheduled for the next implementation milestone; do not emulate it with a visible filter."]
       : ["Provide values.where with one or more predicates. Do not use filter_range for lookup-only questions."]
   };
+}
+
+function queryRowsRedirectOutput(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> {
+  const values = input.values as Record<string, unknown> | undefined;
+  return {
+    status: "NEEDS_WORKFLOW_REDIRECT",
+    mode: requestedMode,
+    workbookContextId: metadata.workbookContextId,
+    summary: "Use query_rows for read-only row lookup; filter_range changes the visible Excel filter.",
+    answer: {
+      kind: "query_rows_redirect",
+      reason: "lookup_only_filter_request",
+      suggestedIntentAction: "query_rows"
+    },
+    proof: [],
+    resourceLinks: [contextResource(metadata.workbookContextId)],
+    suggestedOperation: {
+      request: input.request,
+      mode: "answer",
+      intent: { action: "query_rows", reason: "Read-only row lookup should not mutate the visible Excel filter." },
+      ...(input.target ? { target: input.target } : {}),
+      values: {
+        ...(Array.isArray(values?.where) ? { where: values.where } : {}),
+        ...(Array.isArray(values?.return) ? { return: values.return } : {}),
+        ...(typeof values?.limit === "number" ? { limit: values.limit } : {})
+      }
+    },
+    nextAction: "call_with_target",
+    agentInstruction: "Call suggestedOperation with query_rows for lookup-only row filtering. Use filter_range only when the user explicitly asks to change the visible Excel view.",
+    warnings: ["filter_range is reserved for visible Excel filter mutations, not read-only lookup."]
+  };
+}
+
+function isLookupOnlyFilterRequest(input: AgentRunInput): boolean {
+  const values = input.values as Record<string, unknown> | undefined;
+  const hasQueryShape = Array.isArray(values?.where);
+  const lower = input.request.toLowerCase();
+  const lookupWording = /\b(show|list|find|which|what|read)\b.+\b(rows?|records?|invoices?|transactions?)\b|\brows?\s+where\b|\bwhere\b.+\b(?:is|=|contains?|between)\b/i.test(input.request);
+  const explicitVisibleFilter = /\b(apply|set|change|visible|excel view|in excel|show only|autofilter)\b.*\bfilter\b|\bfilter\s+(?:the|this)\s+(?:sheet|table|range|view)\b/i.test(lower);
+  return (hasQueryShape || lookupWording) && !explicitVisibleFilter;
 }
 
 function resolveQueryRowsTable(metadata: WorkbookMetadata, target: AgentRunTarget | undefined): TableMetadata | undefined {
