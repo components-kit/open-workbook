@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 import {
   AGENT_CONTEXT_FACETS,
+  AGENT_CONTEXT_LEVELS,
   AGENT_CONTEXT_SCOPES,
   AGENT_CONTEXT_STRATEGIES,
   AGENT_DETAIL_LEVELS,
@@ -68,6 +69,7 @@ export function agentRunInputSchema() {
     targetHints: z.array(z.string()).optional()
   }), "intent");
   const contextSchema = jsonObjectString(z.object({
+    level: z.enum(AGENT_CONTEXT_LEVELS.map(String) as [string, ...string[]]).transform((value) => Number(value)).or(z.number().int().min(0).max(5)).optional(),
     strategy: z.enum(AGENT_CONTEXT_STRATEGIES).optional(),
     scope: z.enum(AGENT_CONTEXT_SCOPES).optional(),
     include: z.array(z.enum(AGENT_CONTEXT_FACETS)).optional()
@@ -232,6 +234,9 @@ function agentRunOutputSchema() {
     contextUsed: z.object({
       strategy: z.enum(AGENT_CONTEXT_STRATEGIES),
       scope: z.enum(AGENT_CONTEXT_SCOPES),
+      levelRequested: z.number().int().min(0).max(5).optional(),
+      levelUsed: z.number().int().min(0).max(5),
+      levelReason: z.string(),
       stagesUsed: z.array(z.string()),
       included: z.array(z.string()),
       rangesRead: z.array(z.string()).optional(),

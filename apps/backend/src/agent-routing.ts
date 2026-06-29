@@ -1,4 +1,4 @@
-import type { AgentContextFacet, AgentContextPolicy, AgentContextScope, AgentContextStrategy, AgentRunMode, AgentRunTarget } from "@components-kit/open-workbook-protocol";
+import type { AgentContextFacet, AgentContextLevel, AgentContextPolicy, AgentContextScope, AgentContextStrategy, AgentRunMode, AgentRunTarget } from "@components-kit/open-workbook-protocol";
 import { modeForIntentAction, type NormalizedAgentIntent } from "./agent-intent.js";
 
 export interface IntentRoute {
@@ -18,6 +18,7 @@ export interface AgentContextDecision {
   strategy: AgentContextStrategy;
   scope: AgentContextScope;
   include: AgentContextFacet[];
+  level: AgentContextLevel;
   source: "caller" | "inferred";
   reason: string;
 }
@@ -247,6 +248,7 @@ function inferContextPolicy(
     strategy: callerPolicy.strategy ?? inferred.strategy,
     scope: callerPolicy.scope ?? inferred.scope,
     include: callerPolicy.include ?? inferred.include,
+    level: callerPolicy.level ?? inferred.level,
     source: "caller",
     reason: "Caller supplied context policy; missing fields were filled from router defaults."
   };
@@ -264,37 +266,44 @@ function inferDefaultContextPolicy(
   const action = intent?.accepted ? intent.action : undefined;
 
   if (requestedMode === "status") {
-    return contextDecision("overview", "workbook", ["metadata"], "Status only needs minimal workbook/runtime metadata.");
+    return contextDecision("overview", "workbook", ["metadata"], 1, "Status only needs minimal workbook/runtime metadata.");
   }
   if (requestedMode === "find" || workflow.workflowRoute === "semantic_index.find") {
-    return contextDecision("overview", "workbook", ["metadata", "schema", "tables", "regions", "names"], "Find uses workbook structure, schema, and semantic index context.");
+    return contextDecision("overview", "workbook", ["metadata", "schema", "tables", "regions", "names"], 2, "Find uses workbook structure, schema, and semantic index context.");
   }
   if (requestedMode === "apply_update") {
-    return contextDecision("overview", "target", ["metadata"], "Apply reuses the previewed operation and avoids new reads unless validation requires them.");
+    return contextDecision("overview", "target", ["metadata"], 1, "Apply reuses the previewed operation and avoids new reads unless validation requires them.");
   }
   if (requestedMode === "preview_update" || workflow.workflowRoute === "mutation.preview" || action === "write_values") {
-    return contextDecision("focused", targetScope, ["metadata", "schema", "field_context", "validation"], "Mutation previews need focused target context plus field and validation facets.");
+    return contextDecision("focused", targetScope, ["metadata", "schema", "field_context", "validation"], mutationContextLevel(action), "Mutation previews need focused target context plus field and validation facets.");
   }
   if (/\b(here|selected|selection|current cell|current range|this area|look here)\b/.test(lower) || target?.entity === "active_selection") {
-    return contextDecision("focused", "active_selection", ["values", "schema", "field_context", "formulas", "formats", "validation"], "User referenced the selected/current area.");
+    return contextDecision("focused", "active_selection", ["values", "schema", "field_context", "formulas", "formats", "validation"], 4, "User referenced the selected/current area.");
   }
   if (/\b(analy[sz]e|analysis|trend|trends|compare|comparison|variance|anomal(?:y|ies)|patterns?|aggregate|summary stats)\b/.test(lower)) {
-    return contextDecision("analysis", targetScope, ["metadata", "schema", "field_context", "values", "formulas"], "Analytical wording needs patterns, values, and formula context within budget.");
+    return contextDecision("analysis", targetScope, ["metadata", "schema", "field_context", "values", "formulas"], 5, "Analytical wording needs patterns, values, and formula context within budget.");
   }
   if (/\b(check|broken|issue|problem|why|diagnos(?:e|is)|dropdown|validation|filter|formula|conditional formatting|format not working)\b/.test(lower)) {
-    return contextDecision("audit", targetScope, ["schema", "field_context", "validation", "filters", "formulas", "conditional_formatting", "formats"], "Audit wording needs proof facets such as validation, filters, formulas, and formats.");
+    return contextDecision("audit", targetScope, ["schema", "field_context", "validation", "filters", "formulas", "conditional_formatting", "formats"], 4, "Audit wording needs proof facets such as validation, filters, formulas, and formats.");
   }
   if (workflow.workflowRoute === "workbook.summary") {
-    return contextDecision("overview", "workbook", ["metadata", "schema", "tables", "regions", "values"], workflow.workflowReasons[0] ?? "Workbook overview uses lightweight structure and samples.");
+    return contextDecision("overview", "workbook", ["metadata", "schema", "tables", "regions", "values"], 2, workflow.workflowReasons[0] ?? "Workbook overview uses lightweight structure and samples.");
   }
   if (workflow.workflowRoute === "sheet.summary") {
-    return contextDecision("overview", targetScope === "workbook" ? "active_sheet" : targetScope, ["metadata", "schema", "tables", "regions", "values"], workflow.workflowReasons[0] ?? "Sheet overview uses structure and bounded values.");
+    return contextDecision("overview", targetScope === "workbook" ? "active_sheet" : targetScope, ["metadata", "schema", "tables", "regions", "values"], 2, workflow.workflowReasons[0] ?? "Sheet overview uses structure and bounded values.");
   }
-  return contextDecision("auto", targetScope, ["metadata", "schema", "values"], "Default context policy lets the backend choose the cheapest useful context.");
+  return contextDecision("auto", targetScope, ["metadata", "schema", "values"], 3, "Default context policy lets the backend choose the cheapest useful context.");
 }
 
-function contextDecision(strategy: AgentContextStrategy, scope: AgentContextScope, include: AgentContextFacet[], reason: string): AgentContextDecision {
-  return { strategy, scope, include, source: "inferred", reason };
+function contextDecision(strategy: AgentContextStrategy, scope: AgentContextScope, include: AgentContextFacet[], level: AgentContextLevel, reason: string): AgentContextDecision {
+  return { strategy, scope, include, level, source: "inferred", reason };
+}
+
+function mutationContextLevel(action: string | undefined): AgentContextLevel {
+  if (action === "write_formulas" || action === "format_range" || action === "write_conditional_formatting") {
+    return 4;
+  }
+  return 3;
 }
 
 function contextScopeForTarget(target: AgentRunTarget | undefined): AgentContextScope {

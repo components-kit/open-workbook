@@ -553,11 +553,14 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(workbookSummary.telemetry.contextDecision).toMatchObject({
         strategy: "overview",
         scope: "workbook",
+        level: 2,
         source: "inferred"
       });
       expect(workbookSummary.contextUsed).toMatchObject({
         strategy: "overview",
         scope: "workbook",
+        levelUsed: 2,
+        levelReason: expect.stringContaining("overview"),
         stagesUsed: expect.arrayContaining(["metadata", "schema"]),
         included: expect.arrayContaining(["metadata", "schema"]),
         source: "mixed"

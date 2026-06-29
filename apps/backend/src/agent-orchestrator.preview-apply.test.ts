@@ -1323,6 +1323,7 @@ Data rows:
       });
       expect(preview.contextUsed).toMatchObject({
         strategy: "mutation",
+        levelUsed: 3,
         stagesUsed: expect.arrayContaining(["field_context", "audit_facets", "target_resolution", "preview_proof"]),
         included: expect.arrayContaining(["validation", "field_context", "preview"])
       });

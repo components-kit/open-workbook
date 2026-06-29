@@ -80,16 +80,16 @@ describe("agent workflow routing", () => {
   });
 
   it.each([
-    ["What is this sheet about?", "answer", "overview", "active_sheet", ["metadata", "schema"]],
-    ["Look here and explain this area", "answer", "focused", "active_selection", ["values", "field_context", "validation"]],
-    ["Analyze this sheet for trends", "answer", "analysis", "workbook", ["values", "formulas"]],
-    ["Check why this dropdown is broken", "answer", "audit", "workbook", ["validation", "filters", "formulas"]],
-    ["Find payment status column", "find", "overview", "workbook", ["schema", "tables", "regions"]],
-    ["Update this category", "preview_update", "focused", "workbook", ["field_context", "validation"]]
-  ] as const)("infers context policy for %s", (request, mode, strategy, scope, include) => {
+    ["What is this sheet about?", "answer", "overview", "active_sheet", 2, ["metadata", "schema"]],
+    ["Look here and explain this area", "answer", "focused", "active_selection", 4, ["values", "field_context", "validation"]],
+    ["Analyze this sheet for trends", "answer", "analysis", "workbook", 5, ["values", "formulas"]],
+    ["Check why this dropdown is broken", "answer", "audit", "workbook", 4, ["validation", "filters", "formulas"]],
+    ["Find payment status column", "find", "overview", "workbook", 2, ["schema", "tables", "regions"]],
+    ["Update this category", "preview_update", "focused", "workbook", 3, ["field_context", "validation"]]
+  ] as const)("infers context policy for %s", (request, mode, strategy, scope, level, include) => {
     const route = routeAgentRequest(request, mode);
 
-    expect(route.contextDecision).toMatchObject({ strategy, scope, source: "inferred" });
+    expect(route.contextDecision).toMatchObject({ strategy, scope, level, source: "inferred" });
     expect(route.contextDecision.include).toEqual(expect.arrayContaining([...include]));
   });
 
@@ -106,13 +106,28 @@ describe("agent workflow routing", () => {
   it("respects caller context policy and fills missing fields from defaults", () => {
     const route = routeAgentRequest("Check dropdown issue", "answer", undefined, {
       strategy: "audit",
+      level: 4,
       include: ["validation"]
     });
 
     expect(route.contextDecision).toMatchObject({
       strategy: "audit",
       scope: "workbook",
+      level: 4,
       include: ["validation"],
+      source: "caller"
+    });
+  });
+
+  it("lets callers cap or request an explicit context level", () => {
+    const route = routeAgentRequest("Analyze this sheet for trends", "answer", undefined, {
+      level: 2,
+      strategy: "analysis"
+    });
+
+    expect(route.contextDecision).toMatchObject({
+      strategy: "analysis",
+      level: 2,
       source: "caller"
     });
   });

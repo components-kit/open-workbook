@@ -287,6 +287,8 @@ export type AgentContextStrategy = typeof AGENT_CONTEXT_STRATEGIES[number];
 
 export const AGENT_CONTEXT_SCOPES = ["active_selection", "active_region", "active_sheet", "target", "workbook"] as const;
 export type AgentContextScope = typeof AGENT_CONTEXT_SCOPES[number];
+export const AGENT_CONTEXT_LEVELS = [0, 1, 2, 3, 4, 5] as const;
+export type AgentContextLevel = typeof AGENT_CONTEXT_LEVELS[number];
 
 export const AGENT_CONTEXT_FACETS = [
   "metadata",
@@ -310,6 +312,7 @@ export const AGENT_CONTEXT_FACETS = [
 export type AgentContextFacet = typeof AGENT_CONTEXT_FACETS[number];
 
 export interface AgentContextPolicy {
+  level?: AgentContextLevel;
   strategy?: AgentContextStrategy;
   scope?: AgentContextScope;
   include?: AgentContextFacet[];
@@ -466,6 +469,9 @@ export interface AgentChangePreview {
 export interface AgentContextUsed {
   strategy: AgentContextStrategy;
   scope: AgentContextScope;
+  levelRequested?: AgentContextLevel;
+  levelUsed: AgentContextLevel;
+  levelReason: string;
   stagesUsed: string[];
   included: string[];
   rangesRead?: string[];
@@ -534,6 +540,7 @@ export interface AgentRunOutput {
       strategy: AgentContextStrategy;
       scope: AgentContextScope;
       include: AgentContextFacet[];
+      level?: AgentContextLevel;
       source: "caller" | "inferred";
       reason: string;
     };

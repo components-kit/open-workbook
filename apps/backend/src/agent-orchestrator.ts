@@ -12841,6 +12841,9 @@ function buildContextUsed(
   return stripUndefinedRecord({
     strategy,
     scope: decision.scope,
+    ...(input.context?.level !== undefined ? { levelRequested: input.context.level } : {}),
+    levelUsed: decision.level,
+    levelReason: decision.reason,
     stagesUsed: [...stages],
     included: [...included],
     ...(rangesRead.length > 0 ? { rangesRead } : {}),
@@ -12923,6 +12926,9 @@ function compactContextUsedForBudget(contextUsed: AgentRunOutput["contextUsed"],
     return {
       strategy: contextUsed.strategy,
       scope: contextUsed.scope,
+      ...(contextUsed.levelRequested !== undefined ? { levelRequested: contextUsed.levelRequested } : {}),
+      levelUsed: contextUsed.levelUsed,
+      levelReason: contextUsed.levelReason,
       stagesUsed: contextUsed.stagesUsed.slice(0, 1),
       included: contextUsed.included.slice(0, 1)
     };
@@ -12930,6 +12936,9 @@ function compactContextUsedForBudget(contextUsed: AgentRunOutput["contextUsed"],
   return stripUndefinedRecord({
     strategy: contextUsed.strategy,
     scope: contextUsed.scope,
+    ...(contextUsed.levelRequested !== undefined ? { levelRequested: contextUsed.levelRequested } : {}),
+    levelUsed: contextUsed.levelUsed,
+    levelReason: contextUsed.levelReason,
     stagesUsed: contextUsed.stagesUsed.slice(0, 4),
     included: contextUsed.included.slice(0, 5),
     ...(contextUsed.truncated !== undefined ? { truncated: contextUsed.truncated } : {}),
