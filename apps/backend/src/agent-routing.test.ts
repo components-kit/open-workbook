@@ -91,6 +91,8 @@ describe("agent workflow routing", () => {
 
     expect(route.contextDecision).toMatchObject({ strategy, scope, level, source: "inferred" });
     expect(route.contextDecision.include).toEqual(expect.arrayContaining([...include]));
+    expect(route.contextDecision.plannedStages.length).toBeGreaterThan(0);
+    expect(route.contextDecision.stopWhen).toBeTruthy();
   });
 
   it("uses explicit target as focused context scope for mutation previews", () => {
@@ -128,6 +130,7 @@ describe("agent workflow routing", () => {
     expect(route.contextDecision).toMatchObject({
       strategy: "analysis",
       level: 2,
+      plannedStages: ["metadata", "schema", "semantic_index"],
       source: "caller"
     });
   });

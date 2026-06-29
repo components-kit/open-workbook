@@ -471,8 +471,11 @@ export interface AgentContextUsed {
   scope: AgentContextScope;
   levelRequested?: AgentContextLevel;
   levelUsed: AgentContextLevel;
-  levelReason: string;
+  levelReason?: string;
+  stagesPlanned?: string[];
   stagesUsed: string[];
+  skippedStages?: string[];
+  stopReason?: string;
   included: string[];
   rangesRead?: string[];
   rowsRead?: number;
@@ -541,6 +544,8 @@ export interface AgentRunOutput {
       scope: AgentContextScope;
       include: AgentContextFacet[];
       level?: AgentContextLevel;
+      plannedStages?: string[];
+      stopWhen?: string;
       source: "caller" | "inferred";
       reason: string;
     };

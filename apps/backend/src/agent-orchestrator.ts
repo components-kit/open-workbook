@@ -12838,13 +12838,21 @@ function buildContextUsed(
   const strategy = output.mode === "preview_update" || output.taskOutcome === "preview_ready" ? "mutation" as const : decision.strategy;
   const suggestedNext = contextSuggestedNext(output, input);
   const source = cacheHit ? "cache" as const : runMetrics.internalReadCount > 0 || runMetrics.fullReadCellCount > 0 ? "live" as const : output.workbookContextId ? "mixed" as const : "none" as const;
+  const stagesUsed = [...stages];
+  const skippedStages = decision.plannedStages.filter((stage) => !stages.has(stage));
+  const stopReason = strategy === "mutation"
+    ? "stop after target, field, validation, and preview proof are sufficient for safe preview"
+    : decision.stopWhen;
   return stripUndefinedRecord({
     strategy,
     scope: decision.scope,
     ...(input.context?.level !== undefined ? { levelRequested: input.context.level } : {}),
     levelUsed: decision.level,
     levelReason: decision.reason,
-    stagesUsed: [...stages],
+    stagesPlanned: decision.plannedStages,
+    stagesUsed,
+    ...(skippedStages.length > 0 ? { skippedStages } : {}),
+    stopReason,
     included: [...included],
     ...(rangesRead.length > 0 ? { rangesRead } : {}),
     ...(rowsRead !== undefined ? { rowsRead } : {}),
@@ -12928,7 +12936,7 @@ function compactContextUsedForBudget(contextUsed: AgentRunOutput["contextUsed"],
       scope: contextUsed.scope,
       ...(contextUsed.levelRequested !== undefined ? { levelRequested: contextUsed.levelRequested } : {}),
       levelUsed: contextUsed.levelUsed,
-      levelReason: contextUsed.levelReason,
+      ...(contextUsed.stagesPlanned !== undefined ? { stagesPlanned: contextUsed.stagesPlanned.slice(0, 2) } : {}),
       stagesUsed: contextUsed.stagesUsed.slice(0, 1),
       included: contextUsed.included.slice(0, 1)
     };
@@ -12938,8 +12946,9 @@ function compactContextUsedForBudget(contextUsed: AgentRunOutput["contextUsed"],
     scope: contextUsed.scope,
     ...(contextUsed.levelRequested !== undefined ? { levelRequested: contextUsed.levelRequested } : {}),
     levelUsed: contextUsed.levelUsed,
-    levelReason: contextUsed.levelReason,
+    ...(contextUsed.stagesPlanned !== undefined ? { stagesPlanned: contextUsed.stagesPlanned.slice(0, 6) } : {}),
     stagesUsed: contextUsed.stagesUsed.slice(0, 4),
+    ...(contextUsed.skippedStages !== undefined ? { skippedStages: contextUsed.skippedStages.slice(0, 4) } : {}),
     included: contextUsed.included.slice(0, 5),
     ...(contextUsed.truncated !== undefined ? { truncated: contextUsed.truncated } : {}),
     ...(contextUsed.confidence !== undefined ? { confidence: contextUsed.confidence } : {}),

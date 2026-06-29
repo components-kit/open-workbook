@@ -1324,7 +1324,9 @@ Data rows:
       expect(preview.contextUsed).toMatchObject({
         strategy: "mutation",
         levelUsed: 3,
+        stagesPlanned: expect.arrayContaining(["metadata", "schema", "field_context", "validation"]),
         stagesUsed: expect.arrayContaining(["field_context", "audit_facets", "target_resolution", "preview_proof"]),
+        stopReason: expect.stringContaining("safe preview"),
         included: expect.arrayContaining(["validation", "field_context", "preview"])
       });
       expect(preview.warnings.join(" ")).toContain("validated Status");

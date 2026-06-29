@@ -19,6 +19,8 @@ export interface AgentContextDecision {
   scope: AgentContextScope;
   include: AgentContextFacet[];
   level: AgentContextLevel;
+  plannedStages: string[];
+  stopWhen: string;
   source: "caller" | "inferred";
   reason: string;
 }
@@ -244,11 +246,16 @@ function inferContextPolicy(
   if (!callerPolicy) {
     return inferred;
   }
+  const strategy = callerPolicy.strategy ?? inferred.strategy;
+  const include = callerPolicy.include ?? inferred.include;
+  const level = callerPolicy.level ?? inferred.level;
   return {
-    strategy: callerPolicy.strategy ?? inferred.strategy,
+    strategy,
     scope: callerPolicy.scope ?? inferred.scope,
-    include: callerPolicy.include ?? inferred.include,
-    level: callerPolicy.level ?? inferred.level,
+    include,
+    level,
+    plannedStages: plannedContextStages(strategy, include, level),
+    stopWhen: contextStopReason(strategy, level),
     source: "caller",
     reason: "Caller supplied context policy; missing fields were filled from router defaults."
   };
@@ -296,7 +303,16 @@ function inferDefaultContextPolicy(
 }
 
 function contextDecision(strategy: AgentContextStrategy, scope: AgentContextScope, include: AgentContextFacet[], level: AgentContextLevel, reason: string): AgentContextDecision {
-  return { strategy, scope, include, level, source: "inferred", reason };
+  return {
+    strategy,
+    scope,
+    include,
+    level,
+    plannedStages: plannedContextStages(strategy, include, level),
+    stopWhen: contextStopReason(strategy, level),
+    source: "inferred",
+    reason
+  };
 }
 
 function mutationContextLevel(action: string | undefined): AgentContextLevel {
@@ -304,6 +320,44 @@ function mutationContextLevel(action: string | undefined): AgentContextLevel {
     return 4;
   }
   return 3;
+}
+
+function plannedContextStages(strategy: AgentContextStrategy, include: AgentContextFacet[], level: AgentContextLevel): string[] {
+  const stages = new Set<string>();
+  if (level >= 1) stages.add("metadata");
+  if (level >= 2) {
+    stages.add("schema");
+    stages.add("semantic_index");
+  }
+  if (level >= 3) {
+    stages.add("field_context");
+    if (include.includes("values")) stages.add(strategy === "focused" || strategy === "mutation" ? "focused_values" : "sample_values");
+    if (include.includes("validation")) stages.add("validation");
+  }
+  if (level >= 4) {
+    if (include.includes("formulas")) stages.add("formulas");
+    if (include.includes("formats")) stages.add("formats");
+    if (include.includes("filters")) stages.add("filters");
+    if (include.includes("conditional_formatting") || strategy === "audit") stages.add("audit_facets");
+  }
+  if (level >= 5) {
+    stages.add("aggregates");
+    stages.add("anomalies");
+    stages.add("deep_rows");
+  }
+  if (strategy === "mutation") {
+    stages.add("target_resolution");
+    stages.add("preview_proof");
+  }
+  return [...stages];
+}
+
+function contextStopReason(strategy: AgentContextStrategy, level: AgentContextLevel): string {
+  if (strategy === "mutation") return "stop after target, field, validation, and preview proof are sufficient for safe preview";
+  if (level <= 2) return "stop after lightweight workbook structure is enough for the task";
+  if (level === 3) return "stop after field context and bounded values satisfy the request";
+  if (level === 4) return "stop after requested audit facets are available";
+  return "stop when confidence is sufficient or the request budget is reached";
 }
 
 function contextScopeForTarget(target: AgentRunTarget | undefined): AgentContextScope {

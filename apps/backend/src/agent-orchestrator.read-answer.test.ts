@@ -561,7 +561,9 @@ describe("AgentOrchestrator Read Answer Routing", () => {
         scope: "workbook",
         levelUsed: 2,
         levelReason: expect.stringContaining("overview"),
+        stagesPlanned: expect.arrayContaining(["metadata", "schema"]),
         stagesUsed: expect.arrayContaining(["metadata", "schema"]),
+        stopReason: expect.stringContaining("lightweight workbook structure"),
         included: expect.arrayContaining(["metadata", "schema"]),
         source: "mixed"
       });
