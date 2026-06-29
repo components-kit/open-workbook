@@ -345,7 +345,8 @@ export interface AgentRunInput {
       conditionalFormatting?: Record<string, unknown>;
       note?: string;
       comment?: string;
-      options?: Record<string, unknown>;
+      options?: string[] | Record<string, unknown>;
+      allowedValues?: string[];
       reason?: string;
     }>;
   };

@@ -926,13 +926,17 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
         mode: "preview_update",
         workbookContextId: metadata.workbookContextId,
         intent: { action: "format_range" },
-        target: { sheetName: "Data", address: "A1:D1" },
-        values: { style: { fillColor: "#1A3C6E", fontColor: "#FFFFFF", fontBold: true, horizontalAlignment: "center" } }
+        values: {
+          patches: [{
+            target: { sheetName: "Data", range: "A1:D1" },
+            style: { fillColor: "#1A3C6E", fontColor: "#FFFFFF", fontBold: true, horizontalAlignment: "center" }
+          }]
+        }
       });
 
       expect(preview.status).toBe("PREVIEW_READY");
-      expect((preview.answer as any).range).toBe("A1:D1");
-      expect((preview.answer as any).range).not.toBe("A1:D4");
+      expect(preview.changes?.[0]).toMatchObject({ sheetName: "Data", range: "A1:D1" });
+      expect(preview.changes?.[0]?.range).not.toBe("A1:D4");
     });
 
   it("accepts OpenCode grouped header column arrays and does not trigger broad scope guard", async () => {
@@ -2068,8 +2072,12 @@ Data rows:
         request: "Write Payment Variance formula to May 2026",
         mode: "preview_update",
         intent: { action: "write_formulas" },
-        target: { sheetName: "May 2026", range: "I2:I4" },
-        values: { formula: "=H2-G2" }
+        values: {
+          patches: [{
+            target: { sheetName: "May 2026", range: "I2:I4" },
+            formulas: [["=H2-G2"]]
+          }]
+        }
       });
       const applied = await agent.run({
         request: "Apply formula repair",
@@ -2098,8 +2106,13 @@ Data rows:
         request: "Write formulas and make the text red",
         mode: "preview_update",
         intent: { action: "write_formulas" },
-        target: { sheetName: "May 2026", range: "I2:I3" },
-        values: { formula: "=H2-G2", style: { fontColor: "#FF0000" } }
+        values: {
+          patches: [{
+            target: { sheetName: "May 2026", range: "I2:I3" },
+            formulas: [["=H2-G2"]],
+            style: { fontColor: "#FF0000" }
+          }]
+        }
       });
       const applied = await agent.run({
         request: "Apply formula and style repair",
@@ -2154,8 +2167,12 @@ Data rows:
       request: "Format Data C2:C4 as currency",
       mode: "preview_update",
       intent: { action: "write_number_formats" },
-      target: { sheetName: "Data", range: "C2:C4" },
-      values: { numberFormat: "$#,##0.00" }
+      values: {
+        patches: [{
+          target: { sheetName: "Data", range: "C2:C4" },
+          numberFormat: "$#,##0.00"
+        }]
+      }
     });
     const applied = await agent.run({
       request: "Apply number formats",
@@ -3261,8 +3278,13 @@ Data rows:
         request: "Add select list to Data D2:D4.",
         mode: "preview_update",
         intent: { action: "write_data_validation" },
-        target: { sheetName: "Data", range: "D2:D4" },
-        values: { options: ["20GP", "40GP", "40HQ"], inCellDropDown: true }
+        values: {
+          patches: [{
+            target: { sheetName: "Data", range: "D2:D4" },
+            options: ["20GP", "40GP", "40HQ"],
+            inCellDropDown: true
+          }]
+        }
       });
       const applied = await agent.run({
         request: "Apply dropdown validation.",
@@ -3272,7 +3294,7 @@ Data rows:
       });
 
       expect(preview.status).toBe("PREVIEW_READY");
-      expect((preview.answer as any).validation).toEqual({
+      expect(((preview.answer as any).entries?.[0]?.validation ?? (preview.answer as any).validation)).toEqual({
         type: "list",
         source: ["20GP", "40GP", "40HQ"],
         inCellDropDown: true,
@@ -3299,12 +3321,16 @@ Data rows:
         request: "Update Transaction Type dropdown source range.",
         mode: "preview_update",
         intent: { action: "write_data_validation" },
-        target: { sheetName: "May 2026", range: "E2:E244" },
-        values: { validation: { type: "list", source: "=Dropdown Lists!$B$2:$B$28", inCellDropDown: true } }
+        values: {
+          patches: [{
+            target: { sheetName: "May 2026", range: "E2:E244" },
+            validation: { type: "list", source: "=Dropdown Lists!$B$2:$B$28", inCellDropDown: true }
+          }]
+        }
       });
 
       expect(preview.status).toBe("PREVIEW_READY");
-      expect((preview.answer as any).validation).toMatchObject({
+      expect(((preview.answer as any).entries?.[0]?.validation ?? (preview.answer as any).validation)).toMatchObject({
         type: "list",
         source: "='Dropdown Lists'!$B$2:$B$28",
         inCellDropDown: true,
@@ -3325,8 +3351,15 @@ Data rows:
         request: "Add formula color on Data A2:D4 when column D is 40HQ.",
         mode: "preview_update",
         intent: { action: "write_conditional_formatting" },
-        target: { sheetName: "Data", range: "A2:D4" },
-        values: { formula: "=$D2=\"40HQ\"", style: { fillColor: "#FFFF00", fontColor: "#000000" } }
+        values: {
+          patches: [{
+            target: { sheetName: "Data", range: "A2:D4" },
+            conditionalFormatting: {
+              formula: "=$D2=\"40HQ\"",
+              style: { fillColor: "#FFFF00", fontColor: "#000000" }
+            }
+          }]
+        }
       });
       const applied = await agent.run({
         request: "Apply formula conditional formatting.",
@@ -3520,8 +3553,12 @@ Data rows:
       request: "Set data validation on Data D2:D4 as a list dropdown. Allowed values: 20GP, 40GP, 40HQ.",
       mode: "preview_update",
       intent: { action: "write_data_validation" },
-      target: { sheetName: "Data", range: "D2:D4" },
-      values: { validation: { type: "List", formula1: "20GP,40GP,40HQ" } }
+      values: {
+        patches: [{
+          target: { sheetName: "Data", range: "D2:D4" },
+          validation: { type: "List", formula1: "20GP,40GP,40HQ" }
+        }]
+      }
     });
     const applied = await agent.run({
       request: "Apply dropdown validation.",
@@ -3548,8 +3585,12 @@ Data rows:
       request: "Update May 2026 transaction type dropdown source.",
       mode: "preview_update",
       intent: { action: "write_data_validation" },
-      target: { sheetName: "May 2026", range: "E2:E244" },
-      values: { validation: { type: "list", formula1: "Dropdown Lists!$B$2:$B$28", inCellDropDown: true } }
+      values: {
+        patches: [{
+          target: { sheetName: "May 2026", range: "E2:E244" },
+          validation: { type: "list", formula1: "Dropdown Lists!$B$2:$B$28", inCellDropDown: true }
+        }]
+      }
     });
     const applied = await agent.run({
       request: "Apply dropdown validation.",
@@ -3559,7 +3600,7 @@ Data rows:
     });
 
     expect(preview.status).toBe("PREVIEW_READY");
-    expect((preview.answer as any).validation.source).toBe("='Dropdown Lists'!$B$2:$B$28");
+    expect(((preview.answer as any).entries?.[0]?.validation ?? (preview.answer as any).validation).source).toBe("='Dropdown Lists'!$B$2:$B$28");
     expect(applied.status).toBe("SUCCESS");
     expect(runtime.lastBatchOperations[0]).toMatchObject({
       kind: "range.write_data_validation",
@@ -4225,8 +4266,12 @@ Data rows:
           request: "Write formula to Report A12",
           mode: "preview_update",
           intent: { action: "write_formulas" },
-          target: { sheetName: "Report", range: "A12" },
-          values: { formulas: [["=SUM(B1:B10)"]] }
+          values: {
+            patches: [{
+              target: { sheetName: "Report", range: "A12" },
+              formulas: [["=SUM(B1:B10)"]]
+            }]
+          }
         }
       },
       {
@@ -4236,8 +4281,12 @@ Data rows:
           request: "Format Data C2 as currency",
           mode: "preview_update",
           intent: { action: "write_number_formats" },
-          target: { sheetName: "Data", range: "C2" },
-          values: { numberFormat: "$#,##0.00" }
+          values: {
+            patches: [{
+              target: { sheetName: "Data", range: "C2" },
+              numberFormat: "$#,##0.00"
+            }]
+          }
         }
       },
       {
@@ -4976,6 +5025,57 @@ Data rows:
       });
       expect(result.warnings).toContain("CANONICAL_PATCH_REQUIRED");
       expect(runtime.writeBatchCount).toBe(0);
+    });
+
+  it("rejects legacy top-level structured payloads for patchable direct mutation families", async () => {
+      const cases: Array<Parameters<AgentOrchestrator["run"]>[0]> = [
+        {
+          request: "Write formula to Report A12",
+          mode: "preview_update",
+          intent: { action: "write_formulas" },
+          target: { sheetName: "Report", range: "A12" },
+          values: { formulas: [["=SUM(B1:B10)"]] }
+        },
+        {
+          request: "Format Data C2 as currency",
+          mode: "preview_update",
+          intent: { action: "write_number_formats" },
+          target: { sheetName: "Data", range: "C2" },
+          values: { numberFormat: "$#,##0.00" }
+        },
+        {
+          request: "Style Data A1:D1",
+          mode: "preview_update",
+          intent: { action: "format_range" },
+          target: { sheetName: "Data", range: "A1:D1" },
+          values: { style: { fillColor: "#1A3C6E" } }
+        },
+        {
+          request: "Add dropdown to Data D2:D4",
+          mode: "preview_update",
+          intent: { action: "write_data_validation" },
+          target: { sheetName: "Data", range: "D2:D4" },
+          values: { options: ["20GP", "40GP", "40HQ"] }
+        },
+        {
+          request: "Add conditional formatting",
+          mode: "preview_update",
+          intent: { action: "write_conditional_formatting" },
+          target: { sheetName: "Data", range: "A2:D4" },
+          values: { formula: "=$D2=\"40HQ\"", style: { fillColor: "#FFFF00" } }
+        }
+      ];
+
+      for (const input of cases) {
+        const runtime = new FakeAgentRuntime();
+        const agent = new AgentOrchestrator(runtime as any);
+        const result = await agent.run(input);
+
+        expect(result.status, input.intent?.action).toBe("NEEDS_INPUT");
+        expect((result.answer as any).kind, input.intent?.action).toBe("canonical_patch_required");
+        expect(result.warnings, input.intent?.action).toContain("CANONICAL_PATCH_REQUIRED");
+        expect(runtime.writeBatchCount, input.intent?.action).toBe(0);
+      }
     });
 
   it("reports explicit route metadata for auto mutation routing", async () => {

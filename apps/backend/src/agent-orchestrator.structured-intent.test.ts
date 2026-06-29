@@ -166,8 +166,12 @@ describe("AgentOrchestrator Structured Intent", () => {
         request: "Put this in the cell",
         mode: "preview_update",
         intent: { action: "write_formulas", confidence: 0.9 },
-        target: { sheetName: "Report", range: "B2" },
-        values: { values: [["=SUM(Data!C2:C4)"]] }
+        values: {
+          patches: [{
+            target: { sheetName: "Report", range: "B2" },
+            formulas: [["=SUM(Data!C2:C4)"]]
+          }]
+        }
       });
 
       expect(result.status).toBe("PREVIEW_READY");

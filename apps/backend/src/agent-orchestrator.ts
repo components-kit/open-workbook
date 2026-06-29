@@ -2520,7 +2520,7 @@ export class AgentOrchestrator {
         return mergePreview;
       }
     }
-    if (hasStyleBatchInput(input) && styleEntriesFromInput(metadata, metadata.workbook.workbookId as WorkbookId, input).length > 0) {
+    if (intentAction(input) !== "write_formulas" && hasStyleBatchInput(input) && styleEntriesFromInput(metadata, metadata.workbook.workbookId as WorkbookId, input).length > 0) {
       return this.previewWriteStylesMany(metadata, input, requestedMode);
     }
     const patchValidation = validateDirectPatchInput(input);
@@ -2551,6 +2551,10 @@ export class AgentOrchestrator {
           return guard;
         }
       }
+    }
+    const directMutationIssue = legacyDirectMutationPatchIssue(input);
+    if (directMutationIssue) {
+      return canonicalPatchRequiredOutput(metadata, requestedMode, directMutationIssue.summary, directMutationIssue.warnings);
     }
     const operationPreview = await this.previewOperationIntent(metadata, input, requestedMode);
     if (operationPreview) {
@@ -3192,6 +3196,9 @@ export class AgentOrchestrator {
 
   private async previewOperationIntent(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Promise<Omit<AgentRunOutput, "telemetry"> | undefined> {
     const action = intentAction(input);
+    const operationInput = isCanonicalDirectMutationAction(action)
+      ? canonicalDirectMutationInput(input, action)
+      : input;
     if (action === "transform_values") {
       return this.previewTransformValues(metadata, input, requestedMode);
     }
@@ -3213,19 +3220,19 @@ export class AgentOrchestrator {
     if (action === "improve_visual_readability") {
       return this.previewVisualReadability(metadata, input, requestedMode);
     }
-    const workbookLevelHandler = findAgentActionHandler(input, action, false);
+    const workbookLevelHandler = findAgentActionHandler(operationInput, action, false);
     if (workbookLevelHandler) {
-      return this.previewActionHandler(metadata, input, requestedMode, workbookLevelHandler);
+      return this.previewActionHandler(metadata, operationInput, requestedMode, workbookLevelHandler);
     }
-    const resolved = resolveAgentUpdateTarget(metadata, input);
+    const resolved = resolveAgentUpdateTarget(metadata, operationInput);
     if (!resolved.ok) {
       return undefined;
     }
     const normalizedRange = normalizeOperationRange(metadata, resolved.sheetName, resolved.range);
     const normalizedResolved = { ...resolved, range: normalizedRange };
-    const targetLevelHandler = findAgentActionHandler(input, action, true);
+    const targetLevelHandler = findAgentActionHandler(operationInput, action, true);
     if (targetLevelHandler) {
-      return this.previewActionHandler(metadata, input, requestedMode, targetLevelHandler, normalizedResolved);
+      return this.previewActionHandler(metadata, operationInput, requestedMode, targetLevelHandler, normalizedResolved);
     }
     return undefined;
   }
@@ -3988,12 +3995,13 @@ export class AgentOrchestrator {
       case "write_styles_many":
         return this.previewWriteStylesMany(metadata, input, requestedMode);
       case "write_data_validation":
-        return resolved ? this.previewWriteDataValidation(metadata, input, requestedMode, resolved) : undefined;
+        return resolved ? this.previewWriteDataValidation(metadata, canonicalDirectMutationInput(input, "write_data_validation"), requestedMode, resolved) : undefined;
       case "write_conditional_formatting":
         if (resolved && hasFormulaWriteInput(input) && !isConditionalFormattingMutationRequest(input.request)) {
-          return this.previewFormulaUpdate(metadata, input, requestedMode, resolved, objectToCellMatrix(input.values ?? {}));
+          const canonicalInput = canonicalDirectMutationInput(input, "write_conditional_formatting");
+          return this.previewFormulaUpdate(metadata, canonicalInput, requestedMode, resolved, objectToCellMatrix(canonicalInput.values ?? {}));
         }
-        return resolved ? this.previewWriteConditionalFormatting(metadata, input, requestedMode, resolved) : undefined;
+        return resolved ? this.previewWriteConditionalFormatting(metadata, canonicalDirectMutationInput(input, "write_conditional_formatting"), requestedMode, resolved) : undefined;
       case "insert_rows":
         return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, structuralRangeOperationKind(input, resolved, "range.insert_rows")) : undefined;
       case "delete_rows":
@@ -4011,15 +4019,19 @@ export class AgentOrchestrator {
       case "unmerge_range":
         return resolved ? this.previewRangeStructuralOperation(metadata, input, requestedMode, resolved, "range.unmerge") : undefined;
       case "write_formulas":
-        return resolved ? this.previewFormulaUpdate(metadata, input, requestedMode, resolved, objectToCellMatrix(input.values ?? {})) : undefined;
+        if (!resolved) return undefined;
+        {
+          const canonicalInput = canonicalDirectMutationInput(input, "write_formulas");
+          return this.previewFormulaUpdate(metadata, canonicalInput, requestedMode, resolved, objectToCellMatrix(canonicalInput.values ?? {}));
+        }
       case "convert_formulas_to_values":
         return resolved ? this.previewFormulaConvertToValues(metadata, input, requestedMode, resolved) : undefined;
       case "write_number_formats":
-        return resolved ? this.previewNumberFormatUpdate(metadata, input, requestedMode, resolved) : undefined;
+        return resolved ? this.previewNumberFormatUpdate(metadata, canonicalDirectMutationInput(input, "write_number_formats"), requestedMode, resolved) : undefined;
       case "clear_style_dimensions":
         return resolved ? this.previewClearStyleDimensions(metadata, input, requestedMode, resolved) : undefined;
       case "format_range":
-        return resolved ? this.previewStyleUpdate(metadata, input, requestedMode, resolved) : undefined;
+        return resolved ? this.previewStyleUpdate(metadata, canonicalDirectMutationInput(input, "format_range"), requestedMode, resolved) : undefined;
     }
   }
 
@@ -10389,6 +10401,8 @@ function dataValidationEntriesFromInput(
   const rawInput = input as unknown as Record<string, unknown>;
   const rawEntries = Array.isArray(values?.entries)
     ? values.entries
+    : Array.isArray(values?.patches)
+      ? values.patches
     : Array.isArray(rawInput.entries)
       ? rawInput.entries as unknown[]
       : [];
@@ -10401,8 +10415,9 @@ function dataValidationEntriesFromInput(
       continue;
     }
     const entry = rawEntry as Record<string, unknown>;
-    const sheetName = stringValue(entry.sheetName ?? input.target?.sheetName ?? values?.sheetName);
-    const address = stringValue(entry.address ?? entry.range);
+    const target = entry.target && typeof entry.target === "object" ? entry.target as Record<string, unknown> : {};
+    const sheetName = stringValue(entry.sheetName ?? target.sheetName ?? input.target?.sheetName ?? values?.sheetName);
+    const address = stringValue(entry.address ?? entry.range ?? target.address ?? target.range);
     if (!sheetName || !address) {
       continue;
     }
@@ -14697,7 +14712,7 @@ function validateDirectPatchInput(input: AgentRunInput): { ok: true } | { ok: fa
       };
     }
     const typed = patch as Record<string, unknown>;
-    const payloadKeys = ["values", "rows", "formulas", "style", "numberFormat", "numberFormats", "validation", "conditionalFormatting", "note", "comment"];
+    const payloadKeys = ["values", "rows", "formulas", "style", "numberFormat", "numberFormats", "validation", "options", "allowedValues", "conditionalFormatting", "note", "comment"];
     if (!payloadKeys.some((key) => typed[key] !== undefined)) {
       return {
         ok: false,
@@ -14706,7 +14721,7 @@ function validateDirectPatchInput(input: AgentRunInput): { ok: true } | { ok: fa
       };
     }
     const hasValuePayload = typed.values !== undefined || typed.rows !== undefined;
-    const nonValuePayloadCount = ["formulas", "style", "validation", "conditionalFormatting", "note", "comment"]
+    const nonValuePayloadCount = ["formulas", "style", "validation", "options", "allowedValues", "conditionalFormatting", "note", "comment"]
       .filter((key) => typed[key] !== undefined).length;
     if (hasValuePayload && nonValuePayloadCount > 0) {
       return {
@@ -14732,6 +14747,104 @@ function usesLegacyDirectValueWrite(input: AgentRunInput): boolean {
     return false;
   }
   return Boolean(input.target?.range || action === "write_values" || /\b(update|write|set|change|edit)\b/i.test(input.request));
+}
+
+type CanonicalDirectMutationAction =
+  | "write_formulas"
+  | "write_number_formats"
+  | "format_range"
+  | "write_data_validation"
+  | "write_conditional_formatting";
+
+function legacyDirectMutationPatchIssue(input: AgentRunInput): { summary: string; warnings: string[] } | undefined {
+  const action = intentAction(input);
+  if (!isCanonicalDirectMutationAction(action)) {
+    return undefined;
+  }
+  const values = input.values as Record<string, unknown> | undefined;
+  if (!values || Array.isArray(values.patches)) {
+    return undefined;
+  }
+  const payloadKeys = canonicalDirectMutationPayloadKeys(action);
+  if (!payloadKeys.some((key) => values[key] !== undefined)) {
+    return undefined;
+  }
+  const label = canonicalDirectMutationLabel(action);
+  return {
+    summary: `${label} updates must use values.patches. Top-level structured ${label} payloads are no longer accepted for agent-facing direct mutations.`,
+    warnings: [`Use values.patches[].${payloadKeys[0]} with patch.target for ${label} updates.`]
+  };
+}
+
+function isCanonicalDirectMutationAction(action: string | undefined): action is CanonicalDirectMutationAction {
+  return action === "write_formulas"
+    || action === "write_number_formats"
+    || action === "format_range"
+    || action === "write_data_validation"
+    || action === "write_conditional_formatting";
+}
+
+function canonicalDirectMutationPayloadKeys(action: CanonicalDirectMutationAction): string[] {
+  switch (action) {
+    case "write_formulas":
+      return ["formulas", "formula", "values", "rows"];
+    case "write_number_formats":
+      return ["numberFormats", "numberFormat", "formats"];
+    case "format_range":
+      return ["style", "fillColor", "fontColor", "fontBold", "fontItalic", "horizontalAlignment", "verticalAlignment", "borders"];
+    case "write_data_validation":
+      return ["validation", "source", "options", "allowedValues"];
+    case "write_conditional_formatting":
+      return ["conditionalFormatting", "rule", "formula", "style"];
+  }
+}
+
+function canonicalDirectMutationLabel(action: CanonicalDirectMutationAction): string {
+  switch (action) {
+    case "write_formulas":
+      return "formula";
+    case "write_number_formats":
+      return "number-format";
+    case "format_range":
+      return "style";
+    case "write_data_validation":
+      return "data-validation";
+    case "write_conditional_formatting":
+      return "conditional-formatting";
+  }
+}
+
+function canonicalDirectMutationInput(input: AgentRunInput, action: CanonicalDirectMutationAction): AgentRunInput {
+  const patches = input.values?.patches;
+  if (!Array.isArray(patches) || patches.length === 0) {
+    return input;
+  }
+  const keys = canonicalDirectMutationPayloadKeys(action);
+  const patch = patches.find((candidate) => {
+    if (!candidate || typeof candidate !== "object") {
+      return false;
+    }
+    const typed = candidate as Record<string, unknown>;
+    return keys.some((key) => typed[key] !== undefined);
+  });
+  if (!patch || !patch.target) {
+    return input;
+  }
+  const target = inheritPatchTargetSheet(input, patch.target);
+  const patchRecord = patch as Record<string, unknown>;
+  const nextValues: Record<string, unknown> = { ...patchRecord };
+  delete nextValues.target;
+  if (action === "write_conditional_formatting" && nextValues.conditionalFormatting && nextValues.rule === undefined) {
+    nextValues.rule = nextValues.conditionalFormatting;
+  }
+  return {
+    ...input,
+    target: { ...input.target, ...target },
+    values: {
+      ...nextValues,
+      patches
+    }
+  };
 }
 
 function canonicalPatchRequiredOutput(
