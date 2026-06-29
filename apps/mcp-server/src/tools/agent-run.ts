@@ -243,6 +243,9 @@ function agentRunOutputSchema() {
       stopReason: z.string().optional(),
       included: z.array(z.string()),
       rangesRead: z.array(z.string()).optional(),
+      cachedFacetsUsed: z.array(z.string()).optional(),
+      staleFacets: z.array(z.string()).optional(),
+      freshnessRequiresRead: z.boolean().optional(),
       rowsRead: z.number().optional(),
       estimatedTokens: z.number().optional(),
       truncated: z.boolean().optional(),
@@ -252,6 +255,14 @@ function agentRunOutputSchema() {
         available: z.boolean(),
         suggestedNext: z.array(z.string()).optional()
       }).optional()
+    }).optional(),
+    contextFreshness: z.object({
+      status: z.enum(["fresh", "mostly_fresh", "partially_stale", "stale"]),
+      freshFacets: z.array(z.string()),
+      staleFacets: z.array(z.string()),
+      staleRanges: z.array(z.string()).optional(),
+      confidence: z.number(),
+      updatedAt: z.number()
     }).optional(),
     nextAction: z.string(),
     taskOutcome: z.enum(["final_answer", "preview_ready", "apply_complete", "needs_user_input", "cannot_complete"]).optional(),

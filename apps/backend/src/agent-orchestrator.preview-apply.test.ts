@@ -1221,9 +1221,42 @@ Data rows:
           cacheAction: "updated_from_patch"
         }
       });
-      expect(applied.invalidatedContextIds).toContain(metadata.workbookContextId);
+      expect(applied.invalidatedContextIds).not.toContain(metadata.workbookContextId);
       expect(applied.invalidatedResourceUris).toContain(resultUri);
+      expect(agent.metadataCache.getByContextId(metadata.workbookContextId)).toBeDefined();
+      expect(agent.metadataCache.getContextState(metadata.workbookContextId)?.freshness.staleFacets).toEqual(expect.arrayContaining(["values", "aggregates", "formulaResults"]));
+      expect(applied.contextFreshness).toMatchObject({
+        status: "partially_stale",
+        staleFacets: expect.arrayContaining(["values", "aggregates", "formulaResults"])
+      });
       expect(agent.getResultResource(resultId) as any).toMatchObject({ ok: false });
+      expect(agent.getContextResource(metadata.workbookContextId) as any).toMatchObject({ ok: true });
+    });
+
+  it("fully invalidates workbook context after rebuild-context mutations", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_rebuild_context_apply");
+      agent.metadataCache.set(metadata);
+
+      const preview = await agent.run({
+        request: "Delete column B",
+        mode: "preview_update",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "delete_columns" },
+        target: { sheetName: "Data", range: "B:B" }
+      });
+      const applied = await agent.run({
+        request: "Apply delete column",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect(applied.status).toBe("SUCCESS");
+      expect((applied.answer as any).updateRisk).toMatchObject({ cacheAction: "rebuild_context" });
+      expect(applied.invalidatedContextIds).toContain(metadata.workbookContextId);
       expect(agent.getContextResource(metadata.workbookContextId) as any).toMatchObject({ ok: false });
     });
 

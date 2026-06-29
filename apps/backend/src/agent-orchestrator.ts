@@ -231,11 +231,13 @@ export class AgentOrchestrator {
       const targetHintCount = runMetrics.intent.targetHints?.length ?? 0;
       const targetHintUsed = targetHintCount > 0 && outputUsedCallerTargetHint(output);
       const preliminaryPayloadBytes = Buffer.byteLength(JSON.stringify(budgeted));
-      const fullContextUsed = buildContextUsed(input, budgeted, runMetrics, cacheHit, preliminaryPayloadBytes);
+      const fullContextUsed = buildContextUsed(input, budgeted, runMetrics, cacheHit, preliminaryPayloadBytes, this.metadataCache);
       const contextUsed = compactContextUsedForBudget(fullContextUsed, input.budget?.maxPayloadBytes);
+      const contextFreshness = compactContextFreshnessForBudget(budgeted.contextFreshness ?? contextFreshnessForOutput(budgeted, this.metadataCache).contextFreshness, input.budget?.maxPayloadBytes);
       const budgetedWithContext = stripUndefinedOptionals({
         ...budgeted,
-        ...(contextUsed !== undefined ? { contextUsed } : {})
+        ...(contextUsed !== undefined ? { contextUsed } : {}),
+        ...(contextFreshness !== undefined ? { contextFreshness } : {})
       });
       const finalBudgeted = compactPostContextForTinyBudget(budgetedWithContext, input.budget?.maxPayloadBytes);
       const payloadBytes = Buffer.byteLength(JSON.stringify(finalBudgeted));
@@ -702,6 +704,15 @@ export class AgentOrchestrator {
     const invalidatedContextIds = this.metadataCache.deleteByContextId(workbookContextId) ? [workbookContextId] : [];
     const invalidatedResourceUris = this.results.invalidateByWorkbookContextId(workbookContextId);
     return { invalidatedContextIds, invalidatedResourceUris };
+  }
+
+  private applyContextInvalidation(pending: PendingAgentOperation): { invalidatedContextIds: string[]; invalidatedResourceUris: string[] } {
+    const invalidatedResourceUris = this.results.invalidateByWorkbookContextId(pending.workbookContextId);
+    if (pending.updateRisk?.cacheAction === "rebuild_context") {
+      const invalidatedContextIds = this.metadataCache.deleteByContextId(pending.workbookContextId) ? [pending.workbookContextId] : [];
+      return { invalidatedContextIds, invalidatedResourceUris };
+    }
+    return { invalidatedContextIds: [], invalidatedResourceUris };
   }
 
   private resourceHandleOutput(input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> | undefined {
@@ -6282,7 +6293,7 @@ export class AgentOrchestrator {
     const resultWarnings = Array.isArray(resultRecord.warnings) ? resultRecord.warnings.map(operationWarningMessage) : [];
     const errorWarning = applyErrorMessage(resultRecord.error);
     const cacheImpact = !applyFailed ? this.recordApplyCacheImpact(pending) : undefined;
-    const invalidated = applyFailed ? { invalidatedContextIds: [] as string[], invalidatedResourceUris: [] as string[] } : this.invalidateWorkbookContext(pending.workbookContextId);
+    const invalidated = applyFailed ? { invalidatedContextIds: [] as string[], invalidatedResourceUris: [] as string[] } : this.applyContextInvalidation(pending);
     const permissionFollowup = this.structuralPermissionFollowup(resultWarnings, pending);
     const output: Omit<AgentRunOutput, "telemetry"> = {
       status: applyFailed || validationFailed ? "VALIDATION_FAILED" : "SUCCESS",
@@ -12788,7 +12799,8 @@ function buildContextUsed(
   output: Omit<AgentRunOutput, "telemetry">,
   runMetrics: AgentRunMetrics,
   cacheHit: boolean,
-  payloadBytes: number
+  payloadBytes: number,
+  metadataCache: WorkbookMetadataCache
 ): AgentRunOutput["contextUsed"] {
   const decision = runMetrics.route.contextDecision;
   const answer = output.answer && typeof output.answer === "object" ? output.answer as Record<string, unknown> : undefined;
@@ -12837,7 +12849,15 @@ function buildContextUsed(
   const truncated = answerTruncated(answer) || output.continuation?.fullResultUri !== undefined;
   const strategy = output.mode === "preview_update" || output.taskOutcome === "preview_ready" ? "mutation" as const : decision.strategy;
   const suggestedNext = contextSuggestedNext(output, input);
-  const source = cacheHit ? "cache" as const : runMetrics.internalReadCount > 0 || runMetrics.fullReadCellCount > 0 ? "live" as const : output.workbookContextId ? "mixed" as const : "none" as const;
+  const requiredCacheFacets = contextDecisionCacheFacets(decision.include);
+  const freshnessCheck = output.workbookContextId ? metadataCache.checkFacetFreshness(String(output.workbookContextId), requiredCacheFacets) : undefined;
+  const source = cacheHit && freshnessCheck?.requiresRead !== true
+    ? "cache" as const
+    : runMetrics.internalReadCount > 0 || runMetrics.fullReadCellCount > 0
+      ? "live" as const
+      : output.workbookContextId
+        ? "mixed" as const
+        : "none" as const;
   const stagesUsed = [...stages];
   const skippedStages = decision.plannedStages.filter((stage) => !stages.has(stage));
   const stopReason = strategy === "mutation"
@@ -12855,6 +12875,11 @@ function buildContextUsed(
     stopReason,
     included: [...included],
     ...(rangesRead.length > 0 ? { rangesRead } : {}),
+    ...(freshnessCheck ? {
+      cachedFacetsUsed: freshnessCheck.freshRequiredFacets,
+      staleFacets: freshnessCheck.staleRequiredFacets,
+      freshnessRequiresRead: freshnessCheck.requiresRead
+    } : {}),
     ...(rowsRead !== undefined ? { rowsRead } : {}),
     estimatedTokens: Math.ceil(payloadBytes / 4),
     ...(truncated !== undefined ? { truncated } : {}),
@@ -12865,6 +12890,62 @@ function buildContextUsed(
       ...(suggestedNext !== undefined ? { suggestedNext } : {})
     }
   });
+}
+
+function contextFreshnessForOutput(
+  output: Omit<AgentRunOutput, "telemetry">,
+  metadataCache: WorkbookMetadataCache
+): Pick<AgentRunOutput, "contextFreshness"> {
+  const workbookContextId = output.workbookContextId ? String(output.workbookContextId) : undefined;
+  if (!workbookContextId) {
+    return {};
+  }
+  const state = metadataCache.getContextState(workbookContextId);
+  return state ? { contextFreshness: state.freshness } : {};
+}
+
+function contextDecisionCacheFacets(include: string[]): ContextFacet[] {
+  const facets = new Set<ContextFacet>();
+  for (const facet of include) {
+    switch (facet) {
+      case "metadata":
+        facets.add("metadata");
+        break;
+      case "schema":
+        facets.add("schema");
+        facets.add("headers");
+        break;
+      case "tables":
+        facets.add("tableDimensions");
+        break;
+      case "regions":
+        facets.add("regions");
+        break;
+      case "values":
+        facets.add("values");
+        break;
+      case "field_context":
+        facets.add("fieldContext");
+        break;
+      case "validation":
+        facets.add("validation");
+        break;
+      case "formats":
+        facets.add("formats");
+        break;
+      case "formulas":
+        facets.add("formulas");
+        facets.add("formulaResults");
+        break;
+      case "filters":
+        facets.add("filters");
+        break;
+      case "names":
+        facets.add("names");
+        break;
+    }
+  }
+  return [...facets];
 }
 
 function uniqueContextRanges(proof: AgentProofReference[]): string[] {
@@ -12936,7 +13017,6 @@ function compactContextUsedForBudget(contextUsed: AgentRunOutput["contextUsed"],
       scope: contextUsed.scope,
       ...(contextUsed.levelRequested !== undefined ? { levelRequested: contextUsed.levelRequested } : {}),
       levelUsed: contextUsed.levelUsed,
-      ...(contextUsed.stagesPlanned !== undefined ? { stagesPlanned: contextUsed.stagesPlanned.slice(0, 2) } : {}),
       stagesUsed: contextUsed.stagesUsed.slice(0, 1),
       included: contextUsed.included.slice(0, 1)
     };
@@ -12946,9 +13026,7 @@ function compactContextUsedForBudget(contextUsed: AgentRunOutput["contextUsed"],
     scope: contextUsed.scope,
     ...(contextUsed.levelRequested !== undefined ? { levelRequested: contextUsed.levelRequested } : {}),
     levelUsed: contextUsed.levelUsed,
-    ...(contextUsed.stagesPlanned !== undefined ? { stagesPlanned: contextUsed.stagesPlanned.slice(0, 6) } : {}),
     stagesUsed: contextUsed.stagesUsed.slice(0, 4),
-    ...(contextUsed.skippedStages !== undefined ? { skippedStages: contextUsed.skippedStages.slice(0, 4) } : {}),
     included: contextUsed.included.slice(0, 5),
     ...(contextUsed.truncated !== undefined ? { truncated: contextUsed.truncated } : {}),
     ...(contextUsed.confidence !== undefined ? { confidence: contextUsed.confidence } : {}),
@@ -12963,10 +13041,47 @@ function compactPostContextForTinyBudget(output: Omit<AgentRunOutput, "telemetry
   return stripUndefinedOptionals({
     ...output,
     ...(output.candidates ? { candidates: output.candidates.slice(0, 1) } : {}),
+    ...(output.contextFreshness ? { contextFreshness: compactContextFreshness(output.contextFreshness) } : {}),
     proof: output.proof.slice(0, 1),
     resourceLinks: output.resourceLinks.slice(0, 1),
     warnings: output.warnings.slice(0, 1)
   });
+}
+
+function compactContextFreshness(freshness: NonNullable<AgentRunOutput["contextFreshness"]>): NonNullable<AgentRunOutput["contextFreshness"]> {
+  return {
+    status: freshness.status,
+    freshFacets: freshness.freshFacets.slice(0, 4),
+    staleFacets: freshness.staleFacets.slice(0, 4),
+    ...(freshness.staleRanges ? { staleRanges: freshness.staleRanges.slice(0, 2) } : {}),
+    confidence: freshness.confidence,
+    updatedAt: freshness.updatedAt
+  };
+}
+
+function compactContextFreshnessForBudget(
+  freshness: AgentRunOutput["contextFreshness"],
+  maxPayloadBytes: number | undefined
+): AgentRunOutput["contextFreshness"] {
+  if (!freshness || maxPayloadBytes === undefined || maxPayloadBytes > 1_200) {
+    return freshness;
+  }
+  if (maxPayloadBytes <= 900) {
+    return {
+      status: freshness.status,
+      freshFacets: [],
+      staleFacets: freshness.staleFacets.slice(0, 2),
+      confidence: freshness.confidence,
+      updatedAt: freshness.updatedAt
+    };
+  }
+  return {
+    status: freshness.status,
+    freshFacets: [],
+    staleFacets: freshness.staleFacets.slice(0, 3),
+    confidence: freshness.confidence,
+    updatedAt: freshness.updatedAt
+  };
 }
 
 function uniqueChangeRanges(changes: NonNullable<AgentRunOutput["changes"]>): string[] {

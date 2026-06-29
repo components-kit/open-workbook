@@ -189,6 +189,17 @@ export interface WorkbookContextState {
   journal: OperationJournalEntry[];
 }
 
+export interface ContextFreshnessCheck {
+  status: FacetFreshnessStatus;
+  requiredFacets: ContextFacet[];
+  freshRequiredFacets: ContextFacet[];
+  staleRequiredFacets: ContextFacet[];
+  staleRanges?: string[];
+  requiresRead: boolean;
+  reason: string;
+  confidence: number;
+}
+
 export const DEFAULT_METADATA_CACHE_TTL_MS = 60 * 60 * 1000;
 
 export class WorkbookMetadataCache {
@@ -272,6 +283,29 @@ export class WorkbookMetadataCache {
   getContextState(workbookContextId: string): WorkbookContextState | undefined {
     const state = this.contextStateById.get(workbookContextId);
     return state ? cloneContextState(state) : undefined;
+  }
+
+  checkFacetFreshness(workbookContextId: string, requiredFacets: ContextFacet[]): ContextFreshnessCheck | undefined {
+    const state = this.contextStateById.get(workbookContextId);
+    if (!state) {
+      return undefined;
+    }
+    const stale = new Set(state.freshness.staleFacets);
+    const uniqueRequired = [...new Set(requiredFacets)];
+    const staleRequiredFacets = uniqueRequired.filter((facet) => stale.has(facet));
+    const freshRequiredFacets = uniqueRequired.filter((facet) => !stale.has(facet));
+    return {
+      status: staleRequiredFacets.length === 0 ? "fresh" : freshnessStatus(freshRequiredFacets.length, staleRequiredFacets.length),
+      requiredFacets: uniqueRequired,
+      freshRequiredFacets,
+      staleRequiredFacets,
+      ...(state.freshness.staleRanges ? { staleRanges: [...state.freshness.staleRanges] } : {}),
+      requiresRead: staleRequiredFacets.length > 0,
+      reason: staleRequiredFacets.length === 0
+        ? "Required context facets are fresh."
+        : `Required context facets are stale: ${staleRequiredFacets.join(", ")}.`,
+      confidence: uniqueRequired.length === 0 ? state.freshness.confidence : freshRequiredFacets.length / uniqueRequired.length
+    };
   }
 
   markFacetsStale(workbookContextId: string, facets: ContextFacet[], staleRanges: string[] = [], now = Date.now()): WorkbookContextState | undefined {

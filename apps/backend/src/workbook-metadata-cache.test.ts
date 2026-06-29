@@ -55,6 +55,27 @@ describe("WorkbookMetadataCache context state", () => {
     expect(cache.getContextState(metadata.workbookContextId)?.journal[0]?.affectedRanges).toEqual(["Data!D2"]);
   });
 
+  it("checks required facet freshness without treating the whole context as stale", () => {
+    const cache = new WorkbookMetadataCache();
+    const metadata = createCachedMetadata("wbctx_cache_freshness_check");
+    cache.set(metadata);
+    cache.markFacetsStale(metadata.workbookContextId, ["values", "aggregates"], ["Data!D2"]);
+
+    expect(cache.checkFacetFreshness(metadata.workbookContextId, ["schema", "headers", "validation"])).toMatchObject({
+      status: "fresh",
+      requiresRead: false,
+      freshRequiredFacets: ["schema", "headers", "validation"],
+      staleRequiredFacets: []
+    });
+    expect(cache.checkFacetFreshness(metadata.workbookContextId, ["schema", "values", "aggregates"])).toMatchObject({
+      status: "mostly_fresh",
+      requiresRead: true,
+      freshRequiredFacets: ["schema"],
+      staleRequiredFacets: ["values", "aggregates"],
+      staleRanges: ["Data!D2"]
+    });
+  });
+
   it("removes context state when metadata is deleted", () => {
     const cache = new WorkbookMetadataCache();
     const metadata = createCachedMetadata("wbctx_cache_delete");

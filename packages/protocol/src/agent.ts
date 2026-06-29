@@ -478,6 +478,9 @@ export interface AgentContextUsed {
   stopReason?: string;
   included: string[];
   rangesRead?: string[];
+  cachedFacetsUsed?: string[];
+  staleFacets?: string[];
+  freshnessRequiresRead?: boolean;
   rowsRead?: number;
   estimatedTokens?: number;
   truncated?: boolean;
@@ -507,6 +510,14 @@ export interface AgentRunOutput {
   invalidatedResourceUris?: string[];
   continuation?: AgentContinuation;
   contextUsed?: AgentContextUsed;
+  contextFreshness?: {
+    status: "fresh" | "mostly_fresh" | "partially_stale" | "stale";
+    freshFacets: string[];
+    staleFacets: string[];
+    staleRanges?: string[];
+    confidence: number;
+    updatedAt: number;
+  };
   nextAction: AgentNextAction;
   taskOutcome?: AgentTaskOutcome;
   finalAnswer?: string;
