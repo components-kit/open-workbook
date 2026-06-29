@@ -646,6 +646,41 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       });
     });
 
+  it("recognizes query_rows as a read-only contract distinct from visible filters", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_query_rows_contract");
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Show unpaid invoice rows",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "query_rows" },
+        target: { sheetName: "Data", tableName: "Transactions" },
+        values: {
+          where: [{ column: "Status", op: "=", value: "Open" }],
+          return: ["Date", "Status"],
+          limit: 10,
+          format: "json_rows"
+        }
+      });
+
+      expect(result.status).toBe("NEEDS_INPUT");
+      expect((result.answer as any)).toMatchObject({
+        kind: "query_rows_contract",
+        readOnly: true,
+        predicates: [{ column: "Status", op: "=", value: "Open" }],
+        returnColumns: ["Date", "Status"],
+        supportedOperators: expect.arrayContaining(["=", "between", "contains"]),
+        supportedFormats: ["json_rows", "csv", "summary"]
+      });
+      expect(result.telemetry.intentAction).toBe("query_rows");
+      expect(result.telemetry.workflowRoute).toBe("rows.query");
+      expect(result.agentInstruction).toContain("Do not call filter_range");
+      expect(runtime.readBatchCount).toBe(0);
+    });
+
   it("includes section header and data anchors in sheet summaries", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);

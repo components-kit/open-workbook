@@ -33,6 +33,8 @@ For overview questions such as "what is this workbook/file?", "look into this Ex
 
 For exact formula questions, pass `intent.action: "read_formulas"` with the exact target when known. This covers "is this a formula?", "raw formula", "show formula", and "formula in I165". Do not infer formula existence from displayed values or numbers alone; use returned formula/status proof.
 
+For read-only lookup/filter-like questions such as "show rows where Status = Unpaid", "which invoices are overdue?", or "list transactions in June", pass `intent.action: "query_rows"` with `values.where`, optional `values.return`, `values.limit`, and `values.format`. Use `filter_range` only when the user explicitly wants the visible Excel filter/view changed.
+
 ## Multilingual Requests
 
 For non-English or mixed-language prompts:

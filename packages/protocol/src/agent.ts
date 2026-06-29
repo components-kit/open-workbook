@@ -135,6 +135,7 @@ export const AGENT_INTENT_ACTIONS = [
   "write_region_values",
   "fill_region",
   "find_target",
+  "query_rows",
   "find_similar_rows",
   "analyze_reference_sheet",
   "find_style_references",
@@ -325,6 +326,51 @@ export interface AgentRunIntent {
   targetHints?: string[];
 }
 
+export const AGENT_QUERY_ROW_OPERATORS = [
+  "=",
+  "!=",
+  "contains",
+  "starts_with",
+  "ends_with",
+  "in",
+  "not_in",
+  "blank",
+  "not_blank",
+  ">",
+  ">=",
+  "<",
+  "<=",
+  "between"
+] as const;
+export type AgentQueryRowsOperator = typeof AGENT_QUERY_ROW_OPERATORS[number];
+
+export interface AgentQueryRowsPredicate {
+  column: string;
+  op: AgentQueryRowsOperator;
+  value?: unknown;
+}
+
+export type AgentQueryRowsFormat = "json_rows" | "csv" | "summary";
+
+export interface AgentQueryRowsValues {
+  where?: AgentQueryRowsPredicate[];
+  return?: string[];
+  limit?: number;
+  format?: AgentQueryRowsFormat;
+}
+
+export interface AgentQueryRowsOutput {
+  kind: "query_rows_result";
+  matchedRows: number;
+  returnedRows: number;
+  format: AgentQueryRowsFormat;
+  columns: string[];
+  truncated: boolean;
+  rows?: Array<Record<string, unknown>> | string;
+  rowAddresses?: string[];
+  predicates: AgentQueryRowsPredicate[];
+}
+
 export interface AgentRunInput {
   request: string;
   mode?: AgentRunMode;
@@ -336,6 +382,10 @@ export interface AgentRunInput {
   intent?: AgentRunIntent;
   target?: AgentRunTarget;
   values?: Record<string, unknown> & {
+    where?: AgentQueryRowsPredicate[];
+    return?: string[];
+    limit?: number;
+    format?: AgentQueryRowsFormat;
     patches?: Array<{
       target: AgentRunTarget;
       values?: unknown[][];

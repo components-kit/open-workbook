@@ -105,6 +105,7 @@ export function modeForIntentAction(action: AgentIntentAction): AgentRunMode {
   if (action === "explain_formula") return "answer";
   if (action === "read_named_item") return "answer";
   if (action === "read_region") return "answer";
+  if (action === "query_rows") return "answer";
   if (action === "find_similar_rows") return "answer";
   if (action === "analyze_reference_sheet") return "answer";
   if (action === "find_style_references") return "answer";
@@ -153,6 +154,7 @@ function isRangeReadIntentAction(action: AgentIntentAction): boolean {
     || action === "read_merged_cells"
     || action === "read_data_validation"
     || action === "read_conditional_formatting"
+    || action === "query_rows"
     || action === "search_range"
     || action === "find_blank_cells"
     || action === "find_range_errors";

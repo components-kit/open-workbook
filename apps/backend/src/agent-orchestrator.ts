@@ -1,4 +1,5 @@
 import {
+  AGENT_QUERY_ROW_OPERATORS,
   makeId,
   runtimeError,
   type AgentCandidate,
@@ -879,6 +880,9 @@ export class AgentOrchestrator {
     }
     if (intentAction(input) === "read_region") {
       return this.regionAnswerOutput(metadata, input, requestedMode, runMetrics);
+    }
+    if (intentAction(input) === "query_rows") {
+      return queryRowsContractOutput(metadata, input, requestedMode);
     }
     const templateAnswer = await this.templateAnswerOutput(metadata, input, requestedMode, runMetrics);
     if (templateAnswer) {
@@ -19859,6 +19863,45 @@ function previewChangesForMatrix(sheetName: string, range: string, values: CellM
     before: before[rowIndex]?.[columnIndex],
     after: value
   })));
+}
+
+function queryRowsContractOutput(metadata: WorkbookMetadata, input: AgentRunInput, requestedMode: AgentRunMode): Omit<AgentRunOutput, "telemetry"> {
+  const values = input.values as Record<string, unknown> | undefined;
+  const hasWhere = Array.isArray(values?.where);
+  const returnColumns = Array.isArray(values?.return) ? values.return.filter((value): value is string => typeof value === "string") : undefined;
+  return {
+    status: hasWhere ? "NEEDS_INPUT" : "VALIDATION_FAILED",
+    mode: requestedMode,
+    workbookContextId: metadata.workbookContextId,
+    summary: hasWhere
+      ? "query_rows is recognized as a read-only row query; execution will use the query_rows pipeline."
+      : "query_rows requires values.where predicates before it can run.",
+    answer: {
+      kind: "query_rows_contract",
+      readOnly: true,
+      target: input.target ?? {},
+      predicates: hasWhere ? values?.where : [],
+      returnColumns: returnColumns ?? [],
+      supportedOperators: [...AGENT_QUERY_ROW_OPERATORS],
+      supportedFormats: ["json_rows", "csv", "summary"],
+      requiredShape: {
+        intent: { action: "query_rows" },
+        values: {
+          where: [{ column: "Status", op: "=", value: "Unpaid" }],
+          return: ["Date", "Customer", "Amount", "Status"],
+          limit: 100,
+          format: "json_rows"
+        }
+      }
+    },
+    proof: [],
+    resourceLinks: [contextResource(metadata.workbookContextId)],
+    nextAction: "ask_user",
+    agentInstruction: "Use query_rows for read-only row lookup. Do not call filter_range unless the user explicitly asks to change the visible Excel filter.",
+    warnings: hasWhere
+      ? ["query_rows execution is scheduled for the next implementation milestone; do not emulate it with a visible filter."]
+      : ["Provide values.where with one or more predicates. Do not use filter_range for lookup-only questions."]
+  };
 }
 
 function uniqueProofFromChanges(changes: NonNullable<AgentRunOutput["changes"]>): AgentProofReference[] {

@@ -16,6 +16,7 @@ describe("excel.agent.run MCP schema", () => {
     expect(AGENT_INTENT_ACTIONS).toContain("replace_range_with_styled_table");
     expect(AGENT_INTENT_ACTIONS).toContain("read_style_summary");
     expect(AGENT_INTENT_ACTIONS).toContain("format_diagnostics");
+    expect(AGENT_INTENT_ACTIONS).toContain("query_rows");
     expect(AGENT_INTENT_ACTIONS).toContain("find_similar_rows");
     expect(AGENT_INTENT_ACTIONS).toContain("read_formulas");
     expect(AGENT_INTENT_ACTIONS).toContain("improve_visual_readability");
@@ -26,6 +27,19 @@ describe("excel.agent.run MCP schema", () => {
     expect(AGENT_DETAIL_LEVELS).toContain("full_table");
     expect(AGENT_DETAIL_LEVELS).toContain("semantic_index");
     expect(AGENT_DETAIL_LEVELS).toContain("workbook_design_overview");
+  });
+
+  it("accepts query_rows predicates in values", () => {
+    const schema = agentRunInputSchema();
+    const parsed = (schema.values as any).parse({
+      where: [{ column: "Status", op: "=", value: "Unpaid" }],
+      return: ["Date", "Customer", "Amount"],
+      limit: 50,
+      format: "json_rows"
+    });
+
+    expect(parsed.where[0]).toMatchObject({ column: "Status", op: "=" });
+    expect(parsed.return).toEqual(["Date", "Customer", "Amount"]);
   });
 
   it("exposes semantic and workflow telemetry fields in the output schema", () => {
@@ -180,6 +194,8 @@ describe("excel.agent.run MCP schema", () => {
     expect(combined).toContain("Do not split independent exact edits into separate calls");
     expect(combined).toContain("transform_values");
     expect(combined).toContain("derive_values");
+    expect(combined).toContain("query_rows");
+    expect(combined).toContain("Reserve `filter_range` for visible Excel filter changes");
     expect(combined).toContain("read_formulas");
     expect(combined).toContain("never infer formula existence from displayed values");
     expect(combined).toContain("formula_like");

@@ -27,6 +27,7 @@ describe("agent workflow routing", () => {
     ["read_style_summary", "style.inspect", "targeted_read"],
     ["format_diagnostics", "format.diagnostics", "targeted_read"],
     ["find_target", "semantic_index.find", "metadata_only"],
+    ["query_rows", "rows.query", "targeted_read"],
     ["write_values", "mutation.preview", "preview_only"],
     ["improve_visual_readability", "mutation.preview", "preview_only"]
   ] as const)("prefers structured intent action %s for workflow routing", (action, workflowRoute, readPolicy) => {
@@ -40,6 +41,19 @@ describe("agent workflow routing", () => {
     expect(route.workflowRoute).toBe(workflowRoute);
     expect(route.readPolicy).toBe(readPolicy);
     expect(route.workflowConfidence).toBe(0.91);
+  });
+
+  it("routes lookup-style row requests to read-only query workflow", () => {
+    const route = routeAgentRequest("Show rows where Status = Unpaid", "auto");
+
+    expect(route.mode).toBe("answer");
+    expect(route.workflowRoute).toBe("rows.query");
+    expect(route.readPolicy).toBe("targeted_read");
+    expect(route.contextDecision).toMatchObject({
+      strategy: "focused",
+      level: 3
+    });
+    expect(route.contextDecision.include).toEqual(expect.arrayContaining(["schema", "field_context", "values"]));
   });
 
   it.each([

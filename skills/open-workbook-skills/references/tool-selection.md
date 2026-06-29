@@ -32,6 +32,7 @@ When the user's LLM/client can infer intent, pass structured fields instead of r
 - `intent.targetHints`: short target clues from the workbook, including original labels and useful translated aliases.
 - `target`: explicit `sheetName`, `range`, `tableName`, or returned `candidateId` when known.
 - `values`: 2D matrices, `values.patches`, formulas, styles, or table rows for updates.
+- For read-only row lookup, use `intent.action: "query_rows"` with `values.where`, optional `values.return`, `values.limit`, and `values.format`.
 
 Structured intent is only a routing hint. The backend still performs target resolution, ambiguity checks, session write-permission checks, preview/apply confirmation when required, stale checks, permissions, locks, backups, validation, and rollback bookkeeping.
 
@@ -61,6 +62,7 @@ Do not translate the entire workbook task into English and discard the original 
 - Use `mode: "answer"` with `target.candidateId`, explicit `target.sheetName`/`target.range`, or a clear natural-language target.
 - Ask for rows, samples, actual values, formulas, raw monthly sections, or explicit A1 ranges when live cell data is required.
 - Ask for schema, columns, or headers when cached metadata is enough.
+- For lookup/filter-like questions such as "show rows where...", "which invoices are unpaid?", or "list June transactions", use `query_rows`. Reserve `filter_range` for visible Excel filter changes.
 - For exact formula inspection such as "is this a formula?", "raw formula", "show formula", or "formula in I165", use `read_formulas` with an explicit formula `target.sheetName` and `target.range`; never infer formula existence from displayed values or numbers alone. For formula pattern, dependency, trace, error, explanation, or template comparison inspection, use `read_formula_patterns`, `get_formula_dependency_graph`, `trace_formula_precedents`, `trace_formula_dependents`, `find_formula_errors`, `explain_formula`, or `validate_formula_against_template`.
 - For named items and registered regions, use `read_named_item` or `read_region` with `target.candidateId` from `find` or `target.entity` when the name is exact.
 - For registered-region mutations, use `register_region`, `clear_region_values`, `write_region_values`, or `fill_region` with `values.regionName`; include explicit `values.values` or `values.rows` for writes/fills.
@@ -113,7 +115,7 @@ Never pad broad ranges with blanks or nulls when only a smaller rectangle should
 Describe the user's goal through `excel.agent.run` and let the backend choose internal table, template, formula, pivot, chart, validation, snapshot, diff, backup, and transaction capabilities.
 
 - For table appends, pass `target.candidateId` or `target.tableName` with `values.rows`, preview first, then apply.
-- For table sort/filter, pass `intent.action: "sort_table"` or `filter_range` plus a table/range target. If one user request combines table filters and sorting, use `intent.action: "apply_table_view"` with `values.filters` and `values.sort.fields` so the backend previews and applies one table mutation.
+- For table sort/filter, pass `intent.action: "sort_table"` or `filter_range` plus a table/range target only when the user wants the Excel view changed. For read-only matching rows, use `query_rows`. If one user request combines table filters and sorting, use `intent.action: "apply_table_view"` with `values.filters` and `values.sort.fields` so the backend previews and applies one table mutation.
 - For template, formula repair, pivot/chart, and risky-edit tasks, use `prepare`, `find`, `answer`, `preview_update`, and `validate` as appropriate; template metadata reads can stay in `answer`, while template mutations and repairs must preview/apply; report host capability warnings honestly.
 - For save/recalculate, use `intent.action: "save"` or `calculate`; the backend maps these to workbook-level operations.
 

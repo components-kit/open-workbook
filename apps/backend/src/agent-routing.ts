@@ -33,6 +33,7 @@ export type AgentWorkflowRoute =
   | "style.inspect"
   | "format.diagnostics"
   | "range.read"
+  | "rows.query"
   | "table.sample"
   | "mutation.preview"
   | "mutation.apply"
@@ -161,6 +162,7 @@ function routeAgentWorkflow(
   if (action === "read_schema") return workflow("schema.inspect", intent?.confidence ?? 0.9, "Structured schema inspection action.", "structure_only", "metadata_only");
   if (action === "find_target") return workflow("semantic_index.find", intent?.confidence ?? 0.9, "Structured target finding action.", "sampled_allowed", "metadata_only");
   if (action === "read_values") return workflow("range.read", intent?.confidence ?? 0.85, "Structured value read action.", "sampled_allowed", "targeted_read");
+  if (action === "query_rows") return workflow("rows.query", intent?.confidence ?? 0.9, "Structured read-only row query action.", "sampled_allowed", "targeted_read");
   if (action === "read_formulas" || action === "read_formula_patterns" || action === "explain_formula") return workflow("range.read", intent?.confidence ?? 0.9, "Structured formula inspection action.", "sampled_allowed", "targeted_read");
   if (action === "find_similar_rows") return workflow("range.read", intent?.confidence ?? 0.88, "Structured similar-row reference search action.", "sampled_allowed", "targeted_read");
   if (action === "improve_visual_readability") return workflow("mutation.preview", intent?.confidence ?? 0.9, "Structured visual readability preview action.", "sampled_allowed", "preview_only");
@@ -181,6 +183,9 @@ function routeAgentWorkflow(
   }
   if (/\b(reference|similar|look back|label(?:ed)?|classif(?:y|ied|ication)|before|previous|last month|prior|how did we|how we)\b/.test(lower)) {
     return workflow("range.read", 0.84, "Request asks for cross-sheet reference examples.", "sampled_allowed", "targeted_read");
+  }
+  if (/\b(rows?\s+where|where\s+.+\s+(?:is|=|contains?|between)|which rows?|list rows?|find rows?|show rows?)\b/.test(lower) && !/\b(apply filter|filter the sheet|visible filter|show only in excel)\b/.test(lower)) {
+    return workflow("rows.query", 0.84, "Request asks for read-only filter-like row lookup.", "sampled_allowed", "targeted_read");
   }
   if (/\b(formatting error|wrong format|date format|number format|diagnos(e|is)|why.*format)\b/.test(lower)) {
     return workflow("format.diagnostics", 0.84, "Request asks for formatting diagnostics.", "sampled_allowed", "targeted_read");
@@ -286,6 +291,9 @@ function inferDefaultContextPolicy(
   }
   if (/\b(here|selected|selection|current cell|current range|this area|look here)\b/.test(lower) || target?.entity === "active_selection") {
     return contextDecision("focused", "active_selection", ["values", "schema", "field_context", "formulas", "formats", "validation"], 4, "User referenced the selected/current area.");
+  }
+  if (workflow.workflowRoute === "rows.query" || action === "query_rows") {
+    return contextDecision("focused", targetScope, ["metadata", "schema", "field_context", "values"], 3, "Read-only row queries need schema, field context, and bounded value evidence.");
   }
   if (/\b(analy[sz]e|analysis|trend|trends|compare|comparison|variance|anomal(?:y|ies)|patterns?|aggregate|summary stats)\b/.test(lower)) {
     return contextDecision("analysis", targetScope, ["metadata", "schema", "field_context", "values", "formulas"], 5, "Analytical wording needs patterns, values, and formula context within budget.");
