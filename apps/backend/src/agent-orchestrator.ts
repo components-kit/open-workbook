@@ -1012,21 +1012,21 @@ export class AgentOrchestrator {
     if (!Array.isArray(values?.where) || values.where.length === 0) {
       return queryRowsContractOutput(metadata, input, requestedMode);
     }
-    const table = resolveQueryRowsTable(metadata, input.target);
-    if (!table) {
+    const source = resolveQueryRowsSource(metadata, input.target);
+    if (!source) {
       return {
         status: "AMBIGUOUS_TARGET",
         mode: requestedMode,
         workbookContextId: metadata.workbookContextId,
-        summary: "query_rows needs a table target or a sheet with one known table.",
-        candidates: findAgentCandidates(metadata, input).filter((candidate) => candidate.kind === "table" || candidate.kind === "sheet").slice(0, 5),
+        summary: "query_rows needs a table target, headered range target, or a sheet with one known table/headered range.",
+        candidates: findAgentCandidates(metadata, input).filter((candidate) => candidate.kind === "table" || candidate.kind === "sheet" || candidate.kind === "range").slice(0, 5),
         proof: [],
         resourceLinks: [contextResource(metadata.workbookContextId)],
         nextAction: "call_with_target",
-        warnings: ["Retry query_rows with target.tableName or a narrower target.sheetName."]
+        warnings: ["Retry query_rows with target.tableName, target.range, or a narrower target.sheetName."]
       };
     }
-    if (!table.name) {
+    if (source.kind === "table" && !source.tableName) {
       return queryRowsContractOutput(metadata, input, requestedMode);
     }
     const predicates = normalizeQueryRowsPredicates(values.where);
@@ -1036,8 +1036,8 @@ export class AgentOrchestrator {
     const fieldTerms = [...new Set([...predicates.map((predicate) => predicate.column), ...returnTerms, ...(updateColumn ? [updateColumn] : [])])];
     const fieldResolutions = resolveSemanticFields(metadata, fieldTerms, {
       ...(input.target ?? {}),
-      sheetName: table.sheetName,
-      tableName: table.name
+      sheetName: source.sheetName,
+      ...(source.tableName ? { tableName: source.tableName } : {})
     });
     const unresolved = fieldResolutions.filter((resolution) => !resolution.best || resolution.ambiguous);
     if (unresolved.length > 0) {
@@ -1054,7 +1054,7 @@ export class AgentOrchestrator {
             candidates: resolution.candidates
           }))
         },
-        proof: [{ sheetName: table.sheetName, range: table.range, label: "query table" }],
+        proof: [{ sheetName: source.sheetName, range: source.range, label: "query source" }],
         resourceLinks: [contextResource(metadata.workbookContextId)],
         nextAction: "call_with_target",
         warnings: ["Retry query_rows with exact column names from fieldCandidates."]
@@ -1063,11 +1063,11 @@ export class AgentOrchestrator {
     const fieldByTerm = new Map(fieldResolutions.map((resolution) => [resolution.term, resolution.best!]));
     const returnFields = returnTerms.length > 0
       ? returnTerms.map((term) => fieldByTerm.get(term)!).filter(Boolean)
-      : table.columns.map((column) => ({
+      : source.columns.map((column) => ({
           field: column.name,
-          sheetName: table.sheetName,
-          ...(table.name ? { tableName: table.name } : {}),
-          range: table.range,
+          sheetName: source.sheetName,
+          ...(source.tableName ? { tableName: source.tableName } : {}),
+          range: source.range,
           columnIndex: column.index,
           columnLetter: column.letter,
           score: 1,
@@ -1078,42 +1078,36 @@ export class AgentOrchestrator {
     const readColumns = [...new Set([...predicateFields, ...returnFields].map((field) => field.field))];
     const limit = clampQueryRowsLimit(values.limit);
     const scanLimit = clampQueryRowsScanLimit(values.scanLimit, limit);
-    runMetrics.internalReadCount += 1;
-    const result = await this.runtime.readTable({
-      workbookId: metadata.workbook.workbookId as WorkbookId,
-      tableName: table.name,
-      columns: readColumns,
-      rowLimit: scanLimit
-    });
-    if ((result as { ok?: boolean }).ok === false) {
-      return formulaRuntimeErrorOutput(metadata, requestedMode, `query_rows failed to read ${table.name ?? table.range}.`, result);
+    const loaded = await this.loadQueryRowsData(metadata, source, readColumns, scanLimit, runMetrics);
+    if (!loaded.ok) {
+      return formulaRuntimeErrorOutput(metadata, requestedMode, `query_rows failed to read ${source.tableName ?? source.range}.`, loaded.result);
     }
-    const tableResult = (result as { table?: { headers?: string[]; values?: CellMatrix } }).table;
-    const headers = tableResult?.headers ?? readColumns;
-    const rows = tableResult?.values ?? [];
-    const matched = rows
+    const rows = overlayQueryRowsOptimisticValues(this.metadataCache, metadata.workbookContextId, source, loaded.data);
+    const matched = rows.values
       .map((row, index) => ({ row, index }))
-      .filter(({ row }) => predicates.every((predicate, predicateIndex) => queryPredicateMatches(row[headers.indexOf(predicateFields[predicateIndex]!.field)], predicate)));
+      .filter(({ row }) => predicates.every((predicate, predicateIndex) => queryPredicateMatches(row[rows.headers.indexOf(predicateFields[predicateIndex]!.field)], predicate)));
     const returned = matched.slice(0, limit);
     const outputColumns = returnFields.map((field) => field.field);
-    const rowObjects = returned.map(({ row }) => Object.fromEntries(outputColumns.map((column) => [column, row[headers.indexOf(column)]])));
-    const rowAddresses = returned.map(({ index }) => queryRowAddress(table, index));
+    const rowObjects = returned.map(({ row }) => Object.fromEntries(outputColumns.map((column) => [column, row[rows.headers.indexOf(column)]])));
+    const rowAddresses = returned.map(({ index }) => rows.rowAddresses[index] ?? queryRowAddress(source, index));
     const format = values.format === "csv" || values.format === "summary" ? values.format : "json_rows";
     const suggestedOperation = updateField && updateValue !== undefined
-      ? queryRowsSuggestedPatchOperation(input, table, returned.map(({ index }) => index), updateField.columnLetter, updateValue)
+      ? queryRowsSuggestedPatchOperation(input, source, returned.map(({ index }) => index), updateField.columnLetter, updateValue)
       : undefined;
     return {
       status: "SUCCESS",
       mode: requestedMode,
       workbookContextId: metadata.workbookContextId,
-      summary: `query_rows matched ${matched.length} row(s) in ${table.name ?? table.range}; returned ${returned.length}.`,
+      summary: `query_rows matched ${matched.length} row(s) in ${source.tableName ?? source.range}; returned ${returned.length}.`,
       answer: {
         kind: "query_rows_result",
         matchedRows: matched.length,
         returnedRows: returned.length,
+        source: rows.source,
+        scannedRows: rows.scannedRows,
         format,
         columns: outputColumns,
-        truncated: matched.length > returned.length || rows.length >= scanLimit,
+        truncated: matched.length > returned.length || rows.values.length >= scanLimit,
         rows: format === "csv" ? rowsToCsv(outputColumns, rowObjects) : format === "summary" ? undefined : rowObjects,
         rowAddresses,
         predicates,
@@ -1123,7 +1117,7 @@ export class AgentOrchestrator {
           candidates: resolution.candidates
         }))
       },
-      proof: [{ sheetName: table.sheetName, range: table.dataRange ?? table.range, label: "queried rows" }],
+      proof: [{ sheetName: source.sheetName, range: source.dataRange, label: "queried rows" }],
       resourceLinks: [contextResource(metadata.workbookContextId)],
       ...(suggestedOperation ? { suggestedOperation } : {}),
       nextAction: "answer_now",
@@ -1131,8 +1125,77 @@ export class AgentOrchestrator {
         ? "Answer from query_rows_result. If the user asked to update matched rows, call the returned suggestedOperation once; do not apply visible Excel filters for read-only lookup."
         : "Answer from query_rows_result. Use rowAddresses for any follow-up preview patches; do not apply visible Excel filters for read-only lookup.",
       maxRecommendedFollowupCalls: 0,
-      warnings: rows.length >= scanLimit ? [`Scanned row limit ${scanLimit} was reached; narrow the query or increase values.scanLimit if more rows are needed.`] : []
+      warnings: rows.values.length >= scanLimit ? [`Scanned row limit ${scanLimit} was reached; narrow the query or increase values.scanLimit if more rows are needed.`] : []
     };
+  }
+
+  private async loadQueryRowsData(
+    metadata: WorkbookMetadata,
+    source: QueryRowsSourcePlan,
+    readColumns: string[],
+    scanLimit: number,
+    runMetrics: AgentRunMetrics
+  ): Promise<{ ok: true; data: QueryRowsLoadedData } | { ok: false; result: unknown }> {
+    const cacheKey = queryRowsSnapshotKey(source, readColumns, scanLimit);
+    const freshness = this.metadataCache.checkFacetFreshness(metadata.workbookContextId, ["values"]);
+    const cached = freshness?.requiresRead === false ? this.metadataCache.getQueryRowsSnapshot(metadata.workbookContextId, cacheKey) : undefined;
+    if (cached) {
+      return {
+        ok: true,
+        data: {
+          source: "cache",
+          headers: cached.headers,
+          values: cached.values as CellMatrix,
+          rowAddresses: cached.rowAddresses,
+          scannedRows: cached.values.length
+        }
+      };
+    }
+    if (source.kind === "table" && source.tableName) {
+      runMetrics.internalReadCount += 1;
+      const result = await this.runtime.readTable({
+        workbookId: metadata.workbook.workbookId as WorkbookId,
+        tableName: source.tableName,
+        columns: readColumns,
+        rowLimit: scanLimit
+      });
+      if ((result as { ok?: boolean }).ok === false) {
+        return { ok: false, result };
+      }
+      const tableResult = (result as { table?: { headers?: string[]; values?: CellMatrix } }).table;
+      const headers = tableResult?.headers ?? readColumns;
+      const values = tableResult?.values ?? [];
+      const rowAddresses = values.map((_row, index) => queryRowAddress(source, index));
+      this.metadataCache.putQueryRowsSnapshot(metadata.workbookContextId, {
+        key: cacheKey,
+        sheetName: source.sheetName,
+        ...(source.tableName ? { tableName: source.tableName } : {}),
+        range: source.range,
+        dataRange: source.dataRange,
+        columns: readColumns,
+        headers,
+        values,
+        rowAddresses
+      });
+      return { ok: true, data: { source: "live", headers, values, rowAddresses, scannedRows: values.length } };
+    }
+    const projected = queryRowsProjectedRange(source, readColumns, scanLimit);
+    const snapshot = await this.readRangeSnapshot(metadata.workbook.workbookId as WorkbookId, source.sheetName, projected.range, ["values"], runMetrics);
+    const rawValues = snapshot?.values ?? [];
+    const headers = readColumns;
+    const values: CellMatrix = rawValues.slice(0, scanLimit).map((row) => projected.columnIndexes.map((index) => index >= 0 ? row[index] ?? null : null));
+    const rowAddresses = values.map((_row, index) => queryRowAddress(source, index));
+    this.metadataCache.putQueryRowsSnapshot(metadata.workbookContextId, {
+      key: cacheKey,
+      sheetName: source.sheetName,
+      range: source.range,
+      dataRange: source.dataRange,
+      columns: readColumns,
+      headers,
+      values,
+      rowAddresses
+    });
+    return { ok: true, data: { source: "live", headers, values, rowAddresses, scannedRows: values.length } };
   }
 
   private async workbookActionAnswerOutput(
@@ -7046,6 +7109,24 @@ interface AgentRunMetrics {
   validationStatus: "passed" | "failed" | "not_run";
 }
 
+interface QueryRowsSourcePlan {
+  kind: "table" | "range";
+  sheetName: string;
+  tableName?: string;
+  range: string;
+  dataRange: string;
+  columns: ColumnMetadata[];
+  rowOffset: number;
+}
+
+interface QueryRowsLoadedData {
+  source: "cache" | "live" | "mixed";
+  headers: string[];
+  values: CellMatrix;
+  rowAddresses: string[];
+  scannedRows: number;
+}
+
 interface AgentValuePatch {
   target: AgentRunTarget;
   values: CellMatrix;
@@ -7748,9 +7829,9 @@ function workbookDesignSheetNameScore(sheetName: string, columns: ColumnMetadata
   let score = 0;
   for (const column of columns) {
     const normalized = normalizeComparableText(column.name);
-    if ((/customer|ลูกค้า/.test(normalized) && /customer|ลูกค้า/.test(normalizedSheet))
-      || (/driver|truck|คนขับ|ทะเบียน/.test(normalized) && /driver|truck|รถ|คนขับ/.test(normalizedSheet))
-      || (/booking|บุ๊ค|จอง/.test(normalized) && /booking|บุ๊ค|จอง/.test(normalizedSheet))) {
+    if ((/customer/.test(normalized) && /customer/.test(normalizedSheet))
+      || (/driver|truck|registration/.test(normalized) && /driver|truck|vehicle/.test(normalizedSheet))
+      || (/booking|reservation/.test(normalized) && /booking|reservation/.test(normalizedSheet))) {
       score += 4;
     }
   }
@@ -7759,7 +7840,7 @@ function workbookDesignSheetNameScore(sheetName: string, columns: ColumnMetadata
 
 function workbookDesignHeaderTokens(value: string): string[] {
   return normalizeComparableText(value)
-    .split(/[^a-z0-9ก-๙]+/i)
+    .split(/[^a-z0-9]+/i)
     .filter((token) => token.length >= 3)
     .slice(0, 8);
 }
@@ -7788,19 +7869,19 @@ function workbookDesignColumnRecommendation(metadata: WorkbookMetadata, sheet: W
 function workbookDesignBehavior(column: ColumnMetadata, role: string, normalized: string): string {
   if (role === "date") return "date";
   if (role === "money" || role === "number") return "number_money";
-  if (role === "id" || /เลข|number|no|code|id|ทะเบียน|phone|โทร|tax|ภาษี/.test(normalized)) return "id_text_code";
+  if (role === "id" || /number|no|code|id|registration|phone|tax/.test(normalized)) return "id_text_code";
   if (role === "status" || role === "category") return "dropdown_list";
   return "free_text";
 }
 
 function workbookDesignFormatRecommendation(column: ColumnMetadata, role: string, normalized: string) {
-  if (role === "date" || /วันที่|date/.test(normalized)) {
+  if (role === "date" || /date/.test(normalized)) {
     return { type: "date", numberFormat: "dd/mm/yyyy", reason: "Date-like header should sort/filter as dates." };
   }
-  if (role === "money" || role === "number" || /ราคา|ยอด|ค่า|ภาษี|amount|price|fee|tax|total|net|gross/.test(normalized)) {
+  if (role === "money" || role === "number" || /amount|price|cost|fee|tax|total|net|gross/.test(normalized)) {
     return { type: "money", numberFormat: "#,##0.00", reason: "Money-like columns should align right and use a consistent numeric format." };
   }
-  if (role === "id" || /เลข|booking|บุ๊ค|no|number|code|id|ทะเบียน|phone|โทร|tax id|เลขประจำตัว/.test(normalized)) {
+  if (role === "id" || /booking|no|number|code|id|registration|phone|tax id/.test(normalized)) {
     return { type: "text_code", numberFormat: "@", reason: "Identifiers should stay text so leading zeros, hyphens, and registration codes are preserved." };
   }
   return undefined;
@@ -7811,21 +7892,21 @@ function workbookDesignDropdownRecommendation(column: ColumnMetadata, lookup: un
     return undefined;
   }
   const normalized = normalizeComparableText(column.name);
-  if (/สถานะ|status|state|stage/.test(normalized)) {
+  if (/status|state|stage/.test(normalized)) {
     return {
       source: "suggested_static_options",
-      options: /จ่าย|payment|paid/.test(normalized) ? ["ยังไม่จ่าย", "จ่ายแล้ว", "รอตรวจสอบ"] : ["รอดำเนินการ", "กำลังดำเนินการ", "เสร็จแล้ว", "ยกเลิก"],
+      options: /payment|paid/.test(normalized) ? ["Unpaid", "Paid", "Pending Review"] : ["Pending", "In Progress", "Complete", "Canceled"],
       nextWorkflow: { intentAction: "write_data_validation", mode: "preview_update" }
     };
   }
-  if (/container size|ขนาดตู้/.test(normalized)) {
+  if (/container size/.test(normalized)) {
     return {
       source: "suggested_static_options",
       options: ["20GP", "40GP", "40HQ"],
       nextWorkflow: { intentAction: "write_data_validation", mode: "preview_update" }
     };
   }
-  if (/type|category|ประเภท/.test(normalized)) {
+  if (/type|category/.test(normalized)) {
     return {
       source: "needs_source_or_existing_values",
       options: [],
@@ -7839,9 +7920,9 @@ function workbookDesignLookupRecommendation(metadata: WorkbookMetadata, column: 
   const normalized = normalizeComparableText(column.name);
   const target = relatedSheets.find((sheet) => {
       const sheetName = normalizeComparableText(sheet.sheetName);
-      return (/ลูกค้า|customer/.test(normalized) && /customer|ลูกค้า/.test(sheetName))
-        || (/booking|บุ๊ค|จอง/.test(normalized) && /booking|บุ๊ค|จอง/.test(sheetName))
-        || (/driver|truck|คนขับ|ทะเบียน/.test(normalized) && /driver|truck|รถ|คนขับ/.test(sheetName))
+      return (/customer/.test(normalized) && /customer/.test(sheetName))
+        || (/booking|reservation/.test(normalized) && /booking|reservation/.test(sheetName))
+        || (/driver|truck|registration/.test(normalized) && /driver|truck|vehicle/.test(sheetName))
       || (sheet.kind === "lookup" && workbookDesignRelatedSheetHasHeader(metadata, sheet.sheetName, column.name));
   });
   if (!target) {
@@ -7871,9 +7952,9 @@ function workbookDesignLookupKeyColumn(sheet: WorkbookMetadata["sheets"][number]
   const columns = sheet?.headers.flatMap((header) => header.columns) ?? [];
   const preferred = columns.find((column) => {
     const normalized = normalizeComparableText(column.name);
-    return (/customer|ลูกค้า/.test(normalizedSource) && /customer|ลูกค้า|ชื่อ/.test(normalized))
-      || (/booking|บุ๊ค/.test(normalizedSource) && /booking|บุ๊ค|เลข/.test(normalized))
-      || (/driver|truck|คนขับ|ทะเบียน/.test(normalizedSource) && /driver|truck|คนขับ|ทะเบียน|ชื่อ/.test(normalized));
+    return (/customer/.test(normalizedSource) && /customer|name/.test(normalized))
+      || (/booking/.test(normalizedSource) && /booking|number/.test(normalized))
+      || (/driver|truck|registration/.test(normalizedSource) && /driver|truck|registration|name/.test(normalized));
   }) ?? columns[0];
   return preferred ? `${preferred.letter}:${preferred.name}` : undefined;
 }
@@ -12003,10 +12084,10 @@ function tokenizeReferenceText(value: string): string[] {
 function referencePredicatesFromRequest(request: string, numbers: number[]): SimilarRowPredicate[] {
   const lower = request.toLowerCase();
   const predicates: SimilarRowPredicate[] = [];
-  if (/\binflow\b|\bcash in\b|เงินเข้า|เติมเงิน|เพิ่มเงิน|add(?:ing)? fund|fund(?:ing)?|capital/i.test(request)) {
+  if (/\binflow\b|\bcash in\b|add(?:ing)? fund|fund(?:ing)?|capital/i.test(request)) {
     predicates.push({ label: "Direction is Inflow", value: "inflow", match: "equals", headerPattern: /direction|flow|cash\s*in\s*out/i, role: "status" });
   }
-  if (/\boutflow\b|\bcash out\b|จ่าย|ค่า|ซ่อม/i.test(request)) {
+  if (/\boutflow\b|\bcash out\b|payment|paid|repair/i.test(request)) {
     predicates.push({ label: "Direction is Outflow", value: "outflow", match: "equals", headerPattern: /direction|flow|cash\s*in\s*out/i, role: "status" });
   }
   for (const match of request.matchAll(/\bX\d{3,}\b/gi)) {
@@ -15970,7 +16051,7 @@ function normalizeShortYearDatesForWrite(workbookId: WorkbookId, input: AgentRun
   numberFormatEntries: Array<{ target: A1Range; numberFormat: string[][]; preserveValues?: true }>;
   warnings: string[];
 } {
-  if (!/\b(?:date|booking|bookings|วันที่|วัน\/เวลา|เรือออก|คืนตู้|รับตู้|ปิดสาย)\b/i.test(input.request)) {
+  if (!/\b(?:date|booking|bookings|time|departure|return|pickup|deadline)\b/i.test(input.request)) {
     return { matrix, numberFormatEntries: [], warnings: [] };
   }
   const parsedRange = tryParseA1Address(stripSheetName(range));
@@ -18749,13 +18830,13 @@ function columnsForVisualReadability(metadata: WorkbookMetadata, sheet: Workbook
 function visualColumnRole(column: ColumnMetadata): string {
   const normalized = normalizeComparableText(column.name);
   if (column.inferredType === "formula" || column.role === "formula") return "formula_output";
-  if (column.inferredType === "currency" || column.role === "amount" || /ราคา|ยอด|ค่า|รวม|สุทธิ|ภาษี|amount|price|cost|fee|total|net|tax|revenue|payment|paid|balance/.test(normalized)) return "money";
-  if (column.inferredType === "date" || column.role === "date" || /วันที่|วัน|date/.test(normalized)) return "date";
-  if (column.inferredType === "status" || column.role === "status" || /\b(status|state|stage)\b/i.test(column.name) || /สถานะ/.test(normalized)) return "status";
-  if (column.role === "note" || /\b(note|comment|description|detail)\b/i.test(column.name) || /หมายเหตุ|รายละเอียด/.test(normalized)) return "notes";
-  if (column.role === "identifier" || /\b(id|no\.?|number|code)\b/i.test(column.name) || /เลข|รหัส|ทะเบียน|โค้ด|booking|บุ๊ค|บุก|phone|โทร|tax/.test(normalized)) return "id";
-  if (column.role === "vendor" || column.role === "account" || /ลูกค้า|customer|vendor|supplier|account|ผู้รับเหมา/.test(normalized)) return "entity";
-  if (column.role === "category" || /\b(type|category|priority|owner)\b/i.test(column.name) || /ประเภท|หมวด/.test(normalized)) return "category";
+  if (column.inferredType === "currency" || column.role === "amount" || /amount|price|cost|fee|total|net|tax|revenue|payment|paid|balance/.test(normalized)) return "money";
+  if (column.inferredType === "date" || column.role === "date" || /date|day/.test(normalized)) return "date";
+  if (column.inferredType === "status" || column.role === "status" || /\b(status|state|stage)\b/i.test(column.name)) return "status";
+  if (column.role === "note" || /\b(note|comment|description|detail)\b/i.test(column.name)) return "notes";
+  if (column.role === "identifier" || /\b(id|no\.?|number|code)\b/i.test(column.name) || /registration|booking|phone|tax/.test(normalized)) return "id";
+  if (column.role === "vendor" || column.role === "account" || /customer|vendor|supplier|account|subcontractor/.test(normalized)) return "entity";
+  if (column.role === "category" || /\b(type|category|priority|owner)\b/i.test(column.name)) return "category";
   if (column.inferredType === "number") return "number";
   return "unknown";
 }
@@ -20091,14 +20172,91 @@ function isLookupOnlyFilterRequest(input: AgentRunInput): boolean {
   return (hasQueryShape || lookupWording) && !explicitVisibleFilter;
 }
 
-function resolveQueryRowsTable(metadata: WorkbookMetadata, target: AgentRunTarget | undefined): TableMetadata | undefined {
+function resolveQueryRowsSource(metadata: WorkbookMetadata, target: AgentRunTarget | undefined): QueryRowsSourcePlan | undefined {
+  const sheetName = target?.sheetName ? matchingSheetName(metadata, target.sheetName) : undefined;
+  const tableName = target?.tableName;
   const tables = metadata.tables
-    .filter((table) => !target?.sheetName || table.sheetName === target.sheetName)
-    .filter((table) => !target?.tableName || table.name === target.tableName);
-  if (target?.tableName) {
-    return tables[0];
+    .filter((table) => !sheetName || table.sheetName === sheetName)
+    .filter((table) => !tableName || normalizeComparableText(table.name ?? "") === normalizeComparableText(tableName));
+  if (tableName) {
+    return tables[0] ? queryRowsSourceFromTable(tables[0]) : undefined;
   }
-  return tables.length === 1 ? tables[0] : undefined;
+  if (target?.range && sheetName) {
+    return queryRowsSourceFromHeaderedRange(metadata, sheetName, target.range);
+  }
+  if (tables.length === 1) {
+    return queryRowsSourceFromTable(tables[0]!);
+  }
+  if (sheetName) {
+    const rangeSource = queryRowsSourceFromHeaderedRange(metadata, sheetName, target?.range);
+    if (rangeSource) {
+      return rangeSource;
+    }
+  }
+  return metadata.tables.length === 1 ? queryRowsSourceFromTable(metadata.tables[0]!) : undefined;
+}
+
+function matchingSheetName(metadata: WorkbookMetadata, sheetName: string): string | undefined {
+  return metadata.sheets.find((sheet) => normalizeComparableText(sheet.name) === normalizeComparableText(sheetName))?.name;
+}
+
+function queryRowsSourceFromTable(table: TableMetadata): QueryRowsSourcePlan {
+  return {
+    kind: "table",
+    sheetName: table.sheetName,
+    ...(table.name ? { tableName: table.name } : {}),
+    range: table.range,
+    dataRange: table.dataRange ?? table.range,
+    columns: table.columns,
+    rowOffset: 0
+  };
+}
+
+function queryRowsSourceFromHeaderedRange(metadata: WorkbookMetadata, sheetName: string, requestedRange: string | undefined): QueryRowsSourcePlan | undefined {
+  const sheet = metadata.sheets.find((candidate) => candidate.name === sheetName);
+  if (!sheet || sheet.headers.length === 0) {
+    return undefined;
+  }
+  const normalizedRange = stripSheetName(requestedRange ?? sheet.usedRange ?? "");
+  const parsedTarget = normalizedRange ? tryParseA1Address(normalizedRange) : undefined;
+  const header = chooseQueryRowsHeader(sheet.headers, parsedTarget);
+  if (!header) {
+    return undefined;
+  }
+  const columns = header.columns.filter((column) => {
+    if (!parsedTarget) {
+      return true;
+    }
+    const columnNumber = columnToNumber(column.letter);
+    return columnNumber >= parsedTarget.startColumn && columnNumber <= parsedTarget.endColumn;
+  });
+  if (columns.length === 0) {
+    return undefined;
+  }
+  const startColumn = Math.min(...columns.map((column) => columnToNumber(column.letter)));
+  const endColumn = Math.max(...columns.map((column) => columnToNumber(column.letter)));
+  const dataStartRow = header.row + 1;
+  const dataEndRow = parsedTarget && parsedTarget.endRow > header.row ? parsedTarget.endRow : sheet.rowCount || parsedTarget?.endRow || dataStartRow;
+  return {
+    kind: "range",
+    sheetName,
+    range: normalizedRange || `${numberToColumn(startColumn)}${header.row}:${numberToColumn(endColumn)}${dataEndRow}`,
+    dataRange: `${numberToColumn(startColumn)}${dataStartRow}:${numberToColumn(endColumn)}${Math.max(dataStartRow, dataEndRow)}`,
+    columns,
+    rowOffset: 0
+  };
+}
+
+function chooseQueryRowsHeader(headers: HeaderMetadata[], target: ReturnType<typeof tryParseA1Address> | undefined): HeaderMetadata | undefined {
+  if (!target) {
+    return headers.slice().sort((left, right) => right.confidence - left.confidence)[0];
+  }
+  const inRange = headers.filter((header) => header.row >= target.startRow && header.row <= target.endRow);
+  const overlapping = inRange.filter((header) => header.columns.some((column) => {
+    const columnNumber = columnToNumber(column.letter);
+    return columnNumber >= target.startColumn && columnNumber <= target.endColumn;
+  }));
+  return (overlapping.length > 0 ? overlapping : inRange).slice().sort((left, right) => right.confidence - left.confidence)[0];
 }
 
 function normalizeQueryRowsPredicates(value: unknown[]): AgentQueryRowsPredicate[] {
@@ -20166,29 +20324,91 @@ function normalizedCellString(value: unknown): string {
   return value === undefined || value === null ? "" : String(value).trim().toLowerCase();
 }
 
-function queryRowAddress(table: TableMetadata, zeroBasedDataIndex: number): string {
-  const parsed = table.dataRange ? tryParseA1Address(stripSheetName(table.dataRange)) : undefined;
-  const rowNumber = (parsed?.startRow ?? 2) + zeroBasedDataIndex;
-  return `${table.sheetName}!${rowNumber}:${rowNumber}`;
+function queryRowsSnapshotKey(source: QueryRowsSourcePlan, readColumns: string[], scanLimit: number): string {
+  const columns = readColumns.map((column) => normalizeHeaderName(column)).sort().join(",");
+  return [
+    "query_rows",
+    source.kind,
+    normalizeComparableText(source.sheetName),
+    normalizeComparableText(source.tableName ?? ""),
+    normalizeComparableText(source.dataRange),
+    scanLimit,
+    columns
+  ].join("|");
+}
+
+function queryRowsProjectedRange(source: QueryRowsSourcePlan, readColumns: string[], scanLimit: number): { range: string; columnIndexes: number[] } {
+  const parsed = tryParseA1Address(stripSheetName(source.dataRange));
+  const columns = readColumns.map((name) => queryRowsColumnByName(source, name)).filter((column): column is ColumnMetadata => Boolean(column));
+  const fallbackColumns = columns.length > 0 ? columns : source.columns;
+  const startColumn = Math.min(...fallbackColumns.map((column) => columnToNumber(column.letter)));
+  const endColumn = Math.max(...fallbackColumns.map((column) => columnToNumber(column.letter)));
+  const startRow = parsed?.startRow ?? 2;
+  const maxEndRow = parsed?.endRow ?? startRow + scanLimit - 1;
+  const endRow = Math.min(maxEndRow, startRow + scanLimit - 1);
+  return {
+    range: `${numberToColumn(startColumn)}${startRow}:${numberToColumn(endColumn)}${endRow}`,
+    columnIndexes: readColumns.map((name) => {
+      const column = queryRowsColumnByName(source, name);
+      return column ? columnToNumber(column.letter) - startColumn : -1;
+    })
+  };
+}
+
+function overlayQueryRowsOptimisticValues(
+  cache: WorkbookMetadataCache,
+  workbookContextId: string,
+  source: QueryRowsSourcePlan,
+  data: QueryRowsLoadedData
+): QueryRowsLoadedData {
+  const parsed = tryParseA1Address(stripSheetName(source.dataRange));
+  if (!parsed) {
+    return data;
+  }
+  let changed = false;
+  const values: CellMatrix = data.values.map((row, rowIndex) => data.headers.map((header, columnIndex) => {
+    const column = queryRowsColumnByName(source, header);
+    if (!column) {
+      return row[columnIndex] ?? null;
+    }
+    const optimistic = cache.getOptimisticValue(workbookContextId, source.sheetName, `${column.letter}${parsed.startRow + rowIndex}`);
+    if (optimistic === undefined) {
+      return row[columnIndex] ?? null;
+    }
+    changed = true;
+    return optimistic.value as CellMatrix[number][number];
+  }));
+  return changed ? { ...data, source: "mixed", values } : data;
+}
+
+function queryRowsColumnByName(source: QueryRowsSourcePlan, name: string): ColumnMetadata | undefined {
+  const normalized = normalizeHeaderName(name);
+  return source.columns.find((column) => normalizeHeaderName(column.name) === normalized || normalizeHeaderName(column.normalizedName) === normalized);
+}
+
+function queryRowAddress(source: QueryRowsSourcePlan, zeroBasedDataIndex: number): string {
+  const parsed = tryParseA1Address(stripSheetName(source.dataRange));
+  const rowNumber = (parsed?.startRow ?? 2) + source.rowOffset + zeroBasedDataIndex;
+  return `${source.sheetName}!${rowNumber}:${rowNumber}`;
 }
 
 function queryRowsSuggestedPatchOperation(
   input: AgentRunInput,
-  table: TableMetadata,
+  source: QueryRowsSourcePlan,
   rowIndexes: number[],
   updateColumnLetter: string,
   updateValue: unknown
 ): Partial<AgentRunInput> {
-  const parsed = table.dataRange ? tryParseA1Address(stripSheetName(table.dataRange)) : undefined;
+  const parsed = tryParseA1Address(stripSheetName(source.dataRange));
   const startRow = parsed?.startRow ?? 2;
   return {
     request: input.request,
     mode: "preview_update",
     intent: { action: "write_values", reason: "Preview patches generated from read-only query_rows matched row addresses." },
-    target: { sheetName: table.sheetName, ...(table.name ? { tableName: table.name } : {}) },
+    target: { sheetName: source.sheetName, ...(source.tableName ? { tableName: source.tableName } : {}) },
     values: {
       patches: rowIndexes.map((index) => ({
-        target: { sheetName: table.sheetName, range: `${updateColumnLetter}${startRow + index}` },
+        target: { sheetName: source.sheetName, range: `${updateColumnLetter}${startRow + source.rowOffset + index}` },
         values: [[updateValue]],
         reason: "query_rows matched row"
       }))

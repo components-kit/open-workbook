@@ -449,7 +449,7 @@ describe("AgentOrchestrator Target Resolution", () => {
       const agent = new AgentOrchestrator(runtime as any);
 
       const result = await agent.run({
-        request: "ช่วยอ่านข้อมูลจาก Financials - June 2026",
+        request: "Please read data from Financials - June 2026",
         mode: "answer"
       });
 

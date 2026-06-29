@@ -363,6 +363,8 @@ export interface AgentQueryRowsOutput {
   kind: "query_rows_result";
   matchedRows: number;
   returnedRows: number;
+  source?: "cache" | "live" | "mixed";
+  scannedRows?: number;
   format: AgentQueryRowsFormat;
   columns: string[];
   truncated: boolean;

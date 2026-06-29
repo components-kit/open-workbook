@@ -12,21 +12,21 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
       const agent = new AgentOrchestrator(runtime as any);
       const metadata = createCachedMetadata("wbctx_thai_invoices_grouped");
       const headers = [
-        "สถานะวางบิล",
-        "จ่ายผู้รับเหมาช่วงแล้ว?",
-        "เลขบุ๊คกิ้ง",
-        "ลูกค้า",
-        "สถานะงาน",
-        "วันที่โหลดสินค้า",
-        "ราคางาน",
-        "ค่ายกตู้ขึ้น",
-        "ค่ายกตู้ลง",
-        "ค่ายกรวม",
-        "ค่าใช้จ่ายอื่น",
-        "ยอดวางบิลรวม",
-        "ภาษีหัก ณ ที่จ่าย",
-        "ยอดรับสุทธิ",
-        "งานจ้างช่วง?"
+        "Billing Status",
+        "Subcontractor Paid?",
+        "Booking Number",
+        "Customer",
+        "Job Status",
+        "Load Date",
+        "Job Price",
+        "Lift On Fee",
+        "Lift Off Fee",
+        "Total Lift Fee",
+        "Other Expenses",
+        "Total Billing Amount",
+        "Withholding Tax",
+        "Net Receipt",
+        "Subcontracted?"
       ];
       const invoiceColumns = headers.map((header, index) => ({
         name: header,
@@ -37,7 +37,7 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
         index,
         letter: String.fromCharCode("A".charCodeAt(0) + index)
       }));
-      metadata.workbook = { ...metadata.workbook, activeSheet: "Invoices", name: "มิถุนายน.xlsx" };
+      metadata.workbook = { ...metadata.workbook, activeSheet: "Invoices", name: "June.xlsx" };
       metadata.sheets = [{
         id: "sheet:Invoices",
         name: "Invoices",
@@ -73,7 +73,7 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
         kind: "summary",
         range: "A1:O2",
         columns: [],
-        labels: ["สถานะ", "ข้อมูลการจอง", "ยอดเงิน", "งานจ้างช่วง"],
+        labels: ["Status", "Booking Details", "Amount", "Subcontracted Work"],
         rowCount: 2,
         columnCount: 15,
         nonEmptyCellCount: 19,
@@ -83,7 +83,7 @@ describe("AgentOrchestrator Preview Apply Safety", () => {
         id: "summary:Invoices:grouped-header",
         sheetName: "Invoices",
         range: "A1:O2",
-        labels: ["สถานะ", "ข้อมูลการจอง", "ยอดเงิน", "งานจ้างช่วง"],
+        labels: ["Status", "Booking Details", "Amount", "Subcontracted Work"],
         confidence: 0.95
       }];
       agent.metadataCache.set(metadata);
@@ -1990,7 +1990,7 @@ Data rows:
       agent.metadataCache.set(metadata);
 
       const result = await agent.run({
-        request: "ผมต้องการเสนอราคาที่ 6100",
+        request: "I want to propose a price of 6100",
         mode: "auto",
         workbookContextId: metadata.workbookContextId,
         intent: { action: "write_values" },

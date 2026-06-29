@@ -192,8 +192,8 @@ Preview a grouped_header workflow for this sheet. Add a higher-level grouped hea
     "stylePreservationMode": "none",
     "groupedHeader": {
       "groups": [
-        { "label": "สถานะ", "startColumn": "A", "endColumn": "B" },
-        { "label": "ข้อมูลงาน", "startColumn": "C", "endColumn": "E" }
+        { "label": "Status", "startColumn": "A", "endColumn": "B" },
+        { "label": "Job Details", "startColumn": "C", "endColumn": "E" }
       ]
     }
   }

@@ -1255,9 +1255,9 @@ export function selectionInfo(sheetName: string, address: string, position = { r
 function valuesFor(sheetName: string, address: string) {
   if (sheetName === "Invoices") {
     if (address === "A1:O1") {
-      return [["สถานะ", "", "ข้อมูลการจอง", "", "", "", "ค่าใช้จ่าย", "", "", "", "", "", "", "", "งานจ้างช่วง"]];
+      return [["Status", "", "Booking Details", "", "", "", "Expenses", "", "", "", "", "", "", "", "Subcontracted Work"]];
     }
-    return [["สถานะ", "", "ข้อมูลการจอง", "", "", "", "ค่าใช้จ่าย", "", "", "", "", "", "", "", "งานจ้างช่วง"]];
+    return [["Status", "", "Booking Details", "", "", "", "Expenses", "", "", "", "", "", "", "", "Subcontracted Work"]];
   }
   if (sheetName === "Vendor Propose") {
     const rows = [
@@ -1348,6 +1348,7 @@ function valuesFor(sheetName: string, address: string) {
   if (sheetName === "Customer Master") {
     if (address === "A2:A4") return [["A-100"], ["A-200"], ["A-300"]];
     if (address === "B2:B4") return [["Gold"], ["Silver"], ["Bronze"]];
+    if (address === "A2:B4") return [["A-100", "Gold"], ["A-200", "Silver"], ["A-300", "Bronze"]];
     return [["Account", "Tier"], ["A-100", "Gold"], ["A-200", "Silver"], ["A-300", "Bronze"]];
   }
   if (sheetName === "Mar 2026" || sheetName === "Apr 2026" || sheetName === "May 2026") {
@@ -1438,7 +1439,7 @@ function monthlySheetValues(sheetName: string, address: string) {
     return sliceMonthlyRows(rows, address);
   }
   const ownerFundRow = padToSummary([
-    "2026-04-16", "", "", "เติมเงินเข้าบริษัท", "owner_fund_added", "Inflow", "10000", "10000", "0", "", "From X1183 MR. PRACH YOTHAPRA++", "fund-proof.pdf", "Owner adding fund"
+    "2026-04-16", "", "", "Owner fund added", "owner_fund_added", "Inflow", "10000", "10000", "0", "", "From X1183 MR. PRACH YOTHAPRA++", "fund-proof.pdf", "Owner adding fund"
   ], summaryRows[2]!);
   const rows = sheetName.startsWith("Apr")
     ? [row1, row2, ownerFundRow, ...summaryRows.slice(3).map((summary) => padToSummary([], summary))]

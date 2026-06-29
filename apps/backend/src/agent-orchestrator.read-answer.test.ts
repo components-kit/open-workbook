@@ -61,12 +61,12 @@ describe("AgentOrchestrator Read Answer Routing", () => {
         mergedRangeCount: 3,
         mergeStatus: "merged_spans_detected",
         spans: [
-          { range: "A1:B1", label: "สถานะ", merged: true },
-          { range: "C1:F1", label: "ข้อมูลการจอง", merged: true },
-          { range: "G1:N1", label: "ค่าใช้จ่าย", merged: true }
+          { range: "A1:B1", label: "Status", merged: true },
+          { range: "C1:F1", label: "Booking Details", merged: true },
+          { range: "G1:N1", label: "Expenses", merged: true }
         ],
         unmergedLabels: [
-          { cell: "O1", label: "งานจ้างช่วง", merged: false }
+          { cell: "O1", label: "Subcontracted Work", merged: false }
         ]
       });
       expect(runtime.runtimeMethodCalls["range.read_merged_cells"]).toBe(1);
@@ -704,6 +704,116 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(runtime.runtimeMethodCalls["table.read"]).toBe(1);
     });
 
+  it("reuses cached query_rows snapshots when values are fresh", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_query_rows_cache");
+      agent.metadataCache.set(metadata);
+      const input = {
+        request: "Show open transaction rows",
+        mode: "answer" as const,
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "query_rows" as const },
+        target: { sheetName: "Data", tableName: "Transactions" },
+        values: {
+          where: [{ column: "Status", op: "=" as const, value: "Open" }],
+          return: ["Date", "Status"],
+          limit: 10
+        },
+        responseMode: "verbose" as const
+      };
+
+      const first = await agent.run(input);
+      const second = await agent.run(input);
+
+      expect(first.status).toBe("SUCCESS");
+      expect(second.status).toBe("SUCCESS");
+      expect((first.answer as any).source).toBe("live");
+      expect((second.answer as any).source).toBe("cache");
+      expect((second.answer as any).rows).toEqual([
+        { Date: "2026-06-01", Status: "Open" },
+        { Date: "2026-06-03", Status: "Open" }
+      ]);
+      expect(runtime.runtimeMethodCalls["table.read"]).toBe(1);
+    });
+
+  it("overlays optimistic patch values on cached query_rows snapshots", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_query_rows_optimistic");
+      agent.metadataCache.set(metadata);
+      const baseInput = {
+        request: "Show transaction rows by status",
+        mode: "answer" as const,
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "query_rows" as const },
+        target: { sheetName: "Data", tableName: "Transactions" },
+        values: {
+          where: [{ column: "Status", op: "not_blank" as const }],
+          return: ["Date", "Status"],
+          limit: 10
+        },
+        responseMode: "verbose" as const
+      };
+      await agent.run(baseInput);
+      agent.metadataCache.applyOptimisticValueChanges(metadata.workbookContextId, "op_query_rows_patch", [
+        { sheetName: "Data", cell: "D2", before: "Open", after: "Reviewed" }
+      ]);
+
+      const result = await agent.run({
+        ...baseInput,
+        request: "Which transaction rows are reviewed?",
+        values: {
+          ...baseInput.values,
+          where: [{ column: "Status", op: "=" as const, value: "Reviewed" }]
+        }
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any)).toMatchObject({
+        source: "mixed",
+        matchedRows: 1,
+        rows: [{ Date: "2026-06-01", Status: "Reviewed" }],
+        rowAddresses: ["Data!2:2"]
+      });
+      expect(runtime.runtimeMethodCalls["table.read"]).toBe(1);
+    });
+
+  it("executes query_rows against a headered range without converting it to a visible filter", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      const metadata = createCachedMetadata("wbctx_query_rows_range");
+      agent.metadataCache.set(metadata);
+
+      const result = await agent.run({
+        request: "Find gold customers",
+        mode: "answer",
+        workbookContextId: metadata.workbookContextId,
+        intent: { action: "query_rows" },
+        target: { sheetName: "Customer Master", range: "A1:B4" },
+        values: {
+          where: [{ column: "Tier", op: "=", value: "Gold" }],
+          return: ["Account", "Tier"],
+          limit: 5
+        },
+        responseMode: "verbose"
+      });
+
+      expect(result.status).toBe("SUCCESS");
+      expect((result.answer as any)).toMatchObject({
+        kind: "query_rows_result",
+        source: "live",
+        matchedRows: 1,
+        rows: [{ Account: "A-100", Tier: "Gold" }],
+        rowAddresses: ["Customer Master!2:2"]
+      });
+      expect(runtime.readBatchCount).toBe(1);
+      expect(runtime.runtimeMethodCalls["table.read"]).toBeUndefined();
+      expect(runtime.lastBatchOperations).toEqual([
+        expect.objectContaining({ target: expect.objectContaining({ sheetName: "Customer Master", address: "A2:B4" }) })
+      ]);
+    });
+
   it("includes section header and data anchors in sheet summaries", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -1285,22 +1395,22 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(result.warnings.join(" ")).not.toContain("fullResultUri");
     });
 
-  it("keeps multilingual reference signals available for similar-row search", async () => {
+  it("keeps reference signals available for similar-row search", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
       const metadata = createCachedMetadata("wbctx_reference_thai");
       agent.metadataCache.set(metadata);
 
       const result = await agent.run({
-        request: "หา reference Apr 2026 เติมเงินเข้าบริษัท 10000 จาก PRACH",
+        request: "Find reference Apr 2026 owner fund added 10000 from PRACH",
         mode: "answer",
         workbookContextId: metadata.workbookContextId,
         target: { sheetName: "Apr 2026", range: "A:L" }
       });
 
       expect(result.status).toBe("SUCCESS");
-      expect((result.answer as any).rows[0].matchedSignals.join(" ")).toContain("เติมเงิน");
-      expect((result.answer as any).rows[0].columns.map((column: any) => column.value)).toContain("เติมเงินเข้าบริษัท");
+      expect((result.answer as any).rows[0].matchedSignals.join(" ")).toContain("owner fund");
+      expect((result.answer as any).rows[0].columns.map((column: any) => column.value)).toContain("Owner fund added");
     });
 
   it("returns style reference candidates without falling back to value range profiles", async () => {

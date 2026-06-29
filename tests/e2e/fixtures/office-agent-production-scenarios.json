@@ -4016,9 +4016,9 @@
     "category": "multilingual",
     "difficulty": "medium",
     "intent": "answer",
-    "prompt": "ช่วยสรุปชีต Sales ให้หน่อย",
+    "prompt": "Please summarize the Sales sheet",
     "input": {
-      "request": "ช่วยสรุปชีต Sales ให้หน่อย",
+      "request": "Please summarize the Sales sheet",
       "target": {
         "sheetName": "Sales",
         "range": "A1:E6"
@@ -4056,9 +4056,9 @@
     "category": "multilingual",
     "difficulty": "medium",
     "intent": "mutation-preview",
-    "prompt": "ช่วยเปลี่ยนสถานะ Sales แถว 2 เป็น Reviewed",
+    "prompt": "Please change Sales row 2 status to Reviewed",
     "input": {
-      "request": "ช่วยเปลี่ยนสถานะ Sales แถว 2 เป็น Reviewed",
+      "request": "Please change Sales row 2 status to Reviewed",
       "mode": "preview_update",
       "target": {
         "sheetName": "Sales",

@@ -183,6 +183,20 @@ export interface OptimisticCachedValue {
   updatedAt: number;
 }
 
+export interface QueryRowsCachedSnapshot {
+  key: string;
+  sheetName: string;
+  tableName?: string;
+  range: string;
+  dataRange: string;
+  columns: string[];
+  headers: string[];
+  values: unknown[][];
+  rowAddresses: string[];
+  contextVersion: number;
+  updatedAt: number;
+}
+
 export interface CacheImpactSummary {
   cacheAction: OperationJournalEntry["cacheAction"];
   contextVersion: number;
@@ -197,6 +211,7 @@ export interface WorkbookContextState {
   lastValidatedAt?: number;
   freshness: ContextFreshness;
   optimisticValues: OptimisticCachedValue[];
+  queryRowsSnapshots: QueryRowsCachedSnapshot[];
   journal: OperationJournalEntry[];
 }
 
@@ -425,6 +440,41 @@ export class WorkbookMetadataCache {
     return value ? cloneOptimisticValue(value) : undefined;
   }
 
+  getQueryRowsSnapshot(workbookContextId: string, key: string): QueryRowsCachedSnapshot | undefined {
+    const state = this.contextStateById.get(workbookContextId);
+    const snapshot = state?.queryRowsSnapshots.find((candidate) => candidate.key === key);
+    return snapshot ? cloneQueryRowsSnapshot(snapshot) : undefined;
+  }
+
+  putQueryRowsSnapshot(
+    workbookContextId: string,
+    snapshot: Omit<QueryRowsCachedSnapshot, "contextVersion" | "updatedAt">,
+    now = Date.now()
+  ): QueryRowsCachedSnapshot | undefined {
+    const state = this.contextStateById.get(workbookContextId);
+    if (!state) {
+      return undefined;
+    }
+    const stored: QueryRowsCachedSnapshot = {
+      ...snapshot,
+      columns: [...snapshot.columns],
+      headers: [...snapshot.headers],
+      values: snapshot.values.map((row) => [...row]),
+      rowAddresses: [...snapshot.rowAddresses],
+      contextVersion: state.contextVersion,
+      updatedAt: now
+    };
+    const next: WorkbookContextState = {
+      ...state,
+      queryRowsSnapshots: [
+        stored,
+        ...state.queryRowsSnapshots.filter((candidate) => candidate.key !== snapshot.key)
+      ].slice(0, 50)
+    };
+    this.contextStateById.set(workbookContextId, next);
+    return cloneQueryRowsSnapshot(stored);
+  }
+
   markFacetsStale(workbookContextId: string, facets: ContextFacet[], staleRanges: string[] = [], now = Date.now()): WorkbookContextState | undefined {
     const state = this.contextStateById.get(workbookContextId);
     if (!state) {
@@ -503,6 +553,7 @@ function createInitialContextState(workbookContextId: string, now: number): Work
       updatedAt: now
     },
     optimisticValues: [],
+    queryRowsSnapshots: [],
     journal: []
   };
 }
@@ -545,6 +596,7 @@ function cloneContextState(state: WorkbookContextState): WorkbookContextState {
       ...(state.freshness.staleRanges ? { staleRanges: [...state.freshness.staleRanges] } : {})
     },
     optimisticValues: state.optimisticValues.map(cloneOptimisticValue),
+    queryRowsSnapshots: state.queryRowsSnapshots.map(cloneQueryRowsSnapshot),
     journal: state.journal.map(cloneJournalEntry)
   };
 }
@@ -565,6 +617,16 @@ function cloneOptimisticValue(value: OptimisticCachedValue): OptimisticCachedVal
     ...value,
     value: cloneUnknown(value.value),
     ...(value.before !== undefined ? { before: cloneUnknown(value.before) } : {})
+  };
+}
+
+function cloneQueryRowsSnapshot(snapshot: QueryRowsCachedSnapshot): QueryRowsCachedSnapshot {
+  return {
+    ...snapshot,
+    columns: [...snapshot.columns],
+    headers: [...snapshot.headers],
+    values: snapshot.values.map((row) => [...row]),
+    rowAddresses: [...snapshot.rowAddresses]
   };
 }
 
