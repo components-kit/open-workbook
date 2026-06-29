@@ -13303,7 +13303,7 @@ function compactContextUsedForBudget(contextUsed: AgentRunOutput["contextUsed"],
 }
 
 function compactPostContextForTinyBudget(output: Omit<AgentRunOutput, "telemetry">, maxPayloadBytes: number | undefined): Omit<AgentRunOutput, "telemetry"> {
-  if (maxPayloadBytes === undefined || maxPayloadBytes > 900 || Buffer.byteLength(JSON.stringify(output)) <= maxPayloadBytes + 350) {
+  if (maxPayloadBytes === undefined || maxPayloadBytes > 1_200 || Buffer.byteLength(JSON.stringify(output)) <= maxPayloadBytes + 350) {
     return output;
   }
   return stripUndefinedOptionals({

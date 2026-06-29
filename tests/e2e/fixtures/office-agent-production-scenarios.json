@@ -2352,10 +2352,18 @@
         "range": "E2"
       },
       "values": {
-        "values": [
-          [
-            "Reviewed"
-          ]
+        "patches": [
+          {
+            "target": {
+              "sheetName": "Sales",
+              "range": "E2"
+            },
+            "values": [
+              [
+                "Reviewed"
+              ]
+            ]
+          }
         ]
       }
     },
@@ -3265,14 +3273,22 @@
             "range": "A4:E4"
           },
           "values": {
-            "values": [
-              [
-                "2026-01-08",
-                "Contoso",
-                "Implementation",
-                3500,
-                "Reviewed"
-              ]
+            "patches": [
+              {
+                "target": {
+                  "sheetName": "Sales",
+                  "range": "A4:E4"
+                },
+                "values": [
+                  [
+                    "2026-01-08",
+                    "Contoso",
+                    "Implementation",
+                    3500,
+                    "Reviewed"
+                  ]
+                ]
+              }
             ]
           }
         },
@@ -3322,10 +3338,18 @@
         "range": "E2"
       },
       "values": {
-        "values": [
-          [
-            "Reviewed"
-          ]
+        "patches": [
+          {
+            "target": {
+              "sheetName": "Sales",
+              "range": "E2"
+            },
+            "values": [
+              [
+                "Reviewed"
+              ]
+            ]
+          }
         ]
       }
     },
@@ -4065,10 +4089,18 @@
         "range": "E2"
       },
       "values": {
-        "values": [
-          [
-            "Reviewed"
-          ]
+        "patches": [
+          {
+            "target": {
+              "sheetName": "Sales",
+              "range": "E2"
+            },
+            "values": [
+              [
+                "Reviewed"
+              ]
+            ]
+          }
         ]
       }
     },

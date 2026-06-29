@@ -6,6 +6,26 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+## [0.1.26] - 2026-06-29
+
+### Added
+
+- Added context levels, progressive context planning, facet-aware freshness, and optimistic cache updates so agents can choose the right workbook context depth and avoid unnecessary rereads after safe patches.
+- Added first-class `query_rows` contract and execution for read-only row lookups across tables and headered ranges, including semantic field resolution and row-address proof for follow-up patch workflows.
+- Added cached query row snapshots and optimistic patch overlays so repeated lookups can reuse fresh workbook values while reflecting recent exact value edits.
+
+### Fixed
+
+- Fixed lookup-only filter misuse by redirecting read-only row questions away from visible Excel filters and toward `query_rows`.
+- Fixed query row follow-up patch suggestions so matched rows produce bounded patch-only update operations instead of visible filter mutations or broad writes.
+- Fixed agent context regression coverage for freshness, optimistic values, and query-row workflows so future routing changes preserve the low-read behavior.
+
+### Changed
+
+- Improved `excel.agent.run`, MCP guidance, Open Workbook skill docs, generated docs, and E2E scenarios for context reuse, progression context, and read-only row lookup workflows.
+- Improved query row result metadata with read source and scanned-row details so agents can tell whether answers came from live reads, cache, or optimistic overlays.
+- Improved release and regression coverage around agent context planning, filter redirects, query row caching, headered range lookup, and suggested patch workflows.
+
 ## [0.1.25] - 2026-06-26
 
 ### Added

@@ -346,6 +346,26 @@ The format is based on Keep a Changelog, and this project follows semantic versi
 
 ## [Unreleased]
 
+## [0.1.26] - 2026-06-29
+
+### Added
+
+- Added context levels, progressive context planning, facet-aware freshness, and optimistic cache updates so agents can choose the right workbook context depth and avoid unnecessary rereads after safe patches.
+- Added first-class `query_rows` contract and execution for read-only row lookups across tables and headered ranges, including semantic field resolution and row-address proof for follow-up patch workflows.
+- Added cached query row snapshots and optimistic patch overlays so repeated lookups can reuse fresh workbook values while reflecting recent exact value edits.
+
+### Fixed
+
+- Fixed lookup-only filter misuse by redirecting read-only row questions away from visible Excel filters and toward `query_rows`.
+- Fixed query row follow-up patch suggestions so matched rows produce bounded patch-only update operations instead of visible filter mutations or broad writes.
+- Fixed agent context regression coverage for freshness, optimistic values, and query-row workflows so future routing changes preserve the low-read behavior.
+
+### Changed
+
+- Improved `excel.agent.run`, MCP guidance, Open Workbook skill docs, generated docs, and E2E scenarios for context reuse, progression context, and read-only row lookup workflows.
+- Improved query row result metadata with read source and scanned-row details so agents can tell whether answers came from live reads, cache, or optimistic overlays.
+- Improved release and regression coverage around agent context planning, filter redirects, query row caching, headered range lookup, and suggested patch workflows.
+
 ## [0.1.25] - 2026-06-26
 
 ### Added
@@ -854,6 +874,7 @@ For reads, start with a bounded `answer` call on the selected range. For mutatio
 - Visual styling safety: comprehensive validation/formula suggestions remain preview-only unless the user chooses an explicit bucket or separate workflow; do not apply dropdowns, formulas, inserted rows/columns, or summary blocks through the visual styling apply path.
 - Formatting errors: use `format_diagnostics` before mutating. It returns raw value, displayed text, formulas, number formats, style summary, likely issues, and suggested fix actions.
 - Historical labels and similar rows: when the user asks how something was labeled/classified before, or asks to look at another month/sheet for a data reference, call `intent.action: "find_similar_rows"` on the current row/range/table or requested prior sheet. Let Open Workbook search related sheets and return exact matched rows with proof; do not manually read broad prior-sheet ranges, fetch fullResultUri, or chunk rows looking for matches.
+- Read-only row lookup: when the user asks to show/list/find rows where a condition is true, call `intent.action: "query_rows"` with `values.where`, optional `values.return`, `values.limit`, and `values.format`. Use `filter_range` only when the user explicitly asks to change the visible Excel filter.
 - Formulas: for exact checks such as “is this a formula?”, “raw formula”, “show formula”, or “formula in I165”, call `intent.action: "read_formulas"` with the exact target. Use `read_formula_patterns`, `validate_formula_against_template`, or formula dependency/trace actions for repeated layouts and reference comparisons. Never infer formula existence from displayed values or numbers alone. Formula writes, formula repairs, and broad formula-like derivations are preview/apply workflows with validation.
 - Formula repairs over a full column/table should target the full data range, not sample rows. When one normal same-sheet A1 formula pattern should fill a full target range, send `intent.action: "write_formulas"` with `values.formula` as a single formula string and the full `target.range`; Open Workbook expands relative references such as `=H2-G2` to `=H3-G3` and beyond. Do not build a matching-sized formula array unless Open Workbook explicitly asks for `values.formulas`, and do not add dummy `values.values` to make formula writes route.
 - Reconciliation conventions: for transaction sheets, inspect the reference month convention before changing Payment Variance, Reconciliation Note, or Detail Notes. Match columns by header/role, use `read_formulas` or `read_formula_patterns` for the variance convention, use `find_similar_rows` for note wording, or call `intent.action: "settle_reconciliation"` to preview one grouped formula/note repair that preserves Reconciliation Note and Detail Notes as separate columns.
@@ -928,6 +949,8 @@ Use `context` to request the acquisition policy and `detailLevel` to request the
 For overview questions such as "what is this workbook/file?", "look into this Excel file", or "summarize this workbook", one `mode: "answer"` call with `detailLevel: "workbook_summary"` or `detailLevel: "sheet_summary"` is normally the whole workflow. If the response has `nextAction: "answer_now"` or `maxRecommendedFollowupCalls: 0`, answer immediately. Do not follow `resourceLinks`, fetch `fullResultUri`, chunk-read sheets, list MCP resources, or call low-level resource reads unless the user explicitly asks for all raw rows, every value, or exact cell contents.
 
 For exact formula questions, pass `intent.action: "read_formulas"` with the exact target when known. This covers "is this a formula?", "raw formula", "show formula", and "formula in I165". Do not infer formula existence from displayed values or numbers alone; use returned formula/status proof.
+
+For read-only lookup/filter-like questions such as "show rows where Status = Unpaid", "which invoices are overdue?", or "list transactions in June", pass `intent.action: "query_rows"` with `values.where`, optional `values.return`, `values.limit`, and `values.format`. Use `filter_range` only when the user explicitly wants the visible Excel filter/view changed.
 
 ## Multilingual Requests
 
@@ -1111,6 +1134,7 @@ When the user's LLM/client can infer intent, pass structured fields instead of r
 - `intent.targetHints`: short target clues from the workbook, including original labels and useful translated aliases.
 - `target`: explicit `sheetName`, `range`, `tableName`, or returned `candidateId` when known.
 - `values`: 2D matrices, `values.patches`, formulas, styles, or table rows for updates.
+- For read-only row lookup, use `intent.action: "query_rows"` with `values.where`, optional `values.return`, `values.limit`, and `values.format`.
 
 Structured intent is only a routing hint. The backend still performs target resolution, ambiguity checks, session write-permission checks, preview/apply confirmation when required, stale checks, permissions, locks, backups, validation, and rollback bookkeeping.
 
@@ -1140,6 +1164,7 @@ Do not translate the entire workbook task into English and discard the original 
 - Use `mode: "answer"` with `target.candidateId`, explicit `target.sheetName`/`target.range`, or a clear natural-language target.
 - Ask for rows, samples, actual values, formulas, raw monthly sections, or explicit A1 ranges when live cell data is required.
 - Ask for schema, columns, or headers when cached metadata is enough.
+- For lookup/filter-like questions such as "show rows where...", "which invoices are unpaid?", or "list June transactions", use `query_rows`. Reserve `filter_range` for visible Excel filter changes.
 - For exact formula inspection such as "is this a formula?", "raw formula", "show formula", or "formula in I165", use `read_formulas` with an explicit formula `target.sheetName` and `target.range`; never infer formula existence from displayed values or numbers alone. For formula pattern, dependency, trace, error, explanation, or template comparison inspection, use `read_formula_patterns`, `get_formula_dependency_graph`, `trace_formula_precedents`, `trace_formula_dependents`, `find_formula_errors`, `explain_formula`, or `validate_formula_against_template`.
 - For named items and registered regions, use `read_named_item` or `read_region` with `target.candidateId` from `find` or `target.entity` when the name is exact.
 - For registered-region mutations, use `register_region`, `clear_region_values`, `write_region_values`, or `fill_region` with `values.regionName`; include explicit `values.values` or `values.rows` for writes/fills.
@@ -1192,7 +1217,7 @@ Never pad broad ranges with blanks or nulls when only a smaller rectangle should
 Describe the user's goal through `excel.agent.run` and let the backend choose internal table, template, formula, pivot, chart, validation, snapshot, diff, backup, and transaction capabilities.
 
 - For table appends, pass `target.candidateId` or `target.tableName` with `values.rows`, preview first, then apply.
-- For table sort/filter, pass `intent.action: "sort_table"` or `filter_range` plus a table/range target. If one user request combines table filters and sorting, use `intent.action: "apply_table_view"` with `values.filters` and `values.sort.fields` so the backend previews and applies one table mutation.
+- For table sort/filter, pass `intent.action: "sort_table"` or `filter_range` plus a table/range target only when the user wants the Excel view changed. For read-only matching rows, use `query_rows`. If one user request combines table filters and sorting, use `intent.action: "apply_table_view"` with `values.filters` and `values.sort.fields` so the backend previews and applies one table mutation.
 - For template, formula repair, pivot/chart, and risky-edit tasks, use `prepare`, `find`, `answer`, `preview_update`, and `validate` as appropriate; template metadata reads can stay in `answer`, while template mutations and repairs must preview/apply; report host capability warnings honestly.
 - For save/recalculate, use `intent.action: "save"` or `calculate`; the backend maps these to workbook-level operations.
 

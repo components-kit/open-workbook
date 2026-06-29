@@ -1513,6 +1513,11 @@ class FakeWorkbook {
       if (operation.kind === "range.write_values") {
         cellsWritten += this.sheet(operation.target.sheetName).writeValues(operation.target.address, operation.values);
       }
+      if (operation.kind === "range.write_values_many") {
+        for (const entry of operation.entries ?? []) {
+          cellsWritten += this.sheet(entry.target.sheetName).writeValues(entry.target.address, entry.values);
+        }
+      }
       if (operation.kind === "range.write_formulas") {
         cellsWritten += this.sheet(operation.target.sheetName).writeFormulas(operation.target.address, operation.formulas);
       }

@@ -95,7 +95,14 @@
       "mode": "preview_update",
       "intent": { "action": "write_data_validation" },
       "target": { "sheetName": "Sales", "range": "E2:E6" },
-      "values": { "options": ["Open", "Reviewed", "Closed"] }
+      "values": {
+        "patches": [
+          {
+            "target": { "sheetName": "Sales", "range": "E2:E6" },
+            "options": ["Open", "Reviewed", "Closed"]
+          }
+        ]
+      }
     },
     "expected": {
       "resultType": "apply",
@@ -123,7 +130,17 @@
       "mode": "preview_update",
       "intent": { "action": "write_conditional_formatting" },
       "target": { "sheetName": "Sales", "range": "A2:E6" },
-      "values": { "formula": "=$E2=\"Open\"", "style": { "fillColor": "#FFFF00" } }
+      "values": {
+        "patches": [
+          {
+            "target": { "sheetName": "Sales", "range": "A2:E6" },
+            "conditionalFormatting": {
+              "formula": "=$E2=\"Open\"",
+              "style": { "fillColor": "#FFFF00" }
+            }
+          }
+        ]
+      }
     },
     "expected": {
       "resultType": "apply",

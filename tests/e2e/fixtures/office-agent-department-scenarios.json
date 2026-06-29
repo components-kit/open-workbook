@@ -28,7 +28,14 @@
       "mode": "preview_update",
       "intent": { "action": "write_values" },
       "target": { "sheetName": "January", "range": "C5" },
-      "values": { "values": [["Finance review complete"]] }
+      "values": {
+        "patches": [
+          {
+            "target": { "sheetName": "January", "range": "C5" },
+            "values": [["Finance review complete"]]
+          }
+        ]
+      }
     },
     "expected": {
       "resultType": "apply",
@@ -37,7 +44,7 @@
       "shouldMutateWorkbook": true,
       "mustNotReadFullWorkbook": true,
       "hostMethods": ["operation.execute_batch"],
-      "operationKinds": ["range.write_values"],
+      "operationKinds": ["range.write_values_many"],
       "cellValues": [
         { "sheetName": "January", "cell": "C5", "value": "Finance review complete" }
       ]
@@ -73,7 +80,14 @@
       "mode": "preview_update",
       "intent": { "action": "write_values" },
       "target": { "sheetName": "Sales", "range": "E2" },
-      "values": { "values": [["Reviewed"]] }
+      "values": {
+        "patches": [
+          {
+            "target": { "sheetName": "Sales", "range": "E2" },
+            "values": [["Reviewed"]]
+          }
+        ]
+      }
     },
     "expected": {
       "resultType": "apply",
@@ -82,7 +96,7 @@
       "shouldMutateWorkbook": true,
       "mustNotReadFullWorkbook": true,
       "hostMethods": ["operation.execute_batch"],
-      "operationKinds": ["range.write_values"],
+      "operationKinds": ["range.write_values_many"],
       "cellValues": [
         { "sheetName": "Sales", "cell": "E2", "value": "Reviewed" }
       ]
@@ -118,7 +132,14 @@
       "mode": "preview_update",
       "intent": { "action": "write_values" },
       "target": { "sheetName": "Operations", "range": "J6" },
-      "values": { "values": [["2026-06-24"]] }
+      "values": {
+        "patches": [
+          {
+            "target": { "sheetName": "Operations", "range": "J6" },
+            "values": [["2026-06-24"]]
+          }
+        ]
+      }
     },
     "expected": {
       "resultType": "apply",
@@ -127,7 +148,7 @@
       "shouldMutateWorkbook": true,
       "mustNotReadFullWorkbook": true,
       "hostMethods": ["operation.execute_batch"],
-      "operationKinds": ["range.write_values"],
+      "operationKinds": ["range.write_values_many"],
       "cellValues": [
         { "sheetName": "Operations", "cell": "J6", "value": "2026-06-24" }
       ]
@@ -163,7 +184,14 @@
       "mode": "preview_update",
       "intent": { "action": "write_values" },
       "target": { "sheetName": "HR", "range": "E2" },
-      "values": { "values": [["Q3 review scheduled"]] }
+      "values": {
+        "patches": [
+          {
+            "target": { "sheetName": "HR", "range": "E2" },
+            "values": [["Q3 review scheduled"]]
+          }
+        ]
+      }
     },
     "expected": {
       "resultType": "apply",
@@ -172,7 +200,7 @@
       "shouldMutateWorkbook": true,
       "mustNotReadFullWorkbook": true,
       "hostMethods": ["operation.execute_batch"],
-      "operationKinds": ["range.write_values"],
+      "operationKinds": ["range.write_values_many"],
       "cellValues": [
         { "sheetName": "HR", "cell": "E2", "value": "Q3 review scheduled" }
       ]
@@ -208,7 +236,14 @@
       "mode": "preview_update",
       "intent": { "action": "write_values" },
       "target": { "sheetName": "Summary", "range": "A1" },
-      "values": { "values": [["Executive Snapshot"]] }
+      "values": {
+        "patches": [
+          {
+            "target": { "sheetName": "Summary", "range": "A1" },
+            "values": [["Executive Snapshot"]]
+          }
+        ]
+      }
     },
     "expected": {
       "resultType": "apply",
@@ -217,7 +252,7 @@
       "shouldMutateWorkbook": true,
       "mustNotReadFullWorkbook": true,
       "hostMethods": ["operation.execute_batch"],
-      "operationKinds": ["range.write_values"],
+      "operationKinds": ["range.write_values_many"],
       "cellValues": [
         { "sheetName": "Summary", "cell": "A1", "value": "Executive Snapshot" }
       ]
@@ -282,7 +317,14 @@
       "mode": "preview_update",
       "intent": { "action": "write_values" },
       "target": { "sheetName": "Data Cleanup", "range": "D2" },
-      "values": { "values": [["Normalized"]] }
+      "values": {
+        "patches": [
+          {
+            "target": { "sheetName": "Data Cleanup", "range": "D2" },
+            "values": [["Normalized"]]
+          }
+        ]
+      }
     },
     "expected": {
       "resultType": "apply",
@@ -291,7 +333,7 @@
       "shouldMutateWorkbook": true,
       "mustNotReadFullWorkbook": true,
       "hostMethods": ["operation.execute_batch"],
-      "operationKinds": ["range.write_values"],
+      "operationKinds": ["range.write_values_many"],
       "cellValues": [
         { "sheetName": "Data Cleanup", "cell": "D2", "value": "Normalized" }
       ]
@@ -531,7 +573,17 @@
       "mode": "preview_update",
       "intent": { "action": "write_conditional_formatting" },
       "target": { "sheetName": "January", "range": "A2:C5" },
-      "values": { "formula": "=$B2<3000", "style": { "fillColor": "#FCE4D6", "fontColor": "#9C0006" } }
+      "values": {
+        "patches": [
+          {
+            "target": { "sheetName": "January", "range": "A2:C5" },
+            "conditionalFormatting": {
+              "formula": "=$B2<3000",
+              "style": { "fillColor": "#FCE4D6", "fontColor": "#9C0006" }
+            }
+          }
+        ]
+      }
     },
     "expected": {
       "resultType": "apply",
@@ -560,11 +612,16 @@
       "intent": { "action": "write_formulas" },
       "target": { "sheetName": "January", "range": "D2:D5" },
       "values": {
-        "values": [
-          ["=B2-B3"],
-          ["=B3/B2"],
-          ["=B4/B2"],
-          ["=B5*1000"]
+        "patches": [
+          {
+            "target": { "sheetName": "January", "range": "D2:D5" },
+            "formulas": [
+              ["=B2-B3"],
+              ["=B3/B2"],
+              ["=B4/B2"],
+              ["=B5*1000"]
+            ]
+          }
         ]
       }
     },
@@ -597,7 +654,15 @@
       "mode": "preview_update",
       "intent": { "action": "write_data_validation" },
       "target": { "sheetName": "Sales", "range": "E2:E6" },
-      "values": { "options": ["Open", "Reviewed", "Closed"], "inCellDropDown": true }
+      "values": {
+        "patches": [
+          {
+            "target": { "sheetName": "Sales", "range": "E2:E6" },
+            "options": ["Open", "Reviewed", "Closed"],
+            "inCellDropDown": true
+          }
+        ]
+      }
     },
     "expected": {
       "resultType": "apply",
