@@ -225,6 +225,7 @@ function agentRunOutputSchema() {
     resourceLinks: z.array(z.any()),
     invalidatedContextIds: z.array(z.string()).optional(),
     invalidatedResourceUris: z.array(z.string()).optional(),
+    suggestedOperation: z.record(z.string(), z.any()).optional(),
     operationJournalRef: z.object({
       workbookContextId: z.string(),
       operationId: z.string(),

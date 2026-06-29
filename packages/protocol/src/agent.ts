@@ -562,6 +562,7 @@ export interface AgentRunOutput {
   resourceLinks: AgentResourceLink[];
   invalidatedContextIds?: Array<WorkbookContextId | string>;
   invalidatedResourceUris?: string[];
+  suggestedOperation?: Partial<AgentRunInput>;
   operationJournalRef?: {
     workbookContextId: WorkbookContextId | string;
     operationId: AgentOperationId | string;

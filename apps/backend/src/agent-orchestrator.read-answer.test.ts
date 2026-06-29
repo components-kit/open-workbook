@@ -661,6 +661,8 @@ describe("AgentOrchestrator Read Answer Routing", () => {
         values: {
           where: [{ column: "Status", op: "=", value: "Open" }],
           return: ["Date", "Status"],
+          updateColumn: "Status",
+          updateValue: "Reviewed",
           limit: 10,
           format: "json_rows"
         },
@@ -689,6 +691,16 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect(result.telemetry.intentAction).toBe("query_rows");
       expect(result.telemetry.workflowRoute).toBe("rows.query");
       expect(result.agentInstruction).toContain("do not apply visible Excel filters");
+      expect(result.suggestedOperation).toMatchObject({
+        mode: "preview_update",
+        intent: { action: "write_values" },
+        values: {
+          patches: [
+            { target: { sheetName: "Data", range: "D2" }, values: [["Reviewed"]] },
+            { target: { sheetName: "Data", range: "D4" }, values: [["Reviewed"]] }
+          ]
+        }
+      });
       expect(runtime.runtimeMethodCalls["table.read"]).toBe(1);
     });
 

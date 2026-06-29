@@ -1031,7 +1031,9 @@ export class AgentOrchestrator {
     }
     const predicates = normalizeQueryRowsPredicates(values.where);
     const returnTerms = Array.isArray(values.return) ? values.return.filter((value): value is string => typeof value === "string") : [];
-    const fieldTerms = [...new Set([...predicates.map((predicate) => predicate.column), ...returnTerms])];
+    const updateColumn = stringValue(values.updateColumn ?? values.setColumn ?? values.targetColumn);
+    const updateValue = values.updateValue ?? values.setValue ?? values.value;
+    const fieldTerms = [...new Set([...predicates.map((predicate) => predicate.column), ...returnTerms, ...(updateColumn ? [updateColumn] : [])])];
     const fieldResolutions = resolveSemanticFields(metadata, fieldTerms, {
       ...(input.target ?? {}),
       sheetName: table.sheetName,
@@ -1071,6 +1073,7 @@ export class AgentOrchestrator {
           score: 1,
           evidence: ["table column"]
         }));
+    const updateField = updateColumn ? fieldByTerm.get(updateColumn) : undefined;
     const predicateFields = predicates.map((predicate) => fieldByTerm.get(predicate.column)!);
     const readColumns = [...new Set([...predicateFields, ...returnFields].map((field) => field.field))];
     const limit = clampQueryRowsLimit(values.limit);
@@ -1096,6 +1099,9 @@ export class AgentOrchestrator {
     const rowObjects = returned.map(({ row }) => Object.fromEntries(outputColumns.map((column) => [column, row[headers.indexOf(column)]])));
     const rowAddresses = returned.map(({ index }) => queryRowAddress(table, index));
     const format = values.format === "csv" || values.format === "summary" ? values.format : "json_rows";
+    const suggestedOperation = updateField && updateValue !== undefined
+      ? queryRowsSuggestedPatchOperation(input, table, returned.map(({ index }) => index), updateField.columnLetter, updateValue)
+      : undefined;
     return {
       status: "SUCCESS",
       mode: requestedMode,
@@ -1119,8 +1125,11 @@ export class AgentOrchestrator {
       },
       proof: [{ sheetName: table.sheetName, range: table.dataRange ?? table.range, label: "queried rows" }],
       resourceLinks: [contextResource(metadata.workbookContextId)],
+      ...(suggestedOperation ? { suggestedOperation } : {}),
       nextAction: "answer_now",
-      agentInstruction: "Answer from query_rows_result. Use rowAddresses for any follow-up preview patches; do not apply visible Excel filters for read-only lookup.",
+      agentInstruction: suggestedOperation
+        ? "Answer from query_rows_result. If the user asked to update matched rows, call the returned suggestedOperation once; do not apply visible Excel filters for read-only lookup."
+        : "Answer from query_rows_result. Use rowAddresses for any follow-up preview patches; do not apply visible Excel filters for read-only lookup.",
       maxRecommendedFollowupCalls: 0,
       warnings: rows.length >= scanLimit ? [`Scanned row limit ${scanLimit} was reached; narrow the query or increase values.scanLimit if more rows are needed.`] : []
     };
@@ -20118,6 +20127,30 @@ function queryRowAddress(table: TableMetadata, zeroBasedDataIndex: number): stri
   const parsed = table.dataRange ? tryParseA1Address(stripSheetName(table.dataRange)) : undefined;
   const rowNumber = (parsed?.startRow ?? 2) + zeroBasedDataIndex;
   return `${table.sheetName}!${rowNumber}:${rowNumber}`;
+}
+
+function queryRowsSuggestedPatchOperation(
+  input: AgentRunInput,
+  table: TableMetadata,
+  rowIndexes: number[],
+  updateColumnLetter: string,
+  updateValue: unknown
+): Partial<AgentRunInput> {
+  const parsed = table.dataRange ? tryParseA1Address(stripSheetName(table.dataRange)) : undefined;
+  const startRow = parsed?.startRow ?? 2;
+  return {
+    request: input.request,
+    mode: "preview_update",
+    intent: { action: "write_values", reason: "Preview patches generated from read-only query_rows matched row addresses." },
+    target: { sheetName: table.sheetName, ...(table.name ? { tableName: table.name } : {}) },
+    values: {
+      patches: rowIndexes.map((index) => ({
+        target: { sheetName: table.sheetName, range: `${updateColumnLetter}${startRow + index}` },
+        values: [[updateValue]],
+        reason: "query_rows matched row"
+      }))
+    }
+  };
 }
 
 function rowsToCsv(columns: string[], rows: Array<Record<string, unknown>>): string {
