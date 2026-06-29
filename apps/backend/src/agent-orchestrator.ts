@@ -672,7 +672,13 @@ export class AgentOrchestrator {
     if (!updateRisk) {
       return undefined;
     }
-    const staleFacets = updateRisk.invalidatedFacets.filter(isContextFacet);
+    const optimisticallyUpdatedValues = updateRisk.cacheAction === "update_cache"
+      ? this.metadataCache.applyOptimisticValueChanges(pending.workbookContextId, String(pending.operationId), pending.changes)
+      : [];
+    const updatedFacets: ContextFacet[] = optimisticallyUpdatedValues.length > 0 ? ["values"] : [];
+    const staleFacets = updateRisk.invalidatedFacets
+      .filter(isContextFacet)
+      .filter((facet) => !(facet === "values" && optimisticallyUpdatedValues.length > 0));
     const affectedRanges = uniqueChangeRanges(pending.changes);
     const freshness = this.metadataCache.markFacetsStale(pending.workbookContextId, staleFacets, affectedRanges);
     const state = freshness ?? this.metadataCache.getContextState(pending.workbookContextId);
@@ -682,7 +688,7 @@ export class AgentOrchestrator {
     const journalEntry = this.metadataCache.appendJournalEntry(pending.workbookContextId, {
       operationId: String(pending.operationId),
       affectedRanges,
-      affectedFacets: staleFacets,
+      affectedFacets: [...new Set<ContextFacet>([...staleFacets, ...updatedFacets])],
       invalidatedFacets: staleFacets,
       preservedFacets: updateRisk.preservedFacets.filter(isContextFacet),
       changes: pending.changes,
@@ -696,7 +702,8 @@ export class AgentOrchestrator {
       cacheAction: journalEntry.cacheAction,
       contextVersion: latestState.contextVersion,
       freshness: latestState.freshness,
-      journalEntry
+      journalEntry,
+      ...(updatedFacets.length > 0 ? { updatedFacets } : {})
     };
   }
 
@@ -6294,6 +6301,12 @@ export class AgentOrchestrator {
     const errorWarning = applyErrorMessage(resultRecord.error);
     const cacheImpact = !applyFailed ? this.recordApplyCacheImpact(pending) : undefined;
     const invalidated = applyFailed ? { invalidatedContextIds: [] as string[], invalidatedResourceUris: [] as string[] } : this.applyContextInvalidation(pending);
+    const operationJournalRef = cacheImpact ? {
+      workbookContextId: cacheImpact.journalEntry.workbookContextId,
+      operationId: cacheImpact.journalEntry.operationId,
+      contextVersion: cacheImpact.journalEntry.contextVersion,
+      appliedAt: cacheImpact.journalEntry.appliedAt
+    } : undefined;
     const permissionFollowup = this.structuralPermissionFollowup(resultWarnings, pending);
     const output: Omit<AgentRunOutput, "telemetry"> = {
       status: applyFailed || validationFailed ? "VALIDATION_FAILED" : "SUCCESS",
@@ -6324,6 +6337,7 @@ export class AgentOrchestrator {
       },
       metrics: { operationRisk: pending.risk, updateRisk: pending.updateRisk, targetFingerprintStatus: "matched" },
       changes: pending.changes,
+      ...(operationJournalRef ? { operationJournalRef } : {}),
       proof: pending.changes.flatMap((change) => change.range ? [{ sheetName: change.sheetName, range: change.range, label: "applied target" }] : []).slice(0, 1),
       resourceLinks: resultRecord.transactionId ? [{ uri: `excel://transactions/${resultRecord.transactionId}`, name: "transaction", description: "Applied workbook transaction.", mimeType: "application/json" }] : [],
       invalidatedContextIds: invalidated.invalidatedContextIds,

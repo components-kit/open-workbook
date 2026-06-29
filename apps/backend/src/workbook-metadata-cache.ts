@@ -174,11 +174,21 @@ export interface OperationJournalEntry {
   cacheAction: "recorded" | "updated_from_patch" | "invalidated";
 }
 
+export interface OptimisticCachedValue {
+  sheetName: string;
+  range: string;
+  value: unknown;
+  before?: unknown;
+  operationId: string;
+  updatedAt: number;
+}
+
 export interface CacheImpactSummary {
   cacheAction: OperationJournalEntry["cacheAction"];
   contextVersion: number;
   freshness: ContextFreshness;
   journalEntry: OperationJournalEntry;
+  updatedFacets?: ContextFacet[];
 }
 
 export interface WorkbookContextState {
@@ -186,6 +196,7 @@ export interface WorkbookContextState {
   contextVersion: number;
   lastValidatedAt?: number;
   freshness: ContextFreshness;
+  optimisticValues: OptimisticCachedValue[];
   journal: OperationJournalEntry[];
 }
 
@@ -308,6 +319,53 @@ export class WorkbookMetadataCache {
     };
   }
 
+  applyOptimisticValueChanges(
+    workbookContextId: string,
+    operationId: string,
+    changes: Array<{ sheetName: string; range?: string; cell?: string; before?: unknown; after?: unknown }>,
+    now = Date.now()
+  ): OptimisticCachedValue[] {
+    const state = this.contextStateById.get(workbookContextId);
+    if (!state) {
+      return [];
+    }
+    const optimisticChanges = changes
+      .map((change): OptimisticCachedValue | undefined => {
+        const range = change.cell ?? change.range;
+        if (!range || change.after === undefined || isLargeRangeWriteSummary(change.after)) {
+          return undefined;
+        }
+        return {
+          sheetName: change.sheetName,
+          range,
+          value: cloneUnknown(change.after),
+          ...(change.before !== undefined ? { before: cloneUnknown(change.before) } : {}),
+          operationId,
+          updatedAt: now
+        };
+      })
+      .filter((change): change is OptimisticCachedValue => Boolean(change));
+    if (optimisticChanges.length === 0) {
+      return [];
+    }
+    const byKey = new Map(state.optimisticValues.map((value) => [optimisticValueKey(value.sheetName, value.range), value]));
+    for (const change of optimisticChanges) {
+      byKey.set(optimisticValueKey(change.sheetName, change.range), change);
+    }
+    const next: WorkbookContextState = {
+      ...state,
+      optimisticValues: [...byKey.values()]
+    };
+    this.contextStateById.set(workbookContextId, next);
+    return optimisticChanges.map(cloneOptimisticValue);
+  }
+
+  getOptimisticValue(workbookContextId: string, sheetName: string, range: string): OptimisticCachedValue | undefined {
+    const state = this.contextStateById.get(workbookContextId);
+    const value = state?.optimisticValues.find((candidate) => optimisticValueKey(candidate.sheetName, candidate.range) === optimisticValueKey(sheetName, range));
+    return value ? cloneOptimisticValue(value) : undefined;
+  }
+
   markFacetsStale(workbookContextId: string, facets: ContextFacet[], staleRanges: string[] = [], now = Date.now()): WorkbookContextState | undefined {
     const state = this.contextStateById.get(workbookContextId);
     if (!state) {
@@ -385,6 +443,7 @@ function createInitialContextState(workbookContextId: string, now: number): Work
       confidence: 1,
       updatedAt: now
     },
+    optimisticValues: [],
     journal: []
   };
 }
@@ -409,6 +468,7 @@ function cloneContextState(state: WorkbookContextState): WorkbookContextState {
       staleFacets: [...state.freshness.staleFacets],
       ...(state.freshness.staleRanges ? { staleRanges: [...state.freshness.staleRanges] } : {})
     },
+    optimisticValues: state.optimisticValues.map(cloneOptimisticValue),
     journal: state.journal.map(cloneJournalEntry)
   };
 }
@@ -422,6 +482,29 @@ function cloneJournalEntry(entry: OperationJournalEntry): OperationJournalEntry 
     preservedFacets: [...entry.preservedFacets],
     ...(entry.changes !== undefined ? { changes: entry.changes.map((change) => ({ ...change })) } : {})
   };
+}
+
+function cloneOptimisticValue(value: OptimisticCachedValue): OptimisticCachedValue {
+  return {
+    ...value,
+    value: cloneUnknown(value.value),
+    ...(value.before !== undefined ? { before: cloneUnknown(value.before) } : {})
+  };
+}
+
+function cloneUnknown<T>(value: T): T {
+  if (value === null || value === undefined || typeof value !== "object") {
+    return value;
+  }
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function optimisticValueKey(sheetName: string, range: string): string {
+  return `${sheetName}!${range}`.toLowerCase();
+}
+
+function isLargeRangeWriteSummary(value: unknown): boolean {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && (value as { kind?: unknown }).kind === "range_write_summary");
 }
 
 export function workbookMetadataKey(input: { workbookId?: WorkbookId | string; workbookName: string; workbookPath?: string }): string {

@@ -76,6 +76,35 @@ describe("WorkbookMetadataCache context state", () => {
     });
   });
 
+  it("records optimistic value updates without making the values facet stale", () => {
+    const cache = new WorkbookMetadataCache();
+    const metadata = createCachedMetadata("wbctx_cache_optimistic_values");
+    cache.set(metadata);
+
+    const updated = cache.applyOptimisticValueChanges(metadata.workbookContextId, "op_patch", [
+      { sheetName: "Data", cell: "B2", range: "B2", before: 123, after: 999 },
+      { sheetName: "Data", range: "C2", before: "Open", after: "Closed" },
+      { sheetName: "Data", range: "D2:D500", after: { kind: "range_write_summary", cellCount: 499 } }
+    ], 3000);
+    cache.markFacetsStale(metadata.workbookContextId, ["aggregates", "formulaResults"], ["Data!B2"]);
+
+    expect(updated).toHaveLength(2);
+    expect(cache.getOptimisticValue(metadata.workbookContextId, "Data", "B2")).toMatchObject({
+      sheetName: "Data",
+      range: "B2",
+      value: 999,
+      before: 123,
+      operationId: "op_patch",
+      updatedAt: 3000
+    });
+    expect(cache.getOptimisticValue(metadata.workbookContextId, "Data", "D2:D500")).toBeUndefined();
+    expect(cache.getContextState(metadata.workbookContextId)?.freshness.staleFacets).not.toContain("values");
+    expect(cache.checkFacetFreshness(metadata.workbookContextId, ["values"])).toMatchObject({
+      status: "fresh",
+      requiresRead: false
+    });
+  });
+
   it("removes context state when metadata is deleted", () => {
     const cache = new WorkbookMetadataCache();
     const metadata = createCachedMetadata("wbctx_cache_delete");

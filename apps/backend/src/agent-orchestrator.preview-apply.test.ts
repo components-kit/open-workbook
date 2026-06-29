@@ -1210,25 +1210,42 @@ Data rows:
       expect(applied.status).toBe("SUCCESS");
       expect((applied.answer as any).cacheImpact).toMatchObject({
         cacheAction: "updated_from_patch",
+        updatedFacets: ["values"],
         freshness: {
-          status: "partially_stale",
-          staleFacets: expect.arrayContaining(["values", "aggregates", "formulaResults"]),
+          status: "mostly_fresh",
+          staleFacets: expect.arrayContaining(["aggregates", "formulaResults"]),
           staleRanges: expect.arrayContaining(["Data!B2"])
         },
         journalEntry: {
           operationId: preview.operationId,
           affectedRanges: ["Data!B2"],
+          affectedFacets: expect.arrayContaining(["values", "aggregates", "formulaResults"]),
+          invalidatedFacets: expect.arrayContaining(["aggregates", "formulaResults"]),
           cacheAction: "updated_from_patch"
         }
+      });
+      expect((applied.answer as any).cacheImpact.freshness.staleFacets).not.toContain("values");
+      expect(applied.operationJournalRef).toMatchObject({
+        workbookContextId: metadata.workbookContextId,
+        operationId: preview.operationId,
+        contextVersion: expect.any(Number),
+        appliedAt: expect.any(Number)
       });
       expect(applied.invalidatedContextIds).not.toContain(metadata.workbookContextId);
       expect(applied.invalidatedResourceUris).toContain(resultUri);
       expect(agent.metadataCache.getByContextId(metadata.workbookContextId)).toBeDefined();
-      expect(agent.metadataCache.getContextState(metadata.workbookContextId)?.freshness.staleFacets).toEqual(expect.arrayContaining(["values", "aggregates", "formulaResults"]));
-      expect(applied.contextFreshness).toMatchObject({
-        status: "partially_stale",
-        staleFacets: expect.arrayContaining(["values", "aggregates", "formulaResults"])
+      expect(agent.metadataCache.getContextState(metadata.workbookContextId)?.freshness.staleFacets).toEqual(expect.arrayContaining(["aggregates", "formulaResults"]));
+      expect(agent.metadataCache.getContextState(metadata.workbookContextId)?.freshness.staleFacets).not.toContain("values");
+      expect(agent.metadataCache.getOptimisticValue(metadata.workbookContextId, "Data", "B2")).toMatchObject({
+        range: "B2",
+        value: 999,
+        operationId: preview.operationId
       });
+      expect(applied.contextFreshness).toMatchObject({
+        status: "mostly_fresh",
+        staleFacets: expect.arrayContaining(["aggregates", "formulaResults"])
+      });
+      expect(applied.contextFreshness?.staleFacets).not.toContain("values");
       expect(agent.getResultResource(resultId) as any).toMatchObject({ ok: false });
       expect(agent.getContextResource(metadata.workbookContextId) as any).toMatchObject({ ok: true });
     });
