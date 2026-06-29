@@ -121,8 +121,8 @@ describe("excel.agent.run MCP schema", () => {
     expect(source).toContain("call intent.action read_data_validation once");
     expect(source).toContain("answer from data_validation_summary");
     expect(source).toContain("do not fetch fullResultUri");
-    expect(source).toContain("update the returned source-list cell/range with mode auto");
-    expect(source).toContain("values.patches when bounded");
+    expect(source).toContain("intent.action update_dropdown_options");
+    expect(source).toContain("values.operation");
     expect(source).toContain("dropdown rule/source itself must change");
     expect(source).toContain("one preview_update with intent.action write_data_validation and one apply_update");
   });

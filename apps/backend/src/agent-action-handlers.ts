@@ -71,6 +71,7 @@ export type AgentActionHandlerId =
   | "reorder_range_columns"
   | "write_styles_many"
   | "write_data_validation"
+  | "update_dropdown_options"
   | "write_conditional_formatting"
   | "insert_rows"
   | "delete_rows"
@@ -650,7 +651,7 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     requiresResolvedTarget: true,
     riskKind: "safe_format",
     matches: (input, request) =>
-      /\b(clear|remove)\b/.test(request) &&
+      /\b(clear|remove|reset)\b/.test(request) &&
       /\b(filters?|table filters?|autofilter|auto\s*filter)\b/.test(request) &&
       (Boolean(input.target?.tableName) || /\btable\b/.test(request)) &&
       !input.target?.range
@@ -866,6 +867,17 @@ export const AGENT_ACTION_HANDLERS: AgentActionHandlerDefinition[] = [
     requiresResolvedTarget: false,
     riskKind: "safe_format",
     matches: (_input, request) => /\b(format|style)\b/.test(request) && /\b(multiple|many|several|ranges?)\b/.test(request)
+  },
+  {
+    id: "update_dropdown_options",
+    capabilityName: "excel.range.write_data_validation",
+    intentAction: "update_dropdown_options",
+    requiresResolvedTarget: true,
+    riskKind: "safe_format",
+    matches: (_input, request) =>
+      /\b(add|append|insert|rename|update|change|replace|delete|remove|reorder)\b/.test(request)
+      && /\b(options?|allowed values?)\b/.test(request)
+      && /\b(dropdown|drop\s*down|select\s+list|selection\s+list|validation)\b/.test(request)
   },
   {
     id: "write_data_validation",

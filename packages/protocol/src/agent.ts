@@ -152,6 +152,7 @@ export const AGENT_INTENT_ACTIONS = [
   "write_number_formats",
   "format_range",
   "write_data_validation",
+  "update_dropdown_options",
   "write_conditional_formatting",
   "clear_style_dimensions",
   "read_range_compact",

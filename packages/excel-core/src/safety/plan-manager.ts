@@ -105,7 +105,7 @@ export class PlanManager {
         formulasChanged: plan.operations.filter((operation) => operation.kind === "range.write_formulas").length,
         stylesChanged: 0,
         tablesChanged: 0,
-        sheetsChanged: plan.operations.filter((operation) => operation.kind === "template.create_sheet_from_template").length,
+        sheetsChanged: plan.operations.filter((operation) => operation.kind === "template.create_sheet_from_template" || operation.kind === "sheet.copy" || operation.kind === "sheet.copy_clean_data_regions").length,
         destructiveLevel: compiled.destructiveLevel
       },
       warnings: []

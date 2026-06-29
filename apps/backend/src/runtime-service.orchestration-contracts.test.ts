@@ -204,4 +204,59 @@ describe("RuntimeService orchestration contracts", () => {
     expect(runtime.clearEvents()).toMatchObject({ ok: true });
     expect(runtime.getRecentEvents().events).toHaveLength(0);
   });
+
+  it("rolls back copied sheets created by template copy operations", async () => {
+    const workbookId = "workbook_copy_rollback_contracts" as WorkbookId;
+    const runtime = new RuntimeService({ persistState: false });
+    runtime.setPermissions({ allowDestructiveActions: true, allowWorkbookActions: true, requireConfirmationFor: [] });
+    const session = runtime.sessions.createSession();
+    const appliedBatches: any[] = [];
+    runtime.attachAddinClient(session.connectionId, {
+      request: async (method: string, params: any) => {
+        if (method === "operation.execute_batch") {
+          appliedBatches.push(params);
+          return operationOk();
+        }
+        throw new Error(`Unexpected method ${method}`);
+      }
+    } as any);
+
+    const operations = [
+      {
+        kind: "sheet.copy",
+        operationId: "op_copy_with_data" as OperationId,
+        workbookId,
+        destructiveLevel: "structure",
+        reason: "Copy template with data",
+        sourceSheetName: "Template",
+        newSheetName: "Template Data Copy",
+        position: "after",
+        relativeToSheetName: "Template",
+        activate: true
+      },
+      {
+        kind: "sheet.copy_clean_data_regions",
+        operationId: "op_copy_clean" as OperationId,
+        workbookId,
+        destructiveLevel: "structure",
+        reason: "Copy clean template",
+        sourceSheetName: "Template",
+        newSheetName: "Template Clean Copy",
+        dataRegions: ["Template!A2:B10"],
+        position: "after",
+        relativeToSheetName: "Template",
+        activate: true
+      }
+    ] as any[];
+
+    const plan = runtime.createPlan({ workbookId, goal: "Copy rollback contract", operations });
+    await runtime.previewPlan(plan.planId);
+    await expect(runtime.applyPlan(plan.planId)).resolves.toMatchObject({ ok: true });
+    await expect(runtime.rollbackPlan(plan.planId)).resolves.toMatchObject({ ok: true });
+
+    expect(appliedBatches.at(-1)?.request.operations).toEqual([
+      expect.objectContaining({ kind: "sheet.delete", sheetName: "Template Clean Copy" }),
+      expect.objectContaining({ kind: "sheet.delete", sheetName: "Template Data Copy" })
+    ]);
+  });
 });

@@ -21,7 +21,7 @@ export function registerPrompts(mcp: McpServer): void {
       promptContext(args),
       tokenDiscipline(),
       "Use `excel.agent.run` with `mode: \"prepare\"` to collect workbook context, then preview a template or sheet-copy workflow with `mode: \"preview_update\"`.",
-      "Prefer a clean template copy: preserve headers, formulas, styling, validation, and layout, then clear old data regions for fresh rows. Use raw sheet copy only when the user explicitly asks for an exact duplicate including old values.",
+      "Prefer a clean template copy: preserve headers, formulas, styling, validation, and layout, then clear old data regions for fresh rows. When the user explicitly asks to keep/include data or wants an exact/raw template duplicate, use `copy_template_sheet` with `values.copyMode: \"with_data\"` or `values.includeData: true`.",
       "Prefer a registered template. If no template is clear, ask the user to confirm the source sheet before previewing.",
       "Apply only with a follow-up `excel.agent.run` `mode: \"apply_update\"` using the returned operationId and confirmationToken.",
       "Validate formulas, styles, tables, filters, and template consistency before reporting success."

@@ -18,6 +18,16 @@ describe("agent intent normalization", () => {
     expect(filter.action).toBe("filter_range");
   });
 
+  it("normalizes clear filter aliases to clear_table_filters", () => {
+    const intent = normalizeAgentIntent({
+      request: "Clear all filters so I can see full data",
+      intent: { action: "clear_filters" }
+    });
+
+    expect(intent.accepted).toBe(true);
+    expect(intent.action).toBe("clear_table_filters");
+  });
+
   it("accepts improve_visual_readability as a high-level structured action", () => {
     const intent = normalizeAgentIntent({
       request: "Make this sheet easier to read",

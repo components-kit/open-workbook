@@ -1254,6 +1254,15 @@ describe("AgentOrchestrator Read Answer Routing", () => {
           }
         };
       };
+      runtime.snapshotRangesOverride = {
+        ok: true,
+        rangeSnapshots: [{
+          workbookId: "workbook_agent_unit",
+          sheetName: "Lists",
+          address: "A2:A40",
+          values: [["driver_wage_remaining"], ["owner_cash_topup"], [null], ["driver_reimbursement"]]
+        }]
+      };
 
       const result = await agent.run({
         request: "Check transaction type dropdown source for May 2026.",
@@ -1266,20 +1275,24 @@ describe("AgentOrchestrator Read Answer Routing", () => {
       expect((result.answer as any)).toMatchObject({
         kind: "data_validation_summary",
         sourceFormula: "=Lists!$A$2:$A$40",
-        sourceRange: "Lists!$A$2:$A$40",
-        sourceComplete: false,
+        sourceRange: "Lists!A2:A40",
+        sourceComplete: true,
+        options: ["driver_wage_remaining", "owner_cash_topup", "driver_reimbursement"],
+        optionCount: 3,
         fieldContext: [
           expect.objectContaining({
+            allowedValues: ["driver_wage_remaining", "owner_cash_topup", "driver_reimbursement"],
             validation: expect.objectContaining({
               type: "List",
               sourceType: "range",
-              sourceRange: "Lists!$A$2:$A$40",
-              optionsResolved: false
+              sourceRange: "Lists!A2:A40",
+              optionsResolved: true,
+              options: ["driver_wage_remaining", "owner_cash_topup", "driver_reimbursement"]
             })
           })
         ]
       });
-      expect((result.answer as any).guidance).toContain("source-list cells");
+      expect((result.answer as any).guidance).toContain("update_dropdown_options");
       expect(result.maxRecommendedFollowupCalls).toBe(0);
     });
 

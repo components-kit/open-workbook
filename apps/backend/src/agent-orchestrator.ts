@@ -15,6 +15,7 @@ import {
   type AddinTemplateRepairRequest,
   type A1Range,
   type BatchRequest,
+  type CellValue,
   type CellMatrix,
   type ExcelOperation,
   type FormulaCopyPatternsRequest,
@@ -2313,7 +2314,7 @@ export class AgentOrchestrator {
       };
     }
     const answer = method === "range.read_data_validation"
-      ? dataValidationSummaryAnswer(result, metadata, resolved.sheetName, normalizedRange)
+      ? await this.dataValidationSummaryAnswer(result, metadata, resolved.sheetName, normalizedRange, input, runMetrics)
       : { kind: "range_metadata", method, result };
     return {
       status: (result as { ok?: boolean }).ok === false ? "VALIDATION_FAILED" : "SUCCESS",
@@ -3202,7 +3203,7 @@ export class AgentOrchestrator {
       sheetName,
       address: range
     });
-    const answer = dataValidationSummaryAnswer(result, metadata, sheetName, range);
+    const answer = await this.dataValidationSummaryAnswer(result, metadata, sheetName, range);
     const fieldContext = Array.isArray(answer.fieldContext)
       ? answer.fieldContext.filter((field): field is Record<string, unknown> => Boolean(field && typeof field === "object"))
       : [];
@@ -3267,6 +3268,21 @@ export class AgentOrchestrator {
       warnings.push(`Patch ${patchIndex + 1} validated ${fieldName} against ${allowedValues.length} dropdown option(s).`);
     }
     return { ok: true, warnings, checks };
+  }
+
+  private async dataValidationSummaryAnswer(
+    result: unknown,
+    metadata: WorkbookMetadata,
+    sheetName: string,
+    range: string,
+    input?: AgentRunInput,
+    runMetrics?: AgentRunMetrics
+  ): Promise<Record<string, unknown>> {
+    const summary = dataValidationSummaryAnswer(result, metadata, sheetName, range);
+    const resolved = await resolveDropdownOptions(summary, metadata, sheetName, range, async (sourceSheetName, sourceAddress) => {
+      return this.readRangeValues(metadata.workbook.workbookId as WorkbookId, sourceSheetName, sourceAddress, runMetrics);
+    });
+    return filterDropdownSummaryOptions(resolved, input);
   }
 
   private async previewMatchUpdate(
@@ -4176,6 +4192,9 @@ export class AgentOrchestrator {
         if (isLookupOnlyFilterRequest(input)) {
           return queryRowsRedirectOutput(metadata, input, requestedMode);
         }
+        if (resolved?.candidate.kind === "table" && isClearFilterRequest(input.request)) {
+          return this.previewTableSelectorMutation(metadata, input, requestedMode, resolved, "clear_filters");
+        }
         return resolved?.candidate.kind === "table"
           ? this.previewTableApplyFilters(metadata, input, requestedMode, resolved)
           : resolved ? this.previewAutoFilterMutation(metadata, input, requestedMode, resolved) : undefined;
@@ -4221,6 +4240,8 @@ export class AgentOrchestrator {
         return this.previewWriteStylesMany(metadata, input, requestedMode);
       case "write_data_validation":
         return resolved ? this.previewWriteDataValidation(metadata, canonicalDirectMutationInput(input, "write_data_validation"), requestedMode, resolved) : undefined;
+      case "update_dropdown_options":
+        return resolved ? this.previewUpdateDropdownOptions(metadata, input, requestedMode, resolved) : undefined;
       case "write_conditional_formatting":
         if (resolved && hasFormulaWriteInput(input) && !isConditionalFormattingMutationRequest(input.request)) {
           const canonicalInput = canonicalDirectMutationInput(input, "write_conditional_formatting");
@@ -5195,6 +5216,89 @@ export class AgentOrchestrator {
     );
   }
 
+  private async previewUpdateDropdownOptions(
+    metadata: WorkbookMetadata,
+    input: AgentRunInput,
+    requestedMode: AgentRunMode,
+    resolved: Extract<AgentTargetResolution, { ok: true }>
+  ): Promise<Omit<AgentRunOutput, "telemetry">> {
+    const workbookId = metadata.workbook.workbookId as WorkbookId;
+    const validationResult = await this.runtime.readRangeMetadata("range.read_data_validation", {
+      workbookId,
+      sheetName: resolved.sheetName,
+      address: resolved.range
+    });
+    const summary = await this.dataValidationSummaryAnswer(validationResult, metadata, resolved.sheetName, resolved.range, input);
+    const mutation = dropdownOptionMutationFromInput(input);
+    if (!mutation) {
+      return workbookLevelNeedsInput(metadata, requestedMode, "Dropdown option updates need values.operation plus option details, for example { operation: \"add\", options: [\"Reviewed\"] } or { operation: \"rename\", from: \"Old\", to: \"New\" }.");
+    }
+    if (summary.validationRangeStatus === "mixed_or_inconsistent_range") {
+      return workbookLevelNeedsInput(metadata, requestedMode, "Dropdown option updates need a representative cell or column with one consistent validation rule; the requested range has mixed/inconsistent validation.");
+    }
+    const sourceType = stringValue(summary.sourceType);
+    const sourceRange = stringValue(summary.sourceRange);
+    const sourceSheetName = stringValue(summary.sourceSheetName);
+    const sourceAddress = stringValue(summary.sourceAddress);
+    const currentOptions = stringArrayValue((summary as Record<string, unknown>).options);
+    if (sourceType === "inline") {
+      const nextOptions = applyDropdownOptionMutationToOptions(currentOptions, mutation);
+      if (!nextOptions.ok) {
+        return workbookLevelNeedsInput(metadata, requestedMode, nextOptions.summary);
+      }
+      const operation: ExcelOperation = {
+        kind: "range.write_data_validation",
+        operationId: makeId<OperationId>("op"),
+        workbookId,
+        destructiveLevel: "format",
+        reason: input.request,
+        target: { workbookId, sheetName: resolved.sheetName, address: resolved.range },
+        validation: {
+          type: "list",
+          source: nextOptions.options,
+          inCellDropDown: booleanValue((summary as Record<string, unknown>).inCellDropDown) ?? true,
+          ignoreBlanks: true
+        }
+      };
+      return this.previewBatchOperation(
+        metadata,
+        requestedMode,
+        [operation],
+        [{ sheetName: resolved.sheetName, range: resolved.range, before: `${currentOptions.length} dropdown option(s)`, after: `${nextOptions.options.length} dropdown option(s)` }],
+        `Prepared inline dropdown ${mutation.operation} update on ${resolved.sheetName}!${resolved.range}.`,
+        { kind: "dropdown_options_update_preview", sourceType: "inline", operation: mutation.operation, sheetName: resolved.sheetName, range: resolved.range, beforeOptions: currentOptions, afterOptions: nextOptions.options }
+      );
+    }
+    if (!sourceSheetName || !sourceAddress || !sourceRange) {
+      return workbookLevelNeedsInput(metadata, requestedMode, "Dropdown options could not be edited because the validation source is dynamic, external, or unresolved. Read data validation for a representative cell and edit the backing source directly if needed.");
+    }
+    const sourceValues = await this.readRangeValues(workbookId, sourceSheetName, sourceAddress);
+    const sourcePlan = compileDropdownSourceListMutation(workbookId, sourceSheetName, sourceAddress, sourceValues, mutation, {
+      allowExpandSourceRange: dropdownAllowExpandSourceRange(input),
+      dropdownTarget: { sheetName: resolved.sheetName, address: resolved.range },
+      sourceType
+    });
+    if (!sourcePlan.ok) {
+      return workbookLevelNeedsInput(metadata, requestedMode, sourcePlan.summary);
+    }
+    return this.previewBatchOperation(
+      metadata,
+      requestedMode,
+      sourcePlan.operations,
+      sourcePlan.changes,
+      `Prepared dropdown source-list ${mutation.operation} update for ${sourceRange}.`,
+      {
+        kind: "dropdown_options_update_preview",
+        sourceType,
+        operation: mutation.operation,
+        sourceRange,
+        beforeOptions: sourcePlan.beforeOptions,
+        afterOptions: sourcePlan.afterOptions,
+        changedCellCount: sourcePlan.changedCellCount
+      }
+    );
+  }
+
   private previewWriteConditionalFormatting(
     metadata: WorkbookMetadata,
     input: AgentRunInput,
@@ -6038,8 +6142,21 @@ export class AgentOrchestrator {
     const newSheetName = stringValue(values?.newSheetName ?? values?.targetSheetName ?? values?.sheetName) ?? uniqueSheetName(metadata, `${sourceSheet.name} Template`);
     const dataRegions = stringArrayValue(values?.dataRegions).map((region) => normalizeOperationRange(metadata, sourceSheet.name, region));
     const clearRegions = dataRegions.length > 0 ? dataRegions : [sourceSheet.usedRange];
-    const operations: ExcelOperation[] = [
-      {
+    const copyMode = templateCopyModeFromInput(input);
+    const operation: ExcelOperation = copyMode === "with_data"
+      ? {
+        kind: "sheet.copy",
+        operationId: makeId<OperationId>("op"),
+        workbookId: metadata.workbook.workbookId as WorkbookId,
+        destructiveLevel: "structure",
+        reason: input.request,
+        sourceSheetName: sourceSheet.name,
+        newSheetName,
+        position: "after",
+        relativeToSheetName: sourceSheet.name,
+        activate: true
+      }
+      : {
         kind: "sheet.copy_clean_data_regions",
         operationId: makeId<OperationId>("op"),
         workbookId: metadata.workbook.workbookId as WorkbookId,
@@ -6051,12 +6168,18 @@ export class AgentOrchestrator {
         position: "after",
         relativeToSheetName: sourceSheet.name,
         activate: true
-      }
-    ];
+      };
+    const operations: ExcelOperation[] = [operation];
+    const changes = copyMode === "with_data"
+      ? [{ sheetName: newSheetName, before: "source sheet", after: "copied sheet with existing data preserved" }]
+      : clearRegions.map((range) => ({ sheetName: newSheetName, range, before: "copied values", after: "cleared data-region values; formatting preserved" }));
+    const summary = copyMode === "with_data"
+      ? `Prepared template copy ${newSheetName} from ${sourceSheet.name} with existing data preserved.`
+      : `Prepared template copy ${newSheetName} from ${sourceSheet.name} with ${clearRegions.length} data region(s) cleared.`;
     const pending = this.createPendingOperation(metadata, {
       action: { kind: "batch", operations },
-      changes: clearRegions.map((range) => ({ sheetName: newSheetName, range, before: "copied values", after: "cleared data-region values; formatting preserved" })),
-      summary: `Prepared template copy ${newSheetName} from ${sourceSheet.name} with ${clearRegions.length} data region(s) cleared.`
+      changes,
+      summary
     });
     return {
       status: "PREVIEW_READY",
@@ -6065,7 +6188,14 @@ export class AgentOrchestrator {
       operationId: pending.operationId,
       confirmationToken: pending.confirmationToken,
       summary: pending.summary,
-      answer: { kind: "template_cleanup_preview", sourceSheetName: sourceSheet.name, newSheetName, dataRegions: clearRegions, operationKind: "sheet.copy_clean_data_regions" },
+      answer: {
+        kind: "template_cleanup_preview",
+        sourceSheetName: sourceSheet.name,
+        newSheetName,
+        copyMode,
+        operationKind: operation.kind,
+        ...(copyMode === "clean" ? { dataRegions: clearRegions } : {})
+      },
       metrics: { operationRisk: pending.risk, targetFingerprintStatus: "matched" },
       changes: pending.changes,
       proof: [{ sheetName: sourceSheet.name, range: sourceSheet.usedRange, label: "template source" }],
@@ -11077,6 +11207,7 @@ function dataValidationSummaryAnswer(result: unknown, metadata: WorkbookMetadata
   const summaries = rules.map((rule, index) => {
     const source = dataValidationSource(rule);
     const parsed = parseDataValidationOptions(source);
+    const sourceDescriptor = dropdownSourceDescriptor(metadata, sheetName, source);
     const type = stringValue(rule.type ?? data.type);
     const inCellDropDown = booleanValue(rule.inCellDropDown ?? data.inCellDropDown);
     return stripUndefinedRecord({
@@ -11089,7 +11220,14 @@ function dataValidationSummaryAnswer(result: unknown, metadata: WorkbookMetadata
       options: parsed.options,
       optionCount: parsed.optionCount,
       sourceComplete: parsed.sourceComplete,
-      sourceRange: parsed.sourceRange
+      sourceRange: sourceDescriptor.sourceRange ?? parsed.sourceRange,
+      sourceSheetName: sourceDescriptor.sourceSheetName,
+      sourceAddress: sourceDescriptor.sourceAddress,
+      sourceType: sourceDescriptor.sourceType,
+      sourceName: sourceDescriptor.sourceName,
+      sourceTable: sourceDescriptor.sourceTable,
+      editable: sourceDescriptor.editable,
+      resolutionWarnings: sourceDescriptor.warnings
     });
   });
   const first = summaries[0] as Record<string, unknown> | undefined;
@@ -11107,15 +11245,21 @@ function dataValidationSummaryAnswer(result: unknown, metadata: WorkbookMetadata
     type,
     inCellDropDown: first?.inCellDropDown,
     sourceFormula: typeof first?.source === "string" ? first.source : undefined,
+    sourceType: first?.sourceType,
     options: first?.options,
     optionCount: first?.optionCount,
     sourceComplete: summaries.length > 0 ? summaries.every((rule) => rule.sourceComplete === true) : false,
     sourceRange: first?.sourceRange,
+    sourceSheetName: first?.sourceSheetName,
+    sourceAddress: first?.sourceAddress,
+    sourceName: first?.sourceName,
+    sourceTable: first?.sourceTable,
+    editable: first?.editable,
     fieldContext,
     validationRangeStatus: mixedRange ? "mixed_or_inconsistent_range" : undefined,
     guidance: mixedRange
       ? "This multi-cell range has mixed/inconsistent validation. Do not conclude the dropdown option is missing or the rule is broken from this range summary. Read one representative data cell with the dropdown, such as the selected cell or a known row in the Transaction Type column, to inspect its exact validation source."
-      : "Use this inline validation summary to answer dropdown option questions. Add missing dropdown values by updating the source-list cells when sourceRange is present; otherwise preview a write_data_validation rule rewrite."
+      : "Use this inline validation summary to answer dropdown option questions. Add, rename, delete, replace, or reorder options with intent.action update_dropdown_options; use write_data_validation only when changing the validation rule itself."
   });
 }
 
@@ -11374,6 +11518,408 @@ function parseDataValidationOptions(source: unknown): { options?: string[]; opti
   }
   const options = trimmed.split(",").map((item) => item.trim()).filter(Boolean);
   return { options, optionCount: options.length, sourceComplete: true };
+}
+
+type DropdownSourceDescriptor = {
+  sourceType?: "inline" | "range" | "named_range" | "table_column" | "static_formula" | "dynamic_formula" | "external" | "unknown";
+  sourceRange?: string;
+  sourceSheetName?: string;
+  sourceAddress?: string;
+  sourceName?: string;
+  sourceTable?: { tableName: string; columnName?: string };
+  editable?: boolean;
+  warnings?: string[];
+};
+
+type DropdownOptionMutation = {
+  operation: "add" | "rename" | "delete" | "replace_all" | "reorder";
+  options: string[];
+  from?: string;
+  to?: string;
+};
+
+function dropdownSourceDescriptor(metadata: WorkbookMetadata, sheetName: string, source: unknown): DropdownSourceDescriptor {
+  if (Array.isArray(source)) {
+    return { sourceType: "inline", editable: true };
+  }
+  if (typeof source !== "string") {
+    return { sourceType: "unknown", editable: false, warnings: ["Dropdown source is not a list string or range formula."] };
+  }
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return { sourceType: "unknown", editable: false, warnings: ["Dropdown source is empty."] };
+  }
+  if (!trimmed.startsWith("=")) {
+    return { sourceType: "inline", editable: true };
+  }
+  const body = trimmed.slice(1).trim();
+  const directRange = dropdownA1Source(metadata, sheetName, body);
+  if (directRange) {
+    return { sourceType: "range", sourceRange: `${directRange.sheetName}!${directRange.address}`, sourceSheetName: directRange.sheetName, sourceAddress: directRange.address, editable: true };
+  }
+  const namedRange = metadata.namedRanges.find((name) => normalizeComparableText(name.name) === normalizeComparableText(body));
+  if (namedRange) {
+    const sourceSheetName = namedRange.sheetName ?? sheetName;
+    return { sourceType: "named_range", sourceRange: `${sourceSheetName}!${namedRange.range}`, sourceSheetName, sourceAddress: namedRange.range, sourceName: namedRange.name, editable: true };
+  }
+  const tableSource = dropdownTableSource(metadata, body);
+  if (tableSource) {
+    const sourceTable = tableSource.columnName === undefined
+      ? { tableName: tableSource.tableName }
+      : { tableName: tableSource.tableName, columnName: tableSource.columnName };
+    return {
+      sourceType: "table_column",
+      sourceRange: `${tableSource.sheetName}!${tableSource.address}`,
+      sourceSheetName: tableSource.sheetName,
+      sourceAddress: tableSource.address,
+      sourceTable,
+      editable: true
+    };
+  }
+  const staticOffset = dropdownStaticOffsetSource(metadata, sheetName, body);
+  if (staticOffset) {
+    return { sourceType: "static_formula", sourceRange: `${staticOffset.sheetName}!${staticOffset.address}`, sourceSheetName: staticOffset.sheetName, sourceAddress: staticOffset.address, editable: true };
+  }
+  if (/\[[^\]]+\]/.test(body)) {
+    return { sourceType: "external", editable: false, warnings: ["Dropdown source appears to reference an external workbook or unsupported structured reference."] };
+  }
+  if (/\b(INDIRECT|OFFSET|CHOOSE|INDEX|FILTER|UNIQUE|SORT|XLOOKUP|VLOOKUP|MATCH)\b/i.test(body)) {
+    return { sourceType: "dynamic_formula", editable: false, warnings: ["Dropdown source is dynamic or dependent; provide a representative cell/row or edit the backing source directly."] };
+  }
+  return { sourceType: "unknown", editable: false, warnings: ["Dropdown source could not be resolved to a bounded local list."] };
+}
+
+async function resolveDropdownOptions(
+  summary: Record<string, unknown>,
+  metadata: WorkbookMetadata,
+  sheetName: string,
+  range: string,
+  readRange: (sheetName: string, address: string) => Promise<CellMatrix>
+): Promise<Record<string, unknown>> {
+  const rules = Array.isArray(summary.rules)
+    ? await Promise.all(summary.rules.map(async (rawRule) => {
+        const rule = rawRule && typeof rawRule === "object" ? rawRule as Record<string, unknown> : {};
+        return resolveDropdownRuleOptions(rule, metadata, sheetName, range, readRange);
+      }))
+    : [];
+  const first = rules[0];
+  const next = stripUndefinedRecord({
+    ...summary,
+    ...(first ? {
+      options: first.options,
+      optionCount: first.optionCount,
+      sourceComplete: first.sourceComplete,
+      sourceRange: first.sourceRange,
+      sourceSheetName: first.sourceSheetName,
+      sourceAddress: first.sourceAddress,
+      sourceType: first.sourceType,
+      sourceName: first.sourceName,
+      sourceTable: first.sourceTable,
+      editable: first.editable,
+      availableBlankSlots: first.availableBlankSlots,
+      resolutionWarnings: first.resolutionWarnings
+    } : {}),
+    rules
+  });
+  const fieldContext = validationFieldContext(metadata, sheetName, range, rules);
+  return stripUndefinedRecord({ ...next, fieldContext });
+}
+
+async function resolveDropdownRuleOptions(
+  rule: Record<string, unknown>,
+  _metadata: WorkbookMetadata,
+  _sheetName: string,
+  _range: string,
+  readRange: (sheetName: string, address: string) => Promise<CellMatrix>
+): Promise<Record<string, unknown>> {
+  const sourceSheetName = stringValue(rule.sourceSheetName);
+  const sourceAddress = stringValue(rule.sourceAddress);
+  const sourceType = stringValue(rule.sourceType);
+  if (!sourceSheetName || !sourceAddress || sourceType === "dynamic_formula" || sourceType === "external") {
+    return rule;
+  }
+  const values = await readRange(sourceSheetName, sourceAddress);
+  const cells = dropdownSourceCells(sourceAddress, values);
+  const options = cells.map((cell) => cell.value).filter((value): value is string => typeof value === "string" && value.trim().length > 0).map((value) => value.trim());
+  const blankSlots = cells.filter((cell) => cell.value === undefined || cell.value === "").map((cell) => cell.address);
+  return stripUndefinedRecord({
+    ...rule,
+    options,
+    optionCount: options.length,
+    sourceComplete: true,
+    optionsResolved: true,
+    availableBlankSlots: blankSlots.slice(0, 20),
+    availableBlankSlotCount: blankSlots.length
+  });
+}
+
+function filterDropdownSummaryOptions(summary: Record<string, unknown>, input?: AgentRunInput): Record<string, unknown> {
+  const values = input?.values as Record<string, unknown> | undefined;
+  const query = stringValue(values?.query ?? values?.search ?? values?.filter);
+  if (!query) {
+    return summary;
+  }
+  const options = stringArrayValue(summary.options);
+  const normalized = normalizeValidationOption(query);
+  const filteredOptions = options.filter((option) => normalizeValidationOption(option).includes(normalized));
+  return stripUndefinedRecord({
+    ...summary,
+    filteredOptions,
+    filteredOptionCount: filteredOptions.length,
+    optionFilterQuery: query
+  });
+}
+
+function dropdownA1Source(metadata: WorkbookMetadata, defaultSheetName: string, body: string): { sheetName: string; address: string } | undefined {
+  const normalizedBody = body.replace(/\$/g, "");
+  const parsed = tryParseA1Address(normalizedBody);
+  if (parsed) {
+    return { sheetName: parsed.sheetName ?? defaultSheetName, address: addressFromBounds(parsed.startRow, parsed.startColumn, parsed.endRow - parsed.startRow + 1, parsed.endColumn - parsed.startColumn + 1) };
+  }
+  const wholeColumn = /^(?:(?:'((?:[^']|'')+)'|([^'!]+))!)?(\$?[A-Z]{1,3}):(\$?[A-Z]{1,3})$/i.exec(body);
+  if (wholeColumn) {
+    const sourceSheetName = (wholeColumn[1] ? wholeColumn[1].replace(/''/g, "'") : wholeColumn[2]) ?? defaultSheetName;
+    const startColumn = columnToNumber((wholeColumn[3] ?? "").replace(/\$/g, ""));
+    const endColumn = columnToNumber((wholeColumn[4] ?? "").replace(/\$/g, ""));
+    const sheet = metadata.sheets.find((candidate) => sameText(candidate.name, sourceSheetName));
+    const usedRows = rowCountFromAddress(sheet?.usedRange) ?? sheet?.rowCount ?? 1000;
+    return { sheetName: sourceSheetName, address: addressFromBounds(1, startColumn, usedRows, endColumn - startColumn + 1) };
+  }
+  return undefined;
+}
+
+function dropdownTableSource(metadata: WorkbookMetadata, body: string): { sheetName: string; address: string; tableName: string; columnName?: string } | undefined {
+  const simple = /^'?([^'\[\]]+)'?\[([^\]]+)\]$/.exec(body);
+  const nested = /^'?([^'\[\]]+)'?\[\[(?:#(?:Data|All),)?\[([^\]]+)\]\]\]$/i.exec(body);
+  const match = nested ?? simple;
+  if (!match) {
+    return undefined;
+  }
+  const tableName = (match[1] ?? "").trim();
+  const columnName = (match[2] ?? "").replace(/^#Data,?/i, "").trim();
+  if (!tableName) {
+    return undefined;
+  }
+  const table = metadata.tables.find((candidate) => normalizeComparableText(candidate.name ?? "") === normalizeComparableText(tableName));
+  if (!table) {
+    return undefined;
+  }
+  const column = table.columns.find((candidate) => normalizeComparableText(candidate.name) === normalizeComparableText(columnName));
+  const address = column ? tableColumnRange(table.dataRange ?? table.range, column.letter) : table.dataRange;
+  return address ? stripUndefinedRecord({ sheetName: table.sheetName, address, tableName: table.name, columnName: column?.name }) as { sheetName: string; address: string; tableName: string; columnName?: string } : undefined;
+}
+
+function dropdownStaticOffsetSource(metadata: WorkbookMetadata, defaultSheetName: string, body: string): { sheetName: string; address: string } | undefined {
+  const match = /^OFFSET\(([^,]+),\s*0\s*,\s*0\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/i.exec(body);
+  if (!match) {
+    return undefined;
+  }
+  const anchor = dropdownA1Source(metadata, defaultSheetName, match[1] ?? "");
+  const rows = Number(match[2]);
+  const columns = Number(match[3]);
+  const parsed = anchor ? tryParseA1Address(anchor.address) : undefined;
+  if (!anchor || !parsed || rows < 1 || columns < 1) {
+    return undefined;
+  }
+  return { sheetName: anchor.sheetName, address: addressFromBounds(parsed.startRow, parsed.startColumn, rows, columns) };
+}
+
+function dropdownOptionMutationFromInput(input: AgentRunInput): DropdownOptionMutation | undefined {
+  const values = input.values as Record<string, unknown> | undefined;
+  const operationRaw = stringValue(values?.operation ?? values?.action)?.toLowerCase().replace(/[\s-]+/g, "_");
+  const request = input.request.toLowerCase();
+  const operation = operationRaw === "rename" || operationRaw === "update" || operationRaw === "change" ? "rename"
+    : operationRaw === "delete" || operationRaw === "remove" ? "delete"
+    : operationRaw === "replace_all" || operationRaw === "replace" ? "replace_all"
+    : operationRaw === "reorder" || operationRaw === "sort" ? "reorder"
+    : operationRaw === "add" || operationRaw === "append" || operationRaw === "insert" ? "add"
+    : /\b(rename|change|update)\b/.test(request) ? "rename"
+    : /\b(delete|remove)\b/.test(request) ? "delete"
+    : /\breorder\b/.test(request) ? "reorder"
+    : /\breplace\b/.test(request) ? "replace_all"
+    : /\b(add|append|insert)\b/.test(request) ? "add"
+    : undefined;
+  if (!operation) {
+    return undefined;
+  }
+  const options = stringArrayValue(values?.options ?? values?.allowedValues ?? values?.option ?? values?.value);
+  const from = stringValue(values?.from ?? values?.old ?? values?.oldValue);
+  const to = stringValue(values?.to ?? values?.new ?? values?.newValue);
+  const removeOptions = stringArrayValue(values?.remove ?? values?.delete);
+  return {
+    operation,
+    options: operation === "delete" && removeOptions.length > 0 ? removeOptions : options,
+    ...(from !== undefined ? { from } : {}),
+    ...(to !== undefined ? { to } : {})
+  };
+}
+
+function applyDropdownOptionMutationToOptions(currentOptions: string[], mutation: DropdownOptionMutation): { ok: true; options: string[] } | { ok: false; summary: string } {
+  const normalized = new Set<string>();
+  const dedupe = (options: string[]) => options.filter((option) => {
+    const key = normalizeValidationOption(option);
+    if (!key || normalized.has(key)) return false;
+    normalized.add(key);
+    return true;
+  });
+  if (mutation.operation === "add") {
+    if (mutation.options.length === 0) return { ok: false, summary: "Add dropdown option needs values.options or values.option." };
+    return { ok: true, options: dedupe([...currentOptions, ...mutation.options]) };
+  }
+  if (mutation.operation === "rename") {
+    if (!mutation.from || !mutation.to) return { ok: false, summary: "Rename dropdown option needs values.from and values.to." };
+    const from = normalizeValidationOption(mutation.from);
+    return { ok: true, options: currentOptions.map((option) => normalizeValidationOption(option) === from ? mutation.to! : option) };
+  }
+  if (mutation.operation === "delete") {
+    const remove = new Set(mutation.options.map(normalizeValidationOption));
+    if (remove.size === 0) return { ok: false, summary: "Delete dropdown option needs values.options or values.remove." };
+    return { ok: true, options: currentOptions.filter((option) => !remove.has(normalizeValidationOption(option))) };
+  }
+  if (mutation.operation === "replace_all" || mutation.operation === "reorder") {
+    if (mutation.options.length === 0) return { ok: false, summary: `${mutation.operation} dropdown option update needs values.options.` };
+    return { ok: true, options: dedupe(mutation.options) };
+  }
+  return { ok: false, summary: "Unsupported dropdown option operation." };
+}
+
+function compileDropdownSourceListMutation(
+  workbookId: WorkbookId,
+  sourceSheetName: string,
+  sourceAddress: string,
+  sourceValues: CellMatrix,
+  mutation: DropdownOptionMutation,
+  options: { allowExpandSourceRange: boolean; dropdownTarget: { sheetName: string; address: string }; sourceType?: string | undefined }
+): { ok: true; operations: ExcelOperation[]; changes: NonNullable<AgentRunOutput["changes"]>; beforeOptions: string[]; afterOptions: string[]; changedCellCount: number } | { ok: false; summary: string } {
+  const cells = dropdownSourceCells(sourceAddress, sourceValues);
+  const beforeOptions = cells.map((cell) => cell.value).filter((value): value is string => typeof value === "string" && value.trim().length > 0).map((value) => value.trim());
+  const next = applyDropdownOptionMutationToOptions(beforeOptions, mutation);
+  if (!next.ok) {
+    return next;
+  }
+  const afterOptions = next.options;
+  const blankCell = cells.find((cell) => !cell.value);
+  if (mutation.operation === "add" && mutation.options.length === 1 && blankCell && beforeOptions.length + 1 === afterOptions.length) {
+    const addedOption = mutation.options[0];
+    if (addedOption === undefined) {
+      return { ok: false, summary: "Add dropdown option needs one option value." };
+    }
+    const operation: ExcelOperation = {
+      kind: "range.write_values_many",
+      operationId: makeId<OperationId>("op"),
+      workbookId,
+      destructiveLevel: "values",
+      reason: "Add dropdown option to source list.",
+      entries: [{ target: { workbookId, sheetName: sourceSheetName, address: blankCell.address }, values: [[addedOption]], preserveFormats: true }]
+    };
+    return {
+      ok: true,
+      operations: [operation],
+      changes: [{ sheetName: sourceSheetName, range: blankCell.address, before: "blank source-list cell", after: addedOption }],
+      beforeOptions,
+      afterOptions,
+      changedCellCount: 1
+    };
+  }
+  const sourceShape = rangeShape(sourceAddress);
+  if (mutation.operation === "add" && !blankCell && options.allowExpandSourceRange && options.sourceType === "range" && sourceShape && (sourceShape.columns === 1 || sourceShape.rows === 1)) {
+    const expandedAddress = sourceShape.columns === 1
+      ? addressFromBounds(sourceShape.startRow, sourceShape.startColumn, sourceShape.rows + mutation.options.length, 1)
+      : addressFromBounds(sourceShape.startRow, sourceShape.startColumn, 1, sourceShape.columns + mutation.options.length);
+    const appendAddress = sourceShape.columns === 1
+      ? addressFromBounds(sourceShape.endRow + 1, sourceShape.startColumn, mutation.options.length, 1)
+      : addressFromBounds(sourceShape.startRow, sourceShape.endColumn + 1, 1, mutation.options.length);
+    const appendValues = sourceShape.columns === 1 ? mutation.options.map((option) => [option]) : [mutation.options];
+    const validationSource = normalizeDataValidationRangeReference(`${sourceSheetName}!${expandedAddress}`) ?? `=${sourceSheetName}!${expandedAddress}`;
+    return {
+      ok: true,
+      operations: [
+        {
+          kind: "range.write_values_many",
+          operationId: makeId<OperationId>("op"),
+          workbookId,
+          destructiveLevel: "values",
+          reason: "Expand dropdown source list.",
+          entries: [{ target: { workbookId, sheetName: sourceSheetName, address: appendAddress }, values: appendValues, preserveFormats: true }]
+        },
+        {
+          kind: "range.write_data_validation",
+          operationId: makeId<OperationId>("op"),
+          workbookId,
+          destructiveLevel: "format",
+          reason: "Retarget dropdown validation to expanded source list.",
+          target: { workbookId, sheetName: options.dropdownTarget.sheetName, address: options.dropdownTarget.address },
+          validation: { type: "list", source: validationSource, inCellDropDown: true, ignoreBlanks: true }
+        }
+      ],
+      changes: [
+        { sheetName: sourceSheetName, range: appendAddress, before: "outside previous source list", after: `${mutation.options.length} added option(s)` },
+        { sheetName: options.dropdownTarget.sheetName, range: options.dropdownTarget.address, after: `validation source expanded to ${sourceSheetName}!${expandedAddress}` }
+      ],
+      beforeOptions,
+      afterOptions,
+      changedCellCount: mutation.options.length
+    };
+  }
+  if (afterOptions.length > cells.length) {
+    return { ok: false, summary: "Dropdown source list has no blank cells. Use a plain range-backed dropdown with allowExpandSourceRange true, or expand the named/table source first." };
+  }
+  const rewrittenValues = matrixFromFlatOptions(sourceAddress, afterOptions, cells.length);
+  const operation: ExcelOperation = {
+    kind: "range.write_values_many",
+    operationId: makeId<OperationId>("op"),
+    workbookId,
+    destructiveLevel: "values",
+    reason: `Update dropdown source-list options (${mutation.operation}).`,
+    entries: [{ target: { workbookId, sheetName: sourceSheetName, address: sourceAddress }, values: rewrittenValues, preserveFormats: true }]
+  };
+  return {
+    ok: true,
+    operations: [operation],
+    changes: [{ sheetName: sourceSheetName, range: sourceAddress, before: `${beforeOptions.length} source-list option(s)`, after: `${afterOptions.length} source-list option(s)` }],
+    beforeOptions,
+    afterOptions,
+    changedCellCount: cells.length
+  };
+}
+
+function dropdownSourceCells(sourceAddress: string, values: CellMatrix): Array<{ address: string; value?: string }> {
+  const shape = rangeShape(sourceAddress);
+  if (!shape) {
+    return [];
+  }
+  const cells: Array<{ address: string; value?: string }> = [];
+  for (let rowIndex = 0; rowIndex < shape.rows; rowIndex += 1) {
+    for (let columnIndex = 0; columnIndex < shape.columns; columnIndex += 1) {
+      const raw = values[rowIndex]?.[columnIndex];
+      const address = addressFromBounds(shape.startRow + rowIndex, shape.startColumn + columnIndex, 1, 1);
+      const value = raw === null || raw === undefined || raw === "" ? undefined : String(raw).trim();
+      cells.push(value === undefined ? { address } : { address, value });
+    }
+  }
+  return cells;
+}
+
+function matrixFromFlatOptions(sourceAddress: string, options: string[], cellCount: number): CellMatrix {
+  const shape = rangeShape(sourceAddress);
+  if (!shape) {
+    return [];
+  }
+  const values = [...options, ...Array.from({ length: Math.max(0, cellCount - options.length) }, () => null)];
+  const matrix: CellMatrix = [];
+  for (let rowIndex = 0; rowIndex < shape.rows; rowIndex += 1) {
+    const row: CellValue[] = [];
+    for (let columnIndex = 0; columnIndex < shape.columns; columnIndex += 1) {
+      row.push(values[rowIndex * shape.columns + columnIndex] ?? null);
+    }
+    matrix.push(row);
+  }
+  return matrix;
+}
+
+function dropdownAllowExpandSourceRange(input: AgentRunInput): boolean {
+  const values = input.values as Record<string, unknown> | undefined;
+  return booleanValue(values?.allowExpandSourceRange) ?? true;
 }
 
 function hasRangeMetadataReadIntent(input: AgentRunInput): boolean {
@@ -11677,6 +12223,32 @@ function uniqueSheetName(metadata: WorkbookMetadata, baseName: string): string {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function templateCopyModeFromInput(input: AgentRunInput): "clean" | "with_data" {
+  const values = input.values as Record<string, unknown> | undefined;
+  const copyMode = stringValue(values?.copyMode ?? values?.templateCopyMode)?.toLowerCase().replace(/[\s-]+/g, "_");
+  if (copyMode === "with_data" || copyMode === "include_data" || copyMode === "preserve_data" || copyMode === "raw" || copyMode === "exact") {
+    return "with_data";
+  }
+  if (copyMode === "clean" || copyMode === "without_data" || copyMode === "clear_data" || copyMode === "template_only") {
+    return "clean";
+  }
+  if (booleanValue(values?.includeData ?? values?.preserveData ?? values?.keepData) === true) {
+    return "with_data";
+  }
+  if (booleanValue(values?.clearDataRegions) === false) {
+    return "with_data";
+  }
+
+  const request = input.request;
+  if (/\b(remove|clear|wipe|strip|blank)\b[\s\S]{0,40}\b(data|values?|contents?)\b/i.test(request) || /\b(fresh|clean|empty)\b[\s\S]{0,40}\b(template|copy|sheet)\b/i.test(request) || /\bkeep\s+only\s+(the\s+)?template\b/i.test(request)) {
+    return "clean";
+  }
+  if (/\b(with|include|preserve|keep|retain)\b[\s\S]{0,30}\b(data|values?|contents?|rows?)\b/i.test(request) || /\b(raw|exact|full)\s+(duplicate|copy)\b/i.test(request) || /\bduplicate\b[\s\S]{0,30}\b(with\s+)?data\b/i.test(request)) {
+    return "with_data";
+  }
+  return "clean";
 }
 
 function explicitSheetName(metadata: WorkbookMetadata, input: AgentRunInput): string | undefined {
@@ -12549,9 +13121,9 @@ function tableColumnOrderFromInput(input: AgentRunInput): TableReorderColumnsReq
 }
 
 function tableFiltersFromInput(input: AgentRunInput): { ok: true; filters: TableApplyFiltersRequest["filters"] } | { ok: false; summary: string } {
-  const raw = input.values?.filters;
+  const raw = tableFilterSpecsFromInput(input);
   if (!Array.isArray(raw) || raw.length === 0) {
-    return { ok: false, summary: "Table filter previews need values.filters, for example [{ column: \"Status\", value: \"Open\" }]." };
+    return { ok: false, summary: "Table filter previews need values.filters, values.filter, or values.column plus values.value/criterion/criteria. Example: { column: \"Status\", value: \"Open\" }." };
   }
   const filters = raw.flatMap((filter) => {
     const normalized = normalizeTableFilterSpec(filter);
@@ -12561,6 +13133,30 @@ function tableFiltersFromInput(input: AgentRunInput): { ok: true; filters: Table
     return { ok: false, summary: "Table filter previews need each filter to include column plus criteria, criterion, or value." };
   }
   return { ok: true, filters };
+}
+
+function tableFilterSpecsFromInput(input: AgentRunInput): unknown[] | undefined {
+  const values = input.values as Record<string, unknown> | undefined;
+  if (Array.isArray(values?.filters)) {
+    return values.filters;
+  }
+  if (values?.filter && typeof values.filter === "object" && !Array.isArray(values.filter)) {
+    return [values.filter];
+  }
+  if (typeof values?.column === "string" || typeof values?.column === "number") {
+    const hasCriteria = Object.prototype.hasOwnProperty.call(values, "criteria")
+      || Object.prototype.hasOwnProperty.call(values, "criterion")
+      || Object.prototype.hasOwnProperty.call(values, "value");
+    if (hasCriteria) {
+      return [{
+        column: values.column,
+        ...(Object.prototype.hasOwnProperty.call(values, "criteria") ? { criteria: values.criteria } : {}),
+        ...(Object.prototype.hasOwnProperty.call(values, "criterion") ? { criterion: values.criterion } : {}),
+        ...(Object.prototype.hasOwnProperty.call(values, "value") ? { value: values.value } : {})
+      }];
+    }
+  }
+  return undefined;
 }
 
 function isClearFilterRequest(request: string): boolean {
@@ -12643,9 +13239,14 @@ function normalizeTableSortFieldSpec(field: unknown, table: TableMetadata | unde
   if (key === undefined) {
     return [];
   }
+  const ascending = typeof candidate.ascending === "boolean"
+    ? candidate.ascending
+    : (Object.prototype.hasOwnProperty.call(candidate, "direction") || Object.prototype.hasOwnProperty.call(candidate, "order"))
+      ? sortAscendingFromInput(candidate, "")
+      : undefined;
   return [{
     key,
-    ...(typeof candidate.ascending === "boolean" ? { ascending: candidate.ascending } : {}),
+    ...(ascending !== undefined ? { ascending } : {}),
     ...(isTableSortOn(candidate.sortOn) ? { sortOn: candidate.sortOn } : {}),
     ...(typeof candidate.color === "string" ? { color: candidate.color } : {}),
     ...(isTableSortDataOption(candidate.dataOption) ? { dataOption: candidate.dataOption } : {})
@@ -12674,13 +13275,20 @@ function sortAscendingFromInput(values: Record<string, unknown> | undefined, req
     return values.ascending;
   }
   const direction = stringValue(values?.direction ?? values?.order);
-  if (direction && /\b(desc|descending|high|highest|largest|z-a)\b/i.test(direction)) {
-    return false;
-  }
-  if (direction && /\b(asc|ascending|low|lowest|smallest|a-z)\b/i.test(direction)) {
+  const phrase = `${direction ?? ""} ${request}`.trim();
+  if (/\b(?:lowest|smallest)\s+to\s+(?:highest|largest)\b/i.test(phrase) || /\ba\s*(?:-|to)\s*z\b/i.test(phrase)) {
     return true;
   }
-  return !/\b(highest|descending|desc|largest|lowest to highest)\b/i.test(request);
+  if (/\b(?:highest|largest)\s+to\s+(?:lowest|smallest)\b/i.test(phrase) || /\bz\s*(?:-|to)\s*a\b/i.test(phrase)) {
+    return false;
+  }
+  if (direction && /\b(desc|descending|high|highest|largest)\b/i.test(direction)) {
+    return false;
+  }
+  if (direction && /\b(asc|ascending|low|lowest|smallest)\b/i.test(direction)) {
+    return true;
+  }
+  return !/\b(highest|descending|desc|largest)\b/i.test(request);
 }
 
 function isTableSortOn(value: unknown): value is NonNullable<TableSortRequest["fields"][number]["sortOn"]> {
@@ -14971,7 +15579,7 @@ function conciseFinalAnswer(output: Omit<AgentRunOutput, "telemetry">): string |
     const sheetName = stringValue(answer.sheetName) ?? "the requested sheet";
     const range = stringValue(answer.range) ?? "the requested range";
     if (answer.validationRangeStatus === "mixed_or_inconsistent_range") {
-      return `Read dropdown validation for ${sheetName}!${range}. The range has mixed/inconsistent validation, so this result is inconclusive for dropdown options; do not say the dropdown is broken or missing options from this range summary. Inspect one representative data cell with the dropdown, or update the known source-list cell directly if the user asked to add an option.`;
+      return `Read dropdown validation for ${sheetName}!${range}. The range has mixed/inconsistent validation, so this result is inconclusive for dropdown options; do not say the dropdown is broken or missing options from this range summary. Inspect one representative data cell with the dropdown before using update_dropdown_options.`;
     }
     const optionCount = typeof answer.optionCount === "number" ? answer.optionCount : 0;
     const options = Array.isArray(answer.options)

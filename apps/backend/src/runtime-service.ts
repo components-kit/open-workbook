@@ -6518,7 +6518,7 @@ export class RuntimeService {
     const restoredRanges = new Set<string>();
 
     for (const original of [...plan.operations].reverse()) {
-      if (original.kind === "template.create_sheet_from_template") {
+      if (original.kind === "template.create_sheet_from_template" || original.kind === "sheet.copy" || original.kind === "sheet.copy_clean_data_regions") {
         operations.push({
           kind: "sheet.delete",
           operationId: makeId<OperationId>("op"),

@@ -31,7 +31,7 @@ Composite workflows should compile user intent into one previewed operation when
 
 For related range work, prefer grouped operation kinds such as `range.write_values_many`, `range.write_number_formats_many`, `range.write_styles_many`, `range.clear_many`, `range.clear_formats_many`, and `range.autofit_many` over repeated primitive operations. The grouped operation must still carry per-range targets so fingerprints, lock scopes, backups, telemetry, and rollback evidence cover every affected range.
 
-For duplicate-from-template work, prefer `sheet.copy_clean_data_regions` over `sheet.copy` followed by separate clear operations. The operation must copy the source sheet once, clear only declared data regions on the new sheet, preserve headers/formulas/styles/layout, and return one preview/apply proof.
+For duplicate-from-template work, use one operation. Default clean copies should use `sheet.copy_clean_data_regions` rather than `sheet.copy` followed by separate clear operations: copy the source sheet once, clear only declared data regions on the new sheet, preserve headers/formulas/styles/layout, and return one preview/apply proof. If the caller requests `copyMode: "with_data"` or otherwise explicitly asks to preserve existing data, use `sheet.copy` and report that data is retained.
 
 For table requests that combine filtering and sorting, prefer `table.apply_view` over separate `table.apply_filters` and `table.sort` calls. The operation must preserve one preview/apply lifecycle, one table backup, and one direct Office.js table transaction.
 

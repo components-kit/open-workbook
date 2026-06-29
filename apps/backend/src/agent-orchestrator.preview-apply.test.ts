@@ -1481,6 +1481,117 @@ Data rows:
       });
     });
 
+  it("previews adding a dropdown option by writing the first blank source-list cell", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      runtime.readRangeMetadata = async (method: string, request: any) => {
+        runtime.runtimeMethodCalls[method] = (runtime.runtimeMethodCalls[method] ?? 0) + 1;
+        return {
+          ok: true,
+          method,
+          request,
+          data: {
+            address: request.address,
+            rules: [{
+              address: request.address,
+              type: "list",
+              source: "=Lists!$A$2:$A$5",
+              inCellDropDown: true
+            }]
+          }
+        };
+      };
+      runtime.snapshotRangesOverride = {
+        ok: true,
+        rangeSnapshots: [{
+          workbookId: "workbook_agent_unit",
+          sheetName: "Lists",
+          address: "A2:A5",
+          values: [["Open"], ["Closed"], [null], ["Pending"]]
+        }]
+      };
+
+      const preview = await agent.run({
+        request: "Add Reviewed to the Status dropdown options.",
+        mode: "preview_update",
+        intent: { action: "update_dropdown_options" },
+        target: { sheetName: "Data", range: "D2:D4" },
+        values: { operation: "add", options: ["Reviewed"] }
+      });
+      const applied = await agent.run({
+        request: "Apply dropdown option update.",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any)).toMatchObject({
+        kind: "dropdown_options_update_preview",
+        operation: "add",
+        sourceRange: "Lists!A2:A5",
+        beforeOptions: ["Open", "Closed", "Pending"],
+        afterOptions: ["Open", "Closed", "Pending", "Reviewed"],
+        changedCellCount: 1
+      });
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations).toHaveLength(1);
+      expect(runtime.lastBatchOperations[0]).toMatchObject({
+        kind: "range.write_values_many",
+        entries: [{ target: { sheetName: "Lists", address: "A4:A4" }, values: [["Reviewed"]] }]
+      });
+    });
+
+  it("previews renaming dropdown options by compactly rewriting the source list", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      runtime.readRangeMetadata = async (method: string, request: any) => ({
+        ok: true,
+        method,
+        request,
+        data: {
+          address: request.address,
+          rules: [{
+            address: request.address,
+            type: "list",
+            source: "=Lists!$A$2:$A$5",
+            inCellDropDown: true
+          }]
+        }
+      });
+      runtime.snapshotRangesOverride = {
+        ok: true,
+        rangeSnapshots: [{
+          workbookId: "workbook_agent_unit",
+          sheetName: "Lists",
+          address: "A2:A5",
+          values: [["Open"], ["Closed"], ["Pending"], [null]]
+        }]
+      };
+
+      const preview = await agent.run({
+        request: "Rename Closed to Done in the Status dropdown options.",
+        mode: "preview_update",
+        intent: { action: "update_dropdown_options" },
+        target: { sheetName: "Data", range: "D2:D4" },
+        values: { operation: "rename", from: "Closed", to: "Done" }
+      });
+      const applied = await agent.run({
+        request: "Apply dropdown option rename.",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).afterOptions).toEqual(["Open", "Done", "Pending"]);
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations[0]).toMatchObject({
+        kind: "range.write_values_many",
+        entries: [{ target: { sheetName: "Lists", address: "A2:A5" }, values: [["Open"], ["Done"], ["Pending"], [null]] }]
+      });
+    });
+
   it("auto-applies exact transfer match updates as one backend-owned grouped operation", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -4962,6 +5073,7 @@ Data rows:
 
       expect(result.status).toBe("PREVIEW_READY");
       expect((result.answer as any).kind).toBe("template_cleanup_preview");
+      expect((result.answer as any).copyMode).toBe("clean");
       expect((result.answer as any).operationKind).toBe("sheet.copy_clean_data_regions");
       expect((result.answer as any).dataRegions).toEqual(["B2:B3"]);
       expect((result.answer as any).sourceSheetName).toBe("Report");
@@ -4970,6 +5082,54 @@ Data rows:
       expect(runtime.writeBatchCount).toBe(1);
       expect(runtime.lastBatchOperations).toHaveLength(1);
       expect(runtime.lastBatchOperations[0]?.kind).toBe("sheet.copy_clean_data_regions");
+    });
+
+  it("previews duplicate template with data as a raw sheet copy", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Duplicate Report template",
+        target: { sheetName: "Report" },
+        values: { copyMode: "with_data", newSheetName: "Report Copy" }
+      });
+      const applied = await agent.run({
+        request: "Apply template copy with data",
+        mode: "apply_update",
+        operationId: result.operationId,
+        confirmationToken: result.confirmationToken
+      });
+
+      expect(result.status).toBe("PREVIEW_READY");
+      expect((result.answer as any).kind).toBe("template_cleanup_preview");
+      expect((result.answer as any).copyMode).toBe("with_data");
+      expect((result.answer as any).operationKind).toBe("sheet.copy");
+      expect((result.answer as any).dataRegions).toBeUndefined();
+      expect((result.answer as any).sourceSheetName).toBe("Report");
+      expect((result.answer as any).newSheetName).toBe("Report Copy");
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.writeBatchCount).toBe(1);
+      expect(runtime.lastBatchOperations).toHaveLength(1);
+      expect(runtime.lastBatchOperations[0]).toMatchObject({
+        kind: "sheet.copy",
+        sourceSheetName: "Report",
+        newSheetName: "Report Copy"
+      });
+    });
+
+  it("recognizes natural duplicate-template data preservation phrasing", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const result = await agent.run({
+        request: "Duplicate Report template with data",
+        target: { sheetName: "Report" },
+        values: { newSheetName: "Report Data Copy" }
+      });
+
+      expect(result.status).toBe("PREVIEW_READY");
+      expect((result.answer as any).copyMode).toBe("with_data");
+      expect((result.answer as any).operationKind).toBe("sheet.copy");
     });
 
   it("previews and applies table appends through the agent surface", async () => {
@@ -5274,6 +5434,56 @@ Data rows:
       expect((preview.changes ?? [])[0]).toMatchObject({ sheetName: "Data", range: "A1:D4", after: "filters cleared" });
     });
 
+  it("clears table filters when filter_range clear phrasing resolves to a table", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      agent.metadataCache.set(createCachedMetadata("wbctx_clear_table_filter_range"));
+
+      const preview = await agent.run({
+        request: "Clear all filters from Transactions table so I can see full data",
+        mode: "preview_update",
+        workbookContextId: "wbctx_clear_table_filter_range",
+        intent: { action: "filter_range" },
+        target: { tableName: "Transactions" }
+      });
+      const applied = await agent.run({
+        request: "Apply clear table filters",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).kind).toBe("table_clear_filters_preview");
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.tableMethodCalls.at(-1)).toEqual({
+        method: "table.clear_filters",
+        request: { workbookId: "workbook_agent_unit", tableName: "Transactions" }
+      });
+    });
+
+  it("enables autofilter controls across a resolved range", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+
+      const preview = await agent.run({
+        request: "Add filters to all columns in Data range A1:D4",
+        mode: "preview_update",
+        target: { sheetName: "Data", range: "A1:D4" }
+      });
+      const applied = await agent.run({
+        request: "Apply filters to all columns",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect((preview.answer as any).kind).toBe("filter_preview");
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.lastBatchOperations[0]).toMatchObject({ kind: "range.apply_autofilter", target: { sheetName: "Data", address: "A1:D4" } });
+    });
+
   it("keeps parse_dates patch targets exact instead of broadening to the whole sheet", async () => {
       const runtime = new FakeAgentRuntime();
       const agent = new AgentOrchestrator(runtime as any);
@@ -5363,6 +5573,31 @@ Data rows:
 
       expect(applied.status).toBe("SUCCESS");
       expect(runtime.tableMethodCalls.at(-1)?.request.filters[0].criteria).toEqual({ filterOn: "Values", values: ["Open"] });
+    });
+
+  it("normalizes single table filter shorthand before apply", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      agent.metadataCache.set(createCachedMetadata("wbctx_filter_single_alias"));
+
+      const preview = await agent.run({
+        request: "Filter Transactions Status to Open",
+        mode: "preview_update",
+        workbookContextId: "wbctx_filter_single_alias",
+        intent: { action: "filter_range" },
+        target: { tableName: "Transactions" },
+        values: { column: "Status", value: "Open" }
+      });
+      const applied = await agent.run({
+        request: "Apply filter",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.tableMethodCalls.at(-1)?.request.filters).toEqual([{ column: "Status", criteria: { filterOn: "Values", values: ["Open"] } }]);
     });
 
   it("accepts rowStart and rowEnd aliases for compact table reads", async () => {
@@ -5488,5 +5723,72 @@ Data rows:
       expect((preview.answer as any).sortField).toBe("Status");
       expect(applied.status).toBe("SUCCESS");
       expect(runtime.tableMethodCalls.at(-1)?.request.fields).toEqual([{ key: 3, ascending: false }]);
+    });
+
+  it("normalizes natural table sort direction phrases", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      agent.metadataCache.set(createCachedMetadata("wbctx_sort_phrases"));
+
+      const lowest = await agent.run({
+        request: "Sort Transactions by amount lowest to highest",
+        mode: "preview_update",
+        workbookContextId: "wbctx_sort_phrases",
+        intent: { action: "sort_table" },
+        target: { tableName: "Transactions" },
+        values: { sortBy: "Amount" }
+      });
+      const zToA = await agent.run({
+        request: "Sort Transactions by status Z to A",
+        mode: "preview_update",
+        workbookContextId: "wbctx_sort_phrases",
+        intent: { action: "sort_table" },
+        target: { tableName: "Transactions" },
+        values: { sortBy: "Status" }
+      });
+
+      await agent.run({ request: "Apply amount sort", mode: "apply_update", operationId: lowest.operationId, confirmationToken: lowest.confirmationToken });
+      await agent.run({ request: "Apply status sort", mode: "apply_update", operationId: zToA.operationId, confirmationToken: zToA.confirmationToken });
+
+      expect(runtime.tableMethodCalls.at(-2)?.request.fields).toEqual([{ key: 2, ascending: true }]);
+      expect(runtime.tableMethodCalls.at(-1)?.request.fields).toEqual([{ key: 3, ascending: false }]);
+    });
+
+  it("normalizes apply_table_view clear, filter, and field-level sort direction together", async () => {
+      const runtime = new FakeAgentRuntime();
+      const agent = new AgentOrchestrator(runtime as any);
+      agent.metadataCache.set(createCachedMetadata("wbctx_apply_view_clear_sort"));
+
+      const preview = await agent.run({
+        request: "Clear existing filters, filter Status to Open, and sort Amount highest to lowest",
+        mode: "preview_update",
+        workbookContextId: "wbctx_apply_view_clear_sort",
+        intent: { action: "apply_table_view" },
+        target: { tableName: "Transactions" },
+        values: {
+          clearFilters: true,
+          filters: [{ column: "Status", value: "Open" }],
+          sort: { fields: [{ column: "Amount", direction: "highest to lowest" }] }
+        }
+      });
+      const applied = await agent.run({
+        request: "Apply table view",
+        mode: "apply_update",
+        operationId: preview.operationId,
+        confirmationToken: preview.confirmationToken
+      });
+
+      expect(preview.status).toBe("PREVIEW_READY");
+      expect(applied.status).toBe("SUCCESS");
+      expect(runtime.tableMethodCalls.at(-1)).toEqual({
+        method: "table.apply_view",
+        request: {
+          workbookId: "workbook_agent_unit",
+          tableName: "Transactions",
+          filters: [{ column: "Status", criteria: { filterOn: "Values", values: ["Open"] } }],
+          sort: { fields: [{ key: 2, ascending: false }] },
+          clearFilters: true
+        }
+      });
     });
 });

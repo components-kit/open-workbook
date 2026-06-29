@@ -201,9 +201,11 @@ describe("agent action handlers", () => {
     expect(findAgentActionHandler({ request: "Remove all filters from Booking sheet range A1:X7" }, undefined, false)).toBeUndefined();
     expect(findAgentActionHandler({ request: "Remove all filters from Booking sheet range A1:X7", target: { sheetName: "Booking", range: "A1:X7" } }, undefined, true)?.id).toBe("filter_range");
     expect(findAgentActionHandler({ request: "Clear filters from Transactions table", target: { tableName: "Transactions" } }, undefined, true)?.id).toBe("clear_table_filters");
+    expect(findAgentActionHandler({ request: "Reset filters from Transactions table", target: { tableName: "Transactions" } }, undefined, true)?.id).toBe("clear_table_filters");
     expect(findAgentActionHandler({ request: "Add conditional formatting rule on Booking sheet range A2:X20. Formula =$D2=\"40HQ\" should fill the row yellow." }, undefined, false)).toBeUndefined();
     expect(findAgentActionHandler({ request: "Add conditional formatting rule on Booking sheet range A2:X20. Formula =$D2=\"40HQ\" should fill the row yellow.", target: { sheetName: "Booking", range: "A2:X20" } }, undefined, true)?.id).toBe("write_conditional_formatting");
     expect(findAgentActionHandler({ request: "Add data validation dropdown list to Booking D2:D7.", target: { sheetName: "Booking", range: "D2:D7" } }, undefined, true)?.id).toBe("write_data_validation");
+    expect(findAgentActionHandler({ request: "Add Reviewed to the Status dropdown options.", target: { sheetName: "Booking", range: "D2:D7" } }, undefined, true)?.id).toBe("update_dropdown_options");
     expect(findAgentActionHandler({ request: "Add new col next to Qty", target: { sheetName: "Booking", range: "D:D" } }, undefined, true)?.id).toBe("insert_columns");
   });
 

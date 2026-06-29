@@ -59,7 +59,7 @@ These backups are restorable through `excel.workbook.restore_backup` because the
 The current rollback path supports:
 
 - restoring values, formulas, number formats, and basic style metadata from captured range snapshots
-- deleting sheets created by `template.create_sheet_from_template`
+- deleting sheets created by `template.create_sheet_from_template`, `sheet.copy`, and `sheet.copy_clean_data_regions`
 - applying rollback through the same batch and telemetry path as normal writes
 
 Full workbook-copy restore remains a disaster-recovery layer because replacing an open workbook file usually requires user or OS-level coordination.
